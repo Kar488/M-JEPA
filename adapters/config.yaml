@@ -1,0 +1,43 @@
+
+paths:
+  molclr: "repos/MolCLR"
+  geomgcl: "repos/GeomGCL"
+  himol: "repos/HiMol"
+
+outputs:
+  root: "outputs/baselines"
+
+commands:
+  molclr:
+    train: >
+      python {repo}/scripts/pretrain.py
+      --data {unlabeled}
+      --output {out}
+      --epochs 100 --batch_size 256 --lr 1e-4
+    embed: >
+      python {repo}/scripts/export_embeddings.py
+      --checkpoint {ckpt}
+      --input {smiles}
+      --output {emb}
+  geomgcl:
+    train: >
+      python {repo}/scripts/pretrain.py
+      --data {unlabeled}
+      --output {out}
+      --epochs 100 --batch_size 256 --lr 1e-4
+    embed: >
+      python {repo}/scripts/export_embeddings.py
+      --checkpoint {ckpt}
+      --input {smiles}
+      --output {emb}
+  himol:
+    train: >
+      python {repo}/scripts/pretrain.py
+      --data {unlabeled}
+      --output {out}
+      --epochs 100 --batch_size 256 --lr 1e-4
+    embed: >
+      python {repo}/scripts/export_embeddings.py
+      --checkpoint {ckpt}
+      --input {smiles}
+      --output {emb}
