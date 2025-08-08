@@ -1,143 +1,202 @@
-"""Hyper‑parameter grid search for JEPA.
-
-This script runs a grid search over various hyper‑parameters for the
-JEPA model on a toy dataset. For each configuration it performs a
-short unsupervised pretraining, followed by training a linear head on a
-simple downstream task. Metrics are recorded and returned as a
-pandas DataFrame.
-
-Note: For real experiments you should increase the number of epochs
-and use larger datasets. This grid search is intentionally small to
-serve as an example and to run quickly in constrained environments.
-"""
 
 from __future__ import annotations
-
-from typing import Dict, List, Tuple
+from dataclasses import dataclass, asdict
+from itertools import product
+from typing import Callable, Iterable, List, Tuple, Dict, Any
 
 import numpy as np
 import pandas as pd
 
-from data.dataset import GraphDataset
-from models.encoder import GNNEncoder
+# Models & training
+try:
+    from models.factory import build_encoder
+except Exception:
+    from models.encoder import GNNEncoder as _BasicEnc
+    def build_encoder(gnn_type: str, input_dim: int, hidden_dim: int, num_layers: int, edge_dim: int | None = None):
+        return _BasicEnc(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers, gnn_type=gnn_type)
+
 from models.predictor import MLPPredictor
 from models.ema import EMA
-from training.unsupervised import train_jepa
+from training.unsupervised import train_jepa, train_contrastive
 from training.supervised import train_linear_head
+from training.baselines import pretrain_baseline
 
 
-def run_grid_search() -> pd.DataFrame:
-    """Execute a comprehensive hyper‑parameter sweep and return averaged results.
-
-    This function iterates over a range of JEPA hyper‑parameters and multiple
-    random seeds. For each configuration, it performs a short unsupervised
-    pretraining followed by a supervised linear head training. Classification
-    metrics are averaged across seeds. The returned DataFrame contains the
-    mean ROC‑AUC and PR‑AUC for each configuration.
-
-    Returns:
-        A DataFrame summarising configuration parameters and mean performance metrics.
-    """
-    # Define a small toy dataset with diverse molecules. In a real use case
-    # you would replace this with a large unlabelled dataset and proper
-    # labelled benchmarks. We deliberately keep it small here for
-    # demonstration purposes and fast iteration.
-    smiles_list = [
-        "CCO", "CCN", "CCC", "c1ccccc1", "CC(=O)O", "CCOCC", "CNC", "CCCl", "COC", "CCN(CC)CC"
-    ]
-    # Hyper‑parameter ranges. Feel free to extend these lists when running on
-    # your own machine to explore a wider parameter space.
-    mask_ratios = [0.1, 0.15, 0.25]
-    contiguities = [False, True]
-    hidden_dims = [128, 256]
-    num_layers_list = [2, 3]
-    gnn_types = ["mpnn", "gcn", "gat"]
-    ema_decays = [0.95, 0.99]
-    seeds = [42, 2025, 7]
-    # Storage for results
-    configs: List[Dict[str, float]] = []
-    results: List[Dict[str, float]] = []
-    # Loop over hyper‑parameter combinations
-    for mask_ratio in mask_ratios:
-        for contiguous in contiguities:
-            for hidden_dim in hidden_dims:
-                for num_layers in num_layers_list:
-                    for gnn_type in gnn_types:
-                        for ema_decay in ema_decays:
-                            # Collect metrics for each seed
-                            seed_metrics = []
-                            for seed in seeds:
-                                from utils.seed import set_seed
-
-                                # Set random seed for reproducibility
-                                set_seed(seed)
-                                # Create dataset with random labels for this seed
-                                labels = np.random.randint(0, 2, size=len(smiles_list))
-                                dataset = GraphDataset.from_smiles_list(smiles_list, labels=labels.tolist())
-                                # Determine input dimension from dataset
-                                input_dim = dataset.graphs[0].x.shape[1] if dataset.graphs else 0
-                                # Initialise models
-                                encoder = GNNEncoder(
-                                    input_dim=input_dim,
-                                    hidden_dim=hidden_dim,
-                                    num_layers=num_layers,
-                                    gnn_type=gnn_type,
-                                )
-                                ema_encoder = GNNEncoder(
-                                    input_dim=input_dim,
-                                    hidden_dim=hidden_dim,
-                                    num_layers=num_layers,
-                                    gnn_type=gnn_type,
-                                )
-                                ema_helper = EMA(encoder, decay=ema_decay)
-                                predictor = MLPPredictor(embed_dim=hidden_dim, hidden_dim=hidden_dim * 2)
-                                # Unsupervised pretraining (brief for demonstration)
-                                train_jepa(
-                                    dataset=dataset,
-                                    encoder=encoder,
-                                    ema_encoder=ema_encoder,
-                                    predictor=predictor,
-                                    ema=ema_helper,
-                                    epochs=2,
-                                    batch_size=4,
-                                    mask_ratio=mask_ratio,
-                                    contiguous=contiguous,
-                                    lr=5e-4,
-                                    device="cpu",
-                                    reg_lambda=1e-4,
-                                )
-                                # Train linear head (classification)
-                                metrics = train_linear_head(
-                                    dataset=dataset,
-                                    encoder=encoder,
-                                    task_type="classification",
-                                    epochs=10,
-                                    lr=5e-3,
-                                    batch_size=4,
-                                    device="cpu",
-                                    val_patience=3,
-                                )
-                                seed_metrics.append(metrics)
-                            # Compute mean metrics across seeds
-                            roc_aucs = [m.get("roc_auc", 0.0) for m in seed_metrics]
-                            pr_aucs = [m.get("pr_auc", 0.0) for m in seed_metrics]
-                            mean_roc = float(np.mean(roc_aucs)) if roc_aucs else 0.0
-                            mean_pr = float(np.mean(pr_aucs)) if pr_aucs else 0.0
-                            config = {
-                                "mask_ratio": mask_ratio,
-                                "contiguous": contiguous,
-                                "hidden_dim": hidden_dim,
-                                "num_layers": num_layers,
-                                "gnn_type": gnn_type,
-                                "ema_decay": ema_decay,
-                            }
-                            configs.append(config)
-                            results.append({"roc_auc": mean_roc, "pr_auc": mean_pr})
-    # Combine configuration parameters and metrics into a single DataFrame
-    df = pd.concat([pd.DataFrame(configs), pd.DataFrame(results)], axis=1)
-    return df
+@dataclass(frozen=True)
+class Config:
+    mask_ratio: float
+    contiguous: bool
+    hidden_dim: int
+    num_layers: int
+    gnn_type: str
+    ema_decay: float
+    add_3d: bool
+    pretrain_bs: int
+    finetune_bs: int
+    pretrain_epochs: int
+    finetune_epochs: int
+    lr: float
 
 
-if __name__ == "__main__":
-    df = run_grid_search()
-    print(df)
+def _build_configs(
+    mask_ratios: Iterable[float],
+    contiguities: Iterable[bool],
+    hidden_dims: Iterable[int],
+    num_layers_list: Iterable[int],
+    gnn_types: Iterable[str],
+    ema_decays: Iterable[float],
+    add_3d_options: Iterable[bool],
+    pretrain_batch_sizes: Iterable[int],
+    finetune_batch_sizes: Iterable[int],
+    pretrain_epochs_options: Iterable[int],
+    finetune_epochs_options: Iterable[int],
+    lrs: Iterable[float],
+) -> List[Config]:
+    combos = product(
+        mask_ratios, contiguities, hidden_dims, num_layers_list, gnn_types,
+        ema_decays, add_3d_options, pretrain_batch_sizes, finetune_batch_sizes,
+        pretrain_epochs_options, finetune_epochs_options, lrs
+    )
+    return [Config(*tpl) for tpl in combos]
+
+
+def _edge_dim_or_none(ds) -> int | None:
+    g0 = ds.graphs[0]
+    return None if g0.edge_attr is None else int(g0.edge_attr.shape[1])
+
+
+def _run_one_config_method(
+    cfg: Config,
+    method: str,
+    dataset_fn: Callable[[bool], Any],
+    task_type: str,
+    seeds: Iterable[int],
+    device: str,
+    use_wandb: bool,
+    ckpt_dir: str,
+    ckpt_every: int,
+    use_scheduler: bool,
+    warmup_steps: int,
+) -> Dict[str, Any]:
+    ds = dataset_fn(cfg.add_3d)
+    input_dim = int(ds.graphs[0].x.shape[1])
+    edge_dim = _edge_dim_or_none(ds)
+
+    seed_metrics = []
+    for seed in seeds:
+        np.random.seed(seed)
+
+        if method.lower() == "jepa":
+            encoder = build_encoder(gnn_type=cfg.gnn_type, input_dim=input_dim,
+                                    hidden_dim=cfg.hidden_dim, num_layers=cfg.num_layers, edge_dim=edge_dim)
+            ema_encoder = build_encoder(gnn_type=cfg.gnn_type, input_dim=input_dim,
+                                        hidden_dim=cfg.hidden_dim, num_layers=cfg.num_layers, edge_dim=edge_dim)
+            ema = EMA(encoder, decay=cfg.ema_decay)
+            predictor = MLPPredictor(embed_dim=cfg.hidden_dim, hidden_dim=cfg.hidden_dim * 2)
+
+            try:
+                train_jepa(
+                    dataset=ds, encoder=encoder, ema_encoder=ema_encoder, predictor=predictor, ema=ema,
+                    epochs=cfg.pretrain_epochs, batch_size=cfg.pretrain_bs, mask_ratio=cfg.mask_ratio,
+                    contiguous=cfg.contiguous, lr=cfg.lr, device=device, reg_lambda=1e-4,
+                    use_wandb=use_wandb, ckpt_path=f"{ckpt_dir}/jepa", ckpt_every=ckpt_every,
+                    use_scheduler=use_scheduler, warmup_steps=warmup_steps
+                )
+            except TypeError:
+                train_jepa(
+                    dataset=ds, encoder=encoder, ema_encoder=ema_encoder, predictor=predictor, ema=ema,
+                    epochs=cfg.pretrain_epochs, batch_size=cfg.pretrain_bs, mask_ratio=cfg.mask_ratio,
+                    contiguous=cfg.contiguous, lr=cfg.lr, device=device, reg_lambda=1e-4
+                )
+
+        elif method.lower() == "contrastive":
+            encoder = build_encoder(gnn_type=cfg.gnn_type, input_dim=input_dim,
+                                    hidden_dim=cfg.hidden_dim, num_layers=cfg.num_layers, edge_dim=edge_dim)
+            try:
+                train_contrastive(
+                    dataset=ds, encoder=encoder, projection_dim=64, epochs=cfg.pretrain_epochs,
+                    batch_size=cfg.pretrain_bs, mask_ratio=cfg.mask_ratio, lr=cfg.lr, device=device,
+                    temperature=0.1, use_wandb=use_wandb, ckpt_path=f"{ckpt_dir}/contrast", ckpt_every=ckpt_every,
+                    use_scheduler=use_scheduler, warmup_steps=warmup_steps
+                )
+            except TypeError:
+                train_contrastive(
+                    dataset=ds, encoder=encoder, projection_dim=64, epochs=cfg.pretrain_epochs,
+                    batch_size=cfg.pretrain_bs, mask_ratio=cfg.mask_ratio, lr=cfg.lr, device=device,
+                    temperature=0.1
+                )
+
+        else:
+            # external baselines; wrapper falls back to internal contrastive if unavailable
+            res = pretrain_baseline(method, dataset=ds, input_dim=input_dim, device=device, cfg=dict(
+                hidden_dim=cfg.hidden_dim, num_layers=cfg.num_layers, gnn_type=cfg.gnn_type,
+                epochs=cfg.pretrain_epochs, batch_size=cfg.pretrain_bs, mask_ratio=cfg.mask_ratio, lr=cfg.lr,
+                use_wandb=use_wandb, ckpt_path=f"{ckpt_dir}/{method}", ckpt_every=ckpt_every
+            ))
+            encoder = res.get("encoder", build_encoder(gnn_type=cfg.gnn_type, input_dim=input_dim,
+                                                       hidden_dim=cfg.hidden_dim, num_layers=cfg.num_layers, edge_dim=edge_dim))
+
+        # Finetune linear head
+        metrics = train_linear_head(dataset=ds, encoder=encoder, task_type=task_type,
+                                    epochs=cfg.finetune_epochs, lr=5e-3, batch_size=cfg.finetune_bs, device=device)
+        metrics = {k: float(v) for k, v in metrics.items() if k != "head"}
+        seed_metrics.append(metrics)
+
+    agg = {k: float(np.mean([m[k] for m in seed_metrics])) for k in seed_metrics[0].keys()}
+    row = {**asdict(cfg), **agg, "method": method}
+    return row
+
+
+def run_grid_search(
+    *,
+    dataset_fn: Callable[[bool], Any],
+    methods: Tuple[str, ...] = ("jepa",),
+    task_type: str = "classification",
+    seeds: Tuple[int, ...] = (42, 123, 456),
+    mask_ratios: Tuple[float, ...] = (0.10, 0.15, 0.25),
+    contiguities: Tuple[bool, ...] = (False, True),
+    hidden_dims: Tuple[int, ...] = (128, 256),
+    num_layers_list: Tuple[int, ...] = (2, 3),
+    gnn_types: Tuple[str, ...] = ("mpnn", "gcn", "gat", "edge_mpnn"),
+    ema_decays: Tuple[float, ...] = (0.95, 0.99),
+    add_3d_options: Tuple[bool, ...] = (False, True),
+    pretrain_batch_sizes: Tuple[int, ...] = (256,),
+    finetune_batch_sizes: Tuple[int, ...] = (64,),
+    pretrain_epochs_options: Tuple[int, ...] = (50,),
+    finetune_epochs_options: Tuple[int, ...] = (30,),
+    lrs: Tuple[float, ...] = (1e-4,),
+    device: str = "cuda",
+    n_jobs: int = 0,
+    use_wandb: bool = False,
+    ckpt_dir: str = "outputs/grid_ckpts",
+    ckpt_every: int = 25,
+    use_scheduler: bool = True,
+    warmup_steps: int = 1000,
+) -> pd.DataFrame:
+    cfgs = _build_configs(
+        mask_ratios, contiguities, hidden_dims, num_layers_list, gnn_types,
+        ema_decays, add_3d_options, pretrain_batch_sizes, finetune_batch_sizes,
+        pretrain_epochs_options, finetune_epochs_options, lrs
+    )
+
+    rows: List[Dict[str, Any]] = []
+    if n_jobs and n_jobs != 1:
+        try:
+            from joblib import Parallel, delayed
+            rows = Parallel(n_jobs=n_jobs, backend="loky")(
+                delayed(_run_one_config_method)(cfg, method, dataset_fn, task_type, seeds, device,
+                                                use_wandb, ckpt_dir, ckpt_every, use_scheduler, warmup_steps)
+                for cfg in cfgs for method in methods
+            )
+        except Exception:
+            for cfg in cfgs:
+                for method in methods:
+                    rows.append(_run_one_config_method(cfg, method, dataset_fn, task_type, seeds, device,
+                                                       use_wandb, ckpt_dir, ckpt_every, use_scheduler, warmup_steps))
+    else:
+        for cfg in cfgs:
+            for method in methods:
+                rows.append(_run_one_config_method(cfg, method, dataset_fn, task_type, seeds, device,
+                                                   use_wandb, ckpt_dir, ckpt_every, use_scheduler, warmup_steps))
+
+    return pd.DataFrame(rows)
