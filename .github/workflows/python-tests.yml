@@ -1,0 +1,104 @@
+name: Python tests (CPU)
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  quick:
+    name: Unit & smoke tests (no GPU, no slow)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Miniconda (with mamba)
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: "3.10"
+          activate-environment: ml
+          channels: conda-forge
+          miniforge-version: latest
+          use-mamba: true
+
+      - name: Install RDKit (conda) + pip
+        shell: bash -l {0}
+        run: |
+          mamba install -y python=3.10 rdkit pip
+
+      - name: Install dependencies (CPU)
+        shell: bash -l {0}
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+            pip install scikit-learn pandas pyarrow fastparquet joblib matplotlib pytest pyyaml
+          fi
+
+      - name: Run quick tests (exclude gpu & slow)
+        shell: bash -l {0}
+        run: |
+          pytest -q -m "not gpu and not slow"
+
+      - name: Upload test artifacts (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-quick
+          path: |
+            outputs/**
+            .pytest_cache/**
+          if-no-files-found: ignore
+
+  slow:
+    name: Extended tests (include slow, no GPU)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Miniconda (with mamba)
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: "3.10"
+          activate-environment: ml
+          channels: conda-forge
+          miniforge-version: latest
+          use-mamba: true
+
+      - name: Install RDKit (conda) + pip
+        shell: bash -l {0}
+        run: |
+          mamba install -y python=3.10 rdkit pip
+
+      - name: Install dependencies (CPU)
+        shell: bash -l {0}
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+            pip install scikit-learn pandas pyarrow fastparquet joblib matplotlib pytest pyyaml
+          fi
+
+      - name: Run extended tests (exclude gpu only)
+        shell: bash -l {0}
+        run: |
+          pytest -q -m "not gpu"
+
+      - name: Upload test artifacts (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-slow
+          path: |
+            outputs/**
+            .pytest_cache/**
+          if-no-files-found: ignore

@@ -1,0 +1,25 @@
+unlabeled_dir: data/ZINC_canonicalized
+smiles_col: smiles
+cache_dir: cache/zinc
+prefix_filter: train
+
+device: cuda
+task_type: classification
+seeds: [42, 123, 456]
+
+mask_ratios: [0.10, 0.15]
+contiguities: [false, true]
+hidden_dims: [128, 256]
+num_layers_list: [2, 3]
+gnn_types: ["mpnn", "gcn", "gat"]
+ema_decays: [0.95, 0.99]
+add_3d_options: [false, true]
+
+pretrain_batch_sizes: [256]
+finetune_batch_sizes: [64]
+pretrain_epochs_options: [50]
+finetune_epochs_options: [30]
+lrs: [0.0001]
+
+n_jobs: 0
+output_csv: outputs/grid_results.csv
