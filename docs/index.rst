@@ -8,6 +8,11 @@ M-JEPA documentation
 
 Here you can explore the modules that make up the project.
 
+.. toctree::
+   :maxdepth: 2
+   :caption: Overview
+
+   kid_friendly_overview
 
 .. toctree::
    :maxdepth: 2
