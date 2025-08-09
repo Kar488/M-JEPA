@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+addopts = "-m 'not gpu and not slow'"
+
+[tool.coverage.run]
+branch = true
+source = ["data", "models", "training"]
+
+[tool.coverage.report]
+fail_under = 25
+show_missing = true
