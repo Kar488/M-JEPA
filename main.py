@@ -133,7 +133,7 @@ def _edge_dim_or_none(ds: GraphDataset) -> Optional[int]:
 # ----------------------------- Demo pipeline ----------------------------- #
 
 
-def demonstration(device: str = "cpu", devices: int = 1) -> None:
+def demonstration(device: str = "cpu", devices: int = 1, use_scaffold: bool = False) -> None:
     """Tiny run: JEPA vs contrastive on a toy dataset, with a tiny linear head and a synthetic case study."""
     smiles = [
         "CCO",
@@ -257,6 +257,7 @@ def demonstration(device: str = "cpu", devices: int = 1) -> None:
         lr=1e-3,
         batch_size=5,
         device=device,
+        use_scaffold=use_scaffold,
     )
     print(
         "Toy classification metrics:", {k: v for k, v in metrics.items() if k != "head"}
@@ -615,6 +616,7 @@ def run_grid_mode(args: argparse.Namespace) -> None:
         baseline_smiles_col=spec.get("baseline_smiles_col", "smiles"),
         baseline_label_col=spec.get("baseline_label_col"),
         baseline_cfg=spec.get("baseline_cfg", "adapters/config.yaml"),
+        use_scaffold=args.use_scaffold,
     )
 
     out_csv = spec.get("output_csv", "outputs/grid_results.csv")
@@ -683,6 +685,7 @@ if __name__ == "__main__":
     p.add_argument("--ckpt_dir", type=str, default="outputs/checkpoints")
     p.add_argument("--ckpt_every", type=int, default=10)
     p.add_argument("--warmup_steps", type=int, default=1000)
+    p.add_argument("--use-scaffold", action="store_true", dest="use_scaffold")
 
     # tox21 (optional)
     p.add_argument("--tox21_csv", type=str, default=None)
@@ -696,7 +699,9 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     if args.mode == "demo":
-        demonstration(device=args.device, devices=args.devices)
+        demonstration(
+            device=args.device, devices=args.devices, use_scaffold=args.use_scaffold
+        )
     elif args.mode == "grid":
         if not args.sweep:
             raise SystemExit("--mode grid requires --sweep <spec.yaml|json>")

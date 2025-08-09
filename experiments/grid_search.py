@@ -141,6 +141,7 @@ def _run_one_config_method(
     baseline_smiles_col: str,
     baseline_label_col: Optional[str],
     baseline_cfg: str = "adapters/config.yaml",
+    use_scaffold: bool = False,
 ) -> Dict[str, Any]:
     ds_pre = unlabeled_dataset_fn(cfg.add_3d)
     ds_eval = eval_dataset_fn(cfg.add_3d)
@@ -214,6 +215,7 @@ def _run_one_config_method(
                 lr=5e-3,
                 batch_size=cfg.finetune_bs,
                 device=device,
+                use_scaffold=use_scaffold,
             )
             row = {k: float(v) for k, v in m.items() if k != "head"}
 
@@ -223,10 +225,22 @@ def _run_one_config_method(
                 )
                 if task_type == "classification":
                     row.update(
-                        linear_probe_classification(X, ds_eval.labels.astype(int))
+                        linear_probe_classification(
+                            X,
+                            ds_eval.labels.astype(int),
+                            smiles=ds_eval.smiles,
+                            use_scaffold=use_scaffold,
+                        )
                     )
                 else:
-                    row.update(linear_probe_regression(X, ds_eval.labels.astype(float)))
+                    row.update(
+                        linear_probe_regression(
+                            X,
+                            ds_eval.labels.astype(float),
+                            smiles=ds_eval.smiles,
+                            use_scaffold=use_scaffold,
+                        )
+                    )
                 row.update(clustering_quality(X, n_clusters=10))
 
             seed_metrics.append(row)
@@ -277,6 +291,7 @@ def _run_one_config_method(
                 lr=5e-3,
                 batch_size=cfg.finetune_bs,
                 device=device,
+                use_scaffold=use_scaffold,
             )
             row = {k: float(v) for k, v in m.items() if k != "head"}
 
@@ -286,10 +301,22 @@ def _run_one_config_method(
                 )
                 if task_type == "classification":
                     row.update(
-                        linear_probe_classification(X, ds_eval.labels.astype(int))
+                        linear_probe_classification(
+                            X,
+                            ds_eval.labels.astype(int),
+                            smiles=ds_eval.smiles,
+                            use_scaffold=use_scaffold,
+                        )
                     )
                 else:
-                    row.update(linear_probe_regression(X, ds_eval.labels.astype(float)))
+                    row.update(
+                        linear_probe_regression(
+                            X,
+                            ds_eval.labels.astype(float),
+                            smiles=ds_eval.smiles,
+                            use_scaffold=use_scaffold,
+                        )
+                    )
                 row.update(clustering_quality(X, n_clusters=10))
 
             seed_metrics.append(row)
@@ -364,6 +391,7 @@ def run_grid_search(
     baseline_label_col: Optional[str] = None,
     baseline_cfg: str = "adapters/config.yaml",
     out_csv: Optional[str] = None,
+    use_scaffold: bool = False,
 ) -> pd.DataFrame:
     cfgs = _build_configs(
         mask_ratios,
@@ -401,6 +429,7 @@ def run_grid_search(
                     baseline_smiles_col,
                     baseline_label_col,
                     baseline_cfg,
+                    use_scaffold=use_scaffold,
                 )
             )
 

@@ -28,9 +28,15 @@ class GraphData:
 
 
 class GraphDataset:
-    def __init__(self, graphs: List[GraphData], labels: Optional[np.ndarray] = None):
+    def __init__(
+        self,
+        graphs: List[GraphData],
+        labels: Optional[np.ndarray] = None,
+        smiles: Optional[List[str]] = None,
+    ):
         self.graphs = graphs
         self.labels = labels
+        self.smiles = smiles
 
     # ---------- Core featurisation ---------- #
     @staticmethod
@@ -130,16 +136,18 @@ class GraphDataset:
         random_seed: Optional[int] = None,
     ) -> "GraphDataset":
         graphs: List[GraphData] = []
+        smiles_out: List[str] = []
         for sm in smiles_list:
             try:
                 g = cls.smiles_to_graph(
                     sm, add_3d=add_3d_features, random_seed=random_seed
                 )
                 graphs.append(g)
+                smiles_out.append(sm)
             except Exception:
                 continue
         y = None if labels is None else np.asarray(labels)
-        return cls(graphs, y)
+        return cls(graphs, y, smiles_out)
 
     @classmethod
     def from_parquet(
@@ -173,12 +181,14 @@ class GraphDataset:
         )
 
         graphs: List[GraphData] = []
+        smiles_out: List[str] = []
         for sm in smiles:
             try:
                 g = cls.smiles_to_graph(
                     sm, add_3d=add_3d_features, random_seed=random_seed
                 )
                 graphs.append(g)
+                smiles_out.append(sm)
             except Exception:
                 continue
 
@@ -186,7 +196,7 @@ class GraphDataset:
             with open(cache_path, "wb") as f:
                 pickle.dump((graphs, labels), f)
 
-        return cls(graphs, labels)
+        return cls(graphs, labels, smiles_out)
 
     @classmethod
     def from_csv(
@@ -221,12 +231,14 @@ class GraphDataset:
         )
 
         graphs: List[GraphData] = []
+        smiles_out: List[str] = []
         for sm in smiles:
             try:
                 g = cls.smiles_to_graph(
                     sm, add_3d=add_3d_features, random_seed=random_seed
                 )
                 graphs.append(g)
+                smiles_out.append(sm)
             except Exception:
                 continue
 
@@ -234,7 +246,7 @@ class GraphDataset:
             with open(cache_path, "wb") as f:
                 pickle.dump((graphs, labels), f)
 
-        return cls(graphs, labels)
+        return cls(graphs, labels, smiles_out)
 
     @classmethod
     def from_directory(
@@ -251,6 +263,7 @@ class GraphDataset:
     ) -> "GraphDataset":
         graphs_all: List[GraphData] = []
         labels_all: List[Any] = []
+        smiles_all: List[str] = []
         labels_present = False
 
         files = [
@@ -302,12 +315,14 @@ class GraphDataset:
                 raise ValueError(f"Unsupported ext: {ext}")
 
             graphs_all.extend(ds.graphs)
+            smiles_all.extend(ds.smiles or [])
             if ds.labels is not None:
                 labels_present = True
                 labels_all.extend(ds.labels.tolist())
 
         labels = np.asarray(labels_all) if labels_present else None
-        return cls(graphs_all, labels)
+        smiles = smiles_all if smiles_all else None
+        return cls(graphs_all, labels, smiles)
 
 
 # ------------------ Geometry helpers (angles/dihedrals) ------------------ #
