@@ -1,3 +1,9 @@
+"""Utilities for summarizing experiment metrics.
+
+This module depends on :mod:`pandas` for data manipulation and
+:mod:`matplotlib` for optional plotting.
+"""
+
 from __future__ import annotations
 
 import os
