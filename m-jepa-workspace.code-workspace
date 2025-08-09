@@ -2,18 +2,6 @@
 	"folders": [
 		{
 			"path": ".."
-		},
-		{
-			"name": "MolCLR",
-			"path": "../MolCLR"
-		},
-		{
-			"name": "GeomGCL",
-			"path": "../GeomGCL"
-		},
-		{
-			"name": "HiMol",
-			"path": "../HiMol"
 		}
 	],
 	"settings": {}
