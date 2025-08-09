@@ -1,0 +1,13 @@
+name: Smoke on Vast
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, gpu]   # matches the labels you set
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show GPU
+        run: nvidia-smi
+      - name: Python version
+        run: python -V
