@@ -358,13 +358,25 @@ def _run_one_config_method(
     row = {**asdict(cfg), **agg, "method": method, "seeds": len(list(seeds))}
     return row
 
+def _normalize_ds(ds: Any) -> Tuple[Any, Any, Any]:
+    """Return (train, val, test) from many shapes; else (ds, None, None)."""
+    if isinstance(ds, dict):
+        tr = ds.get("train") or ds.get("train_loader")
+        va = ds.get("val") or ds.get("valid") or ds.get("val_loader")
+        te = ds.get("test") or ds.get("test_loader")
+        return tr, va, te
+    if isinstance(ds, (list, tuple)):
+        if len(ds) == 3: return ds[0], ds[1], ds[2]
+        if len(ds) == 2: return ds[0], ds[1], None
+        if len(ds) == 1: return ds[0], None, None
+    return ds, None, None
 
 def run_grid_search(
     *,
     dataset_fn: Optional[Callable[..., Any]] = None,
     unlabeled_dataset_fn: Optional[Callable[[bool], Any]] = None,
     eval_dataset_fn: Optional[Callable[[bool], Any]] = None,
-    
+
     methods: Tuple[str, ...] = ("jepa",),
     task_type: str = "classification",
     seeds: Tuple[int, ...] = (42, 123, 456),
@@ -409,6 +421,26 @@ def run_grid_search(
         finetune_epochs_options,
         lrs,
     )
+
+     # ---------------- dataset wiring ----------------
+    # Prefer explicit builders if provided
+    train_loader = val_loader = test_loader = None
+    if dataset_fn is not None:
+        # Small test helper; try calling without args, else with task_type
+        try:
+            ds = dataset_fn()
+        except TypeError:
+            ds = dataset_fn(task_type=task_type)
+        train_loader, val_loader, test_loader = _normalize_ds(ds)
+
+    # If no single dataset_fn, fall back to your existing two-builders path
+    if dataset_fn is None:
+        if unlabeled_dataset_fn is None or eval_dataset_fn is None:
+            raise ValueError(
+                "Provide either `dataset_fn` (tests) or both "
+                "`unlabeled_dataset_fn` and `eval_dataset_fn` (production)."
+            )
+        
     rows: List[Dict[str, Any]] = []
     for cfg in cfgs:
         for method in methods:
