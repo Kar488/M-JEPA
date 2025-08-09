@@ -5,6 +5,7 @@ import sys
 import yaml
 import numpy as np
 import torch
+import logging
 
 # Allow running as a script without installing the package
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -14,6 +15,9 @@ from models.base import EncoderBase
 from models.ema import EMA
 from models.predictor import MLPPredictor
 from training.unsupervised import train_jepa
+
+logger = logging.getLogger(__name__)
+
 
 
 def make_synthetic_dataset(num_graphs: int, num_nodes: int, feat_dim: int) -> GraphDataset:
@@ -85,7 +89,7 @@ def main() -> None:
         devices=1,
     )
     if losses:
-        print(f"final_loss: {losses[-1]:.4f}")
+        logger.info("final_loss: %.4f", losses[-1])
 
 
 if __name__ == "__main__":
