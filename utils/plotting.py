@@ -2,7 +2,8 @@
 
 Functions in this module produce Matplotlib figures for visualising
 training loss curves and hyper‑parameter search results. These plots
-help identify which configurations perform best.
+help identify which configurations perform best. Requires
+``matplotlib``, ``pandas``, and ``seaborn``.
 """
 
 from __future__ import annotations
