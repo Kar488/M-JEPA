@@ -359,6 +359,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
                 reg_lambda=1e-4,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
+                wandb_tags=args.wandb_tags,
                 ckpt_path=str(Path(args.ckpt_dir) / "pretrain"),
                 ckpt_every=args.ckpt_every,
                 use_scheduler=True,
@@ -401,6 +402,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
                 temperature=args.temperature,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
+                wandb_tags=args.wandb_tags,
                 ckpt_path=str(Path(args.ckpt_dir) / "pretrain"),
                 ckpt_every=args.ckpt_every,
                 use_scheduler=True,
@@ -682,6 +684,7 @@ if __name__ == "__main__":
     # logging / ckpt / sched
     p.add_argument("--use_wandb", action="store_true")
     p.add_argument("--wandb_project", type=str, default="m-jepa")
+    p.add_argument("--wandb_tags", nargs="*", default=None)
     p.add_argument("--ckpt_dir", type=str, default="outputs/checkpoints")
     p.add_argument("--ckpt_every", type=int, default=10)
     p.add_argument("--warmup_steps", type=int, default=1000)
