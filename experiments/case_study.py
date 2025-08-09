@@ -98,7 +98,7 @@ def run_synthetic_case_study(
         lr=1e-3,
         batch_size=4,
         device="cpu",
-        val_patience=5,
+        patience=5,
     )
     # Compute predictions for ranking using the trained regression head
     reg_head = regression_metrics.get("head")
@@ -306,7 +306,7 @@ def run_tox21_case_study(
         lr=1e-3,
         batch_size=32,
         device=device,
-        val_patience=5,
+        patience=5,
     )
     # Extract the trained head
     reg_head = regression_metrics.get("head")
