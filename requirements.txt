@@ -3,8 +3,8 @@ numpy
 pandas
 pyarrow                 # parquet I/O
 scikit-learn
-torch ; sys_platform == "never"  # placeholder to avoid install on server
-torch-scatter ; sys_platform == "never" # optional, used in gnn_variants.py
+torch==2.2.1         # CUDA wheels handled separately in CI
+torch-scatter==2.1.2 # optional, used in gnn_variants.py; CUDA wheels handled separately in CI
        
 rdkit-pypi              # or install via conda:  conda install -c conda-forge rdkit
 pyyaml
