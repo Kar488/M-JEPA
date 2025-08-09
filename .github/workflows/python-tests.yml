@@ -43,7 +43,7 @@ jobs:
       - name: Run quick tests with coverage (exclude gpu & slow)
         shell: bash -l {0}
         run: |
-          pytest --cov -m "not gpu and not slow"
+          pytest -m "not gpu and not slow"
 
       - name: Upload test artifacts (optional)
         if: always()
@@ -91,7 +91,7 @@ jobs:
       - name: Run extended tests with coverage (exclude gpu only)
         shell: bash -l {0}
         run: |
-          pytest --cov -m "not gpu"
+          pytest -m "not gpu"
 
       - name: Upload test artifacts (optional)
         if: always()
