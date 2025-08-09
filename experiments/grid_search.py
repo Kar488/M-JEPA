@@ -6,6 +6,7 @@ from typing import Callable, Iterable, List, Tuple, Dict, Any, Optional
 import numpy as np
 import pandas as pd
 
+# Encoder factory
 try:
     from models.factory import build_encoder
 except Exception:
@@ -18,11 +19,22 @@ from models.ema import EMA
 from training.unsupervised import train_jepa, train_contrastive
 from training.supervised import train_linear_head
 
+# Baselines (CLI or native adapters)
 from experiments.baseline_integration import baseline_pretrain_and_embed
 from training.train_on_embeddings import (
     train_linear_on_embeddings_classification,
     train_linear_on_embeddings_regression,
 )
+
+# Optional probing & clustering
+try:
+    from experiments.probing import (
+        compute_embeddings, linear_probe_classification, linear_probe_regression, clustering_quality
+    )
+    _HAS_PROBE = True
+except Exception:
+    _HAS_PROBE = False
+
 
 @dataclass(frozen=True)
 class Config:
@@ -38,6 +50,7 @@ class Config:
     pretrain_epochs: int
     finetune_epochs: int
     lr: float
+
 
 def _build_configs(
     mask_ratios: Iterable[float],
@@ -60,19 +73,25 @@ def _build_configs(
     )
     return [Config(*tpl) for tpl in combos]
 
+
 def _edge_dim_or_none(ds) -> Optional[int]:
     g0 = ds.graphs[0]
     return None if g0.edge_attr is None else int(g0.edge_attr.shape[1])
 
+
 def _aggregate_seed_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, float]:
-    keys = metrics_list[0].keys()
+    # union of keys (probing/cluster may be absent for some seeds)
+    keys = sorted({k for m in metrics_list for k in m.keys()})
     out: Dict[str, float] = {}
     for k in keys:
-        vals = np.array([m[k] for m in metrics_list], dtype=np.float64)
+        vals = np.array([m[k] for m in metrics_list if k in m], dtype=np.float64)
+        if len(vals) == 0:
+            continue
         out[f"{k}_mean"] = float(vals.mean())
         out[f"{k}_std"] = float(vals.std(ddof=1)) if len(vals) > 1 else 0.0
         out[f"{k}_ci95"] = float(1.96 * (vals.std(ddof=1) / max(1, np.sqrt(len(vals))))) if len(vals) > 1 else 0.0
     return out
+
 
 def _run_one_config_method(
     cfg: Config,
@@ -122,7 +141,17 @@ def _run_one_config_method(
 
             m = train_linear_head(dataset=ds_eval, encoder=encoder, task_type=task_type,
                                   epochs=cfg.finetune_epochs, lr=5e-3, batch_size=cfg.finetune_bs, device=device)
-            seed_metrics.append({k: float(v) for k, v in m.items() if k != "head"})
+            row = {k: float(v) for k, v in m.items() if k != "head"}
+
+            if _HAS_PROBE:
+                X = compute_embeddings(ds_eval, encoder, batch_size=cfg.finetune_bs, device=device)
+                if task_type == "classification":
+                    row.update(linear_probe_classification(X, ds_eval.labels.astype(int)))
+                else:
+                    row.update(linear_probe_regression(X, ds_eval.labels.astype(float)))
+                row.update(clustering_quality(X, n_clusters=10))
+
+            seed_metrics.append(row)
 
         elif method.lower() == "contrastive":
             encoder = build_encoder(gnn_type=cfg.gnn_type, input_dim=input_dim,
@@ -139,9 +168,19 @@ def _run_one_config_method(
 
             m = train_linear_head(dataset=ds_eval, encoder=encoder, task_type=task_type,
                                   epochs=cfg.finetune_epochs, lr=5e-3, batch_size=cfg.finetune_bs, device=device)
-            seed_metrics.append({k: float(v) for k, v in m.items() if k != "head"})
+            row = {k: float(v) for k, v in m.items() if k != "head"}
 
-        else:  # MolCLR / GeomGCL / HiMol via CLI
+            if _HAS_PROBE:
+                X = compute_embeddings(ds_eval, encoder, batch_size=cfg.finetune_bs, device=device)
+                if task_type == "classification":
+                    row.update(linear_probe_classification(X, ds_eval.labels.astype(int)))
+                else:
+                    row.update(linear_probe_regression(X, ds_eval.labels.astype(float)))
+                row.update(clustering_quality(X, n_clusters=10))
+
+            seed_metrics.append(row)
+
+        else:  # MolCLR / GeomGCL / HiMol via adapters
             if baseline_unlabeled_file is None or baseline_eval_file is None or baseline_label_col is None:
                 raise ValueError("Baselines require baseline_unlabeled_file, baseline_eval_file, and baseline_label_col.")
             _, emb_file = baseline_pretrain_and_embed(
@@ -162,6 +201,7 @@ def _run_one_config_method(
     agg = _aggregate_seed_metrics(seed_metrics)
     row = {**asdict(cfg), **agg, "method": method, "seeds": len(list(seeds))}
     return row
+
 
 def run_grid_search(
     *,

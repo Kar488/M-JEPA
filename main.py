@@ -4,7 +4,7 @@
 - full: pretrain on unlabeled (train shards), then finetune with val early‑stopping; optional test eval
 - grid: YAML/JSON‑driven sweep over JEPA/contrastive/baseline methods
 
-Project layout expected:
+This file expects the project layout:
     data/, experiments/, models/, training/, utils/
 """
 
@@ -12,12 +12,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 from typing import Optional, Callable, Any
 
 import numpy as np
-import pandas as pd
 
 # Data & utils
 from data.dataset import GraphDataset, GraphData
@@ -26,7 +24,7 @@ from utils.checkpoint import save_checkpoint
 
 # Models
 try:
-    from models.factory import build_encoder  # provides 'edge_mpnn' + variants (graphsage, gin, etc.)
+    from models.factory import build_encoder  # provides 'edge_mpnn' + fallbacks
 except Exception:
     # fallback to basic encoder if factory not present
     from models.encoder import GNNEncoder as _BasicEnc
@@ -45,24 +43,8 @@ try:
 except Exception:
     _HAS_VAL_TRAIN = False
 
-# Experiments / analysis
+# Experiments
 from experiments.grid_search import run_grid_search
-from experiments.reporting import build_full_report
-from experiments.baseline_integration import baseline_pretrain_and_embed
-
-# Probing & clustering (NEW)
-try:
-    from experiments.probing import (
-        compute_embeddings,
-        linear_probe_classification,
-        linear_probe_regression,
-        clustering_quality,
-    )
-    _HAS_PROBING = True
-except Exception:
-    _HAS_PROBING = False
-
-# Case study (synthetic + optional Tox21 single‑task)
 try:
     from experiments.case_study import run_synthetic_case_study, run_tox21_case_study
     _HAS_CASE_STUDY = True
@@ -129,27 +111,6 @@ def _edge_dim_or_none(ds: GraphDataset) -> Optional[int]:
     return None if g0.edge_attr is None else int(g0.edge_attr.shape[1])
 
 
-def _write_csv_from_dir(dirpath: str, smiles_col: str, label_col: Optional[str], out_csv: str) -> str:
-    """Concatenate all Parquet/CSV files in a directory to one CSV with (smiles,label)."""
-    frames = []
-    for f in sorted(os.listdir(dirpath)):
-        p = os.path.join(dirpath, f)
-        if f.lower().endswith(".parquet"):
-            df = pd.read_parquet(p)
-        elif f.lower().endswith(".csv"):
-            df = pd.read_csv(p)
-        else:
-            continue
-        cols = [smiles_col] + ([label_col] if (label_col and label_col in df.columns) else [])
-        frames.append(df[cols])
-    if not frames:
-        raise SystemExit(f"No CSV/Parquet in {dirpath}")
-    full = pd.concat(frames, axis=0, ignore_index=True)
-    Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
-    full.to_csv(out_csv, index=False)
-    return out_csv
-
-
 # ----------------------------- Demo pipeline ----------------------------- #
 
 def demonstration(device: str = "cpu") -> None:
@@ -168,37 +129,74 @@ def demonstration(device: str = "cpu") -> None:
 
     try:
         jepa_losses = train_jepa(
-            dataset=dataset, encoder=encoder, ema_encoder=ema_encoder, predictor=predictor, ema=ema,
-            epochs=3, batch_size=5, mask_ratio=0.2, contiguous=False, lr=1e-3, device=device, reg_lambda=1e-4,
+            dataset=dataset,
+            encoder=encoder,
+            ema_encoder=ema_encoder,
+            predictor=predictor,
+            ema=ema,
+            epochs=3,
+            batch_size=5,
+            mask_ratio=0.2,
+            contiguous=False,
+            lr=1e-3,
+            device=device,
+            reg_lambda=1e-4,
             use_wandb=False,
         )
     except TypeError:
         jepa_losses = train_jepa(
-            dataset=dataset, encoder=encoder, ema_encoder=ema_encoder, predictor=predictor, ema=ema,
-            epochs=3, batch_size=5, mask_ratio=0.2, contiguous=False, lr=1e-3, device=device, reg_lambda=1e-4,
+            dataset=dataset,
+            encoder=encoder,
+            ema_encoder=ema_encoder,
+            predictor=predictor,
+            ema=ema,
+            epochs=3,
+            batch_size=5,
+            mask_ratio=0.2,
+            contiguous=False,
+            lr=1e-3,
+            device=device,
+            reg_lambda=1e-4,
         )
 
     # Contrastive
     contrastive_encoder = build_encoder(gnn_type="mpnn", input_dim=input_dim, hidden_dim=64, num_layers=2, edge_dim=edge_dim)
     try:
         contrastive_losses = train_contrastive(
-            dataset=dataset, encoder=contrastive_encoder, projection_dim=32, epochs=3, batch_size=5,
-            mask_ratio=0.2, lr=1e-3, device=device, temperature=0.1, use_wandb=False,
+            dataset=dataset,
+            encoder=contrastive_encoder,
+            projection_dim=32,
+            epochs=3,
+            batch_size=5,
+            mask_ratio=0.2,
+            lr=1e-3,
+            device=device,
+            temperature=0.1,
+            use_wandb=False,
         )
     except TypeError:
         contrastive_losses = train_contrastive(
-            dataset=dataset, encoder=contrastive_encoder, projection_dim=32, epochs=3, batch_size=5,
-            mask_ratio=0.2, lr=1e-3, device=device, temperature=0.1,
+            dataset=dataset,
+            encoder=contrastive_encoder,
+            projection_dim=32,
+            epochs=3,
+            batch_size=5,
+            mask_ratio=0.2,
+            lr=1e-3,
+            device=device,
+            temperature=0.1,
         )
 
-    plot_training_curves({"JEPA": jepa_losses, "Contrastive": contrastive_losses},
-                         title="Toy Unsupervised Training Losses", normalize=True)
+    plot_training_curves(
+        {"JEPA": jepa_losses, "Contrastive": contrastive_losses},
+        title="Toy Unsupervised Training Losses",
+        normalize=True,
+    )
 
     # Tiny head
     labels = np.random.randint(0, 2, size=len(smiles)).tolist()
     labeled_dataset = GraphDataset.from_smiles_list(smiles, labels=labels)
-    metrics = train_linear_head(labeled_dataset, encoder, task_type="classification",
-                                epochs=5, lr=1e-3, batch_size=5, device=device)
+    metrics = train_linear_head(labeled_dataset, encoder, task_type="classification", epochs=5, lr=1e-3, batch_size=5, device=device)
     print("Toy classification metrics:", {k: v for k, v in metrics.items() if k != "head"})
 
     # Synthetic case study
@@ -220,33 +218,8 @@ def _train_with_val_if_available(
     return train_linear_head(train_ds, encoder, task_type, epochs, lr, batch_size, device)
 
 
-def _maybe_probe(name: str, ds: GraphDataset, encoder, task_type: str,
-                 batch_size: int, k: int, save_path: Optional[str], device: str) -> None:
-    """Run optional probing+clustering and print results."""
-    if not _HAS_PROBING:
-        print("[probe] experiments.probing not available; skip")
-        return
-    X = compute_embeddings(ds, encoder, batch_size=batch_size, device=device)
-    if save_path:
-        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-        np.save(save_path, X)
-        print(f"[probe] saved embeddings to {save_path}")
-    if ds.labels is None:
-        print("[probe] dataset has no labels; skip linear probe")
-    else:
-        y = ds.labels
-        if task_type == "classification":
-            p = linear_probe_classification(X, y.astype(int))
-            print(f"[probe] {name} linear probe (cls):", p)
-        else:
-            p = linear_probe_regression(X, y.astype(float))
-            print(f"[probe] {name} linear probe (reg):", p)
-    c = clustering_quality(X, n_clusters=k)
-    print(f"[probe] {name} clustering:", c)
-
-
 def run_full_mode(args: argparse.Namespace) -> None:
-    """Pretrain (unlabeled) then fine‑tune (labeled) with val early‑stopping; optional test, probing, and Tox21."""
+    """Pretrain (unlabeled) then fine‑tune (labeled) with val early‑stopping; optional test & Tox21 case study."""
     # --- Unlabeled (pretraining) --- #
     unlabeled = load_directory_dataset(
         dirpath=args.unlabeled_dir, ext="parquet", smiles_col="smiles",
@@ -283,7 +256,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
                 epochs=args.pretrain_epochs, batch_size=args.pretrain_bs, mask_ratio=args.mask_ratio,
                 contiguous=args.contiguous, lr=args.pretrain_lr, device=args.device, reg_lambda=1e-4
             )
-    elif args.method == "contrastive":
+    elif args.method in ("contrastive",):
         try:
             train_contrastive(
                 dataset=unlabeled, encoder=encoder, projection_dim=args.proj_dim, epochs=args.pretrain_epochs,
@@ -299,49 +272,21 @@ def run_full_mode(args: argparse.Namespace) -> None:
                 temperature=args.temperature
             )
     else:
-        # Baselines via wrapper (train if needed & export embeddings later)
-        print(f"[baseline] Selected method: {args.method} — handled in evaluation section below.")
+        # Baselines via wrapper (if you have a local baseline trainer)
+        from training.baselines import pretrain_baseline
+        pretrain_baseline(args.method, dataset=unlabeled, input_dim=input_dim, device=args.device, cfg=dict(
+            hidden_dim=args.hidden_dim, num_layers=args.num_layers, gnn_type=args.gnn_type,
+            epochs=args.pretrain_epochs, batch_size=args.pretrain_bs, mask_ratio=args.mask_ratio, lr=args.pretrain_lr,
+            use_wandb=args.use_wandb, ckpt_path=str(Path(args.ckpt_dir) / "pretrain"), ckpt_every=args.ckpt_every
+        ))
 
-    # Save encoder checkpoint (JEPA/contrastive path)
-    if args.method in ("jepa", "contrastive"):
-        save_checkpoint(str(Path(args.ckpt_dir) / "encoder_final.pt"), encoder=encoder.state_dict())
+    # Save encoder checkpoint
+    save_checkpoint(str(Path(args.ckpt_dir) / "encoder_final.pt"), encoder=encoder.state_dict())
 
-    # --- Labeled (finetuning/eval) --- #
+    # --- Labeled (finetuning) --- #
     if not (args.label_train_dir and args.label_val_dir):
         raise SystemExit("Full mode requires --label_train_dir and --label_val_dir (and optionally --label_test_dir).")
 
-    # Fast path for *baselines*: train linear head on exported embeddings
-    if args.method in ("molclr", "geomgcl", "himol"):
-        # Build temporary CSVs of (smiles,label) for train/val/test
-        train_csv = args.label_train_file or _write_csv_from_dir(args.label_train_dir, "smiles", args.label_col, "outputs/baselines/tmp_train.csv")
-        val_csv   = args.label_val_file   or _write_csv_from_dir(args.label_val_dir,   "smiles", args.label_col, "outputs/baselines/tmp_val.csv")
-        test_csv  = None
-        if args.label_test_dir:
-            test_csv = args.label_test_file or _write_csv_from_dir(args.label_test_dir, "smiles", args.label_col, "outputs/baselines/tmp_test.csv")
-
-        if not args.baseline_unlabeled_file:
-            raise SystemExit("--baseline_unlabeled_file is required for baselines in full mode.")
-
-        # Train/embed with external repo via adapters
-        _, emb_tr = baseline_pretrain_and_embed(args.method, args.baseline_unlabeled_file, train_csv, cfg_path=args.baseline_cfg)
-        _, emb_va = baseline_pretrain_and_embed(args.method, args.baseline_unlabeled_file, val_csv,   cfg_path=args.baseline_cfg)
-        emb_te = None
-        if test_csv:
-            _, emb_te = baseline_pretrain_and_embed(args.method, args.baseline_unlabeled_file, test_csv, cfg_path=args.baseline_cfg)
-
-        # Fit sklearn head with a simple val split
-        from training.train_on_embeddings import train_linear_on_embeddings_with_val
-        X_tr = np.load(emb_tr) if emb_tr.endswith(".npy") else pd.read_csv(emb_tr).to_numpy()
-        X_va = np.load(emb_va) if emb_va.endswith(".npy") else pd.read_csv(emb_va).to_numpy()
-        y_tr = pd.read_csv(train_csv)[args.label_col].to_numpy()
-        y_va = pd.read_csv(val_csv)[args.label_col].to_numpy()
-        X_te = (np.load(emb_te) if (emb_te and emb_te.endswith(".npy")) else (pd.read_csv(emb_te).to_numpy() if emb_te else None))
-        y_te = (pd.read_csv(test_csv)[args.label_col].to_numpy() if test_csv else None)
-        m = train_linear_on_embeddings_with_val(args.task_type, X_tr, y_tr, X_val=X_va, y_val=y_va, X_test=X_te, y_test=y_te)
-        print("Baseline (embeddings) metrics:", m)
-        return
-
-    # JEPA/contrastive: load Parquet dirs for finetune
     train_ds = load_directory_dataset(args.label_train_dir, ext="parquet", smiles_col="smiles",
                                       label_col=args.label_col, cache_dir=str(Path(args.cache_dir) / "label_train"),
                                       add_3d_features=args.add_3d)
@@ -356,11 +301,6 @@ def run_full_mode(args: argparse.Namespace) -> None:
     )
     print("Train/Val metrics:", {k: v for k, v in metrics.items() if k != "head"})
 
-    # Optional probing on validation set
-    if args.probe:
-        _maybe_probe("val", val_ds, encoder, args.task_type, args.probe_batch_size, args.probe_k,
-                     args.save_probe_embeddings, args.device)
-
     if args.label_test_dir:
         test_ds = load_directory_dataset(args.label_test_dir, ext="parquet", smiles_col="smiles",
                                          label_col=args.label_col, cache_dir=str(Path(args.cache_dir) / "label_test"),
@@ -373,7 +313,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
                                          batch_size=args.finetune_bs, device=args.device)
         print("Test metrics (simple merged baseline):", {k: v for k, v in test_metrics.items() if k != "head"})
 
-    # Optional Tox21 case study (single‑task)
+    # Optional Tox21 case study
     if _HAS_CASE_STUDY and args.tox21_csv and args.tox21_task:
         tox_metrics = run_tox21_case_study(
             tox21_csv=args.tox21_csv, task=args.tox21_task, add_3d=args.add_3d,
@@ -420,8 +360,10 @@ def run_grid_mode(args: argparse.Namespace) -> None:
     task_type = spec.get("task_type", "classification")
     device = spec.get("device", "cuda")
 
+    from experiments.grid_search import run_grid_search
     df = run_grid_search(
-        dataset_fn=dataset_fn,
+        unlabeled_dataset_fn=dataset_fn,   # NOTE: both fns are required
+        eval_dataset_fn=dataset_fn,
         methods=methods,
         task_type=task_type,
         seeds=seeds,
@@ -444,7 +386,6 @@ def run_grid_mode(args: argparse.Namespace) -> None:
         ckpt_every=int(spec.get("ckpt_every", 25)),
         use_scheduler=bool(spec.get("use_scheduler", True)),
         warmup_steps=int(spec.get("warmup_steps", 1000)),
-        # optional baseline params can also be included in the sweep YAML
         baseline_unlabeled_file=spec.get("baseline_unlabeled_file"),
         baseline_eval_file=spec.get("baseline_eval_file"),
         baseline_smiles_col=spec.get("baseline_smiles_col", "smiles"),
@@ -458,10 +399,6 @@ def run_grid_mode(args: argparse.Namespace) -> None:
     print(f"[grid] wrote: {out_csv}")
     print(df.head())
 
-    # NEW: auto‑report (bar + heatmaps + ranked CSV)
-    if args.auto_report:
-        build_full_report(df, metric=args.report_metric, out_dir=args.report_out)
-
 
 # --------------------------------- CLI ---------------------------------- #
 
@@ -472,7 +409,7 @@ if __name__ == "__main__":
 
     # shared model opts
     p.add_argument("--method", type=str, default="jepa", choices=["jepa", "contrastive", "molclr", "geomgcl", "himol"])
-    p.add_argument("--gnn_type", type=str, default="mpnn", help="mpnn|gcn|gat|edge_mpnn|graphsage|gin")
+    p.add_argument("--gnn_type", type=str, default="mpnn", help="mpnn|gcn|gat|edge_mpnn")
     p.add_argument("--hidden_dim", type=int, default=256)
     p.add_argument("--num_layers", type=int, default=3)
     p.add_argument("--ema_decay", type=float, default=0.99)
@@ -488,13 +425,6 @@ if __name__ == "__main__":
     p.add_argument("--proj_dim", type=int, default=64)        # contrastive
     p.add_argument("--temperature", type=float, default=0.1)  # contrastive
     p.add_argument("--cache_dir", type=str, default="cache")
-
-    # baselines (NEW)
-    p.add_argument("--baseline_cfg", type=str, default="adapters/config.yaml")
-    p.add_argument("--baseline_unlabeled_file", type=str, default=None)
-    p.add_argument("--label_train_file", type=str, default=None)
-    p.add_argument("--label_val_file", type=str, default=None)
-    p.add_argument("--label_test_file", type=str, default=None)
 
     # finetune
     p.add_argument("--label_train_dir", type=str, default=None)
@@ -514,13 +444,7 @@ if __name__ == "__main__":
     p.add_argument("--ckpt_every", type=int, default=10)
     p.add_argument("--warmup_steps", type=int, default=1000)
 
-    # probing (NEW)
-    p.add_argument("--probe", action="store_true")
-    p.add_argument("--probe_k", type=int, default=10, help="k for k-means clustering")
-    p.add_argument("--probe_batch_size", type=int, default=64)
-    p.add_argument("--save_probe_embeddings", type=str, default=None)
-
-    # tox21 (optional single‑task)
+    # tox21 (optional)
     p.add_argument("--tox21_csv", type=str, default=None)
     p.add_argument("--tox21_task", type=str, default=None)
     p.add_argument("--tox21_epochs", type=int, default=10)
@@ -528,9 +452,6 @@ if __name__ == "__main__":
 
     # grid
     p.add_argument("--sweep", type=str, default=None, help="YAML/JSON spec")
-    p.add_argument("--auto_report", action="store_true")
-    p.add_argument("--report_metric", type=str, default="roc_auc_mean")
-    p.add_argument("--report_out", type=str, default="outputs/report")
 
     args = p.parse_args()
 
