@@ -133,7 +133,7 @@ def _edge_dim_or_none(ds: GraphDataset) -> Optional[int]:
 # ----------------------------- Demo pipeline ----------------------------- #
 
 
-def demonstration(device: str = "cpu") -> None:
+def demonstration(device: str = "cpu", devices: int = 1) -> None:
     """Tiny run: JEPA vs contrastive on a toy dataset, with a tiny linear head and a synthetic case study."""
     smiles = [
         "CCO",
@@ -183,6 +183,7 @@ def demonstration(device: str = "cpu") -> None:
             contiguous=False,
             lr=1e-3,
             device=device,
+            devices=devices,
             reg_lambda=1e-4,
             use_wandb=False,
         )
@@ -199,6 +200,7 @@ def demonstration(device: str = "cpu") -> None:
             contiguous=False,
             lr=1e-3,
             device=device,
+            devices=devices,
             reg_lambda=1e-4,
         )
 
@@ -220,6 +222,7 @@ def demonstration(device: str = "cpu") -> None:
             mask_ratio=0.2,
             lr=1e-3,
             device=device,
+            devices=devices,
             temperature=0.1,
             use_wandb=False,
         )
@@ -233,6 +236,7 @@ def demonstration(device: str = "cpu") -> None:
             mask_ratio=0.2,
             lr=1e-3,
             device=device,
+            devices=devices,
             temperature=0.1,
         )
 
@@ -350,6 +354,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
                 contiguous=args.contiguous,
                 lr=args.pretrain_lr,
                 device=args.device,
+                devices=args.devices,
                 reg_lambda=1e-4,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
@@ -374,6 +379,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
                 contiguous=args.contiguous,
                 lr=args.pretrain_lr,
                 device=args.device,
+                devices=args.devices,
                 reg_lambda=1e-4,
                 random_rotate=args.aug_rotate,
                 mask_angle=args.aug_mask_angle,
@@ -390,6 +396,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
                 mask_ratio=args.mask_ratio,
                 lr=args.pretrain_lr,
                 device=args.device,
+                devices=args.devices,
                 temperature=args.temperature,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
@@ -411,6 +418,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
                 mask_ratio=args.mask_ratio,
                 lr=args.pretrain_lr,
                 device=args.device,
+                devices=args.devices,
                 temperature=args.temperature,
                 random_rotate=args.aug_rotate,
                 mask_angle=args.aug_mask_angle,
@@ -622,6 +630,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser("JEPA experiments")
     p.add_argument("--mode", type=str, default="demo", choices=["demo", "full", "grid"])
     p.add_argument("--device", type=str, default="cpu")
+    p.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP")
 
     # shared model opts
     p.add_argument(
@@ -687,7 +696,7 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     if args.mode == "demo":
-        demonstration(device=args.device)
+        demonstration(device=args.device, devices=args.devices)
     elif args.mode == "grid":
         if not args.sweep:
             raise SystemExit("--mode grid requires --sweep <spec.yaml|json>")
