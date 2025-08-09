@@ -85,31 +85,46 @@ def train_linear_head(
     lr: float = 1e-3,
     batch_size: int = 32,
     device: str = "cpu",
-    val_patience: int = 10,
+    patience: int = 10,
     use_scaffold: bool = False,
+    devices: int = 1,
 ) -> Dict[str, float]:
-    """Train a linear head on frozen encoder for classification or regression.
+    """Train a linear head on a frozen encoder for classification or regression.
 
-    The dataset must have labels. For classification tasks the labels are
-    assumed to be binary (0 or 1). The encoder is frozen and only the
-    linear head is trained. Early stopping is not implemented here for
-    simplicity.
+    When ``devices > 1`` the encoder and head are wrapped with
+    :class:`~torch.nn.parallel.DistributedDataParallel` and gradients are
+    synchronised across ranks. Validation loss for early stopping is
+    averaged across all processes to ensure a consistent stopping epoch.
 
     Args:
-        dataset: A GraphDataset with labels.
+        dataset: A ``GraphDataset`` with labels.
         encoder: A pre‑trained GNN encoder.
-        task_type: Either "classification" or "regression".
+        task_type: Either ``"classification"`` or ``"regression"``.
         epochs: Maximum number of epochs.
         lr: Learning rate for the optimiser.
         batch_size: Batch size for training.
         device: Computation device.
+        patience: Number of epochs with no improvement before stopping.
+        use_scaffold: Whether to use scaffold split if SMILES are provided.
+        devices: Number of GPUs for DDP.
 
     Returns:
-        A dictionary of metrics on the test set.
+        A dictionary of metrics on the test set (only populated on rank 0).
     """
     assert dataset.labels is not None, "Dataset must have labels."
     assert task_type in {"classification", "regression"}
-    encoder = encoder.to(device)
+
+    from utils.ddp import (
+        cleanup,
+        get_rank,
+        get_world_size,
+        init_distributed,
+        is_main_process,
+    )
+
+    distributed = devices > 1 and init_distributed()
+    device_t = torch.device(device)
+    encoder = encoder.to(device_t)
     for p in encoder.parameters():
         p.requires_grad = False
     num_graphs = len(dataset)
@@ -132,32 +147,43 @@ def train_linear_head(
         train_idx = indices[:train_end]
         val_idx = indices[train_end:val_end]
         test_idx = indices[val_end:]
-    head = nn.Linear(encoder.hidden_dim, 1).to(device)
+    head = nn.Linear(encoder.hidden_dim, 1).to(device_t)
+    if distributed:
+        encoder = nn.parallel.DistributedDataParallel(
+            encoder, device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None
+        )
+        head = nn.parallel.DistributedDataParallel(
+            head, device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None
+        )
     loss_fn = nn.BCEWithLogitsLoss() if task_type == "classification" else nn.MSELoss()
     optimiser = torch.optim.Adam(head.parameters(), lr=lr)
-    early_stopper = EarlyStopping(patience=val_patience) if val_patience > 0 else None
+    early_stopper = EarlyStopping(patience=patience) if patience > 0 else None
+
+    rank = get_rank() if distributed else 0
+    world = get_world_size() if distributed else 1
+    train_idx_rank = train_idx[rank::world]
+
     for epoch in range(epochs):
         encoder.eval()
         head.train()
         batch_losses = []
-        # Training loop
-        for start in range(0, len(train_idx), batch_size):
-            batch_indices = train_idx[start : start + batch_size]
+        for start in range(0, len(train_idx_rank), batch_size):
+            batch_indices = train_idx_rank[start : start + batch_size]
             batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
-            batch_x = batch_x.to(device)
-            batch_adj = batch_adj.to(device)
+            batch_x = batch_x.to(device_t)
+            batch_adj = batch_adj.to(device_t)
             node_emb = encoder(batch_x, batch_adj)
-            graph_emb = global_mean_pool(node_emb, batch_ptr.to(device))
+            graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
             preds = head(graph_emb).squeeze(1)
             targets = torch.tensor(
-                dataset.labels[batch_indices], dtype=torch.float32, device=device
+                dataset.labels[batch_indices], dtype=torch.float32, device=device_t
             )
             loss = loss_fn(preds, targets)
             batch_losses.append(loss.item())
             optimiser.zero_grad()
             loss.backward()
             optimiser.step()
-        # Compute validation loss for early stopping if required
+
         if early_stopper is not None:
             encoder.eval()
             head.eval()
@@ -165,41 +191,49 @@ def train_linear_head(
             for start in range(0, len(val_idx), batch_size):
                 batch_indices = val_idx[start : start + batch_size]
                 batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
-                batch_x = batch_x.to(device)
-                batch_adj = batch_adj.to(device)
+                batch_x = batch_x.to(device_t)
+                batch_adj = batch_adj.to(device_t)
                 node_emb = encoder(batch_x, batch_adj)
-                graph_emb = global_mean_pool(node_emb, batch_ptr.to(device))
+                graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
                 preds = head(graph_emb).squeeze(1)
                 targets = torch.tensor(
-                    dataset.labels[batch_indices], dtype=torch.float32, device=device
+                    dataset.labels[batch_indices], dtype=torch.float32, device=device_t
                 )
                 vloss = loss_fn(preds, targets).item()
                 val_losses.append(vloss)
             avg_val_loss = float(np.mean(val_losses)) if val_losses else 0.0
+            avg_t = torch.tensor([avg_val_loss], device=device_t)
+            if distributed:
+                torch.distributed.all_reduce(avg_t, op=torch.distributed.ReduceOp.AVG)
+            avg_val_loss = avg_t.item()
             if early_stopper.step(avg_val_loss):
                 break
-    # Evaluate on test set
-    encoder.eval()
-    head.eval()
-    all_targets = []
-    all_preds = []
-    for start in range(0, len(test_idx), batch_size):
-        batch_indices = test_idx[start : start + batch_size]
-        batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
-        batch_x = batch_x.to(device)
-        batch_adj = batch_adj.to(device)
-        node_emb = encoder(batch_x, batch_adj)
-        graph_emb = global_mean_pool(node_emb, batch_ptr.to(device))
-        preds = head(graph_emb).squeeze(1).detach().cpu().numpy()
-        targets = dataset.labels[batch_indices]
-        all_targets.append(targets)
-        all_preds.append(preds)
-    y_true = np.concatenate(all_targets)
-    y_pred = np.concatenate(all_preds)
-    if task_type == "classification":
-        metrics = compute_classification_metrics(y_true, y_pred)
-    else:
-        metrics = compute_regression_metrics(y_true, y_pred)
-    # Include the trained head in the metrics for downstream use (e.g., ranking in a case study).
-    metrics["head"] = head
+
+    metrics: Dict[str, float] = {}
+    if is_main_process() or not distributed:
+        encoder.eval()
+        head.eval()
+        all_targets = []
+        all_preds = []
+        for start in range(0, len(test_idx), batch_size):
+            batch_indices = test_idx[start : start + batch_size]
+            batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
+            batch_x = batch_x.to(device_t)
+            batch_adj = batch_adj.to(device_t)
+            node_emb = encoder(batch_x, batch_adj)
+            graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+            preds = head(graph_emb).squeeze(1).detach().cpu().numpy()
+            targets = dataset.labels[batch_indices]
+            all_targets.append(targets)
+            all_preds.append(preds)
+        y_true = np.concatenate(all_targets)
+        y_pred = np.concatenate(all_preds)
+        if task_type == "classification":
+            metrics = compute_classification_metrics(y_true, y_pred)
+        else:
+            metrics = compute_regression_metrics(y_true, y_pred)
+        metrics["head"] = head.module if isinstance(head, nn.parallel.DistributedDataParallel) else head
+
+    if distributed:
+        cleanup()
     return metrics

@@ -262,6 +262,7 @@ def demonstration(device: str = "cpu", devices: int = 1, use_scaffold: bool = Fa
         batch_size=5,
         device=device,
         use_scaffold=use_scaffold,
+        devices=devices,
     )
     logger.info(
         "Toy classification metrics: %s",
@@ -293,6 +294,7 @@ def _train_with_val_if_available(
     batch_size: int,
     device: str,
     val_patience: int,
+    devices: int = 1,
 ) -> dict:
     if _HAS_VAL_TRAIN and val_ds is not None:
         return train_linear_head_with_val(
@@ -305,9 +307,18 @@ def _train_with_val_if_available(
             batch_size=batch_size,
             device=device,
             val_patience=val_patience,
+            devices=devices,
         )
     return train_linear_head(
-        train_ds, encoder, task_type, epochs, lr, batch_size, device
+        train_ds,
+        encoder,
+        task_type,
+        epochs,
+        lr,
+        batch_size,
+        device,
+        patience=val_patience,
+        devices=devices,
     )
 
 
@@ -496,6 +507,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
         batch_size=args.finetune_bs,
         device=args.device,
         val_patience=args.val_patience,
+        devices=args.devices,
     )
     logger.info(
         "Train/Val metrics: %s", {k: v for k, v in metrics.items() if k != "head"}
