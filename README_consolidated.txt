@@ -58,3 +58,27 @@ from training.baselines import run_baseline
 run_baseline("molclr")
 PY
 ```
+
+## Unlabeled data downloads
+
+The `scripts/download_unlabeled.py` helper streams SMILES strings from the
+public ZINC and PubChem APIs and converts them into `GraphDataset` shards.
+Each run produces `train/`, `val/` and `test/` directories under
+`data/unlabeled/` containing parquet files with graph features.
+
+Example:
+
+```
+python scripts/download_unlabeled.py --total 10000 --out-root data/unlabeled
+```
+
+**Rate limiting.** Requests to both APIs are throttled via a configurable
+sleep interval (`--sleep`, default 0.5s) to stay within public quotas.
+
+**Resume logic.** Download progress (current ZINC page and PubChem CID) is
+stored in `progress.json`. Re‑run the script with `--resume` to continue from
+the last checkpoint.
+
+**Disk footprint.** With the default shard size each block of 1k molecules
+requires roughly 5–8 MB on disk, so 1 M molecules will occupy on the order of
+5–8 GB.
