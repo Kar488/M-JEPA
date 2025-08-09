@@ -5,8 +5,9 @@ from itertools import product
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
-import pandas as pd
+import pandas as pd 
 
+import torch
 # Encoder factory
 try:
     from models.factory import build_encoder
@@ -122,6 +123,29 @@ def _aggregate_seed_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, f
         )
     return out
 
+def _infer_dims_from_loader(loader: Any) -> Tuple[Optional[int], Optional[int]]:
+    """Infer node/edge feature dims from a PyG Batch in a DataLoader."""
+    it = iter(loader)
+    try:
+        batch = next(it)
+    except StopIteration:
+        return None, None
+    # PyG Batch: batch.x [N, F], batch.edge_attr [E, Fe] (may be None)
+    in_dim = int(batch.x.size(-1)) if hasattr(batch, "x") and batch.x is not None else None
+    edge_dim = (
+        int(batch.edge_attr.size(-1))
+        if hasattr(batch, "edge_attr") and batch.edge_attr is not None
+        else None
+    )
+    return in_dim, edge_dim
+
+def _edge_dim_or_none(ds_pre: Any) -> Optional[int]:
+    """Your existing util—kept for the non-prebuilt path. Implement as before."""
+    try:
+        ea = ds_pre.graphs[0].edge_attr
+        return int(ea.shape[1]) if ea is not None else None
+    except Exception:
+        return None
 
 def _run_one_config_method(
     cfg: Config,
@@ -142,11 +166,18 @@ def _run_one_config_method(
     baseline_label_col: Optional[str],
     baseline_cfg: str = "adapters/config.yaml",
     use_scaffold: bool = False,
+    prebuilt_loaders: Optional[Tuple[Any, Any, Any]] = None,
+
 ) -> Dict[str, Any]:
-    ds_pre = unlabeled_dataset_fn(cfg.add_3d)
-    ds_eval = eval_dataset_fn(cfg.add_3d)
-    input_dim = int(ds_pre.graphs[0].x.shape[1])
-    edge_dim = _edge_dim_or_none(ds_pre)
+    
+    if prebuilt_loaders is not None:
+        train_loader, val_loader, test_loader = prebuilt_loaders
+        input_dim, edge_dim = _infer_dims_from_loader(train_loader)
+    else:
+        ds_pre = unlabeled_dataset_fn(cfg.add_3d)
+        ds_eval = eval_dataset_fn(cfg.add_3d)
+        input_dim = int(ds_pre.graphs[0].x.shape[1])
+        edge_dim = _edge_dim_or_none(ds_pre)
 
     seed_metrics: List[Dict[str, float]] = []
     for seed in seeds:
