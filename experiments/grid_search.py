@@ -487,17 +487,6 @@ def run_grid_search(
     # ---------------- dataset wiring ----------------
     # We ONLY decide which path to use here; we DO NOT build datasets yet.
     use_single_builder = dataset_fn is not None
-
-    prebuilt_loaders = None
-    if use_single_builder:
-        pre_bs = getattr(cfg, "pretrain_batch_size", 32)
-        ft_bs  = getattr(cfg, "finetune_batch_size", 32)
-        try:
-            ds = dataset_fn(add_3d=add_3d)   # preferred
-        except TypeError:
-            ds = dataset_fn(add_3d)          # positional fallback
-        train_loader, val_loader, test_loader = _normalize_ds_to_loaders(ds, pre_bs, ft_bs)
-        prebuilt_loaders = (train_loader, val_loader, test_loader)
         
     rows: List[Dict[str, Any]] = []
     for cfg in cfgs:
@@ -506,12 +495,13 @@ def run_grid_search(
         # If tests provided dataset_fn, build loaders per-config
         prebuilt_loaders = None
         if use_single_builder:
-            # Prefer keyword form; fall back to positional if needed
+            pre_bs = getattr(cfg, "pretrain_batch_size", 32)
+            ft_bs  = getattr(cfg, "finetune_batch_size", 32)
             try:
-                ds = dataset_fn(add_3d=add_3d)
+                ds = dataset_fn(add_3d=add_3d)   # preferred
             except TypeError:
-                ds = dataset_fn(add_3d)
-            train_loader, val_loader, test_loader = _normalize_ds(ds)
+                ds = dataset_fn(add_3d)          # positional fallback
+            train_loader, val_loader, test_loader = _normalize_ds_to_loaders(ds, pre_bs, ft_bs)
             prebuilt_loaders = (train_loader, val_loader, test_loader)
 
         for method in methods:
