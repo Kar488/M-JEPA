@@ -116,6 +116,8 @@ def evaluate_dataset(
     encoder: GNNEncoder,
     data_root: Path,
     device: torch.device,
+    devices: int,
+    patience: int,
 ) -> Dict[str, float]:
     """Evaluate a dataset over multiple seeds and aggregate metrics."""
     dataset, label_cols, df = load_moleculenet_dataset(name, data_root)
@@ -126,7 +128,14 @@ def evaluate_dataset(
         for col in label_cols:
             labels = df[col].to_numpy()
             ds = GraphDataset(dataset.graphs, labels, dataset.smiles)
-            res = train_linear_head(ds, encoder, task_type, device=str(device))
+            res = train_linear_head(
+                ds,
+                encoder,
+                task_type,
+                device=str(device),
+                devices=devices,
+                patience=patience,
+            )
             # Exclude the trained head from aggregation
             res.pop("head", None)
             for k, v in res.items():
@@ -153,6 +162,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hidden-dim", type=int, default=256, help="Hidden dimension of the encoder")
     p.add_argument("--num-layers", type=int, default=3, help="Number of GNN layers")
     p.add_argument("--gnn-type", type=str, default="mpnn", help="Type of GNN encoder (mpnn/gcn/gat)")
+    p.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP training")
+    p.add_argument("--patience", type=int, default=10, help="Early stopping patience")
     return p.parse_args()
 
 
@@ -180,7 +191,9 @@ def main() -> None:
     results = []
     for name, task_type in DATASETS.items():
         try:
-            metrics = evaluate_dataset(name, task_type, encoder, data_root, device)
+            metrics = evaluate_dataset(
+                name, task_type, encoder, data_root, device, args.devices, args.patience
+            )
             row = {"dataset": name, **metrics}
             results.append(row)
             logger.info("%s: %s", name, metrics)
