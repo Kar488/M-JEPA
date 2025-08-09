@@ -371,6 +371,17 @@ def _normalize_ds(ds: Any) -> Tuple[Any, Any, Any]:
         if len(ds) == 1: return ds[0], None, None
     return ds, None, None
 
+def _build_ds(dataset_fn, add_3d, **kw) -> Tuple[Any, Any, Any]:
+    # Try common call shapes; prefer keyword form
+    try:
+        ds = dataset_fn(add_3d=add_3d, **kw)
+    except TypeError:
+        try:
+            ds = dataset_fn(add_3d)  # positional
+        except TypeError:
+            ds = dataset_fn(**kw)    # fallback (if test helper ignores add_3d)
+    return _normalize_ds(ds)
+
 def run_grid_search(
     *,
     dataset_fn: Optional[Callable[..., Any]] = None,
@@ -422,19 +433,11 @@ def run_grid_search(
         lrs,
     )
 
-     # ---------------- dataset wiring ----------------
-    # Prefer explicit builders if provided
-    train_loader = val_loader = test_loader = None
-    if dataset_fn is not None:
-        # Small test helper; try calling without args, else with task_type
-        try:
-            ds = dataset_fn()
-        except TypeError:
-            ds = dataset_fn(task_type=task_type)
-        train_loader, val_loader, test_loader = _normalize_ds(ds)
+    # ---------------- dataset wiring ----------------
+    # We ONLY decide which path to use here; we DO NOT build datasets yet.
+    use_single_builder = dataset_fn is not None
 
-    # If no single dataset_fn, fall back to your existing two-builders path
-    if dataset_fn is None:
+    if not use_single_builder:
         if unlabeled_dataset_fn is None or eval_dataset_fn is None:
             raise ValueError(
                 "Provide either `dataset_fn` (tests) or both "
@@ -443,6 +446,19 @@ def run_grid_search(
         
     rows: List[Dict[str, Any]] = []
     for cfg in cfgs:
+        add_3d = _cfg_get(cfg, "add_3d", False)  # tests sweep over this
+
+        # If tests provided dataset_fn, build loaders per-config
+        prebuilt_loaders = None
+        if use_single_builder:
+            # Prefer keyword form; fall back to positional if needed
+            try:
+                ds = dataset_fn(add_3d=add_3d)
+            except TypeError:
+                ds = dataset_fn(add_3d)
+            train_loader, val_loader, test_loader = _normalize_ds(ds)
+            prebuilt_loaders = (train_loader, val_loader, test_loader)
+
         for method in methods:
             rows.append(
                 _run_one_config_method(
@@ -464,6 +480,7 @@ def run_grid_search(
                     baseline_label_col,
                     baseline_cfg,
                     use_scaffold=use_scaffold,
+                    prebuilt_loaders=prebuilt_loaders,
                 )
             )
 
