@@ -12,6 +12,7 @@ import torch.optim as optim
 
 from data.dataset import GraphData, GraphDataset
 from data.augment import apply_graph_augmentations
+from training.regularization import l2_regularization
 from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.logging import maybe_init_wandb
 from utils.schedule import cosine_with_warmup
@@ -182,7 +183,7 @@ def train_jepa(
             h_t = torch.cat(tgt_list, dim=0).to(device_t)
             with torch.cuda.amp.autocast(enabled=use_amp and device_t.type == "cuda"):
                 pred = predictor(h_c)
-                l2_reg = sum((p**2).sum() for p in predictor.parameters())
+                l2_reg = l2_regularization(predictor)
                 loss = mse(pred, h_t) + reg_lambda * l2_reg
 
             opt.zero_grad(set_to_none=True)
