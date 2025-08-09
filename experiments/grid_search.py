@@ -371,16 +371,12 @@ def _normalize_ds(ds: Any) -> Tuple[Any, Any, Any]:
         if len(ds) == 1: return ds[0], None, None
     return ds, None, None
 
-def _build_ds(dataset_fn, add_3d, **kw) -> Tuple[Any, Any, Any]:
-    # Try common call shapes; prefer keyword form
-    try:
-        ds = dataset_fn(add_3d=add_3d, **kw)
-    except TypeError:
-        try:
-            ds = dataset_fn(add_3d)  # positional
-        except TypeError:
-            ds = dataset_fn(**kw)    # fallback (if test helper ignores add_3d)
-    return _normalize_ds(ds)
+def _cfg_get(cfg: Any, key: str, default=None):
+    # supports both dict-like and attr-like configs
+    if isinstance(cfg, dict):
+        return cfg.get(key, default)
+    return getattr(cfg, key, default)
+
 
 def run_grid_search(
     *,
