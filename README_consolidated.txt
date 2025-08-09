@@ -1,13 +1,4 @@
 
-This drop includes:
-- adapters/config.yaml : fill with your repo commands and paths.
-- adapters/cli_runner.py : small wrapper to call baseline repos (train + embed).
-- experiments/baseline_integration.py : glue for baseline pretrain/export.
-- training/train_on_embeddings.py : sklearn heads for embeddings (with val/test support).
-- experiments/grid_search.py : updated to support baselines, mean/std/CI across seeds.
-- experiments/reporting.py : simple plots (top-N bar, heatmap) and CSV ranking.
-- sweeps/zinc_small.yaml : example sweep spec; set baseline_* files to your paths.
-- main.py : previously generated; patched to support baseline full-mode.
 
 Example grid:
   python main.py --mode grid --sweep sweeps/zinc_small.yaml
@@ -58,3 +49,4 @@ from training.baselines import run_baseline
 run_baseline("molclr")
 PY
 ```
+Install RDKit first via conda (conda install -c conda-forge rdkit), then run pip install -r requirements.txt.
