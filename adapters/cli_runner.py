@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 import os, shlex, subprocess, yaml
 from pathlib import Path
@@ -13,20 +12,17 @@ class BaselineCLI:
         self.cmds: Dict[str, Dict[str, str]] = y["commands"]
 
     def _format(self, method: str, template: str, **kwargs) -> str:
-        repo = self.paths[method]
-        return template.format(repo=repo, **kwargs)
+        return template.format(repo=self.paths[method], **kwargs)
 
     def train(self, method: str, unlabeled: str, out_dir: str) -> None:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
-        cmd_tmpl = self.cmds[method]["train"]
-        cmd = self._format(method, cmd_tmpl, unlabeled=unlabeled, out=out_dir)
+        cmd = self._format(method, self.cmds[method]["train"], unlabeled=unlabeled, out=out_dir)
         print(f"[{method}] TRAIN:\n  {cmd}")
         subprocess.run(shlex.split(cmd), check=True)
 
     def embed(self, method: str, ckpt_path: str, smiles_file: str, emb_out: str) -> None:
         Path(emb_out).parent.mkdir(parents=True, exist_ok=True)
-        cmd_tmpl = self.cmds[method]["embed"]
-        cmd = self._format(method, cmd_tmpl, ckpt=ckpt_path, smiles=smiles_file, emb=emb_out)
+        cmd = self._format(method, self.cmds[method]["embed"], ckpt=ckpt_path, smiles=smiles_file, emb=emb_out)
         print(f"[{method}] EMBED:\n  {cmd}")
         subprocess.run(shlex.split(cmd), check=True)
 

@@ -1,53 +1,31 @@
-add_3d_options:
-- false
-- true
-baseline_cfg: adapters/config.yaml
-baseline_eval_file: data/esol_eval.csv
-baseline_label_col: ESOL
-baseline_smiles_col: smiles
-baseline_unlabeled_file: data/zinc_pubchem_train.csv
-cache_dir: cache/zinc
-contiguities:
-- false
-- true
-device: cuda
-ema_decays:
-- 0.95
-- 0.99
-finetune_batch_sizes:
-- 64
-finetune_epochs_options:
-- 30
-gnn_types:
-- mpnn
-- gcn
-- edge_mpnn
-hidden_dims:
-- 128
-- 256
-lrs:
-- 0.0001
-mask_ratios:
-- 0.1
-- 0.15
-methods:
-- jepa
-- contrastive
-- molclr
+unlabeled_dir: "data/ZINC_canonicalized"
+smiles_col: "smiles"
+cache_dir: "cache/zinc"
+prefix_filter: "train"
+device: "cuda"
+task_type: "classification"
+
+seeds: [42, 123, 456]
+methods: ["jepa", "contrastive", "molclr"]
+
+mask_ratios: [0.10, 0.15]
+contiguities: [false, true]
+hidden_dims: [128, 256]
+num_layers_list: [2, 3]
+gnn_types: ["mpnn", "gcn", "edge_mpnn"]
+ema_decays: [0.95, 0.99]
+add_3d_options: [false, true]
+
+pretrain_batch_sizes: [256]
+finetune_batch_sizes: [64]
+pretrain_epochs_options: [50]
+finetune_epochs_options: [30]
+lrs: [0.0001]
 n_jobs: 0
-num_layers_list:
-- 2
-- 3
-output_csv: outputs/grid_results.csv
-prefix_filter: train
-pretrain_batch_sizes:
-- 256
-pretrain_epochs_options:
-- 50
-seeds:
-- 42
-- 123
-- 456
-smiles_col: smiles
-task_type: classification
-unlabeled_dir: data/ZINC_canonicalized
+output_csv: "outputs/grid_results.csv"
+
+baseline_unlabeled_file: "data/zinc_pubchem_train.csv"
+baseline_eval_file: "data/esol_eval.csv"
+baseline_smiles_col: "smiles"
+baseline_label_col: "ESOL"
+baseline_cfg: "adapters/config.yaml"

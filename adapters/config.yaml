@@ -1,12 +1,14 @@
-
+# EDIT THESE PATHS & COMMANDS to match your local clones and CLIs.
 paths:
   molclr: "repos/MolCLR"
   geomgcl: "repos/GeomGCL"
-  himol: "repos/HiMol"
+  himol:  "repos/HiMol"
 
 outputs:
   root: "outputs/baselines"
 
+# .format variables:
+#  {repo} {unlabeled} {out} {ckpt} {smiles} {emb}
 commands:
   molclr:
     train: >
@@ -37,7 +39,5 @@ commands:
       --output {out}
       --epochs 100 --batch_size 256 --lr 1e-4
     embed: >
-      python {repo}/scripts/export_embeddings.py
-      --checkpoint {ckpt}
-      --input {smiles}
-      --output {emb}
+      python {ckpt} {smiles} {emb}
+      # Replace with the real embed command for HiMol.

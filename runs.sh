@@ -28,10 +28,38 @@ python main.py --mode full --device cuda --method molclr \
   --label_train_dir data/esol_scaffold/train \
   --label_val_dir   data/esol_scaffold/val \
   --label_test_dir  data/esol_scaffold/test \
+  --label_col ESOL --task_type regression \
+  --use_wandb --ckpt_dir outputs/checkpoints
+
+#Full run (JEPA or contrastive)
+python main.py --mode full --method jepa --device cuda \
+  --unlabeled_dir data/ZINC_canonicalized --label_train_dir data/esol_scaffold/train \
+  --label_val_dir data/esol_scaffold/val --label_col ESOL --task_type regression \
+  --gnn_type edge_mpnn --hidden_dim 256 --num_layers 3 --ema_decay 0.99 \
+  --mask_ratio 0.15 --pretrain_epochs 100 --pretrain_bs 256 --finetune_epochs 30
+
+#Baseline full run (MolCLR as example)
+python main.py --mode full --method molclr --device cuda \
+  --baseline_cfg adapters/config.yaml \
+  --baseline_unlabeled_file data/zinc_pubchem_train.csv \
+  --label_train_dir data/esol_scaffold/train \
+  --label_val_dir data/esol_scaffold/val \
   --label_col ESOL --task_type regression
 
+
 #Grid (JEPA + contrastive + baselines) + visuals
-python main.py --mode grid --sweep sweeps/zinc_small.yaml
+# Edit sweeps/zinc_small.yaml to point to your files (baseline_unlabeled_file, baseline_eval_file, etc.)
+python main.py --mode grid --sweep sweeps/zinc_small.yaml --auto_report --report_metric roc_auc_mean --report_out outputs/report
+
+#Tox21 multi‑task case study
+python main.py --mode full --device cuda --method jepa \
+  --unlabeled_dir data/ZINC_canonicalized \
+  --label_train_dir data/tox21_scaffold/train \
+  --label_val_dir data/tox21_scaffold/val \
+  --label_col NR-AR  --task_type classification \
+  --tox21_multitask --tox21_csv data/tox21.csv \
+  --tox21_tasks NR-AR,NR-ER,SR-p53 --tox21_epochs 20
+
 
 # Example post-processing usage
 from experiments.reporting import plot_topn_bar, pivot_heatmap, save_ranked_csv
