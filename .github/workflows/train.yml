@@ -52,3 +52,25 @@ jobs:
       - name: Train
         run: |
           python scripts/train_jepa.py --config configs/default.yaml
+
+      - name: Install micromamba
+        run: |
+          curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj bin/micromamba
+          mkdir -p ~/mamba && ./bin/micromamba shell init -s bash -p ~/mamba
+          echo 'eval "$(/root/mamba/bin/micromamba shell hook -s bash)"' >> $GITHUB_ENV
+
+      - name: Create & activate env
+        shell: bash
+        run: |
+          eval "$(/root/mamba/bin/micromamba shell hook -s bash)"
+          micromamba create -y -n jepa -c conda-forge python=3.10 rdkit openbabel
+          micromamba activate jepa
+          echo "MAMBA_RUN=eval \"$(/root/mamba/bin/micromamba shell hook -s bash)\" && micromamba activate jepa &&" >> $GITHUB_ENV
+
+      - name: Install torch & deps
+        shell: bash
+        run: |
+          $MAMBA_RUN pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
+          $MAMBA_RUN pip install torch-scatter -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
+          $MAMBA_RUN pip install --upgrade pip
+          $MAMBA_RUN pip install -r requirements.txt
