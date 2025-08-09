@@ -20,11 +20,13 @@ import torch.nn.functional as F
 
 from data.dataset import GraphDataset
 from models.encoder import GNNEncoder
-from utils.pooling import global_mean_pool
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
+from utils.pooling import global_mean_pool
 
 
-def stratified_split(indices: List[int], labels: np.ndarray, train_frac: float, val_frac: float) -> Tuple[List[int], List[int], List[int]]:
+def stratified_split(
+    indices: List[int], labels: np.ndarray, train_frac: float, val_frac: float
+) -> Tuple[List[int], List[int], List[int]]:
     """Perform a stratified split for binary classification.
 
     If labels contain only one class, fall back to a random split.
@@ -51,6 +53,7 @@ def stratified_split(indices: List[int], labels: np.ndarray, train_frac: float, 
     class1 = [idx for idx in indices if labels[idx] == 1]
     random.shuffle(class0)
     random.shuffle(class1)
+
     def split_class(class_indices: List[int]) -> Tuple[List[int], List[int], List[int]]:
         n = len(class_indices)
         train_end = int(train_frac * n)
@@ -60,6 +63,7 @@ def stratified_split(indices: List[int], labels: np.ndarray, train_frac: float, 
             class_indices[train_end:val_end],
             class_indices[val_end:],
         )
+
     c0_train, c0_val, c0_test = split_class(class0)
     c1_train, c1_val, c1_test = split_class(class1)
     train_idx = c0_train + c1_train
@@ -108,7 +112,9 @@ def train_linear_head(
     num_graphs = len(dataset)
     indices = list(range(num_graphs))
     if task_type == "classification":
-        train_idx, val_idx, test_idx = stratified_split(indices, dataset.labels, train_frac=0.8, val_frac=0.1)
+        train_idx, val_idx, test_idx = stratified_split(
+            indices, dataset.labels, train_frac=0.8, val_frac=0.1
+        )
     else:
         # For regression, random split
         random.shuffle(indices)
@@ -137,7 +143,9 @@ def train_linear_head(
             node_emb = encoder(batch_x, batch_adj)
             graph_emb = global_mean_pool(node_emb, batch_ptr.to(device))
             preds = head(graph_emb).squeeze(1)
-            targets = torch.tensor(dataset.labels[batch_indices], dtype=torch.float32, device=device)
+            targets = torch.tensor(
+                dataset.labels[batch_indices], dtype=torch.float32, device=device
+            )
             loss = loss_fn(preds, targets)
             batch_losses.append(loss.item())
             optimiser.zero_grad()
@@ -156,7 +164,9 @@ def train_linear_head(
                 node_emb = encoder(batch_x, batch_adj)
                 graph_emb = global_mean_pool(node_emb, batch_ptr.to(device))
                 preds = head(graph_emb).squeeze(1)
-                targets = torch.tensor(dataset.labels[batch_indices], dtype=torch.float32, device=device)
+                targets = torch.tensor(
+                    dataset.labels[batch_indices], dtype=torch.float32, device=device
+                )
                 vloss = loss_fn(preds, targets).item()
                 val_losses.append(vloss)
             avg_val_loss = float(np.mean(val_losses)) if val_losses else 0.0

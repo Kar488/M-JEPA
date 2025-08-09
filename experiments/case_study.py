@@ -21,11 +21,11 @@ from typing import List, Tuple
 import numpy as np
 
 from data.dataset import GraphDataset
+from models.ema import EMA
 from models.encoder import GNNEncoder
 from models.predictor import MLPPredictor
-from models.ema import EMA
-from training.unsupervised import train_jepa
 from training.supervised import train_linear_head
+from training.unsupervised import train_jepa
 from utils.seed import set_seed
 
 
@@ -58,8 +58,18 @@ def run_synthetic_case_study(
     hidden_dim = 128
     num_layers = 3
     gnn_type = "mpnn"
-    encoder = GNNEncoder(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers, gnn_type=gnn_type)
-    ema_encoder = GNNEncoder(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers, gnn_type=gnn_type)
+    encoder = GNNEncoder(
+        input_dim=input_dim,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        gnn_type=gnn_type,
+    )
+    ema_encoder = GNNEncoder(
+        input_dim=input_dim,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        gnn_type=gnn_type,
+    )
     ema_helper = EMA(encoder, decay=0.99)
     predictor = MLPPredictor(embed_dim=hidden_dim, hidden_dim=hidden_dim * 2)
     # Brief pretraining
@@ -96,10 +106,12 @@ def run_synthetic_case_study(
     batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(list(range(len(dataset))))
     # Convert to tensors on CPU
     import torch
+
     batch_x = batch_x
     batch_adj = batch_adj
     node_emb = encoder(batch_x, batch_adj)
     from utils.pooling import global_mean_pool
+
     graph_emb = global_mean_pool(node_emb, batch_ptr)
     preds = reg_head(graph_emb).squeeze(1).detach().numpy()
     # Rank molecules by predicted toxicity
@@ -107,13 +119,17 @@ def run_synthetic_case_study(
     # Exclude top predicted toxic compounds
     exclude_pred = sorted_indices[:num_top_exclude]
     remaining_pred = [i for i in range(len(smiles)) if i not in exclude_pred]
-    mean_predicted_after = float(np.mean(true_toxicity[remaining_pred])) if remaining_pred else 0.0
+    mean_predicted_after = (
+        float(np.mean(true_toxicity[remaining_pred])) if remaining_pred else 0.0
+    )
     # Random exclusion for comparison
     random_indices = np.arange(len(smiles))
     np.random.shuffle(random_indices)
     exclude_rand = random_indices[:num_top_exclude]
     remaining_rand = [i for i in range(len(smiles)) if i not in exclude_rand]
-    mean_random_after = float(np.mean(true_toxicity[remaining_rand])) if remaining_rand else 0.0
+    mean_random_after = (
+        float(np.mean(true_toxicity[remaining_rand])) if remaining_rand else 0.0
+    )
     mean_true = float(np.mean(true_toxicity))
     return mean_true, mean_random_after, mean_predicted_after
 
@@ -134,19 +150,21 @@ def run_synthetic_case_study(
 # chosen task, ranks compounds by predicted toxicity, and compares the
 # effect of excluding the top predictions versus random exclusions.
 
-from typing import Iterable, Optional
 import os
 import random
+from typing import Iterable, Optional
+
 import numpy as np
 
 from data.dataset import GraphDataset
+from models.ema import EMA
 from models.encoder import GNNEncoder
 from models.predictor import MLPPredictor
-from models.ema import EMA
-from training.unsupervised import train_jepa
 from training.supervised import train_linear_head
+from training.unsupervised import train_jepa
 from utils.pooling import global_mean_pool
 from utils.seed import set_seed
+
 
 def run_tox21_case_study(
     csv_path: str,
@@ -198,6 +216,7 @@ def run_tox21_case_study(
     # caching can consume significant disk space. Users can specify a
     # cache directory if desired.
     import pandas as pd
+
     df = pd.read_csv(csv_path)
     if smiles_col not in df.columns:
         raise ValueError(f"SMILES column '{smiles_col}' not found in {csv_path}")
@@ -232,8 +251,18 @@ def run_tox21_case_study(
     hidden_dim = 256
     num_layers = 3
     gnn_type = "mpnn"
-    encoder = GNNEncoder(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers, gnn_type=gnn_type)
-    ema_encoder = GNNEncoder(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers, gnn_type=gnn_type)
+    encoder = GNNEncoder(
+        input_dim=input_dim,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        gnn_type=gnn_type,
+    )
+    ema_encoder = GNNEncoder(
+        input_dim=input_dim,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        gnn_type=gnn_type,
+    )
     ema_helper = EMA(encoder, decay=0.99)
     predictor = MLPPredictor(embed_dim=hidden_dim, hidden_dim=hidden_dim * 2)
     # Pretrain JEPA on the entire dataset without labels
@@ -251,12 +280,14 @@ def run_tox21_case_study(
         device=device,
         reg_lambda=1e-4,
     )
+
     # Train regression head on the task using only training indices
     # Define a small helper to create a subset dataset
     def subset_dataset(ds: GraphDataset, idxs: Iterable[int]) -> GraphDataset:
         sub_graphs = [ds.graphs[i] for i in idxs]
         sub_labels = ds.labels[idxs] if ds.labels is not None else None
         return GraphDataset(sub_graphs, sub_labels)
+
     train_ds = subset_dataset(dataset, train_idx)
     val_ds = subset_dataset(dataset, val_idx)
     test_ds = subset_dataset(dataset, test_idx)
@@ -285,11 +316,13 @@ def run_tox21_case_study(
     batch_indices = list(range(num_total))
     batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
     import torch
+
     batch_x = batch_x.to(device)
     batch_adj = batch_adj.to(device)
     # Forward pass
     node_emb = encoder(batch_x, batch_adj)
     from utils.pooling import global_mean_pool
+
     graph_emb = global_mean_pool(node_emb, batch_ptr)
     preds = reg_head(graph_emb).squeeze(1).detach().cpu().numpy()
     # Rank molecules by predicted toxicity (higher is more toxic)
@@ -310,9 +343,20 @@ def run_tox21_case_study(
 if __name__ == "__main__":
     # Example usage of the case study with synthetic data
     smiles = [
-        "CCO", "CCN", "CCC", "c1ccccc1", "CC(=O)O", "CCOCC", "CNC", "CCCl", "COC", "CCN(CC)CC"
+        "CCO",
+        "CCN",
+        "CCC",
+        "c1ccccc1",
+        "CC(=O)O",
+        "CCOCC",
+        "CNC",
+        "CCCl",
+        "COC",
+        "CCN(CC)CC",
     ]
-    true_mean, rand_mean, pred_mean = run_synthetic_case_study(smiles, num_top_exclude=2, seed=42)
+    true_mean, rand_mean, pred_mean = run_synthetic_case_study(
+        smiles, num_top_exclude=2, seed=42
+    )
     print("Mean true toxicity:", true_mean)
     print("Mean toxicity after random exclusion:", rand_mean)
     print("Mean toxicity after predicted exclusion:", pred_mean)
