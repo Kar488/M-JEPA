@@ -22,6 +22,7 @@ the following methods before launching a run:
 
 ```
 export WANDB_API_KEY=YOUR_API_KEY
+## set it in repo secret
 ```
 
 ```python
