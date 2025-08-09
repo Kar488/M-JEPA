@@ -125,44 +125,52 @@ def _aggregate_seed_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, f
         )
     return out
 
-def _ensure_loader(obj: Any, batch_size: int, shuffle: bool) -> Optional[GeoLoader]:
+def _is_indexable(obj) -> bool:
+    return hasattr(obj, "__getitem__") and hasattr(obj, "__len__")
+
+def _ensure_loader(obj, batch_size: int, shuffle: bool):
     if obj is None:
         return None
-    # Already a loader (iterable but not indexable)
-    if hasattr(obj, "__iter__") and not hasattr(obj, "__getitem__"):
-        return obj  # assume it's a loader
-    # Likely a dataset: wrap it
-    return GeoLoader(obj, batch_size=batch_size, shuffle=shuffle)
+    # Already an iterable (loader or IterableDataset): leave it alone
+    if hasattr(obj, "__iter__") and not _is_indexable(obj):
+        return obj
+    # Indexable dataset: wrap
+    if _is_indexable(obj):
+        return GeoLoader(obj, batch_size=batch_size, shuffle=shuffle)
+    # Single Data object
+    return GeoLoader([obj], batch_size=1, shuffle=False)
 
-def _normalize_ds_to_loaders(ds: Any, pre_bs: int, ft_bs: int) -> Tuple[Any, Any, Any]:
+def _normalize_ds_to_loaders(ds, pre_bs: int, ft_bs: int):
     tr, va, te = _normalize_ds(ds)
     tr = _ensure_loader(tr, pre_bs, True)
     va = _ensure_loader(va, ft_bs, False)
     te = _ensure_loader(te, ft_bs, False)
     return tr, va, te
 
-def _infer_dims_from_loader(obj: Any) -> Tuple[Optional[int], Optional[int]]:
+def _infer_dims_from_loader(obj) -> Tuple[Optional[int], Optional[int]]:
     if obj is None:
         return None, None
-    # If loader: get first batch; if dataset: get first sample
-    batch = None
-    if hasattr(obj, "__iter__") and not hasattr(obj, "__getitem__"):  # loader
+
+    # loader or iterable dataset (no __getitem__)
+    if hasattr(obj, "__iter__") and not hasattr(obj, "__getitem__"):
         it = iter(obj)
         try:
             batch = next(it)
         except StopIteration:
             return None, None
-    else:  # dataset or single Data
-        try:
-            batch = obj[0]
-        except Exception:
-            batch = obj
+    # indexable dataset
+    elif hasattr(obj, "__getitem__"):
+        batch = obj[0]
+    else:
+        batch = obj  # single Data
+
     if isinstance(batch, (list, tuple)):
         batch = batch[0]
+
     x = getattr(batch, "x", None)
-    edge_attr = getattr(batch, "edge_attr", None)
+    ea = getattr(batch, "edge_attr", None)
     in_dim = int(x.size(-1)) if x is not None else None
-    edge_dim = int(edge_attr.size(-1)) if edge_attr is not None else None
+    edge_dim = int(ea.size(-1)) if ea is not None else None
     return in_dim, edge_dim
 
 def _edge_dim_or_none(ds_pre: Any) -> Optional[int]:
