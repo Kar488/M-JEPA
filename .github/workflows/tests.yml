@@ -7,6 +7,8 @@ on:
 jobs:
   unit:
     runs-on: ubuntu-latest
+    env:
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,6 +34,7 @@ jobs:
           # torch (CPU) then torch-scatter (CPU) with matching wheel
           pip install torch==2.2.1 --index-url https://download.pytorch.org/whl/cpu
           pip install torch-scatter==2.1.2 -f https://data.pyg.org/whl/torch-2.2.1+cpu.html
+          pip install wandb
           # rest of deps (requirements.txt must NOT include rdkit/rdkit-pypi)
           pip install -r requirements.txt
 
