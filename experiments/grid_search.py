@@ -361,8 +361,10 @@ def _run_one_config_method(
 
 def run_grid_search(
     *,
+    dataset_fn: Optional[Callable[..., Any]] = None,
     unlabeled_dataset_fn: Optional[Callable[[bool], Any]] = None,
     eval_dataset_fn: Optional[Callable[[bool], Any]] = None,
+    
     methods: Tuple[str, ...] = ("jepa",),
     task_type: str = "classification",
     seeds: Tuple[int, ...] = (42, 123, 456),
