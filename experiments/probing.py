@@ -1,36 +1,50 @@
 from __future__ import annotations
+from typing import List, Optional, Dict
 import numpy as np
-from sklearn.linear_model import LogisticRegression, Ridge
-from sklearn.metrics import (
-    roc_auc_score, average_precision_score,
-    mean_squared_error, mean_absolute_error, silhouette_score
-)
 from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+from sklearn.linear_model import LogisticRegression, Ridge
 
+from data.dataset import GraphDataset
 
-def linear_probing_classification(embeddings: np.ndarray, labels: np.ndarray) -> dict:
-    clf = LogisticRegression(max_iter=200, n_jobs=1)
-    clf.fit(embeddings, labels)
-    probs = clf.predict_proba(embeddings)[:, 1]
+def compute_embeddings(dataset: GraphDataset, encoder, batch_size: int = 64, device: str = "cuda") -> np.ndarray:
+    encoder.eval()
+    embs = []
+    G = dataset.graphs
+    for i in range(0, len(G), batch_size):
+        batch = G[i:i+batch_size]
+        import torch
+        with torch.no_grad():
+            H = encoder(batch).detach().cpu().numpy()
+        embs.append(H)
+    return np.concatenate(embs, axis=0) if embs else np.zeros((0, getattr(encoder, "hidden_dim", 1)))
+
+def linear_probe_classification(X: np.ndarray, y: np.ndarray) -> Dict[str, float]:
+    from sklearn.metrics import roc_auc_score, average_precision_score, accuracy_score
+    clf = LogisticRegression(max_iter=500, n_jobs=1)
+    clf.fit(X, y)
+    proba = clf.predict_proba(X)[:, 1]
     return {
-        "roc_auc": float(roc_auc_score(labels, probs)),
-        "pr_auc": float(average_precision_score(labels, probs)),
-        "acc": float((clf.predict(embeddings) == labels).mean()),
+        "probe_roc_auc": float(roc_auc_score(y, proba)),
+        "probe_pr_auc": float(average_precision_score(y, proba)),
+        "probe_acc": float(accuracy_score(y, clf.predict(X))),
     }
 
-
-def linear_probing_regression(embeddings: np.ndarray, targets: np.ndarray) -> dict:
+def linear_probe_regression(X: np.ndarray, y: np.ndarray) -> Dict[str, float]:
+    from sklearn.metrics import mean_squared_error, mean_absolute_error
     reg = Ridge(alpha=1.0, random_state=42)
-    reg.fit(embeddings, targets)
-    preds = reg.predict(embeddings)
+    reg.fit(X, y)
+    pred = reg.predict(X)
     return {
-        "rmse": float(np.sqrt(mean_squared_error(targets, preds))),
-        "mae": float(mean_absolute_error(targets, preds)),
-        "r2": float(reg.score(embeddings, targets)),
+        "probe_rmse": float(np.sqrt(mean_squared_error(y, pred))),
+        "probe_mae": float(mean_absolute_error(y, pred)),
+        "probe_r2": float(reg.score(X, y)),
     }
 
-
-def clustering_quality(embeddings: np.ndarray, n_clusters: int = 10) -> dict:
-    km = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
-    labels = km.fit_predict(embeddings)
-    return {"silhouette": float(silhouette_score(embeddings, labels))}
+def clustering_quality(X: np.ndarray, n_clusters: int = 10) -> Dict[str, float]:
+    if len(X) < max(2, n_clusters):
+        return {"cluster_silhouette": 0.0}
+    km = KMeans(n_clusters=n_clusters, n_init="auto", random_state=42)
+    lab = km.fit_predict(X)
+    sil = float(silhouette_score(X, lab)) if len(np.unique(lab)) > 1 else 0.0
+    return {"cluster_silhouette": sil}
