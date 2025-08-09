@@ -15,6 +15,12 @@ from data.augment import apply_graph_augmentations
 from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.logging import maybe_init_wandb
 from utils.schedule import cosine_with_warmup
+from utils.ddp import (
+    DistributedSamplerList,
+    init_distributed,
+    is_main_process,
+    cleanup,
+)
 
 
 def _batch_iter(graphs: List[GraphData], batch_size: int):
@@ -80,6 +86,7 @@ def train_jepa(
     contiguous: bool = False,
     lr: float = 1e-4,
     device: str = "cuda",
+    devices: int = 1,
     reg_lambda: float = 1e-4,
     use_wandb: bool = False,
     wandb_project: str = "m-jepa",
@@ -93,10 +100,24 @@ def train_jepa(
     perturb_dihedral: bool = False,
     resume_from: Optional[str] = None,
 ) -> List[float]:
+    distributed = init_distributed()
     device_t = torch.device(device)
-    encoder.to(device_t).train()
-    ema_encoder.to(device_t).eval()
-    predictor.to(device_t).train()
+    if distributed:
+        encoder = nn.parallel.DistributedDataParallel(
+            encoder.to(device_t),
+            device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None,
+        )
+        predictor = nn.parallel.DistributedDataParallel(
+            predictor.to(device_t),
+            device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None,
+        )
+        ema_encoder = ema_encoder.to(device_t).eval()
+        encoder.train()
+        predictor.train()
+    else:
+        encoder.to(device_t).train()
+        ema_encoder.to(device_t).eval()
+        predictor.to(device_t).train()
     opt = optim.Adam(list(encoder.parameters()) + list(predictor.parameters()), lr=lr)
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp and device_t.type == "cuda")
     steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
@@ -132,7 +153,10 @@ def train_jepa(
 
     for ep in range(start_epoch, epochs + 1):
         ep_loss = 0.0
-        for batch in _batch_iter(dataset.graphs, batch_size):
+        data_iter = (
+            list(DistributedSamplerList(dataset.graphs)) if distributed else dataset.graphs
+        )
+        for batch in _batch_iter(data_iter, batch_size):
             ctx_list, tgt_list = [], []
             for g in batch:
                 if random_rotate or mask_angle or perturb_dihedral:
@@ -175,7 +199,7 @@ def train_jepa(
             lv = float(loss.detach().cpu().item())
             ep_loss += lv
             step += 1
-            if wb:
+            if wb and is_main_process():
                 wb.log(
                     {
                         "train/jepa_loss": lv,
@@ -186,28 +210,31 @@ def train_jepa(
                 )
 
         ep_loss /= steps_per_epoch
-        losses.append(ep_loss)
-        if wb:
-            wb.log({"epoch/jepa_loss": ep_loss, "epoch": ep})
-        if ckpt_path and (ep % ckpt_every == 0 or ep == epochs):
-            save_checkpoint(
-                os.path.join(ckpt_path, f"jepa_ep{ep:04d}.pt"),
-                encoder=encoder.state_dict(),
-                ema_encoder=ema_encoder.state_dict(),
-                predictor=predictor.state_dict(),
-                optimizer=opt.state_dict(),
-                scaler=(
-                    scaler.state_dict()
-                    if isinstance(scaler, torch.cuda.amp.GradScaler)
-                    else None
-                ),
-                epoch=ep,
-            )
+        if is_main_process():
+            losses.append(ep_loss)
+            if wb:
+                wb.log({"epoch/jepa_loss": ep_loss, "epoch": ep})
+            if ckpt_path and (ep % ckpt_every == 0 or ep == epochs):
+                save_checkpoint(
+                    os.path.join(ckpt_path, f"jepa_ep{ep:04d}.pt"),
+                    encoder=encoder.state_dict(),
+                    ema_encoder=ema_encoder.state_dict(),
+                    predictor=predictor.state_dict(),
+                    optimizer=opt.state_dict(),
+                    scaler=(
+                        scaler.state_dict()
+                        if isinstance(scaler, torch.cuda.amp.GradScaler)
+                        else None
+                    ),
+                    epoch=ep,
+                )
     try:
-        if wb:
+        if wb and is_main_process():
             wb.finish()
     except Exception:
         pass
+    if distributed:
+        cleanup()
     return losses
 
 
@@ -221,6 +248,7 @@ def train_contrastive(
     mask_ratio: float = 0.15,
     lr: float = 1e-4,
     device: str = "cuda",
+    devices: int = 1,
     temperature: float = 0.1,
     use_wandb: bool = False,
     wandb_project: str = "m-jepa",
@@ -234,14 +262,29 @@ def train_contrastive(
     perturb_dihedral: bool = False,
     resume_from: Optional[str] = None,
 ) -> List[float]:
+    distributed = init_distributed()
     device_t = torch.device(device)
-    encoder.to(device_t).train()
-    proj = nn.Sequential(
-        nn.Linear(256, projection_dim),
-        nn.ReLU(inplace=True),
-        nn.Linear(projection_dim, projection_dim),
-    ).to(device_t)
-    opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
+    if distributed:
+        encoder = nn.parallel.DistributedDataParallel(
+            encoder.to(device_t),
+            device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None,
+        )
+        proj = nn.Sequential(
+            nn.Linear(256, projection_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(projection_dim, projection_dim),
+        ).to(device_t)
+        opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
+        encoder.train()
+        proj.train()
+    else:
+        encoder.to(device_t).train()
+        proj = nn.Sequential(
+            nn.Linear(256, projection_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(projection_dim, projection_dim),
+        ).to(device_t)
+        opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp and device_t.type == "cuda")
     steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
     total_steps = epochs * steps_per_epoch
@@ -270,7 +313,10 @@ def train_contrastive(
 
     for ep in range(1, epochs + 1):
         ep_loss = 0.0
-        for batch in _batch_iter(dataset.graphs, batch_size):
+        data_iter = (
+            list(DistributedSamplerList(dataset.graphs)) if distributed else dataset.graphs
+        )
+        for batch in _batch_iter(data_iter, batch_size):
             z1_list, z2_list = [], []
             for g in batch:
                 if random_rotate or mask_angle or perturb_dihedral:
@@ -317,7 +363,7 @@ def train_contrastive(
             lv = float(loss.detach().cpu().item())
             ep_loss += lv
             step += 1
-            if wb:
+            if wb and is_main_process():
                 wb.log(
                     {
                         "train/contrastive_loss": lv,
@@ -327,25 +373,28 @@ def train_contrastive(
                     }
                 )
         ep_loss /= steps_per_epoch
-        losses.append(ep_loss)
-        if wb:
-            wb.log({"epoch/contrastive_loss": ep_loss, "epoch": ep})
-        if ckpt_path and (ep % ckpt_every == 0 or ep == epochs):
-            save_checkpoint(
-                os.path.join(ckpt_path, f"contrastive_ep{ep:04d}.pt"),
-                encoder=encoder.state_dict(),
-                projector=proj.state_dict(),
-                optimizer=opt.state_dict(),
-                scaler=(
-                    scaler.state_dict()
-                    if isinstance(scaler, torch.cuda.amp.GradScaler)
-                    else None
-                ),
-                epoch=ep,
-            )
+        if is_main_process():
+            losses.append(ep_loss)
+            if wb:
+                wb.log({"epoch/contrastive_loss": ep_loss, "epoch": ep})
+            if ckpt_path and (ep % ckpt_every == 0 or ep == epochs):
+                save_checkpoint(
+                    os.path.join(ckpt_path, f"contrastive_ep{ep:04d}.pt"),
+                    encoder=encoder.state_dict(),
+                    projector=proj.state_dict(),
+                    optimizer=opt.state_dict(),
+                    scaler=(
+                        scaler.state_dict()
+                        if isinstance(scaler, torch.cuda.amp.GradScaler)
+                        else None
+                    ),
+                    epoch=ep,
+                )
     try:
-        if wb:
+        if wb and is_main_process():
             wb.finish()
     except Exception:
         pass
+    if distributed:
+        cleanup()
     return losses

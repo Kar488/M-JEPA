@@ -22,6 +22,7 @@ from data.dataset import GraphDataset
 from models.encoder import GNNEncoder
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.pooling import global_mean_pool
+from utils.early_stopping import EarlyStopping
 
 
 def stratified_split(
@@ -126,10 +127,7 @@ def train_linear_head(
     head = nn.Linear(encoder.hidden_dim, 1).to(device)
     loss_fn = nn.BCEWithLogitsLoss() if task_type == "classification" else nn.MSELoss()
     optimiser = torch.optim.Adam(head.parameters(), lr=lr)
-    # Implement simple early stopping based on validation loss. If val_patience <= 0,
-    # the model will train for the full number of epochs without early stopping.
-    best_val_loss: Optional[float] = None
-    patience_counter = 0
+    early_stopper = EarlyStopping(patience=val_patience) if val_patience > 0 else None
     for epoch in range(epochs):
         encoder.eval()
         head.train()
@@ -152,7 +150,7 @@ def train_linear_head(
             loss.backward()
             optimiser.step()
         # Compute validation loss for early stopping if required
-        if val_patience > 0:
+        if early_stopper is not None:
             encoder.eval()
             head.eval()
             val_losses = []
@@ -170,14 +168,7 @@ def train_linear_head(
                 vloss = loss_fn(preds, targets).item()
                 val_losses.append(vloss)
             avg_val_loss = float(np.mean(val_losses)) if val_losses else 0.0
-            # Update early stopping counters
-            if best_val_loss is None or avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                patience_counter = 0
-            else:
-                patience_counter += 1
-            if patience_counter >= val_patience:
-                # print(f"Early stopping at epoch {epoch+1} with val loss {avg_val_loss:.4f}")
+            if early_stopper.step(avg_val_loss):
                 break
     # Evaluate on test set
     encoder.eval()
