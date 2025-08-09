@@ -1,8 +1,9 @@
-"""Seed setting utility for reproducibility.
+"""Make experiments repeatable by fixing randomness.
 
-This module provides a helper function to set Python, NumPy and PyTorch
-random seeds. Setting a fixed seed allows experiments to be
-deterministic when using the same environment.
+This module offers a helper function that seeds Python's ``random`` module,
+NumPy, and PyTorch so that runs produce identical results when executed in
+the same environment. By controlling these sources of randomness, it enables
+deterministic behavior for reproducible experiments.
 """
 
 from __future__ import annotations
@@ -14,7 +15,13 @@ import torch
 
 
 def set_seed(seed: int) -> None:
-    """Set random seeds for reproducibility."""
+    """Tell random number makers to start at the same place.
+
+    Initializes the seed for Python's ``random`` module, NumPy, and PyTorch.
+    When CUDA is available, the same seed is applied across all GPU devices,
+    ensuring that model training and evaluation are deterministic when run in
+    identical environments.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
