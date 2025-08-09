@@ -11,6 +11,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from data.dataset import GraphData, GraphDataset
+from data.augment import apply_graph_augmentations
 from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.logging import maybe_init_wandb
 from utils.schedule import cosine_with_warmup
@@ -87,6 +88,9 @@ def train_jepa(
     use_scheduler: bool = True,
     warmup_steps: int = 1000,
     use_amp: bool = True,
+    random_rotate: bool = False,
+    mask_angle: bool = False,
+    perturb_dihedral: bool = False,
     resume_from: Optional[str] = None,
 ) -> List[float]:
     device_t = torch.device(device)
@@ -131,6 +135,13 @@ def train_jepa(
         for batch in _batch_iter(dataset.graphs, batch_size):
             ctx_list, tgt_list = [], []
             for g in batch:
+                if random_rotate or mask_angle or perturb_dihedral:
+                    g = apply_graph_augmentations(
+                        g,
+                        rotate=random_rotate,
+                        mask_angle=mask_angle,
+                        perturb_dihedral=perturb_dihedral,
+                    )
                 g_ctx, g_tgt = _mask_subgraph(g, mask_ratio, contiguous)
                 with torch.cuda.amp.autocast(
                     enabled=use_amp and device_t.type == "cuda"
@@ -217,7 +228,10 @@ def train_contrastive(
     ckpt_every: int = 10,
     use_scheduler: bool = True,
     warmup_steps: int = 1000,
-    use_amp: bool = True,
+    use_amp: bool = True,    
+    random_rotate: bool = False,
+    mask_angle: bool = False,
+    perturb_dihedral: bool = False,
     resume_from: Optional[str] = None,
 ) -> List[float]:
     device_t = torch.device(device)
@@ -259,6 +273,13 @@ def train_contrastive(
         for batch in _batch_iter(dataset.graphs, batch_size):
             z1_list, z2_list = [], []
             for g in batch:
+                if random_rotate or mask_angle or perturb_dihedral:
+                    g = apply_graph_augmentations(
+                        g,
+                        rotate=random_rotate,
+                        mask_angle=mask_angle,
+                        perturb_dihedral=perturb_dihedral,
+                    )
                 v1, _ = _mask_subgraph(g, mask_ratio, contiguous=False)
                 v2, _ = _mask_subgraph(g, mask_ratio, contiguous=False)
                 with torch.cuda.amp.autocast(
