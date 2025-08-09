@@ -128,17 +128,45 @@ def _aggregate_seed_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, f
 def _is_indexable(obj) -> bool:
     return hasattr(obj, "__getitem__") and hasattr(obj, "__len__")
 
-def _ensure_loader(obj, batch_size: int, shuffle: bool):
+def _as_data_sequence(obj: Any):
+    """Return a sequence of PyG Data objects for DataLoader to consume."""
     if obj is None:
         return None
-    # Already an iterable (loader or IterableDataset): leave it alone
-    if hasattr(obj, "__iter__") and not _is_indexable(obj):
-        return obj
-    # Indexable dataset: wrap
+    # If this is your GraphDataset, use its .graphs field
+    if hasattr(obj, "graphs"):
+        return obj.graphs
+    # Already a sequence of Data objects
     if _is_indexable(obj):
-        return GeoLoader(obj, batch_size=batch_size, shuffle=shuffle)
+        return obj
     # Single Data object
-    return GeoLoader([obj], batch_size=1, shuffle=False)
+    if hasattr(obj, "x"):  # crude but effective for PyG Data
+        return [obj]
+    # Otherwise leave None and let caller treat it as an iterable/loader
+    return None
+
+def _ensure_loader(obj: Any, batch_size: int, shuffle: bool):
+    if obj is None:
+        return None
+    # If it's already a loader-like iterable (and not indexable), use as-is
+    if hasattr(obj, "__iter__") and not _is_indexable(obj) and not hasattr(obj, "graphs"):
+        return obj
+    # Convert known dataset containers to a sequence of Data
+    data_seq = _as_data_sequence(obj)
+    if data_seq is not None:
+        return GeoLoader(data_seq, batch_size=batch_size, shuffle=shuffle)
+    # Fallback: treat as iterable (last resort)
+    return obj
+
+def _normalize_ds(ds: Any) -> Tuple[Any, Any, Any]:
+    if isinstance(ds, dict):
+        return (ds.get("train") or ds.get("train_loader"),
+                ds.get("val") or ds.get("valid") or ds.get("val_loader"),
+                ds.get("test") or ds.get("test_loader"))
+    if isinstance(ds, (list, tuple)):
+        if len(ds) == 3: return ds[0], ds[1], ds[2]
+        if len(ds) == 2: return ds[0], ds[1], None
+        if len(ds) == 1: return ds[0], None, None
+    return ds, None, None
 
 def _normalize_ds_to_loaders(ds, pre_bs: int, ft_bs: int):
     tr, va, te = _normalize_ds(ds)
@@ -150,25 +178,27 @@ def _normalize_ds_to_loaders(ds, pre_bs: int, ft_bs: int):
 def _infer_dims_from_loader(obj) -> Tuple[Optional[int], Optional[int]]:
     if obj is None:
         return None, None
-
-    # loader or iterable dataset (no __getitem__)
-    if hasattr(obj, "__iter__") and not hasattr(obj, "__getitem__"):
+    # If we were handed a dataset-like container, turn it into a first item
+    if hasattr(obj, "graphs"):
+        sample = obj.graphs[0] if len(obj.graphs) else None
+    elif _is_indexable(obj):
+        sample = obj[0]
+    elif hasattr(obj, "__iter__"):
         it = iter(obj)
         try:
-            batch = next(it)
+            sample = next(it)
         except StopIteration:
-            return None, None
-    # indexable dataset
-    elif hasattr(obj, "__getitem__"):
-        batch = obj[0]
+            sample = None
     else:
-        batch = obj  # single Data
+        sample = obj
 
-    if isinstance(batch, (list, tuple)):
-        batch = batch[0]
+    if sample is None:
+        return None, None
+    if isinstance(sample, (list, tuple)):
+        sample = sample[0]
 
-    x = getattr(batch, "x", None)
-    ea = getattr(batch, "edge_attr", None)
+    x = getattr(sample, "x", None)
+    ea = getattr(sample, "edge_attr", None)
     in_dim = int(x.size(-1)) if x is not None else None
     edge_dim = int(ea.size(-1)) if ea is not None else None
     return in_dim, edge_dim
@@ -422,17 +452,6 @@ def _run_one_config_method(
     agg = _aggregate_seed_metrics(seed_metrics)
     row = {**asdict(cfg), **agg, "method": method, "seeds": len(list(seeds))}
     return row
-
-def _normalize_ds(ds: Any) -> Tuple[Any, Any, Any]:
-    if isinstance(ds, dict):
-        return ds.get("train") or ds.get("train_loader"), \
-               ds.get("val") or ds.get("valid") or ds.get("val_loader"), \
-               ds.get("test") or ds.get("test_loader")
-    if isinstance(ds, (list, tuple)):
-        if len(ds) == 3: return ds[0], ds[1], ds[2]
-        if len(ds) == 2: return ds[0], ds[1], None
-        if len(ds) == 1: return ds[0], None, None
-    return ds, None, None
 
 def _cfg_get(cfg: Any, key: str, default=None):
     # supports both dict-like and attr-like configs
