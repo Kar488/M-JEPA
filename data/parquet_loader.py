@@ -42,7 +42,12 @@ from torch_geometric.loader import DataLoader
 
 
 def _row_to_data(row: dict) -> Data:
-    """Convert a single DataFrame row (as dict) to ``Data``."""
+    """Turn a table row into a handy graph object.
+
+    Convert a dictionary representation of one DataFrame row into a
+    ``torch_geometric.data.Data`` instance, handling node features, edge
+    indices, optional edge attributes and labels.
+    """
     x = torch.as_tensor(row["x"], dtype=torch.float)
     edge_index = torch.as_tensor(row["edge_index"], dtype=torch.long)
     if edge_index.numel() > 0 and edge_index.shape[0] != 2:
@@ -57,7 +62,11 @@ def _row_to_data(row: dict) -> Data:
 
 
 class ParquetGraphDataset(torch.utils.data.Dataset):
-    """In‑memory dataset backed by one or more Parquet files."""
+    """Keep a bunch of graphs ready for quick grabs.
+
+    Load graphs from one or more Parquet files into memory so they can be
+    served through the standard PyTorch ``Dataset`` interface.
+    """
 
     def __init__(self, files: Sequence[Path]):
         graphs: List[Data] = []
@@ -75,14 +84,11 @@ class ParquetGraphDataset(torch.utils.data.Dataset):
 
 
 def _split_files(root: Path, split: str) -> List[Path]:
-    """Return a list of Parquet files for a given split.
+    """Find all the files that belong to one data split.
 
-    The function looks for files following two conventions:
-
-    ``<split>.parquet``
-        A single file for the entire split.
-    ``<split>_part_*.parquet``
-        Multiple shards for the split (e.g. ``train_part_0.parquet``).
+    Look for ``<split>.parquet`` or sharded files matching
+    ``<split>_part_*.parquet`` under ``root`` and return them in sorted
+    order.  Raise :class:`FileNotFoundError` if none exist.
     """
 
     pat_sharded = f"{split}_part_*.parquet"
@@ -103,18 +109,12 @@ def load_dataloaders(
     num_workers: int = 0,
     **loader_kwargs,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    """Build ``DataLoader`` objects for train/val/test splits.
+    """Hand out train, validation and test batches.
 
-    Parameters
-    ----------
-    parquet_root:
-        Directory containing ``train``/``val``/``test`` parquet files.
-    batch_size:
-        Number of graphs per batch.
-    num_workers:
-        Passed to :class:`torch_geometric.loader.DataLoader`.
-    loader_kwargs:
-        Additional keyword arguments forwarded to ``DataLoader``.
+    Construct :class:`torch_geometric.loader.DataLoader` objects for each
+    split by reading preprocessed graphs from Parquet files located under
+    ``parquet_root``.  Additional ``DataLoader`` keyword arguments can be
+    supplied via ``loader_kwargs``.
     """
 
     root = Path(parquet_root)
