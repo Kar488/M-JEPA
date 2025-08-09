@@ -40,10 +40,10 @@ jobs:
             pip install scikit-learn pandas pyarrow fastparquet joblib matplotlib pytest pyyaml
           fi
 
-      - name: Run quick tests (exclude gpu & slow)
+      - name: Run quick tests with coverage (exclude gpu & slow)
         shell: bash -l {0}
         run: |
-          pytest -q -m "not gpu and not slow"
+          pytest --cov -m "not gpu and not slow"
 
       - name: Upload test artifacts (optional)
         if: always()
@@ -88,10 +88,10 @@ jobs:
             pip install scikit-learn pandas pyarrow fastparquet joblib matplotlib pytest pyyaml
           fi
 
-      - name: Run extended tests (exclude gpu only)
+      - name: Run extended tests with coverage (exclude gpu only)
         shell: bash -l {0}
         run: |
-          pytest -q -m "not gpu"
+          pytest --cov -m "not gpu"
 
       - name: Upload test artifacts (optional)
         if: always()
