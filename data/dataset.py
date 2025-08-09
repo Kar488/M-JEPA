@@ -3,9 +3,10 @@ from __future__ import annotations
 import os
 import pickle
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
+import torch
 
 # RDKit imports
 try:
@@ -26,6 +27,26 @@ class GraphData:
     edge_index: np.ndarray  # [2, num_edges] (directed; add reverse edges)
     edge_attr: Optional[np.ndarray] = None  # [num_edges, edge_feat_dim]
 
+    def num_nodes(self) -> int:
+        """Return the number of nodes in the graph."""
+        return int(self.x.shape[0])
+
+    def to_tensors(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Convert the graph to PyTorch tensors.
+
+        Returns:
+            node_features: Tensor of shape (N, F).
+            adjacency: Dense adjacency tensor of shape (N, N).
+        """
+        x = torch.as_tensor(self.x, dtype=torch.float32)
+        n = x.shape[0]
+        adj = torch.zeros((n, n), dtype=torch.float32)
+        if self.edge_index.size > 0:
+            i = torch.as_tensor(self.edge_index[0], dtype=torch.long)
+            j = torch.as_tensor(self.edge_index[1], dtype=torch.long)
+            adj[i, j] = 1.0
+        return x, adj
+
 
 class GraphDataset:
     def __init__(
@@ -37,6 +58,54 @@ class GraphDataset:
         self.graphs = graphs
         self.labels = labels
         self.smiles = smiles
+
+    def __len__(self) -> int:
+        return len(self.graphs)
+
+    def get_batch(
+        self, indices: List[int]
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        """Construct a mini-batch of graphs.
+
+        Graphs are combined by block-diagonal stacking of their adjacency
+        matrices and concatenation of node features.
+
+        Args:
+            indices: Indices of graphs to include in the batch.
+
+        Returns:
+            batch_x: Tensor of shape (sum_i N_i, F) containing all node features.
+            batch_adj: Dense block-diagonal adjacency matrix.
+            batch_ptr: Tensor marking graph boundaries within the batch.
+            batch_labels: Labels tensor if dataset is labelled, else ``None``.
+        """
+        node_features: List[torch.Tensor] = []
+        adj_blocks: List[torch.Tensor] = []
+        graph_ptr: List[int] = []
+        offset = 0
+        for idx in indices:
+            x_i, adj_i = self.graphs[idx].to_tensors()
+            node_features.append(x_i)
+            adj_blocks.append(adj_i)
+            offset += adj_i.shape[0]
+            graph_ptr.append(offset)
+        batch_x = (
+            torch.cat(node_features, dim=0)
+            if node_features
+            else torch.zeros((0, self.graphs[0].x.shape[1]), dtype=torch.float32)
+        )
+        batch_adj = (
+            torch.block_diag(*adj_blocks)
+            if adj_blocks
+            else torch.zeros((0, 0), dtype=torch.float32)
+        )
+        batch_ptr = torch.tensor(graph_ptr, dtype=torch.long)
+        batch_labels = (
+            torch.tensor(self.labels[indices], dtype=torch.float32)
+            if self.labels is not None
+            else None
+        )
+        return batch_x, batch_adj, batch_ptr, batch_labels
 
     # ---------- Core featurisation ---------- #
     @staticmethod
