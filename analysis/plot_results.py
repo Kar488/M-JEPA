@@ -1,3 +1,9 @@
+"""Plot experiment results and diagnostics.
+
+Requires :mod:`matplotlib`, :mod:`pandas`, and :mod:`scikit-learn` for
+generating plots and computing evaluation metrics.
+"""
+
 from __future__ import annotations
 
 import argparse
