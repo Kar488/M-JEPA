@@ -14,4 +14,5 @@ Here you can explore the modules that make up the project.
    :caption: API
 
    api/utils_logging
+   api/utils_seed
 
