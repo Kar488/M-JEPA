@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 
 class DummyWandb:
@@ -15,14 +15,17 @@ class DummyWandb:
 
 
 def maybe_init_wandb(
-    enable: bool, project: str = "m-jepa", config: Optional[Dict[str, Any]] = None
+    enable: bool,
+    project: str = "m-jepa",
+    config: Optional[Dict[str, Any]] = None,
+    tags: Optional[Sequence[str]] = None,
 ):
     if not enable:
         return DummyWandb()
     try:
         import wandb
 
-        wandb.init(project=project, config=config or {})
+        wandb.init(project=project, config=config or {}, tags=list(tags) if tags else None)
         return wandb
     except Exception:
         return DummyWandb()
