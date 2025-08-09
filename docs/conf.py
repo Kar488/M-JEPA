@@ -7,8 +7,8 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'M-JEPA'
-copyright = '2025, M-JEPA contributors'
-author = 'M-JEPA contributors'
+copyright = '2025, Karthik Iyer'
+author = 'Karthik Iyer'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
