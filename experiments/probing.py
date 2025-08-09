@@ -8,6 +8,7 @@ from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import silhouette_score
 
 from data.dataset import GraphDataset
+from data.scaffold_split import scaffold_split
 
 
 def compute_embeddings(
@@ -30,29 +31,62 @@ def compute_embeddings(
     )
 
 
-def linear_probe_classification(X: np.ndarray, y: np.ndarray) -> Dict[str, float]:
+def linear_probe_classification(
+    X: np.ndarray,
+    y: np.ndarray,
+    smiles: Optional[List[str]] = None,
+    use_scaffold: bool = False,
+) -> Dict[str, float]:
     from sklearn.metrics import accuracy_score, average_precision_score, roc_auc_score
 
+    n = len(y)
+    if use_scaffold and smiles is not None:
+        tr, _, te = scaffold_split(smiles)
+        tr, te = tr.tolist(), te.tolist()
+    else:
+        idx = np.random.permutation(n)
+        train_end = int(0.8 * n)
+        val_end = int(0.9 * n)
+        tr, te = idx[:train_end], idx[val_end:]
+
     clf = LogisticRegression(max_iter=500, n_jobs=1)
-    clf.fit(X, y)
-    proba = clf.predict_proba(X)[:, 1]
+    clf.fit(X[tr], y[tr])
+    proba = clf.predict_proba(X[te])[:, 1]
+    pred = clf.predict(X[te])
+    yt = y[te]
     return {
-        "probe_roc_auc": float(roc_auc_score(y, proba)),
-        "probe_pr_auc": float(average_precision_score(y, proba)),
-        "probe_acc": float(accuracy_score(y, clf.predict(X))),
+        "probe_roc_auc": float(roc_auc_score(yt, proba)),
+        "probe_pr_auc": float(average_precision_score(yt, proba)),
+        "probe_acc": float(accuracy_score(yt, pred)),
     }
 
 
-def linear_probe_regression(X: np.ndarray, y: np.ndarray) -> Dict[str, float]:
+def linear_probe_regression(
+    X: np.ndarray,
+    y: np.ndarray,
+    smiles: Optional[List[str]] = None,
+    use_scaffold: bool = False,
+) -> Dict[str, float]:
     from sklearn.metrics import mean_absolute_error, mean_squared_error
 
+    n = len(y)
+    if use_scaffold and smiles is not None:
+        tr, _, te = scaffold_split(smiles)
+        tr, te = tr.tolist(), te.tolist()
+    else:
+        idx = np.random.permutation(n)
+        train_end = int(0.8 * n)
+        val_end = int(0.9 * n)
+        tr, te = idx[:train_end], idx[val_end:]
+
     reg = Ridge(alpha=1.0, random_state=42)
-    reg.fit(X, y)
-    pred = reg.predict(X)
+    reg.fit(X[tr], y[tr])
+    pred = reg.predict(X[te])
+    yt = y[te]
     return {
-        "probe_rmse": float(np.sqrt(mean_squared_error(y, pred))),
-        "probe_mae": float(mean_absolute_error(y, pred)),
-        "probe_r2": float(reg.score(X, y)),
+        "probe_rmse": float(np.sqrt(mean_squared_error(yt, pred))),
+        "probe_mae": float(mean_absolute_error(yt, pred)),
+        "probe_r2": float(reg.score(X[te], yt)),
     }
 
 

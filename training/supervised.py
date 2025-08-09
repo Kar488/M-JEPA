@@ -19,6 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from data.dataset import GraphDataset
+from data.scaffold_split import scaffold_split
 from models.encoder import GNNEncoder
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.pooling import global_mean_pool
@@ -85,6 +86,7 @@ def train_linear_head(
     batch_size: int = 32,
     device: str = "cpu",
     val_patience: int = 10,
+    use_scaffold: bool = False,
 ) -> Dict[str, float]:
     """Train a linear head on frozen encoder for classification or regression.
 
@@ -112,12 +114,18 @@ def train_linear_head(
         p.requires_grad = False
     num_graphs = len(dataset)
     indices = list(range(num_graphs))
-    if task_type == "classification":
+    if use_scaffold and getattr(dataset, "smiles", None) is not None:
+        train_idx, val_idx, test_idx = scaffold_split(dataset.smiles)
+        train_idx, val_idx, test_idx = (
+            train_idx.tolist(),
+            val_idx.tolist(),
+            test_idx.tolist(),
+        )
+    elif task_type == "classification":
         train_idx, val_idx, test_idx = stratified_split(
             indices, dataset.labels, train_frac=0.8, val_frac=0.1
         )
     else:
-        # For regression, random split
         random.shuffle(indices)
         train_end = int(0.8 * num_graphs)
         val_end = int(0.9 * num_graphs)
