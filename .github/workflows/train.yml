@@ -3,10 +3,12 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
+  schedule:
+    - cron: '0 6 * * *'
 
 jobs:
   train:
-    runs-on: [self-hosted, gpu]   # matches your runner labels
+    runs-on: [self-hosted, vast-ai, gpu]   # matches your runner labels
     steps:
       - uses: actions/checkout@v4
 
