@@ -44,6 +44,8 @@ class ToyEncoder(EncoderBase):
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Train JEPA on a synthetic dataset")
     p.add_argument("--config", type=str, help="Path to YAML config with training options", required=False)
+    p.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP")
+    p.add_argument("--patience", type=int, default=10, help="Early stopping patience")
     return p.parse_args()
 
 
@@ -86,7 +88,7 @@ def main() -> None:
         batch_size=cfg["batch_size"],
         lr=cfg["lr"],
         device=device,
-        devices=1,
+        devices=args.devices,
     )
     if losses:
         logger.info("final_loss: %.4f", losses[-1])
