@@ -1,3 +1,9 @@
+"""Train linear models on learned embeddings using scikit-learn.
+
+This module depends on :mod:`scikit-learn` for model implementations and
+evaluation metrics.
+"""
+
 from __future__ import annotations
 
 from typing import Dict, Optional

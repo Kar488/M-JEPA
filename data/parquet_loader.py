@@ -7,6 +7,7 @@ representations from Parquet files and converts them into
 ``torch_geometric.data.Data`` objects.  It is primarily intended for
 cases where graph featurisation has been performed offline and the
 resulting node/edge features are stored directly in the Parquet rows.
+It requires :mod:`pandas` for reading the underlying Parquet data.
 
 Expected schema for each row
 ----------------------------

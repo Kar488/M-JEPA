@@ -2,6 +2,10 @@
 Joint‑Embedding Predictive Architectures (JEPA) and baseline models for
 molecule representation learning.
 
+This module relies on external packages: :mod:`matplotlib`, :mod:`pandas`,
+and :mod:`scikit-learn` for plotting, data manipulation, and evaluation
+metrics.
+
 This module implements a simplified version of the JEPA algorithm adapted
 for molecular graphs as described in the provided project specification.
 The goal of JEPA is to learn semantically meaningful graph embeddings
