@@ -7,6 +7,7 @@ isn't installed.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional, Sequence
 
 
@@ -44,6 +45,7 @@ def maybe_init_wandb(
     project: str = "m-jepa",
     config: Optional[Dict[str, Any]] = None,
     tags: Optional[Sequence[str]] = None,
+    api_key: Optional[str] = None,
 ):
     """Start a tracker if we ask nicely.
 
@@ -61,6 +63,9 @@ def maybe_init_wandb(
         Configuration values to record. Defaults to ``None``.
     tags : Optional[Sequence[str]], optional
         Labels for the run. Defaults to ``None``.
+    api_key : Optional[str], optional
+        API key for logging in to wandb. If provided, ``wandb.login`` is called
+        before initialising the run. Defaults to ``None``.
 
     Returns
     -------
@@ -72,7 +77,10 @@ def maybe_init_wandb(
     try:
         import wandb
 
+        if api_key:
+            wandb.login(key=api_key)
         wandb.init(project=project, config=config or {}, tags=list(tags) if tags else None)
         return wandb
-    except Exception:
+    except Exception as exc:
+        logging.warning("Failed to initialise wandb: %s", exc)
         return DummyWandb()
