@@ -1,14 +1,13 @@
 name: Train JEPA on Vast
+
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
-  schedule:
-    - cron: '0 6 * * *'
 
 jobs:
   train:
-    runs-on: [self-hosted, vast-ai, gpu]   # matches your runner labels
+    runs-on: [self-hosted, gpu]   # matches your runner labels
     steps:
       - uses: actions/checkout@v4
 
@@ -16,22 +15,40 @@ jobs:
       - name: Prepare PATH
         run: echo "PATH=/venv/main/bin:$PATH" >> $GITHUB_ENV
 
-      - name: Show GPU
+      # Install PyTorch if missing
+      - name: Install PyTorch if missing
         run: |
-          /usr/bin/nvidia-smi || nvidia-smi || true
-          which python && python -V
+          python - <<'PY'
+          try:
+            import torch; print("torch:", torch.__version__)
+          except Exception:
+            import os; os.system("pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio")
+          PY
 
-      - name: Install deps
+      # Install torch-scatter matching torch version
+      - name: Install torch-scatter
+        run: |
+          python - <<'PY'
+          import re, subprocess, sys, importlib
+          v = importlib.import_module("torch").__version__
+          mm = re.match(r"(\d+\.\d+)", v).group(1)
+          url = {
+            "2.4": "https://data.pyg.org/whl/torch-2.4.0+cu121.html",
+            "2.3": "https://data.pyg.org/whl/torch-2.3.0+cu121.html",
+            "2.2": "https://data.pyg.org/whl/torch-2.2.0+cu121.html",
+          }.get(mm)
+          if not url:
+            print("Unknown torch version:", v); sys.exit(1)
+          subprocess.check_call([sys.executable,"-m","pip","install","torch-scatter","-f",url])
+          PY
+
+      # Install the rest of your dependencies
+      - name: Install project deps
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt || true
-          pip install torch-geometric
-          pip install -f https://data.dgl.ai/wheels/cu121/repo.html dgl-cu121
-          if command -v conda >/dev/null 2>&1; then
-            conda install -y -c conda-forge rdkit openbabel
-          else
-            pip install rdkit-pypi
-          fi
+          pip install -r requirements.txt
 
+      # Run training
       - name: Train
-        run: python scripts/train_jepa.py --config configs/default.yaml
+        run: |
+          python scripts/train_jepa.py --config configs/default.yaml
