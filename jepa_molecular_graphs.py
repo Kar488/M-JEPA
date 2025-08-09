@@ -50,35 +50,34 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
-from typing import List, Tuple, Iterator, Optional, Dict, Any
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from sklearn.metrics import roc_auc_score, average_precision_score, mean_squared_error, mean_absolute_error
+from sklearn.metrics import (
+    average_precision_score,
+    mean_absolute_error,
+    mean_squared_error,
+    roc_auc_score,
+)
 
 try:
     from rdkit import Chem
     from rdkit.Chem import rdmolops
 except ImportError as e:
-        raise ImportError(
-            "RDKit is required for SMILES parsing. Please install rdkit-pypi "
-            "or ensure RDKit is available in your environment." ) from e
+    raise ImportError(
+        "RDKit is required for SMILES parsing. Please install rdkit-pypi "
+        "or ensure RDKit is available in your environment."
+    ) from e
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-def set_seed(seed: int) -> None:
-    """Set random seeds for reproducibility.
-
-    Args:
-        seed: The integer seed to set for numpy, random and torch.
-    """
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+from models.predictor import MLPPredictor
+from utils.pooling import global_mean_pool
+from utils.seed import set_seed
 
 
 @dataclass
@@ -98,6 +97,7 @@ class GraphData:
         smiles (str): The original SMILES string for reference and
             potential debugging.
     """
+
     adj: np.ndarray
     x: np.ndarray
     smiles: str
@@ -159,12 +159,17 @@ class GraphDataset:
     block‑diagonal representation. For supervised tasks we maintain a
     separate label array.
     """
-    def __init__(self, graphs: List[GraphData], labels: Optional[np.ndarray] = None) -> None:
+
+    def __init__(
+        self, graphs: List[GraphData], labels: Optional[np.ndarray] = None
+    ) -> None:
         self.graphs = graphs
         self.labels = labels  # shape (num_graphs,) for classification/regression
 
     @classmethod
-    def from_smiles_list(cls, smiles_list: List[str], labels: Optional[List[Any]] = None) -> "GraphDataset":
+    def from_smiles_list(
+        cls, smiles_list: List[str], labels: Optional[List[Any]] = None
+    ) -> "GraphDataset":
         """Construct dataset from SMILES strings.
 
         Args:
@@ -184,7 +189,9 @@ class GraphDataset:
     def __len__(self) -> int:
         return len(self.graphs)
 
-    def get_batch(self, indices: List[int]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    def get_batch(
+        self, indices: List[int]
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         """Create a batch of graphs by block‑diagonally stacking adjacency matrices.
 
         For unsupervised pretraining we simply need the combined node
@@ -212,7 +219,9 @@ class GraphDataset:
             # For adjacency, we build a block diagonal matrix by expanding existing block
             if adj_blocks:
                 existing = torch.block_diag(*adj_blocks)
-                new_block = torch.zeros((existing.shape[0] + N_i, existing.shape[0] + N_i))
+                new_block = torch.zeros(
+                    (existing.shape[0] + N_i, existing.shape[0] + N_i)
+                )
                 new_block[: existing.shape[0], : existing.shape[0]] = existing
                 new_block[existing.shape[0] :, existing.shape[0] :] = adj_i
                 adj_blocks = [new_block]
@@ -243,7 +252,9 @@ class GNNEncoder(nn.Module):
     can be substituted with minor modifications.
     """
 
-    def __init__(self, input_dim: int, hidden_dim: int = 256, num_layers: int = 3) -> None:
+    def __init__(
+        self, input_dim: int, hidden_dim: int = 256, num_layers: int = 3
+    ) -> None:
         """Initialise the GNN encoder.
 
         Args:
@@ -277,44 +288,9 @@ class GNNEncoder(nn.Module):
         return h
 
 
-def global_mean_pool(node_embeddings: torch.Tensor, graph_ptr: torch.Tensor) -> torch.Tensor:
-    """Compute graph embeddings by averaging node embeddings within each graph.
-
-    Args:
-        node_embeddings: Tensor of shape (N_total, hidden_dim).
-        graph_ptr: Tensor of shape (B,) where graph_ptr[i] indicates the
-            cumulative number of nodes up to and including graph i.
-
-    Returns:
-        graph_embeddings: Tensor of shape (B, hidden_dim).
-    """
-    device = node_embeddings.device
-    B = graph_ptr.numel()
-    hidden_dim = node_embeddings.size(1)
-    graph_embeddings = torch.zeros((B, hidden_dim), device=device)
-    start = 0
-    for i, end in enumerate(graph_ptr):
-        end_idx = end.item()
-        if end_idx > start:
-            graph_embeddings[i] = node_embeddings[start:end_idx].mean(dim=0)
-        start = end_idx
-    return graph_embeddings
-
-
-class MLPPredictor(nn.Module):
-    """A two‑layer Multilayer Perceptron (MLP) used to predict target embeddings."""
-    def __init__(self, embed_dim: int, hidden_dim: int = 512) -> None:
-        super().__init__()
-        self.fc1 = nn.Linear(embed_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, embed_dim)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = F.relu(self.fc1(x))
-        return self.fc2(x)
-
-
 class EMA:
     """Maintain an Exponential Moving Average (EMA) copy of model parameters."""
+
     def __init__(self, model: nn.Module, decay: float = 0.99) -> None:
         self.decay = decay
         self.params = [p.detach().clone() for p in model.parameters()]
@@ -331,7 +307,9 @@ class EMA:
             p.data.copy_(ema_p)
 
 
-def sample_subgraphs(graph: GraphData, mask_ratio: float = 0.15, contiguous: bool = False) -> Tuple[GraphData, GraphData]:
+def sample_subgraphs(
+    graph: GraphData, mask_ratio: float = 0.15, contiguous: bool = False
+) -> Tuple[GraphData, GraphData]:
     """Sample context and target subgraphs from a graph."""
     N = graph.num_nodes()
     if N == 0:
@@ -349,10 +327,12 @@ def sample_subgraphs(graph: GraphData, mask_ratio: float = 0.15, contiguous: boo
         context_indices.append(target_indices.pop(0))
     if not target_indices:
         target_indices.append(context_indices.pop(0))
+
     def build_subgraph(indices: List[int]) -> GraphData:
         sub_adj = graph.adj[np.ix_(indices, indices)]
         sub_x = graph.x[indices]
         return GraphData(adj=sub_adj, x=sub_x, smiles=graph.smiles)
+
     context_graph = build_subgraph(context_indices)
     target_graph = build_subgraph(target_indices)
     return context_graph, target_graph
@@ -361,7 +341,7 @@ def sample_subgraphs(graph: GraphData, mask_ratio: float = 0.15, contiguous: boo
 def regularisation_loss(model: nn.Module, lam: float = 1e-4) -> torch.Tensor:
     reg_loss = torch.tensor(0.0, device=next(model.parameters()).device)
     for p in model.parameters():
-        reg_loss += torch.sum(p ** 2)
+        reg_loss += torch.sum(p**2)
     return lam * reg_loss
 
 
@@ -382,7 +362,9 @@ def train_jepa(
     encoder = encoder.to(device)
     ema_encoder = ema_encoder.to(device)
     predictor = predictor.to(device)
-    optimiser = torch.optim.Adam(list(encoder.parameters()) + list(predictor.parameters()), lr=lr)
+    optimiser = torch.optim.Adam(
+        list(encoder.parameters()) + list(predictor.parameters()), lr=lr
+    )
     epoch_losses: List[float] = []
     all_indices = list(range(len(dataset)))
     for epoch in range(epochs):
@@ -394,13 +376,19 @@ def train_jepa(
             targets: List[GraphData] = []
             for idx in batch_indices:
                 g = dataset.graphs[idx]
-                context_g, target_g = sample_subgraphs(g, mask_ratio=mask_ratio, contiguous=contiguous)
+                context_g, target_g = sample_subgraphs(
+                    g, mask_ratio=mask_ratio, contiguous=contiguous
+                )
                 contexts.append(context_g)
                 targets.append(target_g)
             context_dataset = GraphDataset(contexts)
             target_dataset = GraphDataset(targets)
-            ctx_x, ctx_adj, ctx_ptr, _ = context_dataset.get_batch(list(range(len(contexts))))
-            tgt_x, tgt_adj, tgt_ptr, _ = target_dataset.get_batch(list(range(len(targets))))
+            ctx_x, ctx_adj, ctx_ptr, _ = context_dataset.get_batch(
+                list(range(len(contexts)))
+            )
+            tgt_x, tgt_adj, tgt_ptr, _ = target_dataset.get_batch(
+                list(range(len(targets)))
+            )
             ctx_x = ctx_x.to(device)
             ctx_adj = ctx_adj.to(device)
             tgt_x = tgt_x.to(device)
@@ -444,7 +432,9 @@ def train_contrastive(
         nn.ReLU(),
         nn.Linear(projection_dim, projection_dim),
     ).to(device)
-    optimiser = torch.optim.Adam(list(encoder.parameters()) + list(proj_head.parameters()), lr=lr)
+    optimiser = torch.optim.Adam(
+        list(encoder.parameters()) + list(proj_head.parameters()), lr=lr
+    )
     epoch_losses = []
     all_indices = list(range(len(dataset)))
     for epoch in range(epochs):
@@ -458,17 +448,28 @@ def train_contrastive(
                 g = dataset.graphs[idx]
                 ctx1, _ = sample_subgraphs(g, mask_ratio=mask_ratio, contiguous=False)
                 if random.random() < 0.5:
-                    ctx2, _ = sample_subgraphs(g, mask_ratio=mask_ratio, contiguous=True)
+                    ctx2, _ = sample_subgraphs(
+                        g, mask_ratio=mask_ratio, contiguous=True
+                    )
                 else:
-                    ctx2, _ = sample_subgraphs(g, mask_ratio=mask_ratio, contiguous=False)
+                    ctx2, _ = sample_subgraphs(
+                        g, mask_ratio=mask_ratio, contiguous=False
+                    )
                 view1_graphs.append(ctx1)
                 view2_graphs.append(ctx2)
             view1_dataset = GraphDataset(view1_graphs)
-            v1_x, v1_adj, v1_ptr, _ = view1_dataset.get_batch(list(range(len(view1_graphs))))
+            v1_x, v1_adj, v1_ptr, _ = view1_dataset.get_batch(
+                list(range(len(view1_graphs)))
+            )
             view2_dataset = GraphDataset(view2_graphs)
-            v2_x, v2_adj, v2_ptr, _ = view2_dataset.get_batch(list(range(len(view2_graphs))))
+            v2_x, v2_adj, v2_ptr, _ = view2_dataset.get_batch(
+                list(range(len(view2_graphs)))
+            )
             v1_x, v1_adj, v2_x, v2_adj = (
-                v1_x.to(device), v1_adj.to(device), v2_x.to(device), v2_adj.to(device)
+                v1_x.to(device),
+                v1_adj.to(device),
+                v2_x.to(device),
+                v2_adj.to(device),
             )
             h1_node = encoder(v1_x, v1_adj)
             h2_node = encoder(v2_x, v2_adj)
@@ -481,10 +482,13 @@ def train_contrastive(
             sim_matrix = torch.mm(z1, torch.cat([z2, z1], dim=0).t()) / temperature
             labels = torch.arange(0, len(batch_indices), device=device)
             mask = torch.eye(len(batch_indices), device=device)
-            logits = torch.cat([
-                sim_matrix[:, : len(batch_indices)],
-                sim_matrix[:, len(batch_indices) :] * (1.0 - mask),
-            ], dim=1)
+            logits = torch.cat(
+                [
+                    sim_matrix[:, : len(batch_indices)],
+                    sim_matrix[:, len(batch_indices) :] * (1.0 - mask),
+                ],
+                dim=1,
+            )
             targets = labels
             loss = F.cross_entropy(logits, targets)
             batch_losses.append(loss.item())
@@ -506,7 +510,9 @@ def train_linear_head(
     batch_size: int = 32,
     device: str = "cpu",
 ) -> Dict[str, float]:
-    assert dataset.labels is not None, "Dataset must have labels for supervised training."
+    assert (
+        dataset.labels is not None
+    ), "Dataset must have labels for supervised training."
     assert task_type in {"classification", "regression"}, "Invalid task type."
     encoder = encoder.to(device)
     for p in encoder.parameters():
@@ -525,21 +531,26 @@ def train_linear_head(
     else:
         loss_fn = nn.MSELoss()
     optimiser = torch.optim.Adam(head.parameters(), lr=lr)
-    best_val_loss = float('inf')
+    best_val_loss = float("inf")
     best_state: Optional[Dict[str, torch.Tensor]] = None
+
     def evaluate(split_idx: List[int]) -> Tuple[float, Dict[str, float]]:
         batch_losses = []
         all_targets = []
         all_preds = []
         for start in range(0, len(split_idx), batch_size):
             batch_indices = split_idx[start : start + batch_size]
-            batch_x, batch_adj, batch_ptr, batch_labels = dataset.get_batch(batch_indices)
+            batch_x, batch_adj, batch_ptr, batch_labels = dataset.get_batch(
+                batch_indices
+            )
             batch_x = batch_x.to(device)
             batch_adj = batch_adj.to(device)
             node_emb = encoder(batch_x, batch_adj)
             graph_emb = global_mean_pool(node_emb, batch_ptr.to(device))
             preds = head(graph_emb).squeeze(1)
-            targets = torch.tensor(dataset.labels[batch_indices], dtype=torch.float32, device=device)
+            targets = torch.tensor(
+                dataset.labels[batch_indices], dtype=torch.float32, device=device
+            )
             loss = loss_fn(preds, targets)
             batch_losses.append(loss.item())
             all_targets.append(targets.cpu().numpy())
@@ -553,17 +564,18 @@ def train_linear_head(
             try:
                 roc_auc = roc_auc_score(y_true, probs)
             except ValueError:
-                roc_auc = float('nan')
+                roc_auc = float("nan")
             try:
                 pr_auc = average_precision_score(y_true, probs)
             except ValueError:
-                pr_auc = float('nan')
+                pr_auc = float("nan")
             metrics.update({"roc_auc": roc_auc, "pr_auc": pr_auc})
         elif task_type == "regression" and y_true.size > 0:
             rmse = math.sqrt(mean_squared_error(y_true, y_pred))
             mae = mean_absolute_error(y_true, y_pred)
             metrics.update({"rmse": rmse, "mae": mae})
         return mean_loss, metrics
+
     for epoch in range(epochs):
         encoder.eval()
         head.train()
@@ -576,7 +588,9 @@ def train_linear_head(
             node_emb = encoder(batch_x, batch_adj)
             graph_emb = global_mean_pool(node_emb, batch_ptr.to(device))
             preds = head(graph_emb).squeeze()
-            targets = torch.tensor(dataset.labels[batch_indices], dtype=torch.float32, device=device)
+            targets = torch.tensor(
+                dataset.labels[batch_indices], dtype=torch.float32, device=device
+            )
             loss = loss_fn(preds, targets)
             train_losses.append(loss.item())
             optimiser.zero_grad()
@@ -589,7 +603,9 @@ def train_linear_head(
             best_val_loss = val_loss
             best_state = {k: v.clone() for k, v in head.state_dict().items()}
         mean_train_loss = float(np.mean(train_losses)) if train_losses else 0.0
-        print(f"Epoch {epoch+1}/{epochs} – Linear head train loss: {mean_train_loss:.4f}, val loss: {val_loss:.4f}")
+        print(
+            f"Epoch {epoch+1}/{epochs} – Linear head train loss: {mean_train_loss:.4f}, val loss: {val_loss:.4f}"
+        )
         if epoch >= 10 and val_loss > best_val_loss:
             break
     if best_state is not None:
@@ -600,12 +616,25 @@ def train_linear_head(
 
 def run_ablation_experiments() -> pd.DataFrame:
     smiles_list = [
-        "CCO", "CCN", "CCC", "c1ccccc1", "CC(=O)O", "CCOCC", "CNC", "CCCl", "COC", "CCN(CC)CC"
+        "CCO",
+        "CCN",
+        "CCC",
+        "c1ccccc1",
+        "CC(=O)O",
+        "CCOCC",
+        "CNC",
+        "CCCl",
+        "COC",
+        "CCN(CC)CC",
     ]
     classification_labels = np.random.randint(0, 2, size=len(smiles_list))
     regression_labels = np.random.rand(len(smiles_list)) * 10.0
-    dataset_class = GraphDataset.from_smiles_list(smiles_list, labels=classification_labels.tolist())
-    dataset_reg = GraphDataset.from_smiles_list(smiles_list, labels=regression_labels.tolist())
+    dataset_class = GraphDataset.from_smiles_list(
+        smiles_list, labels=classification_labels.tolist()
+    )
+    dataset_reg = GraphDataset.from_smiles_list(
+        smiles_list, labels=regression_labels.tolist()
+    )
     configs = []
     results = []
     mask_ratios = [0.1, 0.15, 0.25]
@@ -618,11 +647,19 @@ def run_ablation_experiments() -> pd.DataFrame:
             for hidden_dim in hidden_dims:
                 for num_layers in layers_list:
                     for ema_decay in ema_decays:
-                        encoder = GNNEncoder(input_dim=2, hidden_dim=hidden_dim, num_layers=num_layers)
-                        ema_encoder = GNNEncoder(input_dim=2, hidden_dim=hidden_dim, num_layers=num_layers)
+                        encoder = GNNEncoder(
+                            input_dim=2, hidden_dim=hidden_dim, num_layers=num_layers
+                        )
+                        ema_encoder = GNNEncoder(
+                            input_dim=2, hidden_dim=hidden_dim, num_layers=num_layers
+                        )
                         ema_helper = EMA(encoder, decay=ema_decay)
-                        predictor = MLPPredictor(embed_dim=hidden_dim, hidden_dim=hidden_dim * 2)
-                        print(f"\nRunning JEPA pretraining for configuration: mask_ratio={mask_ratio}, contiguous={contiguous}, hidden_dim={hidden_dim}, layers={num_layers}, ema_decay={ema_decay}")
+                        predictor = MLPPredictor(
+                            embed_dim=hidden_dim, hidden_dim=hidden_dim * 2
+                        )
+                        print(
+                            f"\nRunning JEPA pretraining for configuration: mask_ratio={mask_ratio}, contiguous={contiguous}, hidden_dim={hidden_dim}, layers={num_layers}, ema_decay={ema_decay}"
+                        )
                         train_jepa(
                             dataset=dataset_class,
                             encoder=encoder,
@@ -637,8 +674,22 @@ def run_ablation_experiments() -> pd.DataFrame:
                             device="cpu",
                             reg_lambda=1e-4,
                         )
-                        class_metrics = train_linear_head(dataset_class, encoder, task_type="classification", epochs=5, lr=5e-3, batch_size=4)
-                        reg_metrics = train_linear_head(dataset_reg, encoder, task_type="regression", epochs=5, lr=5e-3, batch_size=4)
+                        class_metrics = train_linear_head(
+                            dataset_class,
+                            encoder,
+                            task_type="classification",
+                            epochs=5,
+                            lr=5e-3,
+                            batch_size=4,
+                        )
+                        reg_metrics = train_linear_head(
+                            dataset_reg,
+                            encoder,
+                            task_type="regression",
+                            epochs=5,
+                            lr=5e-3,
+                            batch_size=4,
+                        )
                         config = {
                             "mask_ratio": mask_ratio,
                             "contiguous": contiguous,
@@ -647,25 +698,55 @@ def run_ablation_experiments() -> pd.DataFrame:
                             "ema_decay": ema_decay,
                         }
                         result = {
-                            "roc_auc": class_metrics.get("roc_auc", float('nan')),
-                            "pr_auc": class_metrics.get("pr_auc", float('nan')),
-                            "rmse": reg_metrics.get("rmse", float('nan')),
-                            "mae": reg_metrics.get("mae", float('nan')),
+                            "roc_auc": class_metrics.get("roc_auc", float("nan")),
+                            "pr_auc": class_metrics.get("pr_auc", float("nan")),
+                            "rmse": reg_metrics.get("rmse", float("nan")),
+                            "mae": reg_metrics.get("mae", float("nan")),
                         }
                         configs.append(config)
                         results.append(result)
-    df = pd.concat([
-        pd.DataFrame(configs),
-        pd.DataFrame(results),
-    ], axis=1)
+    df = pd.concat(
+        [
+            pd.DataFrame(configs),
+            pd.DataFrame(results),
+        ],
+        axis=1,
+    )
     return df
 
 
 def case_study_tox21() -> pd.DataFrame:
     smiles_list = [
-        "CCO", "CCN", "CCC", "c1ccccc1", "CC(=O)O", "CCOCC", "CNC", "CCCl", "COC", "CCN(CC)CC",
-        "CCO", "CCN", "CCC", "c1ccccc1", "CC(=O)O", "CCOCC", "CNC", "CCCl", "COC", "CCN(CC)CC",
-        "CCO", "CCN", "CCC", "c1ccccc1", "CC(=O)O", "CCOCC", "CNC", "CCCl", "COC", "CCN(CC)CC",
+        "CCO",
+        "CCN",
+        "CCC",
+        "c1ccccc1",
+        "CC(=O)O",
+        "CCOCC",
+        "CNC",
+        "CCCl",
+        "COC",
+        "CCN(CC)CC",
+        "CCO",
+        "CCN",
+        "CCC",
+        "c1ccccc1",
+        "CC(=O)O",
+        "CCOCC",
+        "CNC",
+        "CCCl",
+        "COC",
+        "CCN(CC)CC",
+        "CCO",
+        "CCN",
+        "CCC",
+        "c1ccccc1",
+        "CC(=O)O",
+        "CCOCC",
+        "CNC",
+        "CCCl",
+        "COC",
+        "CCN(CC)CC",
     ]
     true_toxicity = np.random.rand(len(smiles_list))
     dataset = GraphDataset.from_smiles_list(smiles_list, labels=true_toxicity.tolist())
@@ -687,7 +768,9 @@ def case_study_tox21() -> pd.DataFrame:
         device="cpu",
         reg_lambda=1e-4,
     )
-    test_metrics = train_linear_head(dataset, encoder, task_type="regression", epochs=10, lr=1e-2, batch_size=10)
+    test_metrics = train_linear_head(
+        dataset, encoder, task_type="regression", epochs=10, lr=1e-2, batch_size=10
+    )
     print("Case study regression metrics:", test_metrics)
     for p in encoder.parameters():
         p.requires_grad = False
@@ -720,16 +803,22 @@ def case_study_tox21() -> pd.DataFrame:
         remaining_mask[removed] = False
         remaining_benign = benign_mask[remaining_mask].sum()
         total_benign = benign_mask.sum()
-        benign_fraction = remaining_benign / total_benign if total_benign > 0 else float('nan')
-        results.append({
-            "top_removed": n_remove,
-            "remaining_benign_fraction": benign_fraction,
-        })
+        benign_fraction = (
+            remaining_benign / total_benign if total_benign > 0 else float("nan")
+        )
+        results.append(
+            {
+                "top_removed": n_remove,
+                "remaining_benign_fraction": benign_fraction,
+            }
+        )
     df = pd.DataFrame(results)
     return df
 
 
-def plot_training_curves(curves: Dict[str, List[float]], title: str = "Training Loss Curves") -> None:
+def plot_training_curves(
+    curves: Dict[str, List[float]], title: str = "Training Loss Curves"
+) -> None:
     plt.figure(figsize=(8, 4))
     for name, losses in curves.items():
         plt.plot(range(1, len(losses) + 1), losses, label=name)
@@ -743,7 +832,18 @@ def plot_training_curves(curves: Dict[str, List[float]], title: str = "Training 
 
 if __name__ == "__main__":
     set_seed(42)
-    example_smiles = ["CCO", "CCN", "CCC", "c1ccccc1", "CC(=O)O", "CCOCC", "CNC", "CCCl", "COC", "CCN(CC)CC"]
+    example_smiles = [
+        "CCO",
+        "CCN",
+        "CCC",
+        "c1ccccc1",
+        "CC(=O)O",
+        "CCOCC",
+        "CNC",
+        "CCCl",
+        "COC",
+        "CCN(CC)CC",
+    ]
     unlabeled_dataset = GraphDataset.from_smiles_list(example_smiles)
     encoder = GNNEncoder(input_dim=2, hidden_dim=64, num_layers=2)
     ema_encoder = GNNEncoder(input_dim=2, hidden_dim=64, num_layers=2)
@@ -777,7 +877,10 @@ if __name__ == "__main__":
         device="cpu",
         temperature=0.1,
     )
-    plot_training_curves({"JEPA": jepa_losses, "Contrastive": contrastive_losses}, title="Toy Unsupervised Training Losses")
+    plot_training_curves(
+        {"JEPA": jepa_losses, "Contrastive": contrastive_losses},
+        title="Toy Unsupervised Training Losses",
+    )
     print("\n--- Running ablation experiments ---")
     ablation_df = run_ablation_experiments()
     print(ablation_df)

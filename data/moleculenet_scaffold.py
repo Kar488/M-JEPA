@@ -1,6 +1,7 @@
 from __future__ import annotations
-from typing import List, Tuple, Dict
+
 from collections import defaultdict
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -60,12 +61,15 @@ def write_scaffold_splits(
     val_frac: float = 0.1,
     seed: int = 42,
 ) -> None:
-    train_idx, val_idx, test_idx = scaffold_split_indices(df[smiles_col].astype(str).tolist(), train_frac, val_frac, seed)
+    train_idx, val_idx, test_idx = scaffold_split_indices(
+        df[smiles_col].astype(str).tolist(), train_frac, val_frac, seed
+    )
 
     for split, idx in [("train", train_idx), ("val", val_idx), ("test", test_idx)]:
         sub = df.iloc[idx].reset_index(drop=True)
         path = f"{out_dir}/{split}"
         import os
+
         os.makedirs(path, exist_ok=True)
         out_file = f"{path}/0000.{fmt}"
         if fmt == "parquet":

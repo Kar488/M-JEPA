@@ -11,7 +11,9 @@ from __future__ import annotations
 import torch
 
 
-def global_mean_pool(node_embeddings: torch.Tensor, graph_ptr: torch.Tensor) -> torch.Tensor:
+def global_mean_pool(
+    node_embeddings: torch.Tensor, graph_ptr: torch.Tensor
+) -> torch.Tensor:
     """Compute graph embeddings by averaging node embeddings per graph.
 
     Args:

@@ -1,8 +1,9 @@
-
 """Tiny, fast grid search that runs end-to-end on a small subset."""
+
 from pathlib import Path
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 
 from data.dataset import GraphDataset
 from experiments.grid_search import run_grid_search
@@ -13,7 +14,7 @@ TMP = Path("data/tmp_small.parquet")
 TMP.parent.mkdir(parents=True, exist_ok=True)
 
 if SOURCE.exists():
-    df = pd.read_parquet(SOURCE).head(80)     # keep small
+    df = pd.read_parquet(SOURCE).head(80)  # keep small
     # ensure smiles col exists
     use_cols = [c for c in df.columns if c.lower() == "smiles"]
     if use_cols:
@@ -29,12 +30,27 @@ if SOURCE.exists():
             cache_dir="cache/tmp_small",
             add_3d_features=add_3d,
         )
+
 else:
     # Fallback: small toy dataset
     def small_dataset_fn(add_3d: bool):
-        smiles = ["CCO","CCN","CCC","c1ccccc1","CC(=O)O","CCOCC","CNC","CCCl","COC","CCN(CC)CC"]
+        smiles = [
+            "CCO",
+            "CCN",
+            "CCC",
+            "c1ccccc1",
+            "CC(=O)O",
+            "CCOCC",
+            "CNC",
+            "CCCl",
+            "COC",
+            "CCN(CC)CC",
+        ]
         labels = np.random.randint(0, 2, size=len(smiles)).tolist()
-        return GraphDataset.from_smiles_list(smiles, labels=labels, add_3d_features=add_3d)
+        return GraphDataset.from_smiles_list(
+            smiles, labels=labels, add_3d_features=add_3d
+        )
+
 
 df_res = run_grid_search(
     dataset_fn=small_dataset_fn,
