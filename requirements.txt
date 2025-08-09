@@ -1,0 +1,21 @@
+# Core
+numpy
+pandas
+pyarrow                 # parquet I/O
+scikit-learn
+torch
+torch-scatter           # optional, used in gnn_variants.py
+rdkit-pypi              # or install via conda:  conda install -c conda-forge rdkit
+pyyaml
+
+# Logging / plotting
+wandb
+matplotlib
+seaborn
+
+# Data utilities
+deepchem                # optional, only for MoleculeNet downloads
+
+# Testing
+pytest
+pytest-cov
