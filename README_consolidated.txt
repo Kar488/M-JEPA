@@ -32,3 +32,29 @@ Sample outputs:
 ![ROC Curve](reports/roc_curve.png)
 ![Loss Curve](reports/loss_curve.png)
 ![Bar Chart](reports/bar_chart.png)
+
+## Baselines
+
+External baselines are included as git submodules under `third_party/`.
+After cloning this repository run:
+
+```
+git submodule update --init --recursive
+```
+
+Each baseline exposes a training routine that can be invoked through the
+`training.baselines.run_baseline` helper. Example:
+
+```
+from training.baselines import run_baseline
+run_baseline(name="molclr", config_path="third_party/MolCLR/config.yaml")
+```
+
+You can also execute it from the command line:
+
+```
+python - <<'PY'
+from training.baselines import run_baseline
+run_baseline("molclr")
+PY
+```
