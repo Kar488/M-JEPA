@@ -1,0 +1,35 @@
+name: Train JEPA on Vast
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  train:
+    runs-on: [self-hosted, gpu]   # matches your runner labels
+    steps:
+      - uses: actions/checkout@v4
+
+      # Make Vast PyTorch image's Python visible
+      - name: Prepare PATH
+        run: echo "PATH=/venv/main/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Show GPU
+        run: |
+          /usr/bin/nvidia-smi || nvidia-smi || true
+          which python && python -V
+
+      - name: Install deps
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt || true
+          pip install torch-geometric
+          pip install -f https://data.dgl.ai/wheels/cu121/repo.html dgl-cu121
+          if command -v conda >/dev/null 2>&1; then
+            conda install -y -c conda-forge rdkit openbabel
+          else
+            pip install rdkit-pypi
+          fi
+
+      - name: Train
+        run: python scripts/train_jepa.py --config configs/default.yaml
