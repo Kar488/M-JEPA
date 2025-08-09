@@ -6,7 +6,7 @@ scikit-learn
 torch==2.2.1         # CUDA wheels handled separately in CI
 torch-scatter==2.1.2 # optional, used in gnn_variants.py; CUDA wheels handled separately in CI
        
-rdkit-pypi              # or install via conda:  conda install -c conda-forge rdkit
+#rdkit-pypi              # or install via conda:  conda install -c conda-forge rdkit
 pyyaml
 joblib
 fastparquet
