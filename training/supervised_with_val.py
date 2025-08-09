@@ -19,6 +19,7 @@ def train_linear_head_with_val(
     batch_size: int,
     device: str,
     val_patience: int = 5,
+    devices: int = 1,
 ) -> dict:
     """Simple wrapper: train on train+val for fewer epochs after selecting best by val.
     NOTE: This is a light wrapper to avoid changing your existing trainer’s API.
@@ -41,5 +42,7 @@ def train_linear_head_with_val(
         lr=lr,
         batch_size=batch_size,
         device=device,
+        patience=val_patience,
+        devices=devices,
     )
     return metrics
