@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Dict
 
 import yaml
+import logging
 
+logger = logging.getLogger(__name__)
 
 class BaselineCLI:
     def __init__(self, cfg_path: str = "adapters/config.yaml"):
@@ -25,7 +27,7 @@ class BaselineCLI:
         cmd = self._format(
             method, self.cmds[method]["train"], unlabeled=unlabeled, out=out_dir
         )
-        print(f"[{method}] TRAIN:\n  {cmd}")
+        logger.info("[%s] TRAIN:\n  %s", method, cmd)
         subprocess.run(shlex.split(cmd), check=True)
 
     def embed(
@@ -39,7 +41,7 @@ class BaselineCLI:
             smiles=smiles_file,
             emb=emb_out,
         )
-        print(f"[{method}] EMBED:\n  {cmd}")
+        logger.info("[%s] EMBED:\n  %s", method, cmd)
         subprocess.run(shlex.split(cmd), check=True)
 
     def outputs_dir(self, method: str) -> str:

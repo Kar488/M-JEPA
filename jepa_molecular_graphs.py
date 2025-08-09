@@ -55,6 +55,7 @@ import math
 import random
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Tuple
+import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -83,6 +84,7 @@ from models.predictor import MLPPredictor
 from utils.pooling import global_mean_pool
 from utils.seed import set_seed
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class GraphData:
@@ -415,7 +417,9 @@ def train_jepa(
             ema.update(encoder)
         mean_loss = float(np.mean(batch_losses)) if batch_losses else 0.0
         epoch_losses.append(mean_loss)
-        print(f"Epoch {epoch+1}/{epochs} – JEPA training loss: {mean_loss:.4f}")
+        logger.info(
+            "Epoch %d/%d – JEPA training loss: %.4f", epoch + 1, epochs, mean_loss
+        )
     return epoch_losses
 
 
@@ -501,7 +505,9 @@ def train_contrastive(
             optimiser.step()
         mean_loss = float(np.mean(batch_losses)) if batch_losses else 0.0
         epoch_losses.append(mean_loss)
-        print(f"Epoch {epoch+1}/{epochs} – Contrastive loss: {mean_loss:.4f}")
+        logger.info(
+            "Epoch %d/%d – Contrastive loss: %.4f", epoch + 1, epochs, mean_loss
+        )
     return epoch_losses
 
 
@@ -607,8 +613,12 @@ def train_linear_head(
             best_val_loss = val_loss
             best_state = {k: v.clone() for k, v in head.state_dict().items()}
         mean_train_loss = float(np.mean(train_losses)) if train_losses else 0.0
-        print(
-            f"Epoch {epoch+1}/{epochs} – Linear head train loss: {mean_train_loss:.4f}, val loss: {val_loss:.4f}"
+        logger.info(
+            "Epoch %d/%d – Linear head train loss: %.4f, val loss: %.4f",
+            epoch + 1,
+            epochs,
+            mean_train_loss,
+            val_loss,
         )
         if epoch >= 10 and val_loss > best_val_loss:
             break
@@ -661,8 +671,13 @@ def run_ablation_experiments() -> pd.DataFrame:
                         predictor = MLPPredictor(
                             embed_dim=hidden_dim, hidden_dim=hidden_dim * 2
                         )
-                        print(
-                            f"\nRunning JEPA pretraining for configuration: mask_ratio={mask_ratio}, contiguous={contiguous}, hidden_dim={hidden_dim}, layers={num_layers}, ema_decay={ema_decay}"
+                        logger.info(
+                            "Running JEPA pretraining for configuration: mask_ratio=%s, contiguous=%s, hidden_dim=%s, layers=%s, ema_decay=%s",
+                            mask_ratio,
+                            contiguous,
+                            hidden_dim,
+                            num_layers,
+                            ema_decay,
                         )
                         train_jepa(
                             dataset=dataset_class,
@@ -775,7 +790,7 @@ def case_study_tox21() -> pd.DataFrame:
     test_metrics = train_linear_head(
         dataset, encoder, task_type="regression", epochs=10, lr=1e-2, batch_size=10
     )
-    print("Case study regression metrics:", test_metrics)
+    logger.info("Case study regression metrics: %s", test_metrics)
     for p in encoder.parameters():
         p.requires_grad = False
     head = nn.Linear(encoder.hidden_dim, 1)
@@ -853,7 +868,7 @@ if __name__ == "__main__":
     ema_encoder = GNNEncoder(input_dim=2, hidden_dim=64, num_layers=2)
     ema_helper = EMA(encoder, decay=0.99)
     predictor = MLPPredictor(embed_dim=64, hidden_dim=128)
-    print("\n--- Training JEPA on toy dataset ---")
+    logger.info("--- Training JEPA on toy dataset ---")
     jepa_losses = train_jepa(
         dataset=unlabeled_dataset,
         encoder=encoder,
@@ -868,7 +883,7 @@ if __name__ == "__main__":
         device="cpu",
         reg_lambda=1e-4,
     )
-    print("\n--- Training contrastive baseline on toy dataset ---")
+    logger.info("--- Training contrastive baseline on toy dataset ---")
     contrastive_encoder = GNNEncoder(input_dim=2, hidden_dim=64, num_layers=2)
     contrastive_losses = train_contrastive(
         dataset=unlabeled_dataset,
@@ -885,9 +900,9 @@ if __name__ == "__main__":
         {"JEPA": jepa_losses, "Contrastive": contrastive_losses},
         title="Toy Unsupervised Training Losses",
     )
-    print("\n--- Running ablation experiments ---")
+    logger.info("--- Running ablation experiments ---")
     ablation_df = run_ablation_experiments()
-    print(ablation_df)
-    print("\n--- Case study: toxicity ranking ---")
+    logger.info("%s", ablation_df)
+    logger.info("--- Case study: toxicity ranking ---")
     case_df = case_study_tox21()
-    print(case_df)
+    logger.info("%s", case_df)

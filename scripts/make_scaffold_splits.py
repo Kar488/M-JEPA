@@ -5,7 +5,12 @@ import os
 
 import pandas as pd
 
+import logging
+
 from data.moleculenet_scaffold import write_scaffold_splits
+
+logger = logging.getLogger(__name__)
+
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser("Create scaffold splits from a single CSV/Parquet")
@@ -35,4 +40,4 @@ if __name__ == "__main__":
         val_frac=args.val,
         seed=args.seed,
     )
-    print(f"Scaffold splits written to: {args.out_dir}")
+    logger.info("Scaffold splits written to: %s", args.out_dir)

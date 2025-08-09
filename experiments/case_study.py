@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import List, Tuple
 
 import numpy as np
+import logging
 
 from data.dataset import GraphDataset
 from models.ema import EMA
@@ -28,6 +29,7 @@ from training.supervised import train_linear_head
 from training.unsupervised import train_jepa
 from utils.seed import set_seed
 
+logger = logging.getLogger(__name__)
 
 def run_synthetic_case_study(
     smiles: List[str],
@@ -357,6 +359,6 @@ if __name__ == "__main__":
     true_mean, rand_mean, pred_mean = run_synthetic_case_study(
         smiles, num_top_exclude=2, seed=42
     )
-    print("Mean true toxicity:", true_mean)
-    print("Mean toxicity after random exclusion:", rand_mean)
-    print("Mean toxicity after predicted exclusion:", pred_mean)
+    logger.info("Mean true toxicity: %s", true_mean)
+    logger.info("Mean toxicity after random exclusion: %s", rand_mean)
+    logger.info("Mean toxicity after predicted exclusion: %s", pred_mean)

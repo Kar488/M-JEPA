@@ -16,6 +16,10 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import numpy as np
+import logging
+
+# Structured logging
+logger = logging.getLogger(__name__)
 
 # Data & utils
 from data.dataset import GraphData, GraphDataset
@@ -259,16 +263,20 @@ def demonstration(device: str = "cpu", devices: int = 1, use_scaffold: bool = Fa
         device=device,
         use_scaffold=use_scaffold,
     )
-    print(
-        "Toy classification metrics:", {k: v for k, v in metrics.items() if k != "head"}
+    logger.info(
+        "Toy classification metrics: %s",
+        {k: v for k, v in metrics.items() if k != "head"},
     )
 
     # Synthetic case study
     mean_true, mean_rand, mean_pred = run_synthetic_case_study(
         smiles, num_top_exclude=2, seed=42
     )
-    print(
-        f"Synth case study – mean true: {mean_true:.3f}, random: {mean_rand:.3f}, predicted: {mean_pred:.3f}"
+    logger.info(
+        "Synth case study – mean true: %.3f, random: %.3f, predicted: %.3f",
+        mean_true,
+        mean_rand,
+        mean_pred,
     )
 
 
@@ -489,7 +497,9 @@ def run_full_mode(args: argparse.Namespace) -> None:
         device=args.device,
         val_patience=args.val_patience,
     )
-    print("Train/Val metrics:", {k: v for k, v in metrics.items() if k != "head"})
+    logger.info(
+        "Train/Val metrics: %s", {k: v for k, v in metrics.items() if k != "head"}
+    )
 
     if args.label_test_dir:
         test_ds = load_directory_dataset(
@@ -518,8 +528,8 @@ def run_full_mode(args: argparse.Namespace) -> None:
             batch_size=args.finetune_bs,
             device=args.device,
         )
-        print(
-            "Test metrics (simple merged baseline):",
+        logger.info(
+            "Test metrics (simple merged baseline): %s",
             {k: v for k, v in test_metrics.items() if k != "head"},
         )
 
@@ -534,8 +544,8 @@ def run_full_mode(args: argparse.Namespace) -> None:
             device=args.device,
             top_fraction=args.tox21_topk,
         )
-        print(
-            "Tox21 case study (mean_true, mean_random_after, mean_predicted_after):",
+        logger.info(
+            "Tox21 case study (mean_true, mean_random_after, mean_predicted_after): %s",
             tox_metrics,
         )
 
@@ -624,9 +634,8 @@ def run_grid_mode(args: argparse.Namespace) -> None:
     out_csv = spec.get("output_csv", "outputs/grid_results.csv")
     Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_csv, index=False)
-    print(f"[grid] wrote: {out_csv}")
-    print(df.head())
-
+    logger.info("[grid] wrote: %s", out_csv)
+    logger.info("%s", df.head())
 
 # --------------------------------- CLI ---------------------------------- #
 

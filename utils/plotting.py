@@ -14,6 +14,11 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 
 def plot_training_curves(
     curves: Dict[str, List[float]],
@@ -83,7 +88,7 @@ def plot_hyperparameter_results(
             top_n <= 0, all configurations will be shown.
     """
     if df.empty or metric not in df.columns:
-        print("No data to plot.")
+        logger.warning("No data to plot.")
         return
     # Determine sorting order: descending for ROC/PR metrics, ascending otherwise
     ascending = metric not in {"roc_auc", "pr_auc"}

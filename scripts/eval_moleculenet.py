@@ -38,6 +38,7 @@ from typing import Dict, Iterable, List, Tuple
 import numpy as np
 import pandas as pd
 import torch
+import logging
 
 from data.dataset import GraphDataset
 from models.encoder import GNNEncoder
@@ -47,6 +48,9 @@ from utils.seed import set_seed
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
+# Structured logging
+logger = logging.getLogger(__name__)
+
 
 DATASETS: Dict[str, str] = {
     # Regression tasks
@@ -179,13 +183,13 @@ def main() -> None:
             metrics = evaluate_dataset(name, task_type, encoder, data_root, device)
             row = {"dataset": name, **metrics}
             results.append(row)
-            print(f"{name}: {metrics}")
+            logger.info("%s: %s", name, metrics)
         except Exception as e:
-            print(f"Failed to evaluate {name}: {e}")
+            logger.error("Failed to evaluate %s: %s", name, e)
 
     if results:
         pd.DataFrame(results).to_csv(args.output, index=False)
-        print(f"Saved results to {args.output}")
+        logger.info("Saved results to %s", args.output)
 
 
 if __name__ == "__main__":
