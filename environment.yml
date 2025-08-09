@@ -1,0 +1,30 @@
+name: jepa-mol
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  # core
+  - numpy
+  - pandas
+  - pyarrow
+  - scikit-learn
+  - pyyaml
+  - joblib
+  - fastparquet
+  # plotting/logging
+  - matplotlib
+  - seaborn
+  # rdkit from conda-forge
+  - rdkit
+  # pytorch + cuda runtime (works on your RTX A5000)
+  - pytorch=2.2.1
+  - pytorch-cuda=12.1
+  # tests
+  - pytest
+  - pytest-cov
+  - pip:
+      - wandb
+      - deepchem
