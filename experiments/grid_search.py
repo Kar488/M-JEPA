@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd 
 
 import torch
+from torch_geometric.loader import DataLoader as GeoLoader
+
 # Encoder factory
 try:
     from models.factory import build_encoder
@@ -123,20 +125,44 @@ def _aggregate_seed_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, f
         )
     return out
 
-def _infer_dims_from_loader(loader: Any) -> Tuple[Optional[int], Optional[int]]:
-    """Infer node/edge feature dims from a PyG Batch in a DataLoader."""
-    it = iter(loader)
-    try:
-        batch = next(it)
-    except StopIteration:
+def _ensure_loader(obj: Any, batch_size: int, shuffle: bool) -> Optional[GeoLoader]:
+    if obj is None:
+        return None
+    # Already a loader (iterable but not indexable)
+    if hasattr(obj, "__iter__") and not hasattr(obj, "__getitem__"):
+        return obj  # assume it's a loader
+    # Likely a dataset: wrap it
+    return GeoLoader(obj, batch_size=batch_size, shuffle=shuffle)
+
+def _normalize_ds_to_loaders(ds: Any, pre_bs: int, ft_bs: int) -> Tuple[Any, Any, Any]:
+    tr, va, te = _normalize_ds(ds)
+    tr = _ensure_loader(tr, pre_bs, True)
+    va = _ensure_loader(va, ft_bs, False)
+    te = _ensure_loader(te, ft_bs, False)
+    return tr, va, te
+
+def _infer_dims_from_loader(obj: Any) -> Tuple[Optional[int], Optional[int]]:
+    if obj is None:
         return None, None
-    # PyG Batch: batch.x [N, F], batch.edge_attr [E, Fe] (may be None)
-    in_dim = int(batch.x.size(-1)) if hasattr(batch, "x") and batch.x is not None else None
-    edge_dim = (
-        int(batch.edge_attr.size(-1))
-        if hasattr(batch, "edge_attr") and batch.edge_attr is not None
-        else None
-    )
+    # If loader: get first batch; if dataset: get first sample
+    batch = None
+    if hasattr(obj, "__iter__") and not hasattr(obj, "__getitem__"):  # loader
+        it = iter(obj)
+        try:
+            batch = next(it)
+        except StopIteration:
+            return None, None
+    else:  # dataset or single Data
+        try:
+            batch = obj[0]
+        except Exception:
+            batch = obj
+    if isinstance(batch, (list, tuple)):
+        batch = batch[0]
+    x = getattr(batch, "x", None)
+    edge_attr = getattr(batch, "edge_attr", None)
+    in_dim = int(x.size(-1)) if x is not None else None
+    edge_dim = int(edge_attr.size(-1)) if edge_attr is not None else None
     return in_dim, edge_dim
 
 def _edge_dim_or_none(ds_pre: Any) -> Optional[int]:
@@ -390,12 +416,10 @@ def _run_one_config_method(
     return row
 
 def _normalize_ds(ds: Any) -> Tuple[Any, Any, Any]:
-    """Return (train, val, test) from many shapes; else (ds, None, None)."""
     if isinstance(ds, dict):
-        tr = ds.get("train") or ds.get("train_loader")
-        va = ds.get("val") or ds.get("valid") or ds.get("val_loader")
-        te = ds.get("test") or ds.get("test_loader")
-        return tr, va, te
+        return ds.get("train") or ds.get("train_loader"), \
+               ds.get("val") or ds.get("valid") or ds.get("val_loader"), \
+               ds.get("test") or ds.get("test_loader")
     if isinstance(ds, (list, tuple)):
         if len(ds) == 3: return ds[0], ds[1], ds[2]
         if len(ds) == 2: return ds[0], ds[1], None
@@ -464,12 +488,16 @@ def run_grid_search(
     # We ONLY decide which path to use here; we DO NOT build datasets yet.
     use_single_builder = dataset_fn is not None
 
-    if not use_single_builder:
-        if unlabeled_dataset_fn is None or eval_dataset_fn is None:
-            raise ValueError(
-                "Provide either `dataset_fn` (tests) or both "
-                "`unlabeled_dataset_fn` and `eval_dataset_fn` (production)."
-            )
+    prebuilt_loaders = None
+    if use_single_builder:
+        pre_bs = getattr(cfg, "pretrain_batch_size", 32)
+        ft_bs  = getattr(cfg, "finetune_batch_size", 32)
+        try:
+            ds = dataset_fn(add_3d=add_3d)   # preferred
+        except TypeError:
+            ds = dataset_fn(add_3d)          # positional fallback
+        train_loader, val_loader, test_loader = _normalize_ds_to_loaders(ds, pre_bs, ft_bs)
+        prebuilt_loaders = (train_loader, val_loader, test_loader)
         
     rows: List[Dict[str, Any]] = []
     for cfg in cfgs:
