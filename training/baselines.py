@@ -1,102 +1,64 @@
 from __future__ import annotations
 
-import warnings
-from typing import Any, Dict, Optional
+import sys
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional
 
-import numpy as np
-
-from models.encoder import GNNEncoder  # used for fallback run
-from training.unsupervised import train_contrastive  # fallback
-
-
-def _try_import_molclr():
-    try:
-        # adjust if your entrypoint differs; this is just an example
-        from MolCLR.molclr import pretrain as molclr_pretrain
-
-        return molclr_pretrain
-    except Exception:
-        return None
+# ---------------------------------------------------------------------------
+# Third-party baselines live under third_party/.  We add their directories to
+# sys.path so they can be imported like regular modules.
+# ---------------------------------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+THIRD_PARTY = PROJECT_ROOT / "third_party"
+ 
+def _add_repo_to_path(repo: str) -> None:
+    repo_path = THIRD_PARTY / repo
+    if repo_path.exists() and str(repo_path) not in sys.path:
+        sys.path.insert(0, str(repo_path))
 
 
-def _try_import_geomgcl():
-    try:
-        from GeomGCL.train import pretrain as geomgcl_pretrain
+def _load_molclr() -> Callable[..., Any]:
+    _add_repo_to_path("MolCLR")
+    from molclr import main as molclr_main  # type: ignore
 
-        return geomgcl_pretrain
-    except Exception:
-        return None
+    return molclr_main
+
+def _load_geomgcl() -> Callable[..., Any]:
+    _add_repo_to_path("GeomGCL")
+    from train_gcl import main as geomgcl_main  # type: ignore
+
+    return geomgcl_main
+
+def _load_himol() -> Callable[..., Any]:
+    _add_repo_to_path("HiMol")
+    from pretrain import main as himol_main  # type: ignore
+
+    return himol_main
 
 
-def _try_import_himol():
-    try:
-        from HiMol.train import pretrain as himol_pretrain
-
-        return himol_pretrain
-    except Exception:
-        return None
+BASELINES: Dict[str, Callable[[], Callable[..., Any]]] = {
+    "molclr": _load_molclr,
+    "geomgcl": _load_geomgcl,
+    "himol": _load_himol,
+}
 
 
-def pretrain_baseline(
-    method: str,
+def run_baseline(
+    name: str,
     *,
-    dataset,
-    input_dim: int,
+    dataset: Any,
     device: str = "cuda",
     cfg: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Uniform call to external baselines; falls back to our contrastive trainer if missing."""
-    method = method.lower()
+    **kwargs: Any,
+) -> Any:
+    """Dispatch to a third-party baseline training routine."""
+    name = name.lower()
+    if name not in BASELINES:
+        raise ValueError(f"Unknown baseline '{name}'")
+    fn = BASELINES[name]()
     cfg = dict(cfg or {})
-    results: Dict[str, Any] = {}
+    return fn(dataset=dataset, device=device, **cfg, **kwargs)
 
-    if method == "molclr":
-        fn = _try_import_molclr()
-        if fn is not None:
-            return fn(dataset=dataset, device=device, **cfg)  # use their API
-        warnings.warn(
-            "MolCLR not found; falling back to internal contrastive pretrain."
-        )
 
-    if method == "geomgcl":
-        fn = _try_import_geomgcl()
-        if fn is not None:
-            return fn(dataset=dataset, device=device, **cfg)
-        warnings.warn(
-            "GeomGCL not found; falling back to internal contrastive pretrain."
-        )
-
-    if method == "himol":
-        fn = _try_import_himol()
-        if fn is not None:
-            return fn(dataset=dataset, device=device, **cfg)
-        warnings.warn("HiMol not found; falling back to internal contrastive pretrain.")
-
-    # ---- Fallback: our simple contrastive baseline ----
-    encoder = GNNEncoder(
-        input_dim=input_dim,
-        hidden_dim=cfg.get("hidden_dim", 256),
-        num_layers=cfg.get("num_layers", 3),
-        gnn_type=cfg.get("gnn_type", "mpnn"),
-    )
-    losses = train_contrastive(
-        dataset=dataset,
-        encoder=encoder,
-        projection_dim=cfg.get("projection_dim", 64),
-        epochs=cfg.get("epochs", 50),
-        batch_size=cfg.get("batch_size", 256),
-        mask_ratio=cfg.get("mask_ratio", 0.2),
-        lr=cfg.get("lr", 1e-4),
-        device=device,
-        temperature=cfg.get("temperature", 0.1),
-        use_wandb=cfg.get("use_wandb", False),
-        wandb_project=cfg.get("wandb_project", "m-jepa"),
-        wandb_tags=cfg.get("wandb_tags"),
-        ckpt_path=cfg.get("ckpt_path"),
-        ckpt_every=cfg.get("ckpt_every", 10),
-        use_scheduler=cfg.get("use_scheduler", True),
-        warmup_steps=cfg.get("warmup_steps", 500),
-    )
-    results["loss_curve"] = losses
-    results["encoder"] = encoder
-    return results
+# Backwards-compatibility alias
+pretrain_baseline = run_baseline
