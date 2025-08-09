@@ -4,7 +4,7 @@ pandas
 pyarrow                 # parquet I/O
 scikit-learn
 torch==2.2.1         # CUDA wheels handled separately in CI
-torch-scatter==2.1.2 # optional, used in gnn_variants.py; CUDA wheels handled separately in CI
+#torch-scatter==2.1.2 # optional, used in gnn_variants.py; CUDA wheels handled separately in CI removed – install explicitly after torch
        
 #rdkit-pypi              # or install via conda:  conda install -c conda-forge rdkit
 pyyaml
