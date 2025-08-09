@@ -10,7 +10,11 @@ from data.dataset import GraphData
 
 
 def random_rotation(mol: Chem.Mol, conf_id: int = 0) -> Chem.Mol:
-    """Apply a random 3D rotation to an RDKit molecule's conformer."""
+    """Spin the molecule around like a toy top.
+
+    Apply a random 3D rotation to an RDKit molecule's conformer by
+    multiplying atomic coordinates with a random orthogonal matrix.
+    """
     if mol.GetNumConformers() == 0:
         return mol
     conf = mol.GetConformer(conf_id)
@@ -25,7 +29,11 @@ def random_rotation(mol: Chem.Mol, conf_id: int = 0) -> Chem.Mol:
 
 
 def mask_random_angle(mol: Chem.Mol, conf_id: int = 0) -> Chem.Mol:
-    """Mask a random bond angle by setting it to zero degrees."""
+    """Freeze one bond so the molecule can't bend there.
+
+    Mask a randomly chosen bond angle by setting it to zero degrees in
+    the specified conformer, effectively removing local flexibility.
+    """
     if mol.GetNumConformers() == 0:
         return mol
     atoms = [a.GetIdx() for a in mol.GetAtoms() if a.GetDegree() >= 2]
@@ -46,7 +54,11 @@ def mask_random_angle(mol: Chem.Mol, conf_id: int = 0) -> Chem.Mol:
 def perturb_dihedral(
     mol: Chem.Mol, conf_id: int = 0, max_deg: float = 20.0
 ) -> Chem.Mol:
-    """Randomly perturb a dihedral angle by up to ``max_deg`` degrees."""
+    """Give the molecule a tiny twist at one bond.
+
+    Randomly perturb a dihedral angle by up to ``max_deg`` degrees in
+    the selected conformer to add small structural noise.
+    """
     if mol.GetNumConformers() == 0:
         return mol
     quadruples = []
@@ -71,6 +83,12 @@ def perturb_dihedral(
 
 
 def _pick_neighbor(mol: Chem.Mol, center: int, exclude: int) -> Optional[int]:
+    """Choose a nearby atom that's not off-limits.
+
+    Return the smallest index neighbour of ``center`` that is not
+    ``exclude`` or ``None`` if no such atom exists.
+    """
+
     ns = sorted(
         [
             nbr.GetIdx()
@@ -84,7 +102,12 @@ def _pick_neighbor(mol: Chem.Mol, center: int, exclude: int) -> Optional[int]:
 def _geom_features_for_bond(
     mol: Chem.Mol, i: int, j: int, conf_id: int = 0
 ) -> np.ndarray:
-    """Compute geometric features for a directed bond ``i -> j``."""
+    """Describe a bond's shape in numbers.
+
+    Compute bond length, neighbouring angles and dihedral information for
+    the directed bond ``i -> j`` and return a 10‑dimensional feature
+    vector encoded as ``numpy.ndarray``.
+    """
     d = np.zeros(10, dtype=np.float32)
     if mol.GetNumConformers() == 0:
         return d
@@ -123,7 +146,12 @@ def apply_graph_augmentations(
     mask_angle: bool = False,
     perturb_dihedral: bool = False,
 ):
-    """Apply selected augmentations to a :class:`GraphData` instance."""
+    """Play with the molecule's shape using optional tricks.
+
+    Apply random rotation, angle masking, or dihedral perturbation to a
+    :class:`GraphData` instance and update coordinates and geometric edge
+    attributes accordingly.
+    """
     if g.x.shape[1] < 7:
         return g
     num_nodes = g.x.shape[0]
