@@ -90,6 +90,7 @@ def train_jepa(
     reg_lambda: float = 1e-4,
     use_wandb: bool = False,
     wandb_project: str = "m-jepa",
+    wandb_tags: Optional[List[str]] = None,
     ckpt_path: Optional[str] = None,
     ckpt_every: int = 10,
     use_scheduler: bool = True,
@@ -127,6 +128,7 @@ def train_jepa(
         use_wandb,
         project=wandb_project,
         config=dict(method="jepa", lr=lr, mask_ratio=mask_ratio, contiguous=contiguous),
+        tags=wandb_tags,
     )
 
     start_epoch = 1
@@ -252,6 +254,7 @@ def train_contrastive(
     temperature: float = 0.1,
     use_wandb: bool = False,
     wandb_project: str = "m-jepa",
+    wandb_tags: Optional[List[str]] = None,
     ckpt_path: Optional[str] = None,
     ckpt_every: int = 10,
     use_scheduler: bool = True,
@@ -293,6 +296,7 @@ def train_contrastive(
         use_wandb,
         project=wandb_project,
         config=dict(method="contrastive", lr=lr, mask_ratio=mask_ratio),
+        tags=wandb_tags,
     )
 
     if resume_from and os.path.exists(resume_from):
