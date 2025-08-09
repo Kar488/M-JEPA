@@ -1,7 +1,8 @@
 from __future__ import annotations
-from dataclasses import dataclass, asdict
+
+from dataclasses import asdict, dataclass
 from itertools import product
-from typing import Callable, Iterable, List, Tuple, Dict, Any, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -11,26 +12,42 @@ try:
     from models.factory import build_encoder
 except Exception:
     from models.encoder import GNNEncoder as _BasicEnc
-    def build_encoder(gnn_type: str, input_dim: int, hidden_dim: int, num_layers: int, edge_dim: Optional[int] = None):
-        return _BasicEnc(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers, gnn_type=gnn_type)
 
-from models.predictor import MLPPredictor
-from models.ema import EMA
-from training.unsupervised import train_jepa, train_contrastive
-from training.supervised import train_linear_head
+    def build_encoder(
+        gnn_type: str,
+        input_dim: int,
+        hidden_dim: int,
+        num_layers: int,
+        edge_dim: Optional[int] = None,
+    ):
+        return _BasicEnc(
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            gnn_type=gnn_type,
+        )
+
 
 # Baselines (CLI or native adapters)
 from experiments.baseline_integration import baseline_pretrain_and_embed
+from models.ema import EMA
+from models.predictor import MLPPredictor
+from training.supervised import train_linear_head
 from training.train_on_embeddings import (
     train_linear_on_embeddings_classification,
     train_linear_on_embeddings_regression,
 )
+from training.unsupervised import train_contrastive, train_jepa
 
 # Optional probing & clustering
 try:
     from experiments.probing import (
-        compute_embeddings, linear_probe_classification, linear_probe_regression, clustering_quality
+        clustering_quality,
+        compute_embeddings,
+        linear_probe_classification,
+        linear_probe_regression,
     )
+
     _HAS_PROBE = True
 except Exception:
     _HAS_PROBE = False
@@ -67,9 +84,18 @@ def _build_configs(
     lrs: Iterable[float],
 ) -> List[Config]:
     combos = product(
-        mask_ratios, contiguities, hidden_dims, num_layers_list, gnn_types,
-        ema_decays, add_3d_options, pretrain_batch_sizes, finetune_batch_sizes,
-        pretrain_epochs_options, finetune_epochs_options, lrs
+        mask_ratios,
+        contiguities,
+        hidden_dims,
+        num_layers_list,
+        gnn_types,
+        ema_decays,
+        add_3d_options,
+        pretrain_batch_sizes,
+        finetune_batch_sizes,
+        pretrain_epochs_options,
+        finetune_epochs_options,
+        lrs,
     )
     return [Config(*tpl) for tpl in combos]
 
@@ -89,7 +115,11 @@ def _aggregate_seed_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, f
             continue
         out[f"{k}_mean"] = float(vals.mean())
         out[f"{k}_std"] = float(vals.std(ddof=1)) if len(vals) > 1 else 0.0
-        out[f"{k}_ci95"] = float(1.96 * (vals.std(ddof=1) / max(1, np.sqrt(len(vals))))) if len(vals) > 1 else 0.0
+        out[f"{k}_ci95"] = (
+            float(1.96 * (vals.std(ddof=1) / max(1, np.sqrt(len(vals)))))
+            if len(vals) > 1
+            else 0.0
+        )
     return out
 
 
@@ -121,32 +151,80 @@ def _run_one_config_method(
     for seed in seeds:
         np.random.seed(seed)
         if method.lower() == "jepa":
-            encoder = build_encoder(gnn_type=cfg.gnn_type, input_dim=input_dim,
-                                    hidden_dim=cfg.hidden_dim, num_layers=cfg.num_layers, edge_dim=edge_dim)
-            ema_encoder = build_encoder(gnn_type=cfg.gnn_type, input_dim=input_dim,
-                                        hidden_dim=cfg.hidden_dim, num_layers=cfg.num_layers, edge_dim=edge_dim)
+            encoder = build_encoder(
+                gnn_type=cfg.gnn_type,
+                input_dim=input_dim,
+                hidden_dim=cfg.hidden_dim,
+                num_layers=cfg.num_layers,
+                edge_dim=edge_dim,
+            )
+            ema_encoder = build_encoder(
+                gnn_type=cfg.gnn_type,
+                input_dim=input_dim,
+                hidden_dim=cfg.hidden_dim,
+                num_layers=cfg.num_layers,
+                edge_dim=edge_dim,
+            )
             ema = EMA(encoder, decay=cfg.ema_decay)
-            predictor = MLPPredictor(embed_dim=cfg.hidden_dim, hidden_dim=cfg.hidden_dim * 2)
+            predictor = MLPPredictor(
+                embed_dim=cfg.hidden_dim, hidden_dim=cfg.hidden_dim * 2
+            )
 
             try:
-                train_jepa(dataset=ds_pre, encoder=encoder, ema_encoder=ema_encoder, predictor=predictor, ema=ema,
-                           epochs=cfg.pretrain_epochs, batch_size=cfg.pretrain_bs, mask_ratio=cfg.mask_ratio,
-                           contiguous=cfg.contiguous, lr=cfg.lr, device=device, reg_lambda=1e-4,
-                           use_wandb=use_wandb, ckpt_path=f"{ckpt_dir}/jepa", ckpt_every=ckpt_every,
-                           use_scheduler=use_scheduler, warmup_steps=warmup_steps)
+                train_jepa(
+                    dataset=ds_pre,
+                    encoder=encoder,
+                    ema_encoder=ema_encoder,
+                    predictor=predictor,
+                    ema=ema,
+                    epochs=cfg.pretrain_epochs,
+                    batch_size=cfg.pretrain_bs,
+                    mask_ratio=cfg.mask_ratio,
+                    contiguous=cfg.contiguous,
+                    lr=cfg.lr,
+                    device=device,
+                    reg_lambda=1e-4,
+                    use_wandb=use_wandb,
+                    ckpt_path=f"{ckpt_dir}/jepa",
+                    ckpt_every=ckpt_every,
+                    use_scheduler=use_scheduler,
+                    warmup_steps=warmup_steps,
+                )
             except TypeError:
-                train_jepa(dataset=ds_pre, encoder=encoder, ema_encoder=ema_encoder, predictor=predictor, ema=ema,
-                           epochs=cfg.pretrain_epochs, batch_size=cfg.pretrain_bs, mask_ratio=cfg.mask_ratio,
-                           contiguous=cfg.contiguous, lr=cfg.lr, device=device, reg_lambda=1e-4)
+                train_jepa(
+                    dataset=ds_pre,
+                    encoder=encoder,
+                    ema_encoder=ema_encoder,
+                    predictor=predictor,
+                    ema=ema,
+                    epochs=cfg.pretrain_epochs,
+                    batch_size=cfg.pretrain_bs,
+                    mask_ratio=cfg.mask_ratio,
+                    contiguous=cfg.contiguous,
+                    lr=cfg.lr,
+                    device=device,
+                    reg_lambda=1e-4,
+                )
 
-            m = train_linear_head(dataset=ds_eval, encoder=encoder, task_type=task_type,
-                                  epochs=cfg.finetune_epochs, lr=5e-3, batch_size=cfg.finetune_bs, device=device)
+            m = train_linear_head(
+                dataset=ds_eval,
+                encoder=encoder,
+                task_type=task_type,
+                epochs=cfg.finetune_epochs,
+                lr=5e-3,
+                batch_size=cfg.finetune_bs,
+                device=device,
+            )
             row = {k: float(v) for k, v in m.items() if k != "head"}
 
             if _HAS_PROBE:
-                X = compute_embeddings(ds_eval, encoder, batch_size=cfg.finetune_bs, device=device)
+                X = compute_embeddings(
+                    ds_eval, encoder, batch_size=cfg.finetune_bs, device=device
+                )
                 if task_type == "classification":
-                    row.update(linear_probe_classification(X, ds_eval.labels.astype(int)))
+                    row.update(
+                        linear_probe_classification(X, ds_eval.labels.astype(int))
+                    )
                 else:
                     row.update(linear_probe_regression(X, ds_eval.labels.astype(float)))
                 row.update(clustering_quality(X, n_clusters=10))
@@ -154,26 +232,62 @@ def _run_one_config_method(
             seed_metrics.append(row)
 
         elif method.lower() == "contrastive":
-            encoder = build_encoder(gnn_type=cfg.gnn_type, input_dim=input_dim,
-                                    hidden_dim=cfg.hidden_dim, num_layers=cfg.num_layers, edge_dim=edge_dim)
+            encoder = build_encoder(
+                gnn_type=cfg.gnn_type,
+                input_dim=input_dim,
+                hidden_dim=cfg.hidden_dim,
+                num_layers=cfg.num_layers,
+                edge_dim=edge_dim,
+            )
             try:
-                train_contrastive(dataset=ds_pre, encoder=encoder, projection_dim=64, epochs=cfg.pretrain_epochs,
-                                  batch_size=cfg.pretrain_bs, mask_ratio=cfg.mask_ratio, lr=cfg.lr, device=device,
-                                  temperature=0.1, use_wandb=use_wandb, ckpt_path=f"{ckpt_dir}/contrast",
-                                  ckpt_every=ckpt_every, use_scheduler=use_scheduler, warmup_steps=warmup_steps)
+                train_contrastive(
+                    dataset=ds_pre,
+                    encoder=encoder,
+                    projection_dim=64,
+                    epochs=cfg.pretrain_epochs,
+                    batch_size=cfg.pretrain_bs,
+                    mask_ratio=cfg.mask_ratio,
+                    lr=cfg.lr,
+                    device=device,
+                    temperature=0.1,
+                    use_wandb=use_wandb,
+                    ckpt_path=f"{ckpt_dir}/contrast",
+                    ckpt_every=ckpt_every,
+                    use_scheduler=use_scheduler,
+                    warmup_steps=warmup_steps,
+                )
             except TypeError:
-                train_contrastive(dataset=ds_pre, encoder=encoder, projection_dim=64, epochs=cfg.pretrain_epochs,
-                                  batch_size=cfg.pretrain_bs, mask_ratio=cfg.mask_ratio, lr=cfg.lr, device=device,
-                                  temperature=0.1)
+                train_contrastive(
+                    dataset=ds_pre,
+                    encoder=encoder,
+                    projection_dim=64,
+                    epochs=cfg.pretrain_epochs,
+                    batch_size=cfg.pretrain_bs,
+                    mask_ratio=cfg.mask_ratio,
+                    lr=cfg.lr,
+                    device=device,
+                    temperature=0.1,
+                )
 
-            m = train_linear_head(dataset=ds_eval, encoder=encoder, task_type=task_type,
-                                  epochs=cfg.finetune_epochs, lr=5e-3, batch_size=cfg.finetune_bs, device=device)
+            m = train_linear_head(
+                dataset=ds_eval,
+                encoder=encoder,
+                task_type=task_type,
+                epochs=cfg.finetune_epochs,
+                lr=5e-3,
+                batch_size=cfg.finetune_bs,
+                device=device,
+            )
             row = {k: float(v) for k, v in m.items() if k != "head"}
 
             if _HAS_PROBE:
-                X = compute_embeddings(ds_eval, encoder, batch_size=cfg.finetune_bs, device=device)
+                X = compute_embeddings(
+                    ds_eval, encoder, batch_size=cfg.finetune_bs, device=device
+                )
                 if task_type == "classification":
-                    row.update(linear_probe_classification(X, ds_eval.labels.astype(int)))
+                    row.update(
+                        linear_probe_classification(X, ds_eval.labels.astype(int))
+                    )
                 else:
                     row.update(linear_probe_regression(X, ds_eval.labels.astype(float)))
                 row.update(clustering_quality(X, n_clusters=10))
@@ -181,17 +295,29 @@ def _run_one_config_method(
             seed_metrics.append(row)
 
         else:  # MolCLR / GeomGCL / HiMol via adapters
-            if baseline_unlabeled_file is None or baseline_eval_file is None or baseline_label_col is None:
-                raise ValueError("Baselines require baseline_unlabeled_file, baseline_eval_file, and baseline_label_col.")
+            if (
+                baseline_unlabeled_file is None
+                or baseline_eval_file is None
+                or baseline_label_col is None
+            ):
+                raise ValueError(
+                    "Baselines require baseline_unlabeled_file, baseline_eval_file, and baseline_label_col."
+                )
             _, emb_file = baseline_pretrain_and_embed(
-                method=method, unlabeled_file=baseline_unlabeled_file,
-                smiles_eval_file=baseline_eval_file, cfg_path=baseline_cfg
+                method=method,
+                unlabeled_file=baseline_unlabeled_file,
+                smiles_eval_file=baseline_eval_file,
+                cfg_path=baseline_cfg,
             )
             if baseline_eval_file.endswith(".csv"):
                 y = pd.read_csv(baseline_eval_file)[baseline_label_col].to_numpy()
             else:
                 y = pd.read_parquet(baseline_eval_file)[baseline_label_col].to_numpy()
-            X = np.load(emb_file) if emb_file.endswith(".npy") else pd.read_csv(emb_file).to_numpy()
+            X = (
+                np.load(emb_file)
+                if emb_file.endswith(".npy")
+                else pd.read_csv(emb_file).to_numpy()
+            )
             if task_type == "classification":
                 m = train_linear_on_embeddings_classification(X, y)
             else:
@@ -236,16 +362,41 @@ def run_grid_search(
     baseline_cfg: str = "adapters/config.yaml",
 ) -> pd.DataFrame:
     cfgs = _build_configs(
-        mask_ratios, contiguities, hidden_dims, num_layers_list, gnn_types,
-        ema_decays, add_3d_options, pretrain_batch_sizes, finetune_batch_sizes,
-        pretrain_epochs_options, finetune_epochs_options, lrs
+        mask_ratios,
+        contiguities,
+        hidden_dims,
+        num_layers_list,
+        gnn_types,
+        ema_decays,
+        add_3d_options,
+        pretrain_batch_sizes,
+        finetune_batch_sizes,
+        pretrain_epochs_options,
+        finetune_epochs_options,
+        lrs,
     )
     rows: List[Dict[str, Any]] = []
     for cfg in cfgs:
         for method in methods:
-            rows.append(_run_one_config_method(
-                cfg, method, unlabeled_dataset_fn, eval_dataset_fn, task_type, seeds, device,
-                use_wandb, ckpt_dir, ckpt_every, use_scheduler, warmup_steps,
-                baseline_unlabeled_file, baseline_eval_file, baseline_smiles_col, baseline_label_col, baseline_cfg
-            ))
+            rows.append(
+                _run_one_config_method(
+                    cfg,
+                    method,
+                    unlabeled_dataset_fn,
+                    eval_dataset_fn,
+                    task_type,
+                    seeds,
+                    device,
+                    use_wandb,
+                    ckpt_dir,
+                    ckpt_every,
+                    use_scheduler,
+                    warmup_steps,
+                    baseline_unlabeled_file,
+                    baseline_eval_file,
+                    baseline_smiles_col,
+                    baseline_label_col,
+                    baseline_cfg,
+                )
+            )
     return pd.DataFrame(rows)

@@ -11,8 +11,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from models.base import PredictorBase
 
-class MLPPredictor(nn.Module):
+
+class MLPPredictor(PredictorBase):
     """Two‑layer MLP for predicting target graph embeddings.
 
     Args:
@@ -25,6 +27,6 @@ class MLPPredictor(nn.Module):
         self.fc1 = nn.Linear(embed_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, embed_dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def predict(self, x: torch.Tensor) -> torch.Tensor:
         x = F.relu(self.fc1(x))
         return self.fc2(x)
