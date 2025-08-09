@@ -357,6 +357,9 @@ def run_full_mode(args: argparse.Namespace) -> None:
                 ckpt_every=args.ckpt_every,
                 use_scheduler=True,
                 warmup_steps=args.warmup_steps,
+                random_rotate=args.aug_rotate,
+                mask_angle=args.aug_mask_angle,
+                perturb_dihedral=args.aug_dihedral,
             )
         except TypeError:
             train_jepa(
@@ -372,6 +375,9 @@ def run_full_mode(args: argparse.Namespace) -> None:
                 lr=args.pretrain_lr,
                 device=args.device,
                 reg_lambda=1e-4,
+                random_rotate=args.aug_rotate,
+                mask_angle=args.aug_mask_angle,
+                perturb_dihedral=args.aug_dihedral,
             )
     elif args.method in ("contrastive",):
         try:
@@ -391,6 +397,9 @@ def run_full_mode(args: argparse.Namespace) -> None:
                 ckpt_every=args.ckpt_every,
                 use_scheduler=True,
                 warmup_steps=args.warmup_steps,
+                random_rotate=args.aug_rotate,
+                mask_angle=args.aug_mask_angle,
+                perturb_dihedral=args.aug_dihedral,
             )
         except TypeError:
             train_contrastive(
@@ -403,6 +412,9 @@ def run_full_mode(args: argparse.Namespace) -> None:
                 lr=args.pretrain_lr,
                 device=args.device,
                 temperature=args.temperature,
+                random_rotate=args.aug_rotate,
+                mask_angle=args.aug_mask_angle,
+                perturb_dihedral=args.aug_dihedral,
             )
     else:
         # Baselines via wrapper (if you have a local baseline trainer)
@@ -633,6 +645,9 @@ if __name__ == "__main__":
     p.add_argument("--pretrain_lr", type=float, default=1e-4)
     p.add_argument("--mask_ratio", type=float, default=0.15)
     p.add_argument("--contiguous", action="store_true")
+    p.add_argument("--aug_rotate", action="store_true")
+    p.add_argument("--aug_mask_angle", action="store_true")
+    p.add_argument("--aug_dihedral", action="store_true")
     p.add_argument("--proj_dim", type=int, default=64)  # contrastive
     p.add_argument("--temperature", type=float, default=0.1)  # contrastive
     p.add_argument("--cache_dir", type=str, default="cache")
