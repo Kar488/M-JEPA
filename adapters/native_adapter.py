@@ -1,7 +1,11 @@
 from __future__ import annotations
-import importlib.util, importlib, sys
+
+import importlib
+import importlib.util
+import sys
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
+
 
 class NativeBaseline:
     """
@@ -9,7 +13,10 @@ class NativeBaseline:
     configured train/export functions. Your repo must expose Python-callable
     entrypoints (no argparse parsing side‑effects).
     """
-    def __init__(self, repo_path: str, train_spec: Dict[str, str], embed_spec: Dict[str, str]):
+
+    def __init__(
+        self, repo_path: str, train_spec: Dict[str, str], embed_spec: Dict[str, str]
+    ):
         self.repo_path = str(Path(repo_path).resolve())
         if self.repo_path not in sys.path:
             sys.path.insert(0, self.repo_path)

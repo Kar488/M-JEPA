@@ -1,13 +1,16 @@
-
-import pytest
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
+import pytest
+
 
 @pytest.fixture(scope="session")
 def tiny_parquet(tmp_path_factory):
     # Create a tiny parquet with just a few SMILES
     p = tmp_path_factory.mktemp("data") / "tiny.parquet"
-    df = pd.DataFrame({"smiles": ["CCO","CCC","CCN","c1ccccc1","COC","CCCl","CNC"]})
+    df = pd.DataFrame(
+        {"smiles": ["CCO", "CCC", "CCN", "c1ccccc1", "COC", "CCCl", "CNC"]}
+    )
     try:
         df.to_parquet(p, index=False)
     except Exception:
@@ -16,6 +19,7 @@ def tiny_parquet(tmp_path_factory):
         df.to_csv(p, index=False)
     return p
 
+
 @pytest.fixture(scope="session")
 def toy_smiles():
-    return ["CCO","CCC","CCN","c1ccccc1","COC","CCCl","CNC"]
+    return ["CCO", "CCC", "CCN", "c1ccccc1", "COC", "CCCl", "CNC"]

@@ -1,10 +1,12 @@
 from __future__ import annotations
-import numpy as np
+
 from typing import Optional
 
-from training.supervised import train_linear_head  # reuse your existing head + metrics
+import numpy as np
+
 from data.dataset import GraphDataset
 from models.encoder import GNNEncoder
+from training.supervised import train_linear_head  # reuse your existing head + metrics
 
 
 def train_linear_head_with_val(
@@ -25,7 +27,11 @@ def train_linear_head_with_val(
     # 2) For now, just train on train+val as a pragmatic default.
     merged = GraphDataset(
         graphs=train_ds.graphs + val_ds.graphs,
-        labels=None if train_ds.labels is None else np.concatenate([train_ds.labels, val_ds.labels])
+        labels=(
+            None
+            if train_ds.labels is None
+            else np.concatenate([train_ds.labels, val_ds.labels])
+        ),
     )
     metrics = train_linear_head(
         dataset=merged,

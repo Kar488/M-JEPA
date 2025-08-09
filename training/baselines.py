@@ -1,33 +1,41 @@
 from __future__ import annotations
-from typing import Any, Dict, Optional
 
 import warnings
+from typing import Any, Dict, Optional
+
 import numpy as np
 
-from training.unsupervised import train_contrastive   # fallback
-from models.encoder import GNNEncoder                  # used for fallback run
+from models.encoder import GNNEncoder  # used for fallback run
+from training.unsupervised import train_contrastive  # fallback
+
 
 def _try_import_molclr():
     try:
         # adjust if your entrypoint differs; this is just an example
         from MolCLR.molclr import pretrain as molclr_pretrain
+
         return molclr_pretrain
     except Exception:
         return None
 
+
 def _try_import_geomgcl():
     try:
         from GeomGCL.train import pretrain as geomgcl_pretrain
+
         return geomgcl_pretrain
     except Exception:
         return None
 
+
 def _try_import_himol():
     try:
         from HiMol.train import pretrain as himol_pretrain
+
         return himol_pretrain
     except Exception:
         return None
+
 
 def pretrain_baseline(
     method: str,
@@ -45,14 +53,18 @@ def pretrain_baseline(
     if method == "molclr":
         fn = _try_import_molclr()
         if fn is not None:
-            return fn(dataset=dataset, device=device, **cfg)   # use their API
-        warnings.warn("MolCLR not found; falling back to internal contrastive pretrain.")
+            return fn(dataset=dataset, device=device, **cfg)  # use their API
+        warnings.warn(
+            "MolCLR not found; falling back to internal contrastive pretrain."
+        )
 
     if method == "geomgcl":
         fn = _try_import_geomgcl()
         if fn is not None:
             return fn(dataset=dataset, device=device, **cfg)
-        warnings.warn("GeomGCL not found; falling back to internal contrastive pretrain.")
+        warnings.warn(
+            "GeomGCL not found; falling back to internal contrastive pretrain."
+        )
 
     if method == "himol":
         fn = _try_import_himol()
@@ -61,8 +73,12 @@ def pretrain_baseline(
         warnings.warn("HiMol not found; falling back to internal contrastive pretrain.")
 
     # ---- Fallback: our simple contrastive baseline ----
-    encoder = GNNEncoder(input_dim=input_dim, hidden_dim=cfg.get("hidden_dim", 256),
-                         num_layers=cfg.get("num_layers", 3), gnn_type=cfg.get("gnn_type", "mpnn"))
+    encoder = GNNEncoder(
+        input_dim=input_dim,
+        hidden_dim=cfg.get("hidden_dim", 256),
+        num_layers=cfg.get("num_layers", 3),
+        gnn_type=cfg.get("gnn_type", "mpnn"),
+    )
     losses = train_contrastive(
         dataset=dataset,
         encoder=encoder,

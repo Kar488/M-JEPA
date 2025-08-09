@@ -15,14 +15,16 @@ from typing import Dict, Tuple
 
 import numpy as np
 from sklearn.metrics import (
-    roc_auc_score,
     average_precision_score,
-    mean_squared_error,
     mean_absolute_error,
+    mean_squared_error,
+    roc_auc_score,
 )
 
 
-def compute_classification_metrics(y_true: np.ndarray, y_pred_logits: np.ndarray) -> Dict[str, float]:
+def compute_classification_metrics(
+    y_true: np.ndarray, y_pred_logits: np.ndarray
+) -> Dict[str, float]:
     """Compute ROC‑AUC and PR‑AUC for binary classification.
 
     The logits are converted to probabilities using the sigmoid
@@ -52,7 +54,9 @@ def compute_classification_metrics(y_true: np.ndarray, y_pred_logits: np.ndarray
     return metrics
 
 
-def compute_regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
+def compute_regression_metrics(
+    y_true: np.ndarray, y_pred: np.ndarray
+) -> Dict[str, float]:
     """Compute RMSE and MAE for regression tasks."""
     rmse = math.sqrt(mean_squared_error(y_true, y_pred))
     mae = mean_absolute_error(y_true, y_pred)

@@ -100,7 +100,11 @@ def plot_hyperparameter_results(
     plt.figure(figsize=(8, max(4, len(df_sorted) * 0.5)))
     bars = plt.barh(y=range(len(df_sorted)), width=values, color=colors)
     # Build labels from configuration columns (except the metric columns)
-    label_cols = [col for col in df_sorted.columns if col not in {metric, "roc_auc", "pr_auc", "rmse", "mae"}]
+    label_cols = [
+        col
+        for col in df_sorted.columns
+        if col not in {metric, "roc_auc", "pr_auc", "rmse", "mae"}
+    ]
     labels = [
         ", ".join(f"{col}={df_sorted.iloc[i][col]}" for col in label_cols)
         for i in range(len(df_sorted))

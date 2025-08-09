@@ -1,7 +1,13 @@
 from __future__ import annotations
-import os, shlex, subprocess, yaml
+
+import os
+import shlex
+import subprocess
 from pathlib import Path
 from typing import Dict
+
+import yaml
+
 
 class BaselineCLI:
     def __init__(self, cfg_path: str = "adapters/config.yaml"):
@@ -16,13 +22,23 @@ class BaselineCLI:
 
     def train(self, method: str, unlabeled: str, out_dir: str) -> None:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
-        cmd = self._format(method, self.cmds[method]["train"], unlabeled=unlabeled, out=out_dir)
+        cmd = self._format(
+            method, self.cmds[method]["train"], unlabeled=unlabeled, out=out_dir
+        )
         print(f"[{method}] TRAIN:\n  {cmd}")
         subprocess.run(shlex.split(cmd), check=True)
 
-    def embed(self, method: str, ckpt_path: str, smiles_file: str, emb_out: str) -> None:
+    def embed(
+        self, method: str, ckpt_path: str, smiles_file: str, emb_out: str
+    ) -> None:
         Path(emb_out).parent.mkdir(parents=True, exist_ok=True)
-        cmd = self._format(method, self.cmds[method]["embed"], ckpt=ckpt_path, smiles=smiles_file, emb=emb_out)
+        cmd = self._format(
+            method,
+            self.cmds[method]["embed"],
+            ckpt=ckpt_path,
+            smiles=smiles_file,
+            emb=emb_out,
+        )
         print(f"[{method}] EMBED:\n  {cmd}")
         subprocess.run(shlex.split(cmd), check=True)
 
