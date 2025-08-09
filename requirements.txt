@@ -3,12 +3,12 @@ numpy
 pandas
 pyarrow                 # parquet I/O
 scikit-learn
-torch
-torch-scatter           # optional, used in gnn_variants.py
+torch ; sys_platform == "never"  # placeholder to avoid install on server
+torch-scatter ; sys_platform == "never" # optional, used in gnn_variants.py
+       
 rdkit-pypi              # or install via conda:  conda install -c conda-forge rdkit
 pyyaml
 joblib
-pyarrow
 fastparquet
 
 # Logging / plotting
