@@ -322,7 +322,10 @@ def _run_one_config_method(
                 m = train_linear_on_embeddings_classification(X, y)
             else:
                 m = train_linear_on_embeddings_regression(X, y)
-            seed_metrics.append({k: float(v) for k, v in m.items()})
+            row = {f"probe_{k}": float(v) for k, v in m.items()}
+            if _HAS_PROBE:
+                row.update(clustering_quality(X, n_clusters=10))
+            seed_metrics.append(row)
 
     agg = _aggregate_seed_metrics(seed_metrics)
     row = {**asdict(cfg), **agg, "method": method, "seeds": len(list(seeds))}
@@ -360,6 +363,7 @@ def run_grid_search(
     baseline_smiles_col: str = "smiles",
     baseline_label_col: Optional[str] = None,
     baseline_cfg: str = "adapters/config.yaml",
+    out_csv: Optional[str] = None,
 ) -> pd.DataFrame:
     cfgs = _build_configs(
         mask_ratios,
@@ -399,4 +403,41 @@ def run_grid_search(
                     baseline_cfg,
                 )
             )
-    return pd.DataFrame(rows)
+
+    df = pd.DataFrame(rows)
+    df["best_metric"] = ""
+    metrics_max = [
+        "roc_auc_mean",
+        "pr_auc_mean",
+        "acc_mean",
+        "probe_roc_auc_mean",
+        "probe_pr_auc_mean",
+        "probe_acc_mean",
+        "r2_mean",
+        "probe_r2_mean",
+        "cluster_silhouette_mean",
+    ]
+    metrics_min = [
+        "rmse_mean",
+        "mae_mean",
+        "probe_rmse_mean",
+        "probe_mae_mean",
+    ]
+    best_rows: List[Dict[str, Any]] = []
+    for m in metrics_max:
+        if m in df.columns:
+            idx = df[m].idxmax()
+            row = df.loc[idx].to_dict()
+            row["best_metric"] = m
+            best_rows.append(row)
+    for m in metrics_min:
+        if m in df.columns:
+            idx = df[m].idxmin()
+            row = df.loc[idx].to_dict()
+            row["best_metric"] = m
+            best_rows.append(row)
+    if best_rows:
+        df = pd.concat([df, pd.DataFrame(best_rows)], ignore_index=True)
+    if out_csv is not None:
+        df.to_csv(out_csv, index=False)
+    return df
