@@ -2,13 +2,18 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from itertools import product
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Sequence
+
+ds_pre: Optional[Any] = None    
+ds_eval: Optional[Any] = None
 
 import numpy as np
 import pandas as pd 
 
 import torch
 from torch_geometric.loader import DataLoader as GeoLoader
+from torch_geometric.data import Data as PyGData
+import inspect
 
 # Encoder factory
 try:
@@ -71,6 +76,75 @@ class Config:
     finetune_epochs: int
     lr: float
 
+@dataclass
+class _GraphDatasetShim:
+    graphs: Sequence[Any]
+    labels: Optional[np.ndarray] = None
+    smiles: Optional[Sequence[str]] = None
+
+def _extract_attr(seq: Sequence[Any], name: str):
+    out: List[Any] = []
+    for g in seq:
+        v = getattr(g, name, None)
+        if v is None:
+            return None
+        if isinstance(v, torch.Tensor):
+            v = v.detach().cpu()
+            if v.numel() == 1:
+                v = v.item()
+            else:
+                v = v.numpy()
+        out.append(v)
+    # labels as np.array when name == 'y'
+    return np.asarray(out) if name == "y" else out
+
+def _ensure_graph_dataset(obj: Any) -> Any:
+    """Return object with `.graphs` and `.labels` if possible."""
+    if obj is None:
+        return None
+    if hasattr(obj, "graphs"):
+        if getattr(obj, "labels", None) is None:
+            labs = _extract_attr(getattr(obj, "graphs"), "y")
+            if labs is not None:
+                obj.labels = labs  # type: ignore[attr-defined]
+        return obj
+    if hasattr(obj, "__len__") and hasattr(obj, "__getitem__"):
+        graphs = list(obj)
+        labels = getattr(obj, "labels", None) or _extract_attr(graphs, "y")
+        smiles = getattr(obj, "smiles", None) or _extract_attr(graphs, "smiles")
+        return _GraphDatasetShim(graphs=graphs, labels=labels, smiles=smiles)
+    if isinstance(obj, PyGData) or hasattr(obj, "x") or hasattr(obj, "edge_index") or hasattr(obj, "adj"):
+        label = getattr(obj, "y", None)
+        if isinstance(label, torch.Tensor) and label.numel() == 1:
+            label = np.asarray([label.item()])
+        return _GraphDatasetShim(graphs=[obj], labels=label)
+    return obj
+
+def _dataset_from_loader(loader: Any) -> Any:
+    """Get a dataset from a loader. If `.dataset` missing, materialize from the loader."""
+    if loader is None:
+        return None
+    ds = getattr(loader, "dataset", None)
+    if ds is not None:
+        return _ensure_graph_dataset(ds)
+
+    # Materialize small loaders: consume items into a shim
+    graphs: List[Any] = []
+    labels: List[Any] = []
+    for item in loader:
+        g = item[0] if isinstance(item, (list, tuple)) else item
+        graphs.append(g)
+        y = getattr(g, "y", None)
+        if isinstance(y, torch.Tensor):
+            y = y.detach().cpu()
+            if y.numel() == 1:
+                labels.append(y.item())
+            else:
+                labels.append(y.numpy())
+        elif y is not None:
+            labels.append(y)
+    labs = np.asarray(labels) if len(labels) else None
+    return _GraphDatasetShim(graphs=graphs, labels=labs)
 
 def _build_configs(
     mask_ratios: Iterable[float],
@@ -128,33 +202,54 @@ def _aggregate_seed_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, f
 def _is_indexable(obj) -> bool:
     return hasattr(obj, "__getitem__") and hasattr(obj, "__len__")
 
+def _to_pyg(g: Any) -> PyGData:
+    # If your class already provides a converter, use it
+    if hasattr(g, "to_pyg") and callable(getattr(g, "to_pyg")):
+        return g.to_pyg()
+    # Fallback: build a PyG Data from common attributes
+    fields = {}
+    for name in ("x", "edge_index", "edge_attr", "pos", "y"):
+        if hasattr(g, name):
+            fields[name] = getattr(g, name)
+    if not fields:
+        raise TypeError(f"Cannot convert {type(g)} to PyG Data (missing fields)")
+    return PyGData(**fields)
+
 def _as_data_sequence(obj: Any):
-    """Return a sequence of PyG Data objects for DataLoader to consume."""
+    """
+    Return a sequence of PyG Data objects that GeoLoader can collate.
+    Handles GraphDataset/GraphData from your codebase.
+    """
     if obj is None:
         return None
-    # If this is your GraphDataset, use its .graphs field
+
+    # Your container type: has .graphs -> list of GraphData / Data
     if hasattr(obj, "graphs"):
-        return obj.graphs
-    # Already a sequence of Data objects
-    if _is_indexable(obj):
-        return obj
-    # Single Data object
-    if hasattr(obj, "x"):  # crude but effective for PyG Data
-        return [obj]
-    # Otherwise leave None and let caller treat it as an iterable/loader
-    return None
+        seq = obj.graphs
+    else:
+        # Already a list/tuple of samples?
+        if _is_indexable(obj):
+            seq = obj
+        else:
+            # Single sample (GraphData or PyG Data)
+            return [_to_pyg(obj)] if not isinstance(obj, PyGData) else [obj]
+
+    # Map any custom GraphData items to PyG Data
+    if len(seq) > 0 and not isinstance(seq[0], PyGData):
+        seq = [_to_pyg(g) for g in seq]
+    return seq
 
 def _ensure_loader(obj: Any, batch_size: int, shuffle: bool):
     if obj is None:
         return None
-    # If it's already a loader-like iterable (and not indexable), use as-is
+    # If it's already a loader-like iterable and not a dataset container, use as-is
     if hasattr(obj, "__iter__") and not _is_indexable(obj) and not hasattr(obj, "graphs"):
         return obj
-    # Convert known dataset containers to a sequence of Data
+    # Convert to a sequence of PyG Data, then wrap
     data_seq = _as_data_sequence(obj)
     if data_seq is not None:
         return GeoLoader(data_seq, batch_size=batch_size, shuffle=shuffle)
-    # Fallback: treat as iterable (last resort)
+    # Fallback: last resort
     return obj
 
 def _normalize_ds(ds: Any) -> Tuple[Any, Any, Any]:
@@ -175,32 +270,81 @@ def _normalize_ds_to_loaders(ds, pre_bs: int, ft_bs: int):
     te = _ensure_loader(te, ft_bs, False)
     return tr, va, te
 
-def _infer_dims_from_loader(obj) -> Tuple[Optional[int], Optional[int]]:
+def _feat_dim(x):
+    if x is None:
+        return None
+
+    # Torch tensor
+    try:
+        import torch
+        if isinstance(x, torch.Tensor):
+            return int(x.shape[-1])
+    except Exception:
+        pass
+
+    # NumPy array
+    try:
+        import numpy as np
+        if isinstance(x, np.ndarray):
+            return int(x.shape[-1]) if x.ndim > 0 else 1
+    except Exception:
+        pass
+
+    # Lists/tuples: walk until we find a real tensor/array/shape
+    if isinstance(x, (list, tuple)) and x:
+        for elem in x:
+            d = _feat_dim(elem)
+            if d is not None:
+                return d
+        return None
+
+    # Generic fallback: anything with a shape-like attr
+    if hasattr(x, "shape"):
+        try:
+            shape = x.shape
+            return int(shape[-1]) if len(shape) else None
+        except Exception:
+            pass
+
+    # Last-ditch: some custom objects expose num_features
+    if hasattr(x, "num_features"):
+        try:
+            return int(x.num_features)
+        except Exception:
+            return None
+
+    return None
+
+def _infer_dims_from_loader(obj):
+    # accept loader, dataset (GraphDataset), list of Data, or single Data
+    sample = None
     if obj is None:
         return None, None
-    # If we were handed a dataset-like container, turn it into a first item
-    if hasattr(obj, "graphs"):
-        sample = obj.graphs[0] if len(obj.graphs) else None
-    elif _is_indexable(obj):
+    if hasattr(obj, "graphs") and len(obj.graphs):
+        sample = obj.graphs[0]
+    elif hasattr(obj, "__getitem__") and hasattr(obj, "__len__") and len(obj):
         sample = obj[0]
     elif hasattr(obj, "__iter__"):
         it = iter(obj)
         try:
             sample = next(it)
         except StopIteration:
-            sample = None
+            return None, None
     else:
         sample = obj
 
-    if sample is None:
-        return None, None
-    if isinstance(sample, (list, tuple)):
-        sample = sample[0]
+    if isinstance(sample, (list, tuple)) and sample:
+        sample = sample[0]  # (data, label) → data
+
+    # If this is your custom GraphData, convert or access its fields
+    if not hasattr(sample, "x") and hasattr(sample, "to_pyg"):
+        sample = sample.to_pyg()
 
     x = getattr(sample, "x", None)
     ea = getattr(sample, "edge_attr", None)
-    in_dim = int(x.size(-1)) if x is not None else None
-    edge_dim = int(ea.size(-1)) if ea is not None else None
+
+    in_dim = _feat_dim(x)
+    edge_dim = _feat_dim(ea)
     return in_dim, edge_dim
 
 def _edge_dim_or_none(ds_pre: Any) -> Optional[int]:
@@ -231,17 +375,30 @@ def _run_one_config_method(
     baseline_cfg: str = "adapters/config.yaml",
     use_scaffold: bool = False,
     prebuilt_loaders: Optional[Tuple[Any, Any, Any]] = None,
-
+    prebuilt_datasets: Optional[Tuple[Any, Any, Any]] = None,  
 ) -> Dict[str, Any]:
     
-    if prebuilt_loaders is not None:
+    if prebuilt_datasets is not None:
+        tr_ds, va_ds, te_ds = prebuilt_datasets
+        ds_pre  = _ensure_graph_dataset(tr_ds)
+        ds_eval = _ensure_graph_dataset(va_ds) or ds_pre
+        # infer dims from the train dataset
+        input_dim = _feat_dim(getattr(ds_pre.graphs[0], "x", None))
+        edge_dim  = _feat_dim(getattr(ds_pre.graphs[0], "edge_attr", None))
+    elif prebuilt_loaders is not None:
         train_loader, val_loader, test_loader = prebuilt_loaders
         input_dim, edge_dim = _infer_dims_from_loader(train_loader)
+        ds_pre  = _dataset_from_loader(train_loader)
+        ds_eval = _dataset_from_loader(val_loader) or ds_pre
     else:
         ds_pre = unlabeled_dataset_fn(cfg.add_3d)
         ds_eval = eval_dataset_fn(cfg.add_3d)
         input_dim = int(ds_pre.graphs[0].x.shape[1])
         edge_dim = _edge_dim_or_none(ds_pre)
+
+    # Safety: ensure both expose `.graphs` and (if possible) `.labels`
+    ds_pre  = _ensure_graph_dataset(ds_pre)
+    ds_eval = _ensure_graph_dataset(ds_eval) or ds_pre
 
     seed_metrics: List[Dict[str, float]] = []
     for seed in seeds:
@@ -524,12 +681,24 @@ def run_grid_search(
         if use_single_builder:
             pre_bs = getattr(cfg, "pretrain_batch_size", 32)
             ft_bs  = getattr(cfg, "finetune_batch_size", 32)
+
+            # get datasets straight from dataset_fn
             try:
-                ds = dataset_fn(add_3d=add_3d)   # preferred
+                ds = dataset_fn(add_3d=add_3d)
             except TypeError:
-                ds = dataset_fn(add_3d)          # positional fallback
+                ds = dataset_fn(add_3d)
+
+            # datasets (train/val/test)
+            tr_ds, va_ds, te_ds = _normalize_ds(ds)
+
+            # loaders built from ds (as you already had)
             train_loader, val_loader, test_loader = _normalize_ds_to_loaders(ds, pre_bs, ft_bs)
-            prebuilt_loaders = (train_loader, val_loader, test_loader)
+
+            prebuilt_loaders  = (train_loader, val_loader, test_loader)
+            prebuilt_datasets = (tr_ds, va_ds, te_ds)
+        else:
+            prebuilt_loaders  = None
+            prebuilt_datasets = None
 
         for method in methods:
             rows.append(
@@ -553,6 +722,7 @@ def run_grid_search(
                     baseline_cfg,
                     use_scaffold=use_scaffold,
                     prebuilt_loaders=prebuilt_loaders,
+                    prebuilt_datasets=prebuilt_datasets,
                 )
             )
 
@@ -576,20 +746,30 @@ def run_grid_search(
         "probe_mae_mean",
     ]
     best_rows: List[Dict[str, Any]] = []
+    # metrics where higher is better
     for m in metrics_max:
         if m in df.columns:
-            idx = df[m].idxmax()
-            row = df.loc[idx].to_dict()
-            row["best_metric"] = m
-            best_rows.append(row)
+            col = pd.to_numeric(df[m], errors="coerce")
+            if col.notna().any():  # skip if all NaN
+                pos = int(col.idxmax())           # position of best row
+                row = df.iloc[pos].to_dict()      # use iloc, not loc
+                row["best_metric"] = m
+                best_rows.append(row)
+
+    # metrics where lower is better
     for m in metrics_min:
         if m in df.columns:
-            idx = df[m].idxmin()
-            row = df.loc[idx].to_dict()
-            row["best_metric"] = m
-            best_rows.append(row)
+            col = pd.to_numeric(df[m], errors="coerce")
+            if col.notna().any():  # skip if all NaN
+                pos = int(col.idxmin())
+                row = df.iloc[pos].to_dict()
+                row["best_metric"] = m
+                best_rows.append(row)
+
     if best_rows:
         df = pd.concat([df, pd.DataFrame(best_rows)], ignore_index=True)
+
     if out_csv is not None:
         df.to_csv(out_csv, index=False)
+
     return df
