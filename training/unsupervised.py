@@ -148,20 +148,31 @@ def _encode_graph(encoder, g):
         adj_t = _edge_index_to_dense(ei_t, num_nodes, device=device, add_self_loops=True)
         edge_t = _to_tensor(getattr(g, "edge_attr", None), dtype=torch.float32, device=device)
 
-    # Try 3-arg (x, adj, edge_attr); fall back to 2-arg (x, adj)
-    try:
-        return encoder(x_t, adj_t, edge_t)
-    except TypeError:
-        try:
-            # 2-arg: (x, structure)
+    # --- decide how to call the encoder by inspecting its forward signature ---
+    import inspect
+
+    mod = encoder.module if hasattr(encoder, "module") else encoder
+    sig = inspect.signature(mod.forward)
+
+    # names of non-self positional-or-keyword params, in order
+    params = [
+        p.name for p in sig.parameters.values()
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+
+    # If the encoder expects the graph object
+    if params and params[0] in {"g", "graph", "data"}:
+        return encoder(g)
+
+    # If it accepts x + structure (+ optional edge_attr)
+    if {"x", "adj"}.issubset(params) or {"x", "edge_index"}.issubset(params) or len(params) >= 2:
+        if "edge_attr" in params and edge_t is not None:
+            return encoder(x_t, adj_t, edge_t)
+        else:
             return encoder(x_t, adj_t)
-        except TypeError:
-            try:
-                # 1-arg: (g)  — e.g., DummyEncoder.forward(self, g)
-                return encoder(g)
-            except TypeError:
-                # 1-arg: (x)  — final fallback
-                return encoder(x_t)
+
+    # Fallback: x only
+    return encoder(x_t)
 
 def _pool_graph_emb(h: torch.Tensor, g) -> torch.Tensor:
     """
