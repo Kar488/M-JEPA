@@ -11,6 +11,8 @@ jobs:
   quick:
     name: Unit & smoke tests (no GPU, no slow)
     runs-on: ubuntu-latest
+    env:
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,12 +35,11 @@ jobs:
       - name: Install dependencies (CPU)
         shell: bash -l {0}
         run: |
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          else
-            pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-            pip install scikit-learn pandas pyarrow fastparquet joblib matplotlib pytest pyyaml
-          fi
+          python -m pip install --upgrade pip setuptools wheel "numpy<2"
+          pip install "torch==2.2.1" --index-url https://download.pytorch.org/whl/cpu
+          pip install "torch-scatter==2.1.2" -f https://data.pyg.org/whl/torch-2.2.1+cpu.html
+          pip install torch-geometric
+          pip install -r requirements.txt
 
       - name: Run quick tests with coverage (exclude gpu & slow)
         shell: bash -l {0}
@@ -58,6 +59,8 @@ jobs:
   slow:
     name: Extended tests (include slow, no GPU)
     runs-on: ubuntu-latest
+    env:
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
     if: github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout
@@ -81,12 +84,11 @@ jobs:
       - name: Install dependencies (CPU)
         shell: bash -l {0}
         run: |
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          else
-            pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-            pip install scikit-learn pandas pyarrow fastparquet joblib matplotlib pytest pyyaml
-          fi
+          python -m pip install --upgrade pip setuptools wheel "numpy<2"
+          pip install "torch==2.2.1" --index-url https://download.pytorch.org/whl/cpu
+          pip install "torch-scatter==2.1.2" -f https://data.pyg.org/whl/torch-2.2.1+cpu.html
+          pip install torch-geometric
+          pip install -r requirements.txt
 
       - name: Run extended tests with coverage (exclude gpu only)
         shell: bash -l {0}

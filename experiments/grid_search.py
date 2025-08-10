@@ -683,7 +683,7 @@ def run_grid_search(
             ft_bs  = getattr(cfg, "finetune_batch_size", 32)
 
             # get datasets straight from dataset_fn
-            try:
+            try: 
                 ds = dataset_fn(add_3d=add_3d)
             except TypeError:
                 ds = dataset_fn(add_3d)
