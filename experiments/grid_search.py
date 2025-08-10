@@ -775,7 +775,13 @@ def run_grid_search(
     all_metrics = list(set(metrics_max + metrics_min))
     for m in all_metrics:
         if m in df.columns:
+            # flatten list/tuple/ndarray scalars like [0.85]
+            df[m] = df[m].apply(
+                lambda v: float(v[0]) if isinstance(v, (list, tuple, np.ndarray)) and len(v) == 1 else v
+            )
+            # coerce to numeric
             df[m] = pd.to_numeric(df[m], errors="coerce")
+            # replace infinities with NaN
             df[m] = df[m].replace([np.inf, -np.inf], np.nan)
-            
+
     return df
