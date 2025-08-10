@@ -1,6 +1,9 @@
 import sys
 import types
 import logging
+import os
+import pytest
+
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -26,6 +29,16 @@ def test_maybe_init_wandb_login_called(monkeypatch):
     assert calls['login'] == 'token'
     assert calls['init'] is True
 
+def test_maybe_init_wandb_real():
+    api_key = os.getenv("WANDB_API_KEY")
+    if not api_key:
+        pytest.skip("WANDB_API_KEY not set")
+    wandb = maybe_init_wandb(True, api_key=api_key)  # no monkeypatch here
+    run = wandb.init(project="m-jepa", name="m-jepa-unit-test", reinit=True)
+    wandb.log({"ok": True})
+    url = run.url
+    wandb.finish()
+    assert "wandb.ai" in url
 
 def test_maybe_init_wandb_warns_on_failure(monkeypatch, caplog):
     calls = {}

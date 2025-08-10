@@ -5,14 +5,22 @@ import pytest
 
 import pandas as pd
 
-
 import sys
-
+import importlib
+dataset_module = importlib.import_module(f'data.mdataset')
+GraphDataset = getattr(dataset_module, 'GraphDataset')
 
 def test_dataset_from_smiles_list(toy_smiles):
-    from data.mdataset import GraphDataset
-
     ds = GraphDataset.from_smiles_list(toy_smiles, add_3d=False)
+
+    if len(ds.graphs) != len(toy_smiles):
+        import pprint, pytest
+        pytest.fail(
+            "len mismatch | inputs=%d graphs=%d\nsample graph repr:\n%s"
+            % (len(toy_smiles), len(ds.graphs), pprint.pformat(ds.graphs[:2]))
+        )
+
+
     assert len(ds.graphs) == len(toy_smiles)
     assert ds.graphs[0].x.ndim == 2
     assert ds.graphs[0].edge_index.shape[0] == 2
@@ -20,21 +28,8 @@ def test_dataset_from_smiles_list(toy_smiles):
 
 @pytest.mark.parametrize("add_3d", [False, True])
 def test_dataset_from_file_smoke(tiny_parquet, add_3d):
-    #from data.mdataset import GraphDataset
-
     path = str(tiny_parquet)
     ext = os.path.splitext(path)[1].lower()
-
-    #print("sys.path:", sys.path)
-    print("Imported mdataset.py from (expected):", os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'mdataset.py')))
-    try:
-        from data.mdataset import GraphDataset
-        print("Actual module path:", sys.modules['data.mdataset'].__file__)
-        print("GraphDataset has from_smiles_list:", hasattr(GraphDataset, 'from_smiles_list'))
-        print("GraphDataset has from_parquet:", hasattr(GraphDataset, 'from_parquet'))
-    except Exception as e:
-        print("Error importing GraphDataset:", str(e))
-
 
     if ext == ".parquet":
         ds = GraphDataset.from_parquet(

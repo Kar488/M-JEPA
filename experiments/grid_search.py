@@ -124,7 +124,9 @@ def _dataset_from_loader(loader: Any) -> Any:
     """Get a dataset from a loader. If `.dataset` missing, materialize from the loader."""
     if loader is None:
         return None
-    ds = getattr(loader, "mdataset", None)
+    
+    ds = getattr(loader, "dataset", None)
+   
     if ds is not None:
         return _ensure_graph_dataset(ds)
 
@@ -691,7 +693,7 @@ def run_grid_search(
             # datasets (train/val/test)
             tr_ds, va_ds, te_ds = _normalize_ds(ds)
 
-            # loaders built from ds (as you already had)
+            # loaders built from ds (as we already had)
             train_loader, val_loader, test_loader = _normalize_ds_to_loaders(ds, pre_bs, ft_bs)
 
             prebuilt_loaders  = (train_loader, val_loader, test_loader)

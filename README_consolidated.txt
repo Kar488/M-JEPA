@@ -92,3 +92,8 @@ the last checkpoint.
 **Disk footprint.** With the default shard size each block of 1k molecules
 requires roughly 5–8 MB on disk, so 1 M molecules will occupy on the order of
 5–8 GB.
+
+
+##tests
+pytest --cache-clear tests -v --capture=no
+pytest --cache-clear tests -v -o log_cli=true

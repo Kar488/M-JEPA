@@ -81,33 +81,67 @@ class GraphDataset:
             batch_ptr: Tensor marking graph boundaries within the batch.
             batch_labels: Labels tensor if dataset is labelled, else ``None``.
         """
-        node_features: List[torch.Tensor] = []
-        adj_blocks: List[torch.Tensor] = []
-        graph_ptr: List[int] = []
-        offset = 0
+        node_feats = []
+        adjs = []
+        sizes = []  # number of nodes per graph
+
         for idx in indices:
-            x_i, adj_i = self.graphs[idx].to_tensors()
-            node_features.append(x_i)
-            adj_blocks.append(adj_i)
-            offset += adj_i.shape[0]
-            graph_ptr.append(offset)
-        batch_x = (
-            torch.cat(node_features, dim=0)
-            if node_features
-            else torch.zeros((0, self.graphs[0].x.shape[1]), dtype=torch.float32)
-        )
-        batch_adj = (
-            torch.block_diag(*adj_blocks)
-            if adj_blocks
-            else torch.zeros((0, 0), dtype=torch.float32)
-        )
-        batch_ptr = torch.tensor(graph_ptr, dtype=torch.long)
-        batch_labels = (
-            torch.tensor(self.labels[indices], dtype=torch.float32)
-            if self.labels is not None
-            else None
-        )
-        return batch_x, batch_adj, batch_ptr, batch_labels
+            g = self.graphs[idx]
+
+            # Prefer GraphData.to_tensors if present
+            if hasattr(g, "to_tensors") and callable(getattr(g, "to_tensors")):
+                x_i, adj_i = g.to_tensors()
+            else:
+                # Fallbacks (PyG-like)
+                if not hasattr(g, "x"):
+                    raise AttributeError("Graph missing 'x'")
+                x_i = torch.as_tensor(g.x, dtype=torch.float32) if not torch.is_tensor(g.x) else g.x
+
+                if hasattr(g, "adj") and g.adj is not None:
+                    adj_i = torch.as_tensor(g.adj, dtype=torch.float32) if not torch.is_tensor(g.adj) else g.adj
+                elif hasattr(g, "edge_index") and g.edge_index is not None:
+                    ei = g.edge_index
+                    if not torch.is_tensor(ei):
+                        ei = torch.as_tensor(ei, dtype=torch.long)
+                    n = int(x_i.size(0))
+                    adj_i = torch.zeros((n, n), dtype=torch.float32)
+                    if ei.numel() > 0:
+                        src, dst = ei[0], ei[1]
+                        adj_i[src, dst] = 1.0
+                        adj_i[dst, src] = 1.0  # undirected
+                else:
+                    raise AttributeError("Graph has neither 'adj' nor 'edge_index'")
+
+            n_i = int(x_i.size(0))
+            if n_i <= 0:
+                # avoid empty segments causing NaNs
+                raise ValueError(f"Graph at idx {idx} has 0 nodes")
+
+            node_feats.append(x_i)
+            adjs.append(adj_i)
+            sizes.append(n_i)
+
+        # Build block-diagonal adjacency
+        A = adjs[0]
+        for Ai in adjs[1:]:
+            A = torch.block_diag(A, Ai)
+
+        # Concatenate features
+        X = torch.cat(node_feats, dim=0)
+
+        # Build ptr = [0, n1, n1+n2, ..., sum(sizes)]
+        ptr = np.cumsum([0] + sizes, dtype=np.int64)
+        # Sanity: ptr must be strictly increasing and have len = num_graphs + 1
+        if np.any(np.diff(ptr) <= 0) or (len(ptr) != len(indices) + 1):
+            raise AssertionError(f"Bad batch_ptr: {ptr.tolist()} for {len(indices)} graphs")
+
+        batch_ptr = torch.as_tensor(ptr, dtype=torch.long)
+
+        labels = None
+        if getattr(self, "labels", None) is not None:
+            labels = torch.tensor(self.labels[np.array(indices, dtype=int)], dtype=torch.float32)
+
+        return X, A, batch_ptr, labels
 
 
 
@@ -235,10 +269,6 @@ class GraphDataset:
                 g = cls.smiles_to_graph(
                     sm, add_3d=add_3d, random_seed=random_seed
                 )
-                
-                graphs.append(g)
-                smiles_out.append(sm)
-                
             except Exception as e:
                 
                 if _RUNNING_IN_CI:

@@ -78,7 +78,7 @@ def maybe_init_wandb(
         import wandb
 
         if api_key:
-            wandb.login(key=api_key) #dde60cc222c6b4b01f5f4d2e1a4fcf99228d95f7
+            wandb.login(key=api_key)
         wandb.init(project=project, config=config or {}, tags=list(tags) if tags else None)
         return wandb
     except Exception as exc:
