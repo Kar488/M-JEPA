@@ -42,7 +42,7 @@ import pandas as pd
 import torch
 import logging
 
-from data.dataset import GraphDataset
+from data.mdataset import GraphDataset
 from models.encoder import GNNEncoder
 from training.supervised import train_linear_head
 from utils.seed import set_seed

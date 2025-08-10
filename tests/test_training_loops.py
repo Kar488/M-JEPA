@@ -1,6 +1,6 @@
 import numpy as np
 
-from data.dataset import GraphData
+from data.mdataset import GraphData
 from training.unsupervised import _batch_iter, _mask_subgraph
 
 

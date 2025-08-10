@@ -22,7 +22,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Data & utils
-from data.dataset import GraphData, GraphDataset
+from data.mdataset import GraphData, GraphDataset
 from utils.checkpoint import save_checkpoint
 from utils.plotting import plot_training_curves
 
@@ -90,7 +90,7 @@ def load_parquet_dataset(
     smiles_col: str = "smiles",
     label_col: Optional[str] = None,
     cache_dir: Optional[str] = None,
-    add_3d_features: bool = False,
+    add_3d: bool = False,
     random_seed: Optional[int] = None,
     n_rows: Optional[int] = None,
 ) -> GraphDataset:
@@ -99,7 +99,7 @@ def load_parquet_dataset(
         smiles_col=smiles_col,
         label_col=label_col,
         cache_dir=cache_dir,
-        add_3d_features=add_3d_features,
+        add_3d=add_3d,
         random_seed=random_seed,
         n_rows=n_rows,
     )
@@ -112,7 +112,7 @@ def load_directory_dataset(
     label_col: Optional[str] = None,
     cache_dir: Optional[str] = None,
     prefix_filter: Optional[str] = None,
-    add_3d_features: bool = False,
+    add_3d: bool = False,
     random_seed: Optional[int] = None,
     n_rows_per_file: Optional[int] = None,
 ) -> GraphDataset:
@@ -122,7 +122,7 @@ def load_directory_dataset(
         smiles_col=smiles_col,
         label_col=label_col,
         cache_dir=cache_dir,
-        add_3d_features=add_3d_features,
+        add_3d=add_3d,
         random_seed=random_seed,
         prefix_filter=prefix_filter,
         n_rows_per_file=n_rows_per_file,
@@ -331,7 +331,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
         smiles_col="smiles",
         cache_dir=args.cache_dir,
         prefix_filter="train",
-        add_3d_features=args.add_3d,
+        add_3d=args.add_3d,
     )
     if not unlabeled.graphs:
         raise SystemExit(f"No graphs loaded from {args.unlabeled_dir}")
@@ -486,7 +486,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
         smiles_col="smiles",
         label_col=args.label_col,
         cache_dir=str(Path(args.cache_dir) / "label_train"),
-        add_3d_features=args.add_3d,
+        add_3d=args.add_3d,
     )
     val_ds = load_directory_dataset(
         args.label_val_dir,
@@ -494,7 +494,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
         smiles_col="smiles",
         label_col=args.label_col,
         cache_dir=str(Path(args.cache_dir) / "label_val"),
-        add_3d_features=args.add_3d,
+        add_3d=args.add_3d,
     )
 
     metrics = _train_with_val_if_available(
@@ -520,7 +520,7 @@ def run_full_mode(args: argparse.Namespace) -> None:
             smiles_col="smiles",
             label_col=args.label_col,
             cache_dir=str(Path(args.cache_dir) / "label_test"),
-            add_3d_features=args.add_3d,
+            add_3d=args.add_3d,
         )
         # quick re‑train on merged set for reporting (simple baseline)
         merged = GraphDataset(
@@ -596,7 +596,7 @@ def run_grid_mode(args: argparse.Namespace) -> None:
             smiles_col=smiles_col,
             cache_dir=cache_dir,
             prefix_filter=prefix_filter,
-            add_3d_features=add_3d,
+            add_3d=add_3d,
         )
 
     # sweep axes

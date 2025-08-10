@@ -6,7 +6,7 @@ from typing import Optional
 from rdkit import Chem
 from rdkit.Chem import rdMolTransforms as MT
 
-from data.dataset import GraphData
+from data.mdataset import GraphData
 
 
 def random_rotation(mol: Chem.Mol, conf_id: int = 0) -> Chem.Mol:

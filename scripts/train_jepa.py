@@ -10,7 +10,7 @@ import logging
 # Allow running as a script without installing the package
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from data.dataset import GraphData, GraphDataset
+from data.mdataset import GraphData, GraphDataset
 from models.base import EncoderBase
 from models.ema import EMA
 from models.predictor import MLPPredictor

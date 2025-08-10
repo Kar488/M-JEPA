@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from data.dataset import GraphData
+from data.mdataset import GraphData
 from models.ema import EMA
 from training import unsupervised as unsup
 import utils.ddp as ddp

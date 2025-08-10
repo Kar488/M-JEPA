@@ -7,7 +7,7 @@ from sklearn.cluster import KMeans
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import silhouette_score
 
-from data.dataset import GraphDataset
+from data.mdataset import GraphDataset
 from data.scaffold_split import scaffold_split
 
 import torch

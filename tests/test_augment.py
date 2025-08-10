@@ -9,7 +9,7 @@ from data.augment import (
     perturb_dihedral,
     apply_graph_augmentations,
 )
-from data.dataset import GraphDataset
+from data.mdataset import GraphDataset
 
 
 def _build_mol(smiles: str = "CCO") -> Chem.Mol:

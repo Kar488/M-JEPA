@@ -21,7 +21,7 @@ from typing import List, Tuple
 import numpy as np
 import logging
 
-from data.dataset import GraphDataset
+from data.mdataset import GraphDataset
 from models.ema import EMA
 from models.encoder import GNNEncoder
 from models.predictor import MLPPredictor
@@ -158,7 +158,7 @@ from typing import Iterable, Optional
 
 import numpy as np
 
-from data.dataset import GraphDataset
+from data.mdataset import GraphDataset
 from models.ema import EMA
 from models.encoder import GNNEncoder
 from models.predictor import MLPPredictor

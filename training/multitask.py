@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from data.dataset import GraphData, GraphDataset
+from data.mdataset import GraphData, GraphDataset
 
 
 def _batch_iter(graphs: List[GraphData], labels: np.ndarray, batch_size: int):

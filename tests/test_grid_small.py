@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 # Configure a source parquet (adjust path to one of your shards)
-SOURCE = Path("data/ZINC_canonicalized/train-0000.parquet")  # change if needed
+SOURCE = Path("data/ZINC_canonicalized/train-00000-of-00003-1dd8e62fc2556455.parquet")  # change if needed
 TMP = Path("data/tmp_small.parquet")
 TMP.parent.mkdir(parents=True, exist_ok=True)
 
@@ -22,19 +22,20 @@ if SOURCE.exists():
     df.to_parquet(TMP, index=False)
 
     def small_dataset_fn(add_3d: bool):
-        from data.dataset import GraphDataset
+        from data.mdataset import GraphDataset
 
         return GraphDataset.from_parquet(
             filepath=str(TMP),
             smiles_col=smiles_col,
             cache_dir="cache/tmp_small",
-            add_3d_features=add_3d,
+            add_3d=add_3d,
         )
 
 else:
     # Fallback: small toy dataset
+    
     def small_dataset_fn(add_3d: bool):
-        from data.dataset import GraphDataset
+        from data.mdataset import GraphDataset
 
         smiles = [
             "CCO",
@@ -50,7 +51,7 @@ else:
         ]
         labels = np.random.randint(0, 2, size=len(smiles)).tolist()
         return GraphDataset.from_smiles_list(
-            smiles, labels=labels, add_3d_features=add_3d
+            smiles, labels=labels, add_3d=add_3d
         )
 
 

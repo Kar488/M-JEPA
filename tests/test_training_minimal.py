@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 # Stubs for modules requiring optional dependencies
-data_dataset = types.ModuleType("data.dataset")
+data_dataset = types.ModuleType("data.mdataset")
 
 @dataclass
 class GraphData:
@@ -24,7 +24,7 @@ class GraphDataset:
 
 data_dataset.GraphData = GraphData
 data_dataset.GraphDataset = GraphDataset
-sys.modules["data.dataset"] = data_dataset
+sys.modules["data.mdataset"] = data_dataset
 
 utils_pooling = types.ModuleType("utils.pooling")
 

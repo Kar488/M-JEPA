@@ -18,7 +18,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from data.dataset import GraphDataset
+from data.mdataset import GraphDataset
 from data.scaffold_split import scaffold_split
 from models.encoder import GNNEncoder
 from utils.metrics import compute_classification_metrics, compute_regression_metrics

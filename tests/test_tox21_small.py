@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from data.dataset import GraphDataset
+from data.mdataset import GraphDataset
 
 from utils.logging import maybe_init_wandb
 

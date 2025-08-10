@@ -12,7 +12,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.optim as optim
 
-from data.dataset import GraphDataset
+from data.mdataset import GraphDataset
 
 
 @torch.no_grad()

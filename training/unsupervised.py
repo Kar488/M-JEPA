@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from data.dataset import GraphData, GraphDataset
+from data.mdataset import GraphData, GraphDataset
 from data.augment import apply_graph_augmentations
 from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.logging import maybe_init_wandb

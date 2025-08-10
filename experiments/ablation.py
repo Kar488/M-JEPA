@@ -6,7 +6,7 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 
-from data.dataset import GraphDataset
+from data.mdataset import GraphDataset
 from models.ema import EMA
 from models.encoder import GNNEncoder
 from models.predictor import MLPPredictor

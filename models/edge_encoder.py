@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from data.dataset import GraphData
+from data.mdataset import GraphData
 from models.base import EncoderBase
 from utils.pooling import global_mean_pool
 
@@ -82,7 +82,7 @@ class EdgeGNNEncoder(EncoderBase):
         e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)  # [2, E]
         if g.edge_attr is None:
             raise ValueError(
-                "edge_attr is required for EdgeGNNEncoder (set add_3d_features=True in dataset to get bond lengths)."
+                "edge_attr is required for EdgeGNNEncoder (set add_3d=True in dataset to get bond lengths)."
             )
         a = torch.as_tensor(g.edge_attr, dtype=torch.float32, device=device)  # [E, Fe]
         return x, e, a

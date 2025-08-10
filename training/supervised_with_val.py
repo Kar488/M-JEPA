@@ -4,7 +4,7 @@ from typing import Optional
 
 import numpy as np
 
-from data.dataset import GraphDataset
+from data.mdataset import GraphDataset
 from models.encoder import GNNEncoder
 from training.supervised import train_linear_head  # reuse your existing head + metrics
 

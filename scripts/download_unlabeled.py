@@ -27,7 +27,7 @@ from typing import Iterator, List, Tuple
 import pandas as pd
 import requests
 
-from data.dataset import GraphDataset
+from data.mdataset import GraphDataset
 
 logger = logging.getLogger(__name__)
 

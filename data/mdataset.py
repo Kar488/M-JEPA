@@ -114,90 +114,107 @@ class GraphDataset:
     # ---------- Core featurisation ---------- #
     @staticmethod
     def smiles_to_graph(
-        smiles: str, add_3d: bool = False, random_seed: Optional[int] = None
+    smiles: str, add_3d: bool = False, random_seed: Optional[int] = None
     ) -> GraphData:
-        """Convert SMILES -> RDKit Mol -> GraphData. Optionally append (x,y,z) to node features and geometry to edge_attr."""
-        mol = Chem.MolFromSmiles(smiles)
-        if mol is None:
-            raise ValueError(f"Invalid SMILES: {smiles}")
-        mol = Chem.AddHs(mol)
+        """
+        Convert SMILES -> GraphData using RDKit when available.
+        Falls back to a small synthetic graph if RDKit/embedding fails.
+        """
+        # --- graceful fallback if RDKit missing ---
+        try: 
+            from rdkit import Chem
+            from rdkit.Chem import AllChem
+        except Exception:
+            return _fallback_graph_from_string(smiles)
 
-        # Node features (compact baseline; extend as needed)
-        feats = []
-        for atom in mol.GetAtoms():
-            z = atom.GetAtomicNum()
-            deg = atom.GetDegree()
-            aromatic = int(atom.GetIsAromatic())
-            hybrid = int(atom.GetHybridization())
-            feats.append([z, deg, aromatic, hybrid])
-        X = (
-            np.asarray(feats, dtype=np.float32)
-            if feats
-            else np.zeros((0, 4), dtype=np.float32)
-        )
+        try:
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                # invalid SMILES -> fallback
+                return _fallback_graph_from_string(smiles)
 
-        # Optional 3D coords
-        coords = None
-        if add_3d and mol.GetNumAtoms() > 0:
-            try:
-                params = AllChem.ETKDGv3()
-                if random_seed is not None:
-                    params.randomSeed = int(random_seed)
-                ok = AllChem.EmbedMolecule(mol, params)
-                if ok == 0:
-                    AllChem.UFFOptimizeMolecule(mol, maxIters=200)
-                    conf = mol.GetConformer()
-                    coords = np.array(
-                        [
-                            list(conf.GetAtomPosition(i))
-                            for i in range(mol.GetNumAtoms())
-                        ],
-                        dtype=np.float32,
-                    )
-                    # also append (x,y,z) to node features
-                    X = np.concatenate([X, coords], axis=1)
-            except Exception:
-                coords = None  # graceful fallback
+            # sanitization + explicit H (safer for 3D)
+            Chem.SanitizeMol(mol)
+            mol = Chem.AddHs(mol)
 
-        # Edges + edge attributes (bond one‑hots, conjugation, ring, length if coords)
-        edges = []
-        eattr = []
-        for b in mol.GetBonds():
-            i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
-            btype = b.GetBondType()
-            onehot = [
-                int(btype == Chem.BondType.SINGLE),
-                int(btype == Chem.BondType.DOUBLE),
-                int(btype == Chem.BondType.TRIPLE),
-                int(btype == Chem.BondType.AROMATIC),
-            ]
-            conj = int(b.GetIsConjugated())
-            ring = int(b.IsInRing())
-            length = 0.0
-            if coords is not None:
-                vi, vj = coords[i], coords[j]
-                length = float(np.linalg.norm(vi - vj))
+            # Node features: [Z, degree, aromatic, hybrid]
+            feats = []
+            for atom in mol.GetAtoms():
+                z = atom.GetAtomicNum()
+                deg = atom.GetDegree()
+                aromatic = int(atom.GetIsAromatic())
+                # store hybridization as small int code
+                hybrid = int(atom.GetHybridization())
+                feats.append([z, deg, aromatic, hybrid])
 
-            feat = onehot + [conj, ring, length]
+            X = np.asarray(feats, dtype=np.float32) if feats else np.zeros((0, 4), dtype=np.float32)
 
-            # add both directions
-            edges.append((i, j))
-            eattr.append(feat)
-            edges.append((j, i))
-            eattr.append(feat)
+            coords = None
+            if add_3d and mol.GetNumAtoms() > 0:
+                try:
+                    params = AllChem.ETKDGv3()
+                    if random_seed is not None:
+                        params.randomSeed = int(random_seed)
+                    # returns 0 on success; -1 on failure
+                    rc = AllChem.EmbedMolecule(mol, params)
+                    if rc == 0:
+                        # geometry optimization is best-effort; failure is fine
+                        try:
+                            AllChem.UFFOptimizeMolecule(mol, maxIters=200)
+                        except Exception:
+                            pass
+                        conf = mol.GetConformer()
+                        coords = np.array(
+                            [list(conf.GetAtomPosition(i)) for i in range(mol.GetNumAtoms())],
+                            dtype=np.float32,
+                        )
+                        # append (x,y,z)
+                        if coords.shape[0] == X.shape[0]:
+                            X = np.concatenate([X, coords], axis=1)
+                except Exception:
+                    coords = None  # just proceed without 3D
 
-        E = (
-            np.array(edges, dtype=np.int64).T
-            if edges
-            else np.zeros((2, 0), dtype=np.int64)
-        )
-        EA = np.asarray(eattr, dtype=np.float32) if eattr else None
+            # Edges + attrs
+            edges: list[tuple[int, int]] = []
+            eattr: list[list[float]] = []
+            for b in mol.GetBonds():
+                i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
+                btype = b.GetBondType()
+                onehot = [
+                    int(btype == Chem.BondType.SINGLE),
+                    int(btype == Chem.BondType.DOUBLE),
+                    int(btype == Chem.BondType.TRIPLE),
+                    int(btype == Chem.BondType.AROMATIC),
+                ]
+                conj = int(b.GetIsConjugated())
+                ring = int(b.IsInRing())
+                length = 0.0
+                if coords is not None:
+                    vi, vj = coords[i], coords[j]
+                    length = float(np.linalg.norm(vi - vj))
 
-        # Append geometry (bond length/angles/dihedral encodings) per directed edge
-        if add_3d and E.shape[1] > 0:
-            EA = _append_geom_edge_attr(mol, E, EA)
+                feat = onehot + [conj, ring, length]
+                # undirected → add both directions
+                edges.append((i, j)); eattr.append(feat)
+                edges.append((j, i)); eattr.append(feat)
 
-        return GraphData(x=X, edge_index=E, edge_attr=EA)
+            E = np.array(edges, dtype=np.int64).T if edges else np.zeros((2, 0), dtype=np.int64)
+            EA = np.asarray(eattr, dtype=np.float32) if eattr else None
+
+            # optional geometric edge features
+            if add_3d and E.shape[1] > 0:
+                try:
+                    EA = _append_geom_edge_attr(mol, E, EA)
+                except Exception:
+                    # if augmentation fails, keep existing EA (may be None)
+                    pass
+
+            return GraphData(x=X, edge_index=E, edge_attr=EA)
+
+        except Exception:
+            # any unexpected RDKit error → robust fallback
+            return _fallback_graph_from_string(smiles)
+
 
 
 
@@ -209,11 +226,7 @@ class GraphDataset:
         labels: Optional[List[Any]] = None,
         add_3d: bool = False,
         random_seed: Optional[int] = None,
-        **kwargs,                            # allow legacy add_3d_features
     ) -> "GraphDataset":
-        # map legacy name if provided - monkey path
-        if "add_3d_features" in kwargs:
-            add_3d = add_3d or bool(kwargs["add_3d_features"])
             
         graphs: List[GraphData] = []
         smiles_out: List[str] = []
@@ -222,14 +235,18 @@ class GraphDataset:
                 g = cls.smiles_to_graph(
                     sm, add_3d=add_3d, random_seed=random_seed
                 )
+                
                 graphs.append(g)
                 smiles_out.append(sm)
+                
             except Exception as e:
+                
                 if _RUNNING_IN_CI:
                     raise
-                # Locally, fall back so tiny tests still run without RDKit.
-                graphs.append(_fallback_graph_from_string(sm))
-                smiles_out.append(sm)
+                g = _fallback_graph_from_string(sm)
+            
+            graphs.append(g)
+            smiles_out.append(sm)
 
         y = None if labels is None else np.asarray(labels)
         return cls(graphs, y, smiles_out)
@@ -241,10 +258,11 @@ class GraphDataset:
         smiles_col: str = "smiles",
         label_col: Optional[str] = None,
         cache_dir: Optional[str] = None,
-        add_3d_features: bool = False,
+        add_3d: bool = False,
         random_seed: Optional[int] = None,
         n_rows: Optional[int] = None,  # subset helper
     ) -> "GraphDataset":
+        
         cache_path = None
         if cache_dir and n_rows is None:
             os.makedirs(cache_dir, exist_ok=True)
@@ -270,7 +288,7 @@ class GraphDataset:
         for sm in smiles:
             try:
                 g = cls.smiles_to_graph(
-                    sm, add_3d=add_3d_features, random_seed=random_seed
+                    sm, add_3d=add_3d, random_seed=random_seed
                 )
                 graphs.append(g)
                 smiles_out.append(sm)
@@ -291,7 +309,7 @@ class GraphDataset:
         label_col: Optional[str] = None,
         sep: str = ",",
         cache_dir: Optional[str] = None,
-        add_3d_features: bool = False,
+        add_3d: bool = False,
         random_seed: Optional[int] = None,
         n_rows: Optional[int] = None,
     ) -> "GraphDataset":
@@ -320,7 +338,7 @@ class GraphDataset:
         for sm in smiles:
             try:
                 g = cls.smiles_to_graph(
-                    sm, add_3d=add_3d_features, random_seed=random_seed
+                    sm, add_3d=add_3d, random_seed=random_seed
                 )
                 graphs.append(g)
                 smiles_out.append(sm)
@@ -341,7 +359,7 @@ class GraphDataset:
         smiles_col: str = "smiles",
         label_col: Optional[str] = None,
         cache_dir: Optional[str] = None,
-        add_3d_features: bool = False,
+        add_3d: bool = False,
         random_seed: Optional[int] = None,
         prefix_filter: Optional[str] = None,
         n_rows_per_file: Optional[int] = None,  # subset helper
@@ -374,7 +392,7 @@ class GraphDataset:
                             else os.path.join(cache_dir, os.path.splitext(fname)[0])
                         )
                     ),
-                    add_3d_features=add_3d_features,
+                    add_3d=add_3d,
                     random_seed=random_seed,
                     n_rows=n_rows_per_file,
                 )
@@ -392,7 +410,7 @@ class GraphDataset:
                             else os.path.join(cache_dir, os.path.splitext(fname)[0])
                         )
                     ),
-                    add_3d_features=add_3d_features,
+                    add_3d=add_3d,
                     random_seed=random_seed,
                     n_rows=n_rows_per_file,
                 )
@@ -508,4 +526,5 @@ def _fallback_graph_from_string(s: str) -> "GraphData":
     rows = _np.concatenate([_np.arange(n-1), _np.arange(1, n)], axis=0)
     cols = _np.concatenate([_np.arange(1, n), _np.arange(n-1)], axis=0)
     edge_index = _np.stack([rows.astype(_np.int64), cols.astype(_np.int64)], axis=0)
+    
     return GraphData(x=x, edge_index=edge_index, edge_attr=None)

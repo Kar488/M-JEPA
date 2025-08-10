@@ -124,7 +124,7 @@ def _dataset_from_loader(loader: Any) -> Any:
     """Get a dataset from a loader. If `.dataset` missing, materialize from the loader."""
     if loader is None:
         return None
-    ds = getattr(loader, "dataset", None)
+    ds = getattr(loader, "mdataset", None)
     if ds is not None:
         return _ensure_graph_dataset(ds)
 

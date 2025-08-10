@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from data.dataset import GraphData
+from data.mdataset import GraphData
 from models.base import EncoderBase
 from utils.pooling import global_mean_pool
 

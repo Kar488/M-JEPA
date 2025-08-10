@@ -6,7 +6,7 @@ from typing import List, Union
 import torch
 import torch.nn as nn
 
-from data.dataset import GraphData
+from data.mdataset import GraphData
 
 
 class EncoderBase(nn.Module, ABC):
