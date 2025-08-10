@@ -772,4 +772,10 @@ def run_grid_search(
     if out_csv is not None:
         df.to_csv(out_csv, index=False)
 
+    all_metrics = list(set(metrics_max + metrics_min))
+    for m in all_metrics:
+        if m in df.columns:
+            df[m] = pd.to_numeric(df[m], errors="coerce")
+            df[m] = df[m].replace([np.inf, -np.inf], np.nan)
+            
     return df
