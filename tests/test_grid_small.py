@@ -4,9 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
-from data.dataset import GraphDataset
-from experiments.grid_search import run_grid_search
+import pytest
 
 # Configure a source parquet (adjust path to one of your shards)
 SOURCE = Path("data/ZINC_canonicalized/train-0000.parquet")  # change if needed
@@ -24,6 +22,8 @@ if SOURCE.exists():
     df.to_parquet(TMP, index=False)
 
     def small_dataset_fn(add_3d: bool):
+        from data.dataset import GraphDataset
+
         return GraphDataset.from_parquet(
             filepath=str(TMP),
             smiles_col=smiles_col,
@@ -34,6 +34,8 @@ if SOURCE.exists():
 else:
     # Fallback: small toy dataset
     def small_dataset_fn(add_3d: bool):
+        from data.dataset import GraphDataset
+
         smiles = [
             "CCO",
             "CCN",
@@ -52,28 +54,30 @@ else:
         )
 
 
-df_res = run_grid_search(
-    dataset_fn=small_dataset_fn,
-    task_type="classification",
-    seeds=(42, 123),
-    add_3d_options=(False, True),
-    mask_ratios=(0.10, 0.20),
-    contiguities=(False, True),
-    hidden_dims=(64,),
-    num_layers_list=(2,),
-    gnn_types=("mpnn", "gcn"),
-    ema_decays=(0.95, 0.99),
-    pretrain_batch_sizes=(8,),
-    finetune_batch_sizes=(4,),
-    pretrain_epochs_options=(2,),
-    finetune_epochs_options=(2,),
-    lrs=(1e-3,),
-    device="cpu",
-    n_jobs=0,
-)
+def test_grid_search_small(wb):
+    pytest.importorskip("rdkit")
+    from experiments.grid_search import run_grid_search
+    df_res = run_grid_search(
+        dataset_fn=small_dataset_fn,
+        task_type="classification",
+        seeds=(42, 123),
+        add_3d_options=(False, True),
+        mask_ratios=(0.10, 0.20),
+        contiguities=(False, True),
+        hidden_dims=(64,),
+        num_layers_list=(2,),
+        gnn_types=("mpnn", "gcn"),
+        ema_decays=(0.95, 0.99),
+        pretrain_batch_sizes=(8,),
+        finetune_batch_sizes=(4,),
+        pretrain_epochs_options=(2,),
+        finetune_epochs_options=(2,),
+        lrs=(1e-3,),
+        device="cpu",
+        n_jobs=0,
+    )
 
-out = Path("outputs/small_grid_results.csv")
-out.parent.mkdir(parents=True, exist_ok=True)
-df_res.to_csv(out, index=False)
-print("Wrote:", out)
-print(df_res.head())
+    out = Path("outputs/small_grid_results.csv")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df_res.to_csv(out, index=False)
+    wb.log({"output_csv": str(out), "rows": len(df_res)})
