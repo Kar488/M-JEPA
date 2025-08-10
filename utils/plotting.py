@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Dict, List
 
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 import pandas as pd
 import seaborn as sns
 
@@ -24,7 +25,7 @@ def plot_training_curves(
     curves: Dict[str, List[float]],
     title: str = "Training Loss",
     normalize: bool = False,
-) -> None:
+) -> Figure:
     """Plot nicely styled training loss curves for multiple models.
 
     This function uses seaborn’s whitegrid style and distinct colour palette
@@ -63,7 +64,9 @@ def plot_training_curves(
     plt.title(title)
     plt.legend(frameon=False)
     plt.tight_layout()
+    fig = plt.gcf()
     plt.show()
+    return fig
 
 
 def plot_hyperparameter_results(
