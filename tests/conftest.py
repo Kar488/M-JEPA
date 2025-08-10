@@ -3,6 +3,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import os, sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 @pytest.fixture(scope="session")
 def tiny_parquet(tmp_path_factory):

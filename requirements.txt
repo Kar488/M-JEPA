@@ -1,5 +1,5 @@
 # Core
-numpy
+numpy<2
 pandas
 pyarrow                 # parquet I/O
 scikit-learn

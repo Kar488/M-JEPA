@@ -73,6 +73,110 @@ def _mask_subgraph(
     return _subgraph(g, ctx), _subgraph(g, tgt)
 
 
+def _ref_device(module: torch.nn.Module) -> torch.device:
+    try:
+        return next(module.parameters()).device
+    except StopIteration:
+        return torch.device("cpu")
+
+def _to_tensor(x, dtype=None, device=None):
+    if x is None:
+        return None
+    t = torch.as_tensor(x)
+    if dtype is not None and t.dtype != dtype:
+        t = t.to(dtype)
+    if device is not None:
+        t = t.to(device)
+    return t
+
+def _looks_like_edge_index(arr) -> bool:
+    try:
+        a = np.asarray(arr)
+        return a.ndim == 2 and a.shape[0] == 2
+    except Exception:
+        return False
+
+def _edge_index_to_dense(edge_index: torch.Tensor, num_nodes: int, device, add_self_loops: bool = True) -> torch.Tensor:
+    """Build dense adjacency [N,N] from edge_index [2,E]."""
+    if edge_index.numel() == 0:
+        adj = torch.zeros((num_nodes, num_nodes), dtype=torch.float32, device=device)
+    else:
+        values = torch.ones(edge_index.shape[1], dtype=torch.float32, device=device)
+        adj = torch.sparse_coo_tensor(edge_index, values, (num_nodes, num_nodes), device=device).to_dense()
+    if add_self_loops:
+        adj = adj.clone()
+        adj.fill_diagonal_(1.0)
+    return adj
+
+def _encode_graph(encoder, g):
+    """
+    Accepts:
+      - GraphData with .x and .adj (dense/sparse-like) and optional .edge_attr
+      - PyG Data with .x and .edge_index (we convert to dense adj)
+    Ensures tensors are on the encoder's device and correct dtypes.
+    """
+    device = _ref_device(encoder)
+
+    # features
+    x = getattr(g, "x", None)
+    x_t = _to_tensor(x, dtype=torch.float32, device=device)
+
+    # structure: prefer GraphData.adj; otherwise PyG edge_index
+    if hasattr(g, "adj") and getattr(g, "adj") is not None:
+        adj = getattr(g, "adj")
+        # If adj looks dense-like, make it float; otherwise try to densify
+        if torch.is_tensor(adj):
+            if adj.ndim == 2:
+                adj_t = adj.to(device=device, dtype=torch.float32)
+            else:
+                # unknown tensor shape, try to squeeze to [N,N]
+                adj_t = adj.to(device=device, dtype=torch.float32).squeeze()
+        else:
+            adj_t = _to_tensor(adj, dtype=torch.float32, device=device)
+        # optional; keep diagonal as 1
+        if adj_t.shape[0] == adj_t.shape[1]:
+            adj_t = adj_t.clone()
+            adj_t.fill_diagonal_(1.0)
+        edge_t = _to_tensor(getattr(g, "edge_attr", None), dtype=torch.float32, device=device)
+    else:
+        # Build dense adjacency from edge_index
+        edge_index = getattr(g, "edge_index", None)
+        if edge_index is None:
+            raise ValueError("Graph has neither 'adj' nor 'edge_index'.")
+        ei_t = _to_tensor(edge_index, dtype=torch.long, device=device)
+        num_nodes = int(x_t.shape[0])
+        adj_t = _edge_index_to_dense(ei_t, num_nodes, device=device, add_self_loops=True)
+        edge_t = _to_tensor(getattr(g, "edge_attr", None), dtype=torch.float32, device=device)
+
+    # Try 3-arg (x, adj, edge_attr); fall back to 2-arg (x, adj)
+    try:
+        return encoder(x_t, adj_t, edge_t)
+    except TypeError:
+        return encoder(x_t, adj_t)
+
+def _pool_graph_emb(h: torch.Tensor, g) -> torch.Tensor:
+    """
+    Turn node embeddings [N, D] (or batched) into a graph embedding.
+    If PyG batch vector exists, do global mean pool; else mean over nodes.
+    """
+    if not isinstance(h, torch.Tensor):
+        h = torch.as_tensor(h)
+
+    batch = getattr(g, "batch", None)
+    if batch is not None:
+        try:
+            from torch_geometric.nn import global_mean_pool
+            return global_mean_pool(h, batch)  # [B, D]
+        except Exception:
+            # fallback if PyG not available for some reason
+            uniq = torch.unique(batch)
+            return torch.stack([h[batch == i].mean(dim=0) for i in uniq], dim=0)  # [B, D]
+
+    # Single graph: [N, D] -> [D]
+    if h.dim() == 2:
+        return h.mean(dim=0)  # [D]
+    return h  # already [D] or [B, D]
+
 def train_jepa(
     *,
     dataset: GraphDataset,
@@ -172,18 +276,28 @@ def train_jepa(
                 with torch.cuda.amp.autocast(
                     enabled=use_amp and device_t.type == "cuda"
                 ):
-                    h_c = encoder(g_ctx)
+                    h_c = _encode_graph(encoder, g_ctx)
                     with torch.no_grad():
-                        h_t = ema_encoder(g_tgt)
+                        h_t = _encode_graph(ema_encoder, g_tgt)
                 ctx_list.append(_ensure_2d(h_c))
                 tgt_list.append(_ensure_2d(h_t))
 
-            h_c = torch.cat(ctx_list, dim=0).to(device_t)
-            h_t = torch.cat(tgt_list, dim=0).to(device_t)
+            h_c_nodes = torch.cat(ctx_list, dim=0).to(device_t)  # node embeddings
+            h_t_nodes = torch.cat(tgt_list, dim=0).to(device_t)  # node embeddings
+            # pool to graph-level
+            h_c_g = _pool_graph_emb(h_c_nodes, g_ctx)  # [D] or [B, D]
+            h_t_g = _pool_graph_emb(h_t_nodes, g_tgt)  # [D] or [B, D]
+
             with torch.cuda.amp.autocast(enabled=use_amp and device_t.type == "cuda"):
-                pred = predictor(h_c)
+                pred = predictor(h_c_g)
+
+                if pred.dim() == 1 and h_t_g.dim() == 2 and h_t_g.size(0) == 1:
+                    pred = pred.unsqueeze(0)
+                if h_t_g.dim() == 1 and pred.dim() == 2 and pred.size(0) == 1:
+                    h_t_g = h_t_g.unsqueeze(0)
+                    
                 l2_reg = sum((p**2).sum() for p in predictor.parameters())
-                loss = mse(pred, h_t) + reg_lambda * l2_reg
+                loss = mse(pred, h_t_g) + reg_lambda * l2_reg
 
             opt.zero_grad(set_to_none=True)
             if isinstance(scaler, torch.cuda.amp.GradScaler):
