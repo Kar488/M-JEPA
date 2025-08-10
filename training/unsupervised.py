@@ -156,8 +156,12 @@ def _encode_graph(encoder, g):
             # 2-arg: (x, structure)
             return encoder(x_t, adj_t)
         except TypeError:
-            # 1-arg: (x)  — e.g., DummyEncoder in the distributed test
-            return encoder(x_t)
+            try:
+                # 1-arg: (g)  — e.g., DummyEncoder.forward(self, g)
+                return encoder(g)
+            except TypeError:
+                # 1-arg: (x)  — final fallback
+                return encoder(x_t)
 
 def _pool_graph_emb(h: torch.Tensor, g) -> torch.Tensor:
     """
