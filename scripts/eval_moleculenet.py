@@ -3,6 +3,8 @@
 This script iterates over a selection of MoleculeNet datasets and trains a
 simple linear head on top of a frozen encoder. For each dataset we run the
 linear head training for multiple random seeds and report aggregate metrics.
+Train/validation/test splits use Bemis–Murcko scaffold partitioning when SMILES
+strings are available, providing structural separation between splits.
 
 Metrics
 -------
@@ -119,7 +121,12 @@ def evaluate_dataset(
     devices: int,
     patience: int,
 ) -> Dict[str, float]:
-    """Evaluate a dataset over multiple seeds and aggregate metrics."""
+    """Evaluate a dataset over multiple seeds and aggregate metrics.
+
+    The linear probe uses scaffold-based splits when SMILES strings are
+    available in the dataset; otherwise default random or stratified splits are
+    used.
+    """
     dataset, label_cols, df = load_moleculenet_dataset(name, data_root)
     metrics_accum: Dict[str, List[float]] = {}
     for seed in SEEDS:
@@ -128,6 +135,9 @@ def evaluate_dataset(
         for col in label_cols:
             labels = df[col].to_numpy()
             ds = GraphDataset(dataset.graphs, labels, dataset.smiles)
+            # Scaffold-based splitting requires SMILES strings; fall back
+            # to the default behaviour otherwise.
+            scaffold_kwargs = {"use_scaffold": True} if ds.smiles is not None else {}
             res = train_linear_head(
                 ds,
                 encoder,
@@ -135,6 +145,7 @@ def evaluate_dataset(
                 device=str(device),
                 devices=devices,
                 patience=patience,
+                **scaffold_kwargs,
             )
             # Exclude the trained head from aggregation
             res.pop("head", None)
