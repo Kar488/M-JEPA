@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pandas as pd
 
+import numpy as np
+
 outdir = Path("outputs")
 outdir.mkdir(parents=True, exist_ok=True)
 csv = outdir / "small_grid_results.csv"
@@ -56,13 +58,14 @@ else:
     import matplotlib.pyplot as plt
 
     metric = "roc_auc" if "roc_auc" in df.columns else df.columns[-1]
+    vals = pd.to_numeric(df[metric], errors="coerce").astype("float64").to_numpy()
+    x = np.arange(len(vals), dtype=float)
     labels = [
         f"{r['gnn_type']}/{r['hidden_dim']}/{r['mask_ratio']}/{int(r['add_3d'])}"
         for _, r in df.iterrows()
     ]
-    plt.figure()
-    plt.bar(range(len(df)), df[metric].values)
-    plt.xticks(range(len(df)), labels, rotation=45, ha="right")
+    plt.bar(x, vals)
+    plt.xticks(range(len(vals)), labels, rotation=45, ha="right")
     plt.title(f"{metric} Across Configs (Tiny Test)")
     plt.tight_layout()
     plt.savefig(outdir / "tiny_grid_bar.png")

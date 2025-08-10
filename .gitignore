@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *.pyd
 *.pyo
+*.pyc
+.coverage
 
 # C extensions
 *.so
@@ -22,3 +24,4 @@ docs/_build/
 # Operating system files
 .DS_Store
 Thumbs.db
+
