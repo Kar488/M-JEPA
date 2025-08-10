@@ -11,6 +11,8 @@ import numpy as np
 
 from data.dataset import GraphDataset
 
+from utils.logging import maybe_init_wandb
+
 try:
     from experiments.case_study import run_tox21_case_study
 
@@ -27,6 +29,7 @@ def main():
     p.add_argument("--epochs", type=int, default=3)
     p.add_argument("--top_fraction", type=float, default=0.2)
     args = p.parse_args()
+    wb = maybe_init_wandb(enable=False)
 
     csv = Path(args.csv)
     if not csv.exists():
@@ -35,7 +38,7 @@ def main():
         )
 
     if HAS_CASE:
-        print("[case] Using experiments.case_study.run_tox21_case_study")
+        wb.log({"mode": "case"})
         triple = run_tox21_case_study(
             tox21_csv=str(csv),
             task=args.task,
@@ -45,14 +48,17 @@ def main():
             device=args.device,
             top_fraction=args.top_fraction,
         )
-        print(
-            "Tox21 tiny case study (mean_true, mean_random_after, mean_predicted_after):",
-            triple,
+        wb.log(
+            {
+                "tox21_mean_true": triple[0],
+                "tox21_mean_random_after": triple[1],
+                "tox21_mean_predicted_after": triple[2],
+            }
         )
         return
 
     # Fallback: minimal pipeline just to validate IO
-    print("[fallback] experiments.case_study not available, running minimal check...")
+    wb.log({"mode": "fallback"})
     ds = GraphDataset.from_csv(
         str(csv), smiles_col="smiles", label_col=args.task, cache_dir="cache/tox21_tiny"
     )
@@ -65,8 +71,12 @@ def main():
     y = ds.labels if ds.labels is not None else rng.integers(0, 2, size=len(ds.graphs))
     mean_true = float(y.mean())
     mean_after = float(y[keep_mask].mean())
-    print(
-        f"[fallback] mean_true={mean_true:.3f}, mean_after_random={mean_true:.3f}, mean_after_pred={mean_after:.3f}"
+    wb.log(
+        {
+            "mean_true": mean_true,
+            "mean_after_random": mean_true,
+            "mean_after_pred": mean_after,
+        }
     )
 
 
