@@ -19,7 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from data.mdataset import GraphDataset
-from data.scaffold_split import scaffold_split
+from data.scaffold_split import scaffold_split_indices
 from models.encoder import GNNEncoder
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.pooling import global_mean_pool
@@ -133,7 +133,7 @@ def train_linear_head(
 
     # Use provided batch_indices for single-batch training, else split dataset
     if use_scaffold and getattr(dataset, "smiles", None) is not None:
-        train_idx, val_idx, test_idx = scaffold_split(dataset.smiles)
+        train_idx, val_idx, test_idx = scaffold_split_indices(dataset.smiles)
         train_idx, val_idx, test_idx = (
             train_idx.tolist(),
             val_idx.tolist(),

@@ -16,7 +16,7 @@ except ImportError:
 # training.supervised imports data.scaffold_split which requires RDKit. Provide a
 # minimal stub so we can import stratified_split without pulling in RDKit.
 dummy_scaffold = types.ModuleType("data.scaffold_split")
-dummy_scaffold.scaffold_split = lambda *args, **kwargs: ([], [], [])
+dummy_scaffold.scaffold_split_indices = lambda *args, **kwargs: ([], [], [])
 sys.modules.setdefault("data.scaffold_split", dummy_scaffold)
 
 from training.supervised import stratified_split
