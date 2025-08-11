@@ -1,7 +1,9 @@
 import torch
+import inspect
 
 from utils.pooling import global_mean_pool
-
+print("USING:", global_mean_pool.__code__.co_filename)
+print(inspect.getsource(global_mean_pool))
 
 def test_global_mean_pool_basic():
     node_emb = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]])

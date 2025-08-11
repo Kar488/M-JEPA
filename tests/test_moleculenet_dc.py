@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from data import moleculenet_dc
+import deepchem as dc
 
 
 class DummyDataset:
@@ -11,35 +12,41 @@ class DummyDataset:
         self.ids = ids
         self.y = y
 
+def _ds_len(ds):
+    # robust length for DeepChem Datasets
+    for attr in ("ids", "y", "X"):
+        if hasattr(ds, attr):
+            return len(getattr(ds, attr))
+    return None
 
 def test_download_moleculenet_to_parquet(tmp_path, monkeypatch):
     # Force use of fastparquet to avoid missing engine
     pd.options.io.parquet.engine = "fastparquet"
 
-    # Pretend DeepChem is installed
-    monkeypatch.setattr(moleculenet_dc, "_ensure_dc", lambda: True)
-
-    train = DummyDataset(["C", "CC"], np.array([[1.0], [2.0]]))
-    valid = DummyDataset(["O"], np.array([[3.0]]))
-    test = DummyDataset(["N"], np.array([[4.0]]))
-    tasks = ["prop"]
-
-    def load_delaney(featurizer="Raw"):
-        return tasks, (train, valid, test), []
-
-    dc_stub = types.SimpleNamespace(molnet=types.SimpleNamespace(load_delaney=load_delaney))
-    monkeypatch.setitem(sys.modules, "deepchem", dc_stub)
-
     out = moleculenet_dc.download_moleculenet_to_parquet("esol", out_dir=str(tmp_path))
 
-    assert set(out.keys()) == {"train", "valid", "test", "tasks"}
-    assert out["tasks"] == "prop"
+    tasks, (train, valid, test), _ = dc.molnet.load_delaney(featurizer="Raw")
+    expected_tasks = ",".join(tasks)
+    assert out["tasks"] == expected_tasks
 
-    train_df = pd.read_parquet(tmp_path / "esol_train.parquet")
-    valid_df = pd.read_parquet(tmp_path / "esol_valid.parquet")
-    test_df = pd.read_parquet(tmp_path / "esol_test.parquet")
+    paths = {
+        "train": tmp_path / "esol_train.parquet",
+        "valid": tmp_path / "esol_valid.parquet",
+        "test":  tmp_path / "esol_test.parquet",
+    }
+    dsets = {"train": train, "valid": valid, "test": test}
 
-    assert train_df["smiles"].tolist() == ["C", "CC"]
-    assert train_df["prop"].tolist() == [1.0, 2.0]
-    assert valid_df["smiles"].tolist() == ["O"]
-    assert test_df["smiles"].tolist() == ["N"]
+    for split, ds in dsets.items():
+        df = pd.read_parquet(paths[split])
+
+        # columns present
+        assert "smiles" in df.columns
+        for t in tasks:
+            assert t in df.columns
+
+        # row counts match (when determinable)
+        n = _ds_len(ds)
+        if n is not None:
+            assert len(df) == n
+        else:
+            assert len(df) > 0

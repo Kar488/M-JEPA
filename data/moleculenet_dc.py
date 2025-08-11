@@ -4,7 +4,28 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+import deepchem as dc
 
+LOADER_NAMES = {
+    "esol": "load_delaney",
+    "freesolv": "load_freesolv",
+    "lipo": "load_lipo",
+    "bace": "load_bace_classification",
+    "bbbp": "load_bbbp",
+    "tox21": "load_tox21",
+}
+
+
+def get_loader(name: str):
+    key = name.lower()
+    try:
+        fn_name = LOADER_NAMES[key]
+    except KeyError:
+        raise ValueError(f"Unknown dataset '{name}'. Options: {', '.join(LOADER_NAMES)}")
+    try:
+        return getattr(dc.molnet, fn_name)
+    except AttributeError as e:
+        raise ImportError(f"DeepChem missing loader '{fn_name}'") from e
 
 def _ensure_dc():
     try:
@@ -35,24 +56,18 @@ def download_moleculenet_to_parquet(
         raise RuntimeError(
             "DeepChem not installed. Please `pip install deepchem` (and rdkit)."
         )
-
-    import deepchem as dc
+    
 
     name_low = name.lower()
-    loaders = {
-        "esol": dc.molnet.load_delaney,
-        "freesolv": dc.molnet.load_freesolv,
-        "lipo": dc.molnet.load_lipo,
-        "bace": dc.molnet.load_bace_classification,
-        "bbbp": dc.molnet.load_bbbp,
-        "tox21": dc.molnet.load_tox21,
-    }
-    if name_low not in loaders:
+   
+    if name_low not in LOADER_NAMES:
         raise ValueError(
-            f"Unsupported dataset {name}. Supported: {list(loaders.keys())}"
+            f"Unsupported dataset {name}. Supported: {list(LOADER_NAMES.keys())}"
         )
 
-    tasks, datasets, transformers = loaders[name_low](featurizer="Raw")  # Raw SMILES
+    loader = get_loader(name_low)
+    tasks, datasets, transformers = loader(featurizer="Raw")
+    
     train, valid, test = datasets
 
     def _to_df(dset) -> pd.DataFrame:

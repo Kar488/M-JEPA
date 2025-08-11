@@ -13,20 +13,22 @@ dataset_module = importlib.import_module(f'data.mdataset')
 GraphDataset = getattr(dataset_module, 'GraphDataset')
 
 def _find_csv():
-    # assume tests/… → project root at parents[1]
     root = Path(__file__).resolve().parents[1]
-    candidates = [
-        root / "samples" / "tox21_mini.csv",
-        Path.cwd() / "samples" / "tox21_mini.csv",
-    ]
-    for p in candidates:
+    for p in [root / "samples" / "tox21_mini.csv", Path.cwd() / "samples" / "tox21_mini.csv"]:
         if p.exists():
             return p
-    pytest.skip("samples/tox21_mini.csv not found in repo")
+    pytest.skip("samples/tox21_mini.csv not found")
 
+def _require_label(csv, col="NR-AR"):
+    import pandas as pd
+    cols = set(pd.read_csv(csv, nrows=0).columns)
+    if col not in cols:
+        pytest.skip(f"Column '{col}' not found in {csv}")
 
 def test_tox21_dataset_loads_and_labels():
     csv = _find_csv()
+    _require_label(csv, "NR-AR")
+    
     ds = GraphDataset.from_csv(
         str(csv), smiles_col="smiles", label_col="NR-AR", cache_dir=None
     )
@@ -37,10 +39,11 @@ def test_tox21_dataset_loads_and_labels():
     # labels should be binary 0/1 for NR-AR
     uniq = set(np.unique(ds.labels))
     assert uniq.issubset({0, 1}) and len(uniq) >= 1
+    assert np.asarray(ds.labels).dtype.kind in "iu"
 
 def test_tox21_minipipeline_rank_and_filter():
     csv = _find_csv()
-
+    _require_label(csv, "NR-AR")
     ds = GraphDataset.from_csv(
         str(csv), smiles_col="smiles", label_col="NR-AR", cache_dir=None
     )

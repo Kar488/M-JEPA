@@ -8,6 +8,11 @@ baseline.
 """
 
 from __future__ import annotations
+from typing import Iterable, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # type-only import; not evaluated at runtime
+    from data.mdataset import GraphDataset as GraphDatasetT
 
 import logging
 import os
@@ -17,7 +22,6 @@ from typing import Iterable, Tuple
 import numpy as np
 import pandas as pd
 
-from data.mdataset import GraphDataset
 from models.ema import EMA
 from models.encoder import GNNEncoder
 from models.predictor import MLPPredictor
@@ -27,6 +31,43 @@ from utils.pooling import global_mean_pool
 from utils.seed import set_seed
 
 logger = logging.getLogger(__name__)
+
+import sys
+import importlib, types
+from pathlib import Path
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from data.mdataset import GraphDataset as GraphDatasetT
+
+def _load_real_graphdataset():
+    repo_root = Path(__file__).resolve().parents[1]
+    data_dir = repo_root / "data"
+    mod_name = "data.mdataset"              # the real module name
+    file_path = data_dir / "mdataset.py"
+
+    # 1) Ensure 'data' package exists and points at your repo's data/ dir
+    if "data" not in sys.modules:
+        pkg = types.ModuleType("data")
+        pkg.__path__ = [str(data_dir)]
+        sys.modules["data"] = pkg
+    else:
+        # make sure its __path__ points to your repo
+        sys.modules["data"].__path__ = [str(data_dir)]
+
+    # 2) Build spec for the correct qualified name, create module, and
+    #    register it in sys.modules BEFORE exec_module (needed for dataclasses)
+    spec = importlib.util.spec_from_file_location(mod_name, str(file_path))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[mod_name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    return module.GraphDataset
+
+def _import_graphdataset():
+    from data.mdataset import GraphDataset
+    return GraphDataset
 
 
 def run_tox21_case_study(
@@ -79,7 +120,16 @@ def run_tox21_case_study(
     labels_list = df[task_name].astype(float).tolist()
 
     set_seed(seed)
-    dataset = GraphDataset.from_smiles_list(smiles_list, labels=labels_list)
+
+    GraphDatasetCls  = _load_real_graphdataset()
+
+    def subset_dataset(ds: 'GraphDatasetT', idxs: Iterable[int]) -> 'GraphDatasetT':
+        sub_graphs = [ds.graphs[i] for i in idxs]
+        sub_labels = ds.labels[idxs] if ds.labels is not None else None
+        return GraphDatasetCls(sub_graphs, sub_labels)
+
+
+    dataset = GraphDatasetCls.from_smiles_list(smiles_list, labels=labels_list)
     if len(dataset) == 0:
         raise ValueError("No valid molecules could be parsed from the dataset.")
 
@@ -129,10 +179,6 @@ def run_tox21_case_study(
         reg_lambda=1e-4,
     )
 
-    def subset_dataset(ds: GraphDataset, idxs: Iterable[int]) -> GraphDataset:
-        sub_graphs = [ds.graphs[i] for i in idxs]
-        sub_labels = ds.labels[idxs] if ds.labels is not None else None
-        return GraphDataset(sub_graphs, sub_labels)
 
     train_ds = subset_dataset(dataset, train_idx)
     val_ds = subset_dataset(dataset, val_idx)
@@ -140,7 +186,7 @@ def run_tox21_case_study(
 
     combined_ds_graphs = train_ds.graphs + val_ds.graphs
     combined_ds_labels = np.concatenate([train_ds.labels, val_ds.labels])
-    combined_ds = GraphDataset(combined_ds_graphs, combined_ds_labels)
+    combined_ds = GraphDatasetCls(combined_ds_graphs, combined_ds_labels)
 
     regression_metrics = train_linear_head(
         dataset=combined_ds,

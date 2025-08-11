@@ -26,21 +26,36 @@ def global_mean_pool(
     Returns:
         Tensor of shape (B, hidden_dim) containing one embedding per graph.
     """
-    device = node_embeddings.device
-    B = graph_ptr.numel()-1
-    hidden_dim = node_embeddings.size(1)
-    #graph_embeddings = torch.zeros((B, hidden_dim), device=device)
-    #start = 0
-    # for i, end in enumerate(graph_ptr):
-    #     end_idx = end.item()
-    #     if end_idx > start:
-    #         graph_embeddings[i] = node_embeddings[start:end_idx].mean(dim=0)
-    #     start = end_idx
-    # return graph_embeddings
-    graph_embeddings = torch.empty((B, hidden_dim), device=device)
-    for i in range(B):
-        s = int(graph_ptr[i].item())
-        e = int(graph_ptr[i + 1].item())
-        graph_embeddings[i] = node_embeddings[s:e].mean(dim=0) if e > s else node_embeddings.new_zeros(hidden_dim)
+    # device = node_embeddings.device
+    # B = graph_ptr.numel()-1
+    # hidden_dim = node_embeddings.size(1)
+    # graph_embeddings = torch.empty((B, hidden_dim), device=device)
+    # for i in range(B):
+    #     s = int(graph_ptr[i].item())
+    #     e = int(graph_ptr[i + 1].item())
+    #     graph_embeddings[i] = node_embeddings[s:e].mean(dim=0) if e > s else node_embeddings.new_zeros(hidden_dim)
 
-    return graph_embeddings
+    # return graph_embeddings
+
+    x = node_embeddings
+    p = graph_ptr.to(dtype=torch.long).view(-1)
+
+    # Normalize to B+1 style ptr
+    if p.numel() == 0:
+        return x.new_zeros((0, x.size(1)))
+    if p[0].item() != 0:
+        # Looks like cumulative without leading 0 → prepend 0
+        p = torch.cat([p.new_tensor([0]), p], dim=0)
+
+    B = p.numel() - 1
+    D = x.size(1)
+    out = x.new_zeros((B, D))
+
+    for i in range(B):
+        s = int(p[i].item())
+        e = int(p[i + 1].item())
+        if e > s:
+            out[i] = x[s:e].mean(dim=0)
+        # else keep zeros for empty graphs
+
+    return out
