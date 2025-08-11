@@ -6,6 +6,35 @@ import pandas as pd
 import pytest
 from pathlib import Path
 
+import importlib.util, sys, pathlib, inspect, os
+
+def load_scaffold_module_fresh():
+    path = pathlib.Path(__file__).resolve().parents[1] / "data" / "scaffold_split.py"
+    mod_name = "scaffold_under_test"
+
+    # ensure we don't reuse a previous module object
+    sys.modules.pop(mod_name, None)
+
+    spec = importlib.util.spec_from_file_location(mod_name, path)
+    assert spec is not None, "spec_from_file_location returned None"
+    assert spec.origin == str(path), f"Spec origin mismatch: {spec.origin}"
+    assert spec.loader is not None, "No loader for scaffold_split.py (cannot execute)"
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+
+    # PROVE it's the right scaffold
+    assert hasattr(mod, "smiles_to_scaffold"), "smiles_to_scaffold missing"
+    fn_file = inspect.getsourcefile(mod.smiles_to_scaffold)
+    assert fn_file is not None
+    # samefile handles case/sep differences on Windows
+    assert os.path.samefile(fn_file, str(path)), f"Loaded from {fn_file}, expected {path}"
+    # also confirm module file path
+    assert os.path.samefile(mod.__file__, str(path)), f"Module file {mod.__file__}"
+
+    return mod
+
+
 def _dummy_scaffold(smiles: str) -> str:
     # Keep it simple & deterministic: bucket by first letter (upper-cased).
     # This makes "c1ccccc1" -> "C", which is fine for unit testing split logic.
@@ -29,7 +58,7 @@ def _import_ms():
 
 def test_scaffold_split_indices_with_real_smiles(monkeypatch):
     _stub_rdkit(monkeypatch)
-    ms = _import_ms()
+    ms = load_scaffold_module_fresh()
     # Force deterministic, fake scaffold function (we're testing split logic, not chemistry)
     monkeypatch.setattr(ms, "smiles_to_scaffold", _dummy_scaffold)
 
@@ -64,7 +93,7 @@ def test_scaffold_split_indices_with_real_smiles(monkeypatch):
 
 def test_write_scaffold_splits_with_real_smiles(tmp_path, monkeypatch):
     _stub_rdkit(monkeypatch)
-    ms = _import_ms()
+    ms = load_scaffold_module_fresh()
     monkeypatch.setattr(ms, "smiles_to_scaffold", _dummy_scaffold)
 
     smiles = ["CCO", "CCN", "NCC", "NC=O", "O=C=O"]  # C(2), N(2), O(1)
