@@ -30,7 +30,7 @@ This room creates and handles the molecules.
   - Twist them slightly (``perturb_dihedral``).
 
 Other helpers
-  Files like ``parquet_loader.py`` and ``moleculenet_scaffold.py`` help load real datasets.
+  Files like ``parquet_loader.py`` and ``scaffold_split.py`` help load real datasets.
 
 Model Factory: ``models/``
 ----------------------------------------

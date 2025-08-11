@@ -8,7 +8,7 @@ from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import silhouette_score
 
 from data.mdataset import GraphDataset
-from data.scaffold_split import scaffold_split
+from data.scaffold_split import scaffold_split_indices
 
 import torch
 from torch_geometric.loader import DataLoader as GeoLoader
@@ -139,7 +139,7 @@ def linear_probe_classification(
 
     n = len(y)
     if use_scaffold and smiles is not None:
-        tr, _, te = scaffold_split(smiles)
+        tr, _, te = scaffold_split_indices(smiles)
         tr, te = tr.tolist(), te.tolist()
     else:
         idx = np.random.permutation(n)
@@ -169,7 +169,7 @@ def linear_probe_regression(
 
     n = len(y)
     if use_scaffold and smiles is not None:
-        tr, _, te = scaffold_split(smiles)
+        tr, _, te = scaffold_split_indices(smiles)
         tr, te = tr.tolist(), te.tolist()
     else:
         idx = np.random.permutation(n)

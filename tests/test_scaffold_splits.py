@@ -24,7 +24,7 @@ def _stub_rdkit(monkeypatch):
     monkeypatch.setitem(sys.modules, "rdkit.Chem.Scaffolds.MurckoScaffold", murcko)
 
 def _import_ms():
-    from data import moleculenet_scaffold as ms
+    from data import scaffold_split as ms
     return ms
 
 def test_scaffold_split_indices_with_real_smiles(monkeypatch):
