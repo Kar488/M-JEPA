@@ -21,7 +21,18 @@ GraphData = getattr(mdataset, 'GraphData')
 
 
 def _make_synthetic_dataset():
-    smiles = ['aa', 'bbb']
+    smiles = [
+            "CCO",
+            "CCN",
+            "CCC",
+            "c1ccccc1",
+            "CC(=O)O",
+            "CCOCC",
+            "CNC",
+            "CCCl",
+            "COC",
+            "CCN(CC)CC",
+        ]
     labels = [0, 1]
     ds = GraphDataset.from_smiles_list(smiles, labels=labels, add_3d=False)
     return ds
