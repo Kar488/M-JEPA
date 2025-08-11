@@ -44,7 +44,7 @@ jobs:
       - name: Run quick tests with coverage (exclude gpu & slow)
         shell: bash -l {0}
         run: |
-          pytest -m "not gpu and not slow"
+          pytest --cache-clear -m "not gpu and not slow"
 
       - name: Upload test artifacts (optional)
         if: always()

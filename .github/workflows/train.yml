@@ -8,6 +8,8 @@ on:
 jobs:
   train:
     runs-on: [self-hosted, gpu]   # matches your runner labels
+    env:
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -24,28 +26,29 @@ jobs:
           except Exception:
             import os; os.system("pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio")
           PY
+      
+      - name: Set up Miniconda (with mamba)
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: "3.10"
+          activate-environment: ml
+          channels: conda-forge
+          miniforge-version: latest
+          use-mamba: true
 
-      # Install torch-scatter matching torch version
-      - name: Install torch-scatter
+      - name: Install RDKit (conda) + pip
+        shell: bash -l {0}
         run: |
-          python - <<'PY'
-          import re, subprocess, sys, importlib
-          v = importlib.import_module("torch").__version__
-          mm = re.match(r"(\d+\.\d+)", v).group(1)
-          url = {
-            "2.4": "https://data.pyg.org/whl/torch-2.4.0+cu121.html",
-            "2.3": "https://data.pyg.org/whl/torch-2.3.0+cu121.html",
-            "2.2": "https://data.pyg.org/whl/torch-2.2.0+cu121.html",
-          }.get(mm)
-          if not url:
-            print("Unknown torch version:", v); sys.exit(1)
-          subprocess.check_call([sys.executable,"-m","pip","install","torch-scatter","-f",url])
-          PY
+          mamba install -y python=3.10 rdkit pip
 
       # Install the rest of your dependencies
       - name: Install project deps
         run: |
-          pip install --upgrade pip
+          pip install --upgrade pip setuptools wheel "numpy<2"
+          pip install "torch==2.2.1" --index-url https://download.pytorch.org/whl/cpu
+          pip install "torch-scatter==2.1.2" -f https://data.pyg.org/whl/torch-2.2.1+cpu.html
+          pip install torch-geometric
           pip install -r requirements.txt
 
       # Run training
@@ -67,12 +70,3 @@ jobs:
           micromamba create -y -n jepa -c conda-forge python=3.10 rdkit openbabel
           micromamba activate jepa
           echo "MAMBA_RUN=eval \"$(/root/mamba/bin/micromamba shell hook -s bash)\" && micromamba activate jepa &&" >> $GITHUB_ENV
-
-      - name: Install torch & deps
-        shell: bash
-        run: |
-          $MAMBA_RUN pip install --upgrade pip setuptools wheel "numpy<2"
-          $MAMBA_RUN pip install "torch==2.2.1" --index-url https://download.pytorch.org/whl/cpu
-          $MAMBA_RUN pip install "torch-scatter==2.1.2" -f https://data.pyg.org/whl/torch-2.2.1+cpu.html
-          $MAMBA_RUN pip install torch-geometric
-          $MAMBA_RUN pip install -r requirements.txt
