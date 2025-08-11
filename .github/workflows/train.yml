@@ -6,52 +6,19 @@ on:
     branches: [ main ]
 
 jobs:
+  deploy-to-vast:
+    uses: ./.github/workflows/smoke.yml
+    secrets: inherit
+
   train:
-    runs-on: [self-hosted, gpu]   # matches your runner labels
+    needs: deploy-to-vast
+    runs-on: [self-hosted, gpu]
     env:
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Base environment setup
+        uses: ./.github/actions/base
 
-      # Make Vast PyTorch image's Python visible
-      - name: Prepare PATH
-        run: echo "PATH=/venv/main/bin:$PATH" >> $GITHUB_ENV
-
-      # Install PyTorch if missing
-      - name: Install PyTorch if missing
-        run: |
-          python - <<'PY'
-          try:
-            import torch; print("torch:", torch.__version__)
-          except Exception:
-            import os; os.system("pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio")
-          PY
-      
-      - name: Set up Miniconda (with mamba)
-        uses: conda-incubator/setup-miniconda@v2
-        with:
-          auto-update-conda: true
-          python-version: "3.10"
-          activate-environment: ml
-          channels: conda-forge
-          miniforge-version: latest
-          use-mamba: true
-
-      - name: Install RDKit (conda) + pip
-        shell: bash -l {0}
-        run: |
-          mamba install -y python=3.10 rdkit pip
-
-      # Install the rest of your dependencies
-      - name: Install project deps
-        run: |
-          pip install --upgrade pip setuptools wheel "numpy<2"
-          pip install "torch==2.2.1" --index-url https://download.pytorch.org/whl/cpu
-          pip install "torch-scatter==2.1.2" -f https://data.pyg.org/whl/torch-2.2.1+cpu.html
-          pip install torch-geometric
-          pip install -r requirements.txt
-
-      # Run training
       - name: Train
         run: |
           torchrun --standalone --nproc_per_node=2 \
@@ -69,4 +36,6 @@ jobs:
           eval "$(/root/mamba/bin/micromamba shell hook -s bash)"
           micromamba create -y -n jepa -c conda-forge python=3.10 rdkit openbabel
           micromamba activate jepa
-          echo "MAMBA_RUN=eval \"$(/root/mamba/bin/micromamba shell hook -s bash)\" && micromamba activate jepa &&" >> $GITHUB_ENV
+          echo "MAMBA_RUN=eval \"$(/root/mamba/bin/micromamba shell hook -s bash)\" && micromamba activate jepa &&" >> \
+            $GITHUB_ENV
+
