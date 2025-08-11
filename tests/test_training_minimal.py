@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
+import pytest
 
 # Stubs for modules requiring optional dependencies
 data_dataset = types.ModuleType("data.mdataset")
@@ -55,8 +56,8 @@ from training.train_on_embeddings import train_linear_on_embeddings_classificati
 
 
 def make_graph():
-    x = np.random.randn(3, 4).astype(np.float32)
-    edge_index = np.array([[0, 1, 1, 2], [1, 0, 2, 1]], dtype=np.int64)
+    x = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+    edge_index = np.array([[0, 1], [1, 0]], dtype=np.int64)
     edge_attr = np.ones((edge_index.shape[1], 1), dtype=np.float32)
     return GraphData(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
@@ -68,10 +69,11 @@ def test_train_jepa_minimal_epoch():
     class DummyEncoder(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            self.lin = torch.nn.Linear(4, 4)
+            self.weight = torch.nn.Parameter(torch.eye(2))
+            self.bias = torch.nn.Parameter(torch.zeros(2))
 
         def forward(self, x, adj, edge_attr=None):
-            return self.lin(x)
+            return x @ self.weight + self.bias
 
     encoder = DummyEncoder()
     ema_encoder = DummyEncoder()
@@ -79,10 +81,11 @@ def test_train_jepa_minimal_epoch():
     class DummyPredictor(torch.nn.Module):
         def __init__(self):
             super().__init__()
-            self.lin = torch.nn.Linear(4, 4)
+            self.weight = torch.nn.Parameter(torch.eye(2))
+            self.bias = torch.nn.Parameter(torch.zeros(2))
 
         def forward(self, h):
-            return self.lin(h)
+            return h @ self.weight + self.bias
 
     predictor = DummyPredictor()
 
@@ -100,16 +103,20 @@ def test_train_jepa_minimal_epoch():
         ema=ema,
         epochs=1,
         batch_size=1,
-        lr=1e-3,
+        lr=0.0,
+        reg_lambda=0.0,
+        mask_ratio=0.5,
         device="cpu",
         use_scheduler=False,
         use_amp=False,
     )
-    assert len(losses) == 1
+    assert losses == [pytest.approx(1.0)]
 
 
 def test_train_linear_on_embeddings():
-    X = np.random.randn(8, 4)
-    y = np.array([0, 1, 0, 1, 0, 1, 0, 1])
-    metrics = train_linear_on_embeddings_classification(X, y, max_iter=10)
-    assert "roc_auc" in metrics
+    X = np.array([[0.0], [1.0], [0.0], [1.0]], dtype=np.float32)
+    y = np.array([0, 1, 0, 1])
+    metrics = train_linear_on_embeddings_classification(X, y, max_iter=100)
+    assert metrics["roc_auc"] == pytest.approx(1.0)
+    assert metrics["pr_auc"] == pytest.approx(1.0)
+    assert metrics["acc"] == pytest.approx(1.0)
