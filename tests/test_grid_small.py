@@ -61,13 +61,13 @@ if SOURCE.exists():
             filepath=str(TMP),
             smiles_col=smiles_col,
             label_col="label", # label column is somehow ignored by loader
-            cache_dir="cache/tmp_small",
+            cache_dir=None,
             add_3d=add_3d,
         )
         # hard‑set labels from the Parquet file
-        import numpy as np, pandas as pd
-        y = pd.read_parquet(TMP, columns=["label"])["label"].to_numpy()
-        ds.labels = y.astype(int)  # or float for regression
+        # import numpy as np, pandas as pd
+        # y = pd.read_parquet(TMP, columns=["label"])["label"].to_numpy()
+        # ds.labels = y.astype(int)  # or float for regression
 
         return ds
 

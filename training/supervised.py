@@ -172,8 +172,11 @@ def train_linear_head(
             batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
             batch_x = batch_x.to(device_t)
             batch_adj = batch_adj.to(device_t)
+            
             node_emb = encoder(batch_x, batch_adj)
+            
             graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+               
             preds = head(graph_emb).squeeze(1)
             targets = torch.tensor(
                 dataset.labels[batch_indices], dtype=torch.float32, device=device_t
