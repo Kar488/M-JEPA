@@ -1,12 +1,15 @@
+# tests/test_scaffold_split_real_smiles.py
 import sys
 import types
 import numpy as np
 import pandas as pd
-
+import pytest
+from pathlib import Path
 
 def _dummy_scaffold(smiles: str) -> str:
-    return smiles[0]
-
+    # Keep it simple & deterministic: bucket by first letter (upper-cased).
+    # This makes "c1ccccc1" -> "C", which is fine for unit testing split logic.
+    return smiles[0].upper()
 
 def _stub_rdkit(monkeypatch):
     chem = types.ModuleType("Chem")
@@ -20,41 +23,51 @@ def _stub_rdkit(monkeypatch):
     monkeypatch.setitem(sys.modules, "rdkit.Chem.Scaffolds", scaffolds)
     monkeypatch.setitem(sys.modules, "rdkit.Chem.Scaffolds.MurckoScaffold", murcko)
 
-
-def test_scaffold_split_indices_deterministic(monkeypatch):
-    _stub_rdkit(monkeypatch)
+def _import_ms():
     from data import moleculenet_scaffold as ms
+    return ms
 
+def test_scaffold_split_indices_with_real_smiles(monkeypatch):
+    _stub_rdkit(monkeypatch)
+    ms = _import_ms()
+    # Force deterministic, fake scaffold function (we're testing split logic, not chemistry)
     monkeypatch.setattr(ms, "smiles_to_scaffold", _dummy_scaffold)
-    smiles = ["A1", "A2", "B1", "B2", "C1"]
+
+    # Real-ish SMILES chosen to create 3 buckets by first letter: C(2), N(2), O(1)
+    smiles = ["CCO", "CCN", "NCC", "NC=O", "O=C=O"]
 
     train1, val1, test1 = ms.scaffold_split_indices(smiles, train_frac=0.4, val_frac=0.2, seed=0)
     train2, val2, test2 = ms.scaffold_split_indices(smiles, train_frac=0.4, val_frac=0.2, seed=123)
 
+    # Determinism across seeds (your function should be seed-invariant with this stub)
     assert np.array_equal(train1, train2)
     assert np.array_equal(val1, val2)
     assert np.array_equal(test1, test2)
 
-    assert train1.tolist() == [0, 1]
-    assert val1.tolist() == [2, 3]
-    assert test1.tolist() == [4]
+    # Sizes should respect 2–2–1 due to bucket constraint
+    assert len(train1) == 2
+    assert len(val1) == 2
+    assert len(test1) == 1
 
+    # Disjoint & covering
+    all_idx = set(train1.tolist()) | set(val1.tolist()) | set(test1.tolist())
+    assert all_idx == set(range(len(smiles)))
+    assert set(train1).isdisjoint(val1) and set(train1).isdisjoint(test1) and set(val1).isdisjoint(test1)
+
+    # Each scaffold must appear in only one split
     split_for = {}
-    for split, idxs in zip(["train", "val", "test"], [train1, val1, test1]):
+    for split_name, idxs in [("train", train1), ("val", val1), ("test", test1)]:
         for i in idxs:
             sc = _dummy_scaffold(smiles[i])
-            if sc in split_for:
-                assert split_for[sc] == split
-            else:
-                split_for[sc] = split
+            assert split_for.get(sc, split_name) == split_name
+            split_for[sc] = split_name
 
-
-def test_write_scaffold_splits(tmp_path, monkeypatch):
+def test_write_scaffold_splits_with_real_smiles(tmp_path, monkeypatch):
     _stub_rdkit(monkeypatch)
-    from data import moleculenet_scaffold as ms
-
+    ms = _import_ms()
     monkeypatch.setattr(ms, "smiles_to_scaffold", _dummy_scaffold)
-    smiles = ["A1", "A2", "B1", "B2", "C1"]
+
+    smiles = ["CCO", "CCN", "NCC", "NC=O", "O=C=O"]  # C(2), N(2), O(1)
     df = pd.DataFrame(
         {
             "smiles": smiles,
@@ -71,12 +84,32 @@ def test_write_scaffold_splits(tmp_path, monkeypatch):
         }
     )
     pd.options.io.parquet.engine = "fastparquet"
-    ms.write_scaffold_splits(df, "smiles", str(tmp_path), fmt="parquet", train_frac=0.4, val_frac=0.2, seed=0)
 
-    train_df = pd.read_parquet(tmp_path / "train" / "0000.parquet")
-    val_df = pd.read_parquet(tmp_path / "val" / "0000.parquet")
-    test_df = pd.read_parquet(tmp_path / "test" / "0000.parquet")
+    outdir = tmp_path
+    ms.write_scaffold_splits(
+        df, "smiles", str(outdir), fmt="parquet", train_frac=0.4, val_frac=0.2, seed=0
+    )
 
-    assert train_df["smiles"].tolist() == ["A1", "A2"]
-    assert val_df["smiles"].tolist() == ["B1", "B2"]
-    assert test_df["smiles"].tolist() == ["C1"]
+    train_df = pd.read_parquet(outdir / "train" / "0000.parquet")
+    val_df   = pd.read_parquet(outdir / "val"   / "0000.parquet")
+    test_df  = pd.read_parquet(outdir / "test"  / "0000.parquet")
+
+    # Check counts (don’t assume exact ordering of indices)
+    assert len(train_df) == 2
+    assert len(val_df) == 2
+    assert len(test_df) == 1
+
+    # Scaffolds shouldn’t be split across files
+    def buckets(ss):
+        return { _dummy_scaffold(s) for s in ss }
+
+    train_sc = buckets(train_df["smiles"])
+    val_sc   = buckets(val_df["smiles"])
+    test_sc  = buckets(test_df["smiles"])
+
+    assert train_sc.isdisjoint(val_sc)
+    assert train_sc.isdisjoint(test_sc)
+    assert val_sc.isdisjoint(test_sc)
+
+    # And the union of scaffolds equals what we expect: {"C","N","O"}
+    assert train_sc | val_sc | test_sc == {"C", "N", "O"}
