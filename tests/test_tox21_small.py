@@ -3,82 +3,62 @@ Tiny Tox21 case study runner.
 - If you provide --csv, uses that; else uses samples/tox21_mini.csv
 - Calls run_tox21_case_study if available; otherwise, runs a minimal fallback using GraphDataset.
 """
-
-import argparse
+# tests/test_tox21_mini.py
 from pathlib import Path
-
 import numpy as np
+import pytest
 
-from data.mdataset import GraphDataset
+import importlib
+dataset_module = importlib.import_module(f'data.mdataset')
+GraphDataset = getattr(dataset_module, 'GraphDataset')
 
-from utils.logging import maybe_init_wandb
+def _find_csv():
+    # assume tests/… → project root at parents[1]
+    root = Path(__file__).resolve().parents[1]
+    candidates = [
+        root / "samples" / "tox21_mini.csv",
+        Path.cwd() / "samples" / "tox21_mini.csv",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    pytest.skip("samples/tox21_mini.csv not found in repo")
 
-try:
-    from experiments.case_study import run_tox21_case_study
 
-    HAS_CASE = True
-except Exception:
-    HAS_CASE = False
-
-
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--csv", type=str, default="samples/tox21_mini.csv")
-    p.add_argument("--task", type=str, default="NR-AR")
-    p.add_argument("--device", type=str, default="cpu")
-    p.add_argument("--epochs", type=int, default=3)
-    p.add_argument("--top_fraction", type=float, default=0.2)
-    args = p.parse_args()
-    wb = maybe_init_wandb(enable=False)
-
-    csv = Path(args.csv)
-    if not csv.exists():
-        raise SystemExit(
-            f"CSV not found: {csv}. Provide --csv path to your Tox21 file."
-        )
-
-    if HAS_CASE:
-        wb.log({"mode": "case"})
-        triple = run_tox21_case_study(
-            tox21_csv=str(csv),
-            task=args.task,
-            add_3d=False,
-            pretrain_epochs=args.epochs,
-            finetune_epochs=args.epochs,
-            device=args.device,
-            top_fraction=args.top_fraction,
-        )
-        wb.log(
-            {
-                "tox21_mean_true": triple[0],
-                "tox21_mean_random_after": triple[1],
-                "tox21_mean_predicted_after": triple[2],
-            }
-        )
-        return
-
-    # Fallback: minimal pipeline just to validate IO
-    wb.log({"mode": "fallback"})
+def test_tox21_dataset_loads_and_labels():
+    csv = _find_csv()
     ds = GraphDataset.from_csv(
-        str(csv), smiles_col="smiles", label_col=args.task, cache_dir="cache/tox21_tiny"
+        str(csv), smiles_col="smiles", label_col="NR-AR", cache_dir=None
     )
-    # Fake a 'predicted toxicity' score to verify ranking path
-    rng = np.random.default_rng(42)
+
+    assert len(ds.graphs) > 0
+    assert ds.labels is not None
+    assert ds.labels.shape[0] == len(ds.graphs)
+    # labels should be binary 0/1 for NR-AR
+    uniq = set(np.unique(ds.labels))
+    assert uniq.issubset({0, 1}) and len(uniq) >= 1
+
+def test_tox21_minipipeline_rank_and_filter():
+    csv = _find_csv()
+
+    ds = GraphDataset.from_csv(
+        str(csv), smiles_col="smiles", label_col="NR-AR", cache_dir=None
+    )
+
+    # Minimal scoring + “remove top fraction” pipeline (deterministic)
+    rng = np.random.default_rng(0)
     scores = rng.random(len(ds.graphs))
-    k = max(1, int(len(scores) * args.top_fraction))
-    keep_mask = np.ones(len(scores), dtype=bool)
-    keep_mask[np.argsort(scores)[-k:]] = False
-    y = ds.labels if ds.labels is not None else rng.integers(0, 2, size=len(ds.graphs))
+    top_fraction = 0.2
+    k = max(1, int(len(scores) * top_fraction))
+
+    keep = np.ones(len(scores), dtype=bool)
+    keep[np.argsort(scores)[-k:]] = False
+
+    y = ds.labels
     mean_true = float(y.mean())
-    mean_after = float(y[keep_mask].mean())
-    wb.log(
-        {
-            "mean_true": mean_true,
-            "mean_after_random": mean_true,
-            "mean_after_pred": mean_after,
-        }
-    )
+    mean_after_pred = float(y[keep].mean())
 
-
-if __name__ == "__main__":
-    main()
+    # Basic sanity checks (no assumptions about improvement)
+    assert 0.0 <= mean_true <= 1.0
+    assert 0.0 <= mean_after_pred <= 1.0
+    assert keep.sum() == len(ds.graphs) - k
