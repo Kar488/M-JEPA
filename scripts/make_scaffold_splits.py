@@ -7,7 +7,7 @@ import pandas as pd
 
 import logging
 
-from data.moleculenet_scaffold import write_scaffold_splits
+from data.scaffold_split import write_scaffold_splits
 
 logger = logging.getLogger(__name__)
 
