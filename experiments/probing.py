@@ -14,61 +14,7 @@ import torch
 from torch_geometric.loader import DataLoader as GeoLoader
 from torch_geometric.data import Data as PyGData
 
-
-def _to_tensor(x, dtype=None, device=None):
-    if x is None:
-        return None
-    t = torch.as_tensor(x)
-    if dtype is not None and t.dtype != dtype:
-        t = t.to(dtype)
-    if device is not None:
-        t = t.to(device)
-    return t
-
-def _edge_index_to_dense(edge_index: torch.Tensor, num_nodes: int, device, add_self_loops: bool = True):
-    if edge_index.numel() == 0:
-        adj = torch.zeros((num_nodes, num_nodes), dtype=torch.float32, device=device)
-    else:
-        values = torch.ones(edge_index.shape[1], dtype=torch.float32, device=device)
-        adj = torch.sparse_coo_tensor(edge_index, values, (num_nodes, num_nodes), device=device).to_dense()
-    if add_self_loops:
-        adj = adj.clone()
-        adj.fill_diagonal_(1.0)
-    return adj
-
-def _encode_graph(encoder: torch.nn.Module, g):
-    device = next(encoder.parameters()).device if any(True for _ in encoder.parameters()) else torch.device("cpu")
-    x = getattr(g, "x", None)
-    x_t = _to_tensor(x, dtype=torch.float32, device=device)
-
-    # Prefer GraphData.adj; otherwise build from PyG edge_index
-    if hasattr(g, "adj") and getattr(g, "adj") is not None:
-        adj_t = _to_tensor(getattr(g, "adj"), dtype=torch.float32, device=device)
-        if adj_t.ndim > 2:
-            adj_t = adj_t.squeeze()
-        if adj_t.shape[0] == adj_t.shape[1]:
-            adj_t = adj_t.clone()
-            adj_t.fill_diagonal_(1.0)
-    else:
-        ei_t = _to_tensor(getattr(g, "edge_index"), dtype=torch.long, device=device)
-        num_nodes = int(x_t.shape[0])
-        adj_t = _edge_index_to_dense(ei_t, num_nodes, device=device, add_self_loops=True)
-
-    # Try (x, adj, edge_attr) then fallback (x, adj)
-    edge_t = _to_tensor(getattr(g, "edge_attr", None), dtype=torch.float32, device=device)
-    try:
-        return encoder(x_t, adj_t, edge_t)
-    except TypeError:
-        return encoder(x_t, adj_t)
-
-def _pool_graph_emb(h: torch.Tensor, g) -> torch.Tensor:
-    # Use PyG batch vector if present
-    batch = getattr(g, "batch", None)
-    if batch is not None:
-        from torch_geometric.nn import global_mean_pool
-        return global_mean_pool(h, batch)  # [B, D]
-    # Single graph
-    return h.mean(dim=0, keepdim=True) if h.dim() == 2 else h
+from utils.graph_ops import _encode_graph, _pool_graph_emb
 
 def _adj_to_edge_index(adj):
     import torch
