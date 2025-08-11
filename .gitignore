@@ -28,3 +28,4 @@ Thumbs.db
 experiments/__pycache__/grid_search.cpython-312.pyc
 data/__pycache__/__init__.cpython-312.pyc
 outputs/grid_ckpts/jepa/jepa_ep0002.pt
+training/__pycache__/supervised.cpython-312.pyc
