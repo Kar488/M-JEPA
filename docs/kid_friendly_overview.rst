@@ -78,7 +78,10 @@ Handy helper functions used all over the project.
   Makes experiments repeatable by setting random seeds.
 
 ``logging.py``
-  Provides a fake ``wandb`` logger so experiments don’t crash if ``wandb`` isn’t installed.
+  Adds ``maybe_init_wandb``, which starts a real Weights & Biases run
+  when available and otherwise falls back to a safe dummy logger.
+  Tests use a ``wb`` pytest fixture based on this helper, and both tests
+  and training scripts log metrics and artifacts to Weights & Biases.
 
 ``pooling.py``
   Squishes all node embeddings in a graph into one by averaging.
