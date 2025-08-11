@@ -76,6 +76,7 @@ SEEDS: Iterable[int] = range(3)  # 0, 1, 2
 # Dataset loading utilities
 # -----------------------------------------------------------------------------
 
+
 def _read_dataset_files(path: Path) -> pd.DataFrame:
     """Read train/val/test parquet files and concatenate into a single DataFrame."""
     dfs: List[pd.DataFrame] = []
@@ -88,7 +89,9 @@ def _read_dataset_files(path: Path) -> pd.DataFrame:
     return pd.concat(dfs, ignore_index=True)
 
 
-def load_moleculenet_dataset(name: str, root: Path) -> Tuple[GraphDataset, List[str], pd.DataFrame]:
+def load_moleculenet_dataset(
+    name: str, root: Path
+) -> Tuple[GraphDataset, List[str], pd.DataFrame]:
     """Load MoleculeNet dataset and return base dataset plus label columns.
 
     Returns
@@ -105,12 +108,14 @@ def load_moleculenet_dataset(name: str, root: Path) -> Tuple[GraphDataset, List[
     # Convert SMILES to graph structures once
     base_ds = GraphDataset.from_smiles_list(smiles, labels=None)
     label_cols = [c for c in df.columns if c != "smiles"]
-    return GraphDataset(base_ds.graphs, None, base_ds.smiles), label_cols, df
+    # Preserve SMILES strings so downstream code can perform scaffold splits.
+    return GraphDataset(base_ds.graphs, None, smiles), label_cols, df
 
 
 # -----------------------------------------------------------------------------
 # Evaluation helper
 # -----------------------------------------------------------------------------
+
 
 def evaluate_dataset(
     name: str,
@@ -135,9 +140,8 @@ def evaluate_dataset(
         for col in label_cols:
             labels = df[col].to_numpy()
             ds = GraphDataset(dataset.graphs, labels, dataset.smiles)
-            # Scaffold-based splitting requires SMILES strings; fall back
-            # to the default behaviour otherwise.
-            scaffold_kwargs = {"use_scaffold": True} if ds.smiles is not None else {}
+            # Always request scaffold-based splitting; ``train_linear_head``
+            # internally falls back to random splits when SMILES are absent.
             res = train_linear_head(
                 ds,
                 encoder,
@@ -145,7 +149,7 @@ def evaluate_dataset(
                 device=str(device),
                 devices=devices,
                 patience=patience,
-                **scaffold_kwargs,
+                use_scaffold=True,
             )
             # Exclude the trained head from aggregation
             res.pop("head", None)
@@ -163,17 +167,46 @@ def evaluate_dataset(
 # Main
 # -----------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Evaluate linear probes on MoleculeNet datasets")
-    p.add_argument("--encoder-checkpoint", type=str, required=True, help="Path to encoder checkpoint")
-    p.add_argument("--data-root", type=str, default="data/moleculenet", help="Root directory with MoleculeNet datasets")
-    p.add_argument("--output", type=str, default="moleculenet_results.csv", help="Where to save aggregated CSV results")
+    p = argparse.ArgumentParser(
+        description="Evaluate linear probes on MoleculeNet datasets"
+    )
+    p.add_argument(
+        "--encoder-checkpoint",
+        type=str,
+        required=True,
+        help="Path to encoder checkpoint",
+    )
+    p.add_argument(
+        "--data-root",
+        type=str,
+        default="data/moleculenet",
+        help="Root directory with MoleculeNet datasets",
+    )
+    p.add_argument(
+        "--output",
+        type=str,
+        default="moleculenet_results.csv",
+        help="Where to save aggregated CSV results",
+    )
     p.add_argument("--device", type=str, default="cpu", help="Computation device")
-    p.add_argument("--input-dim", type=int, default=4, help="Input node feature dimension")
-    p.add_argument("--hidden-dim", type=int, default=256, help="Hidden dimension of the encoder")
+    p.add_argument(
+        "--input-dim", type=int, default=4, help="Input node feature dimension"
+    )
+    p.add_argument(
+        "--hidden-dim", type=int, default=256, help="Hidden dimension of the encoder"
+    )
     p.add_argument("--num-layers", type=int, default=3, help="Number of GNN layers")
-    p.add_argument("--gnn-type", type=str, default="mpnn", help="Type of GNN encoder (mpnn/gcn/gat)")
-    p.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP training")
+    p.add_argument(
+        "--gnn-type",
+        type=str,
+        default="mpnn",
+        help="Type of GNN encoder (mpnn/gcn/gat)",
+    )
+    p.add_argument(
+        "--devices", type=int, default=1, help="Number of GPUs for DDP training"
+    )
     p.add_argument("--patience", type=int, default=10, help="Early stopping patience")
     return p.parse_args()
 
