@@ -69,53 +69,6 @@ if SOURCE.exists():
         y = pd.read_parquet(TMP, columns=["label"])["label"].to_numpy()
         ds.labels = y.astype(int)  # or float for regression
 
-
-        # ---- monkey‑patch get_batch to produce ptr with length == num graphs ----
-        def _safe_get_batch(indices):
-            import torch, numpy as np
-
-            node_feats, adjs, sizes = [], [], []
-
-            for idx in indices:
-                g = ds.graphs[idx]
-                if hasattr(g, "to_tensors") and callable(getattr(g, "to_tensors")):
-                    x_i, adj_i = g.to_tensors()
-                else:
-                    # minimal fallback: GraphData spec you showed
-                    x_i = torch.as_tensor(g.x, dtype=torch.float32)
-                    n = int(x_i.size(0))
-                    adj_i = torch.zeros((n, n), dtype=torch.float32)
-                    ei = torch.as_tensor(g.edge_index, dtype=torch.long)
-                    if ei.numel() > 0:
-                        src, dst = ei[0], ei[1]
-                        adj_i[src, dst] = 1.0
-                        adj_i[dst, src] = 1.0  # undirected
-                n_i = int(x_i.size(0))
-                if n_i <= 0:
-                    continue  # drop empties completely
-                node_feats.append(x_i)
-                adjs.append(adj_i)
-                sizes.append(n_i)
-
-            # Build dense block-diagonal adjacency and concat features
-            X = torch.cat(node_feats, dim=0)
-            A = adjs[0]
-            for Ai in adjs[1:]:
-                A = torch.block_diag(A, Ai)
-
-            # ptr WITHOUT the final total (len == num_graphs)
-            ptr = [0]
-            for n_i in sizes[:-1]:               # <- note: up to last-1
-                ptr.append(ptr[-1] + n_i)
-            batch_ptr = torch.as_tensor(ptr, dtype=torch.long)
-
-            # Targets are built in train loop from dataset.labels[indices] (not used here)
-            return X, A, batch_ptr, None
-
-        ds.get_batch = _safe_get_batch
-
-
-
         return ds
 
 else:

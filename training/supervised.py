@@ -178,6 +178,12 @@ def train_linear_head(
             targets = torch.tensor(
                 dataset.labels[batch_indices], dtype=torch.float32, device=device_t
             )
+            # Guard: ensure preds and targets match in length
+            assert preds.shape[0] == targets.shape[0], (
+                f"Preds length {preds.shape[0]} != targets length {targets.shape[0]}; "
+                f"batch_ptr={batch_ptr.tolist()}, batch_indices={batch_indices}"
+            )
+
             loss = loss_fn(preds, targets)
             batch_losses.append(loss.item())
             optimiser.zero_grad()
