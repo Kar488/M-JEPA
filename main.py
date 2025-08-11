@@ -66,20 +66,11 @@ except Exception:
 from experiments.grid_search import run_grid_search
 
 try:
-    from experiments.case_study import run_synthetic_case_study, run_tox21_case_study
+    from experiments.case_study import run_tox21_case_study
 
     _HAS_CASE_STUDY = True
 except Exception:
     _HAS_CASE_STUDY = False
-
-    def run_synthetic_case_study(smiles, num_top_exclude=2, seed=42):
-        rng = np.random.RandomState(seed)
-        y = rng.rand(len(smiles))
-        top = max(1, int(num_top_exclude))
-        mean_true = float(y.mean())
-        after_rand = float(np.delete(y, rng.choice(len(y), top, replace=False)).mean())
-        after_pred = float(np.delete(y, np.argsort(-y)[:top]).mean())
-        return mean_true, after_rand, after_pred
 
 
 # ---------------------------- Dataset helpers ---------------------------- #
@@ -269,12 +260,18 @@ def demonstration(device: str = "cpu", devices: int = 1, use_scaffold: bool = Fa
         {k: v for k, v in metrics.items() if k != "head"},
     )
 
-    # Synthetic case study
-    mean_true, mean_rand, mean_pred = run_synthetic_case_study(
-        smiles, num_top_exclude=2, seed=42
+    # Tox21 case study using real labels
+    csv = "samples/tox21_mini.csv"
+    mean_true, mean_rand, mean_pred = run_tox21_case_study(
+        csv_path=csv,
+        task_name="NR-AR",
+        pretrain_epochs=1,
+        finetune_epochs=1,
+        num_top_exclude=1,
+        device=device,
     )
     logger.info(
-        "Synth case study – mean true: %.3f, random: %.3f, predicted: %.3f",
+        "Tox21 case study – mean true: %.3f, random: %.3f, predicted: %.3f",
         mean_true,
         mean_rand,
         mean_pred,
