@@ -27,13 +27,20 @@ def global_mean_pool(
         Tensor of shape (B, hidden_dim) containing one embedding per graph.
     """
     device = node_embeddings.device
-    B = graph_ptr.numel()
+    B = graph_ptr.numel()-1
     hidden_dim = node_embeddings.size(1)
-    graph_embeddings = torch.zeros((B, hidden_dim), device=device)
-    start = 0
-    for i, end in enumerate(graph_ptr):
-        end_idx = end.item()
-        if end_idx > start:
-            graph_embeddings[i] = node_embeddings[start:end_idx].mean(dim=0)
-        start = end_idx
+    #graph_embeddings = torch.zeros((B, hidden_dim), device=device)
+    #start = 0
+    # for i, end in enumerate(graph_ptr):
+    #     end_idx = end.item()
+    #     if end_idx > start:
+    #         graph_embeddings[i] = node_embeddings[start:end_idx].mean(dim=0)
+    #     start = end_idx
+    # return graph_embeddings
+    graph_embeddings = torch.empty((B, hidden_dim), device=device)
+    for i in range(B):
+        s = int(graph_ptr[i].item())
+        e = int(graph_ptr[i + 1].item())
+        graph_embeddings[i] = node_embeddings[s:e].mean(dim=0) if e > s else node_embeddings.new_zeros(hidden_dim)
+
     return graph_embeddings

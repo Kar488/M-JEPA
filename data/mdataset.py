@@ -83,20 +83,22 @@ class GraphDataset:
         """
         
         if not indices:
-            raise ValueError("Empty batch indices")
+                raise ValueError("Empty batch indices")
         if max(indices) >= len(self.graphs):
             raise IndexError(f"Index out of bounds: max {max(indices)} vs {len(self.graphs)} graphs")
 
         node_features: List[torch.Tensor] = []
         adj_blocks: List[torch.Tensor] = []
-        graph_ptr: List[int] = []
-        offset = 0
+        sizes: List[int] = []
         for idx in indices:
             x_i, adj_i = self.graphs[idx].to_tensors()
+            n_i = int(x_i.size(0))
+            if n_i <= 0:
+                raise ValueError(f"Graph at idx {idx} has 0 nodes")
             node_features.append(x_i)
             adj_blocks.append(adj_i)
-            offset += adj_i.shape[0]
-            graph_ptr.append(offset)
+            sizes.append(n_i) 
+ 
         batch_x = (
             torch.cat(node_features, dim=0)
             if node_features
@@ -107,12 +109,21 @@ class GraphDataset:
             if adj_blocks
             else torch.zeros((0, 0), dtype=torch.float32)
         )
-        batch_ptr = torch.tensor(graph_ptr, dtype=torch.long)
+        ptr = np.cumsum([0] + sizes, dtype=np.int64)
+        if np.any(np.diff(ptr) <= 0) or (len(ptr) != len(indices) + 1):
+            raise AssertionError(f"Bad batch_ptr: {ptr.tolist()} for {len(indices)} graphs")
+        batch_ptr = torch.tensor(ptr, dtype=torch.long) 
+
         batch_labels = (
             torch.tensor(self.labels[indices], dtype=torch.float32)
             if self.labels is not None
             else None
         )
+        if batch_labels is not None: 
+            assert batch_labels.shape[0] == len(indices), (
+                f"Labels length {batch_labels.shape[0]} != indices length {len(indices)}"
+            )
+
         return batch_x, batch_adj, batch_ptr, batch_labels
 
 

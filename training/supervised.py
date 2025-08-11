@@ -87,7 +87,7 @@ def train_linear_head(
     device: str = "cpu",
     patience: int = 10,
     use_scaffold: bool = False,
-    devices: int = 1,
+    devices: int = 1
 ) -> Dict[str, float]:
     """Train a linear head on a frozen encoder for classification or regression.
 
@@ -107,6 +107,7 @@ def train_linear_head(
         patience: Number of epochs with no improvement before stopping.
         use_scaffold: Whether to use scaffold split if SMILES are provided.
         devices: Number of GPUs for DDP.
+        batch_indices: Optional list of indices for a single batch; if provided, overrides internal splitting.
 
     Returns:
         A dictionary of metrics on the test set (only populated on rank 0).
@@ -129,6 +130,8 @@ def train_linear_head(
         p.requires_grad = False
     num_graphs = len(dataset)
     indices = list(range(num_graphs))
+
+    # Use provided batch_indices for single-batch training, else split dataset
     if use_scaffold and getattr(dataset, "smiles", None) is not None:
         train_idx, val_idx, test_idx = scaffold_split(dataset.smiles)
         train_idx, val_idx, test_idx = (
@@ -147,6 +150,7 @@ def train_linear_head(
         train_idx = indices[:train_end]
         val_idx = indices[train_end:val_end]
         test_idx = indices[val_end:]
+        
     head = nn.Linear(encoder.hidden_dim, 1).to(device_t)
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
@@ -169,16 +173,20 @@ def train_linear_head(
         batch_losses = []
         for start in range(0, len(train_idx_rank), batch_size):
             batch_indices = train_idx_rank[start : start + batch_size]
-            batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
+            batch_x, batch_adj, batch_ptr, batch_labels = dataset.get_batch(batch_indices)
             batch_x = batch_x.to(device_t)
             batch_adj = batch_adj.to(device_t)
             
             node_emb = encoder(batch_x, batch_adj)
             
             graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+
+            num_graphs = batch_ptr.numel() - 1
+            if graph_emb.shape[0] != num_graphs:
+                graph_emb = graph_emb[:num_graphs]
                
             preds = head(graph_emb).squeeze(1)
-            targets = torch.tensor(
+            targets = batch_labels if batch_labels is not None else torch.tensor(
                 dataset.labels[batch_indices], dtype=torch.float32, device=device_t
             )
             # Guard: ensure preds and targets match in length
@@ -204,6 +212,11 @@ def train_linear_head(
                 batch_adj = batch_adj.to(device_t)
                 node_emb = encoder(batch_x, batch_adj)
                 graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+                
+                num_graphs = batch_ptr.numel() - 1
+                if graph_emb.shape[0] != num_graphs:
+                    graph_emb = graph_emb[:num_graphs]
+
                 preds = head(graph_emb).squeeze(1)
                 targets = torch.tensor(
                     dataset.labels[batch_indices], dtype=torch.float32, device=device_t
@@ -231,6 +244,11 @@ def train_linear_head(
             batch_adj = batch_adj.to(device_t)
             node_emb = encoder(batch_x, batch_adj)
             graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+
+            num_graphs = batch_ptr.numel() - 1
+            if graph_emb.shape[0] != num_graphs:
+                graph_emb = graph_emb[:num_graphs]
+            
             preds = head(graph_emb).squeeze(1).detach().cpu().numpy()
             targets = dataset.labels[batch_indices]
             all_targets.append(targets)

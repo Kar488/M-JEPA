@@ -267,9 +267,9 @@ def _normalize_ds(ds: Any) -> Tuple[Any, Any, Any]:
 
 def _normalize_ds_to_loaders(ds, pre_bs: int, ft_bs: int):
     tr, va, te = _normalize_ds(ds)
-    tr = _ensure_loader(tr, pre_bs, True)
-    va = _ensure_loader(va, ft_bs, False)
-    te = _ensure_loader(te, ft_bs, False)
+    tr = _ensure_loader(tr, pre_bs, shuffle=True)  
+    va = _ensure_loader(va, ft_bs, shuffle=False)  
+    te = _ensure_loader(te, ft_bs, shuffle=False)  
     return tr, va, te
 
 def _feat_dim(x):
