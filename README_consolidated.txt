@@ -97,3 +97,4 @@ requires roughly 5–8 MB on disk, so 1 M molecules will occupy on the order o
 ##tests
 pytest --cache-clear tests -v --capture=no
 pytest --cache-clear tests -v -o log_cli=true
+pytest --cache-clear tests -v -q -s -o log_cli=true
