@@ -534,6 +534,104 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         wb.finish()
 
 
+def cmd_grid_search(args: argparse.Namespace) -> None:
+    """Run a hyper‑parameter sweep using the ``run_grid_search`` helper.
+
+    This command loads the specified dataset using ``load_directory_dataset`` and
+    then performs a grid search over various JEPA hyper‑parameters.  The search
+    space is configurable via CLI flags.  Results are logged to Weights &
+    Biases if enabled and optionally written to a CSV file.  When the grid
+    search completes, the best configuration and its metric are reported.
+    """
+    # If the experiments module is unavailable, abort with a distinct exit code
+    if run_grid_search is None:
+        logger.error("Grid search functionality is unavailable. Install the experiments package or check the import.")
+        sys.exit(7)
+
+    # Convert numerical lists to tuples and boolean flags
+    contiguities = tuple(bool(c) for c in args.contiguities)
+    add_3d_opts = tuple(bool(a) for a in args.add_3d_options)
+    seeds: tuple
+    # Determine seeds: use CLI if provided, otherwise fall back to configuration defaults
+    if args.seeds is not None and len(args.seeds) > 0:
+        seeds = tuple(args.seeds)
+    else:
+        seeds = tuple(CONFIG.get("finetune", {}).get("seeds", [42, 123, 456]))
+
+    # Create a dataset loader closure expected by run_grid_search.  It must accept
+    # ``add_3d`` and return a GraphDataset.  The label column is passed along
+    # for downstream tasks but ignored if the dataset is truly unlabeled.
+    def _dataset_fn(add_3d: bool = False):  # type: ignore[override]
+        return load_directory_dataset(args.dataset_dir, label_col=args.label_col, add_3d=add_3d)  # type: ignore[arg-type]
+
+    # Initialise optional W&B run for grid search
+    wb = maybe_init_wandb(
+        args.use_wandb,
+        project=args.wandb_project,
+        tags=args.wandb_tags,
+        config={
+            "dataset_dir": args.dataset_dir,
+            "task_type": args.task_type,
+            "mask_ratios": args.mask_ratios,
+            "contiguities": args.contiguities,
+            "hidden_dims": args.hidden_dims,
+            "num_layers_list": args.num_layers_list,
+            "gnn_types": args.gnn_types,
+            "ema_decays": args.ema_decays,
+            "add_3d_options": args.add_3d_options,
+            "pretrain_batch_sizes": args.pretrain_batch_sizes,
+            "finetune_batch_sizes": args.finetune_batch_sizes,
+            "pretrain_epochs_options": args.pretrain_epochs_options,
+            "finetune_epochs_options": args.finetune_epochs_options,
+            "learning_rates": args.learning_rates,
+            "seeds": seeds,
+        },
+    )
+    wb.log({"phase": "grid_search", "status": "start"})
+
+    try:
+        df = run_grid_search(
+            dataset_fn=_dataset_fn,
+            methods=("jepa",),
+            task_type=args.task_type,
+            seeds=seeds,
+            mask_ratios=tuple(args.mask_ratios),
+            contiguities=contiguities,
+            hidden_dims=tuple(args.hidden_dims),
+            num_layers_list=tuple(args.num_layers_list),
+            gnn_types=tuple(args.gnn_types),
+            ema_decays=tuple(args.ema_decays),
+            add_3d_options=add_3d_opts,
+            pretrain_batch_sizes=tuple(args.pretrain_batch_sizes),
+            finetune_batch_sizes=tuple(args.finetune_batch_sizes),
+            pretrain_epochs_options=tuple(args.pretrain_epochs_options),
+            finetune_epochs_options=tuple(args.finetune_epochs_options),
+            lrs=tuple(args.learning_rates),
+            device=args.device,
+            use_wandb=args.use_wandb,
+            ckpt_dir=args.ckpt_dir,
+            ckpt_every=args.ckpt_every,
+            use_scheduler=args.use_scheduler,
+            warmup_steps=args.warmup_steps,
+            out_csv=args.out_csv,
+        )
+        # Summarise the best configuration: the last row of df contains best row(s)
+        best_conf = None
+        if df is not None and not df.empty:
+            best_conf = df.iloc[-1].to_dict()
+            logger.info("Grid search completed. Best configuration: %s", best_conf)
+        else:
+            logger.info("Grid search returned no results.")
+        wb.log({"phase": "grid_search", "status": "success", "best": best_conf})
+    except Exception:
+        logger.exception("Grid search failed")
+        wb.log({"phase": "grid_search", "status": "error"})
+        # exit with distinct code for grid search failures
+        sys.exit(7)
+    finally:
+        wb.finish()
+
+
 # ---------------------------------------------------------------------------
 # CLI parsing
 # ---------------------------------------------------------------------------
@@ -623,6 +721,183 @@ def build_parser() -> argparse.ArgumentParser:
     tox.add_argument("--num-top-exclude", type=int, default=case_cfg.get("num_top_exclude", 10), help="Top‑k toxic compounds to exclude when ranking")
     _add_common_args(tox, "case_study")
     tox.set_defaults(func=cmd_tox21)
+
+    # ------------------------------------------------------------------
+    # Grid search
+    # ------------------------------------------------------------------
+    # This subcommand exposes the hyper‑parameter sweep functionality from
+    # ``experiments.grid_search``.  It allows a user to optimise JEPA
+    # pretraining and downstream evaluation parameters across a user‑defined
+    # search space.  The defaults mirror those in ``run_grid_search`` but
+    # can be overridden on the CLI.  The dataset is specified via
+    # ``--dataset-dir`` and will be loaded with the same loader used in
+    # other stages.  Seeds and search ranges can also be customised.
+    grid = sub.add_parser(
+        "grid-search",
+        help="Perform hyper‑parameter grid search for JEPA using run_grid_search",
+    )
+    grid.add_argument(
+        "--dataset-dir",
+        required=True,
+        help="Directory containing a labelled graph dataset (CSV or Parquet) used for both pretraining and evaluation",
+    )
+    grid.add_argument(
+        "--label-col",
+        type=str,
+        default="label",
+        help="Name of the label column in the dataset (ignored for unlabeled data)",
+    )
+    grid.add_argument(
+        "--task-type",
+        choices=["classification", "regression"],
+        default="classification",
+        help="Task type for downstream evaluation",
+    )
+    # Search space parameters
+    grid.add_argument(
+        "--mask-ratios",
+        type=float,
+        nargs="+",
+        default=[0.10, 0.15, 0.25],
+        help="List of mask ratios to sweep over",
+    )
+    grid.add_argument(
+        "--contiguities",
+        type=int,
+        nargs="+",
+        default=[0, 1],
+        help="Contiguity flags (0 for False, 1 for True) to sweep over",
+    )
+    grid.add_argument(
+        "--hidden-dims",
+        type=int,
+        nargs="+",
+        default=[128, 256],
+        help="Hidden dimensions to sweep over",
+    )
+    grid.add_argument(
+        "--num-layers-list",
+        type=int,
+        nargs="+",
+        default=[2, 3],
+        help="Number of GNN layers to sweep over",
+    )
+    grid.add_argument(
+        "--gnn-types",
+        nargs="+",
+        default=["mpnn", "gcn", "gat", "edge_mpnn"],
+        help="GNN architectures to sweep over",
+    )
+    grid.add_argument(
+        "--ema-decays",
+        type=float,
+        nargs="+",
+        default=[0.95, 0.99],
+        help="EMA decay rates to sweep over",
+    )
+    grid.add_argument(
+        "--add-3d-options",
+        type=int,
+        nargs="+",
+        default=[0, 1],
+        help="Whether to include 3D features (0 for False, 1 for True)",
+    )
+    grid.add_argument(
+        "--pretrain-batch-sizes",
+        type=int,
+        nargs="+",
+        default=[256],
+        help="Batch sizes for JEPA pretraining",
+    )
+    grid.add_argument(
+        "--finetune-batch-sizes",
+        type=int,
+        nargs="+",
+        default=[64],
+        help="Batch sizes for downstream fine‑tuning",
+    )
+    grid.add_argument(
+        "--pretrain-epochs-options",
+        type=int,
+        nargs="+",
+        default=[50],
+        help="Number of epochs for JEPA pretraining",
+    )
+    grid.add_argument(
+        "--finetune-epochs-options",
+        type=int,
+        nargs="+",
+        default=[30],
+        help="Number of epochs for downstream training",
+    )
+    grid.add_argument(
+        "--learning-rates",
+        type=float,
+        nargs="+",
+        default=[1e-4],
+        help="Learning rates to sweep over",
+    )
+    grid.add_argument(
+        "--seeds",
+        type=int,
+        nargs="*",
+        default=None,
+        help="Random seeds for averaging results (overrides config)",
+    )
+    grid.add_argument(
+        "--device",
+        type=str,
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        help="Device for training (cuda or cpu)",
+    )
+    grid.add_argument(
+        "--out-csv",
+        type=str,
+        default=None,
+        help="Path to output CSV file for grid search results",
+    )
+    grid.add_argument(
+        "--ckpt-dir",
+        type=str,
+        default="outputs/grid_ckpts",
+        help="Directory in which to save intermediate checkpoints during the sweep",
+    )
+    grid.add_argument(
+        "--ckpt-every",
+        type=int,
+        default=25,
+        help="Checkpoint every N epochs during pretraining in the sweep",
+    )
+    grid.add_argument(
+        "--use-scheduler",
+        action="store_true",
+        help="Enable learning‑rate warmup and cosine scheduler during grid search",
+    )
+    grid.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=1000,
+        help="Number of warmup steps for the scheduler during grid search",
+    )
+    grid.add_argument(
+        "--use-wandb",
+        action="store_true",
+        help="Enable Weights & Biases logging for the grid search",
+    )
+    # Additional options to mirror other subcommands
+    grid.add_argument(
+        "--wandb-project",
+        type=str,
+        default=CONFIG.get("wandb", {}).get("project", "m-jepa"),
+        help="W&B project name for grid search runs",
+    )
+    grid.add_argument(
+        "--wandb-tags",
+        nargs="*",
+        default=CONFIG.get("wandb", {}).get("tags", []),
+        help="W&B tags for grid search runs",
+    )
+    grid.set_defaults(func=cmd_grid_search)
 
     return parser
 
