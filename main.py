@@ -745,5 +745,6 @@ if __name__ == "__main__":
         run_grid_mode(args)
     else:
         run_full_mode(args)
-    with contextlib.suppress(Exception):
-        wb.finish()
+    if wb is not None:
+        with contextlib.suppress(Exception):
+            wb.finish()
