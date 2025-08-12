@@ -8,15 +8,6 @@ runs:
     - name: Prepare PATH
       run: echo "PATH=/venv/main/bin:$PATH" >> $GITHUB_ENV
 
-    - name: Install PyTorch if missing
-      run: |
-        python - <<'PY' 
-        try:
-          import torch; print("torch:", torch.__version__)
-        except Exception:
-          import os; os.system("pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio")
-        PY
-
     - name: Set up Miniconda (with mamba)
       uses: conda-incubator/setup-miniconda@v2
       with:
