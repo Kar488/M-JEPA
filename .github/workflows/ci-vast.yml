@@ -39,6 +39,16 @@ jobs:
           miniforge-version: latest
           use-mamba: true
 
+      - name: Install RDKit (conda)
+        shell: bash -l {0}
+        run: |
+            mamba install -y python=3.10 rdkit
+
+      - name: Set versions (for cache key)
+        run: |
+          echo "TORCH_VER=2.2.1" >> $GITHUB_ENV
+          echo "TSCATTER_VER=2.1.2" >> $GITHUB_ENV
+
       - name: Cache pip (CI)
         uses: actions/cache@v4
         with:
@@ -105,6 +115,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}   # leave secret empty if no passphrase
           script: |
             set -euxo pipefail
             mkdir -p "$APP_DIR"
