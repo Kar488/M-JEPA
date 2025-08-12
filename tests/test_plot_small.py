@@ -22,8 +22,11 @@ def test_plot_small(wb):
     except Exception:
         has_utils = False
 
+    read_from_csv= False
+
     if csv.exists(): 
         df = pd.read_csv(csv)
+        read_from_csv= True
     else:
         # Synthesize a minimal dataframe with expected columns
         df = pd.DataFrame(
@@ -40,7 +43,15 @@ def test_plot_small(wb):
             }
         )
 
-    if has_utils and "roc_auc" in df.columns:
+    metric = None
+    if "roc_auc_mean" in df.columns:
+        metric = "roc_auc_mean"
+    elif "roc_auc" in df.columns:
+        metric = "roc_auc"
+    else:
+        metric = df.columns[-1]  # Fallback to last column if no ROC AUC metric is found
+
+    if has_utils and read_from_csv:
         df_plot = df.copy()
         df_plot.index = df.apply(
             lambda r: f"3D={r['add_3d']} MR={r['mask_ratio']} C={r['contiguous']} "
@@ -49,8 +60,8 @@ def test_plot_small(wb):
         )
         plot_hyperparameter_results(
             df_plot,
-            metric="roc_auc",
-            title="ROC-AUC Across Hyper-parameters (Tiny Test)",
+            metric=metric,
+            title="ROC-AUC Mean Across Hyper-parameters (Tiny Test)",
             top_n=min(15, len(df_plot)),
             wb=wb,
         )
@@ -58,7 +69,6 @@ def test_plot_small(wb):
         # Fallback: simple matplotlib bar
         import matplotlib.pyplot as plt
 
-        metric = "roc_auc" if "roc_auc" in df.columns else df.columns[-1]
         vals = pd.to_numeric(df[metric], errors="coerce").astype("float64").to_numpy()
         x = np.arange(len(vals), dtype=float)
         labels = [
