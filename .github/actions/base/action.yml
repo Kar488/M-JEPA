@@ -10,7 +10,7 @@ runs:
 
     - name: Install PyTorch if missing
       run: |
-        python - <<'PY'
+        python - <<'PY' 
         try:
           import torch; print("torch:", torch.__version__)
         except Exception:
