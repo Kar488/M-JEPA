@@ -205,4 +205,8 @@ jobs:
             . "$VENV_DIR/bin/activate"
             nvidia-smi
             torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              scripts/train_jepa.py --config configs/default.yaml --patience 10 2>&1 | tee -a logs/train_$(date +%F_%H-%M).log
+              scripts/train_jepa.py --config configs/default.yaml --patience 10 --stage pretrain 2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
+            torchrun --standalone --nnodes=1 --nproc_per_node=1 \
+              scripts/train_jepa.py --config configs/default.yaml --patience 10 --stage finetune 2>&1 | tee -a logs/finetune_$(date +%F_%H-%M).log
+            torchrun --standalone --nnodes=1 --nproc_per_node=1 \
+              scripts/train_jepa.py --config configs/default.yaml --patience 10 --stage eval 2>&1 | tee -a logs/eval_$(date +%F_%H-%M).log
