@@ -204,9 +204,18 @@ jobs:
             cd "$APP_DIR"
             . "$VENV_DIR/bin/activate"
             nvidia-smi
+            mkdir -p logs
             torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              scripts/train_jepa.py --config configs/default.yaml --patience 10 --stage pretrain 2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
+              scripts/train_jepa.py pretrain --unlabeled-dir data/BASF_AIPubChem_v4 \
+              --epochs 1 --batch-size 4 --contrastive --output outputs/encoder.pt \
+              --use-wandb 2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
             torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              scripts/train_jepa.py --config configs/default.yaml --patience 10 --stage finetune 2>&1 | tee -a logs/finetune_$(date +%F_%H-%M).log
+              scripts/train_jepa.py benchmark --labeled-dir data/katielinkmoleculenet_benchmark/train \
+              --jepa-encoder outputs/encoder.pt \
+              --contrastive-encoder outputs/encoder_contrastive.pt \
+              --epochs 1 --batch-size 4 --task-type classification --use-wandb \
+              2>&1 | tee -a logs/benchmark_$(date +%F_%H-%M).log
             torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              scripts/train_jepa.py --config configs/default.yaml --patience 10 --stage eval 2>&1 | tee -a logs/eval_$(date +%F_%H-%M).log
+              scripts/train_jepa.py tox21 --csv data/tox21/data.csv --task NR-AR \
+              --pretrain-epochs 1 --finetune-epochs 1 --num-top-exclude 5 --use-wandb \
+              2>&1 | tee -a logs/tox21_$(date +%F_%H-%M).log
