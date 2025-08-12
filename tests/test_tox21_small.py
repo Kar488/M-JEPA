@@ -9,8 +9,9 @@ import numpy as np
 import pytest
 
 import importlib
-dataset_module = importlib.import_module(f'data.mdataset')
-GraphDataset = getattr(dataset_module, 'GraphDataset')
+
+dataset_module = importlib.import_module(f"data.mdataset")
+GraphDataset = getattr(dataset_module, "GraphDataset")
 
 def _find_csv():
     root = Path(__file__).resolve().parents[1]
@@ -25,7 +26,7 @@ def _require_label(csv, col="NR-AR"):
     if col not in cols:
         pytest.skip(f"Column '{col}' not found in {csv}")
 
-def test_tox21_dataset_loads_and_labels():
+def test_tox21_dataset_loads_and_labels(wb):
     csv = _find_csv()
     _require_label(csv, "NR-AR")
     
@@ -41,7 +42,7 @@ def test_tox21_dataset_loads_and_labels():
     assert uniq.issubset({0, 1}) and len(uniq) >= 1
     assert np.asarray(ds.labels).dtype.kind in "iu"
 
-def test_tox21_minipipeline_rank_and_filter():
+def test_tox21_minipipeline_rank_and_filter(wb):
     csv = _find_csv()
     _require_label(csv, "NR-AR")
     ds = GraphDataset.from_csv(

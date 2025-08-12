@@ -32,7 +32,8 @@ def toy_smiles():
 
 @pytest.fixture(scope="session")
 def wb():
-    wb = maybe_init_wandb(enable=False)
+    api_key = os.getenv("WANDB_API_KEY")
+    wb = maybe_init_wandb(enable=bool(api_key), api_key=api_key)
     yield wb
     with contextlib.suppress(Exception):
         wb.finish()

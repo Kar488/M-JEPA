@@ -8,7 +8,7 @@ help identify which configurations perform best. Requires
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -16,6 +16,9 @@ import pandas as pd
 import seaborn as sns
 
 import logging
+import os
+
+from utils.logging import maybe_init_wandb
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +28,9 @@ def plot_training_curves(
     curves: Dict[str, List[float]],
     title: str = "Training Loss",
     normalize: bool = False,
+    use_wandb: bool = False,
+    wandb_project: str = "m-jepa",
+    wandb_tags: Optional[List[str]] = None,
 ) -> Figure:
     """Plot nicely styled training loss curves for multiple models.
 
@@ -37,6 +43,9 @@ def plot_training_curves(
         curves: Mapping from model names to lists of loss values.
         title: Title of the plot.
         normalize: If True, divide each loss curve by its first value.
+        use_wandb: If True, log the figure to Weights & Biases.
+        wandb_project: W&B project name when logging.
+        wandb_tags: Optional list of W&B tags.
     """
     # Set seaborn style for a clean look
     sns.set(style="whitegrid")
@@ -66,6 +75,16 @@ def plot_training_curves(
     plt.tight_layout()
     fig = plt.gcf()
     plt.show()
+
+    wb = maybe_init_wandb(
+        use_wandb,
+        project=wandb_project,
+        tags=wandb_tags,
+        api_key=os.getenv("WANDB_API_KEY"),  # set WANDB_API_KEY for logging
+    )
+    if use_wandb:
+        wb.log({"training_curves": fig})
+        wb.finish()
     return fig
 
 

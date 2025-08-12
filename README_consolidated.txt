@@ -19,8 +19,10 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    ```bash
    wandb login
    ```
-   or set `WANDB_API_KEY` in the environment. Logging is disabled by default in
-   tests and examples.
+   or set `WANDB_API_KEY` in the environment (e.g., `export WANDB_API_KEY=...`).
+   This variable is used by `main.py`, plotting helpers, and the tests to
+   establish a connection to W&B. Logging is disabled by default when the
+   variable is absent.
 
 3. **Datasets**
    - Large corpora such as **ZINC** and **PubChem** can be downloaded with
