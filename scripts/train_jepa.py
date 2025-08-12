@@ -85,8 +85,19 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--unlabeled-dir", required=True, help="Directory of unlabeled graphs")
     pre.add_argument("--mask-ratio", type=float, default=0.15, help="Masking ratio for JEPA")
     pre.add_argument("--epochs", type=int, default=1, help="Number of pretraining epochs")
-    pre.add_argument("--output", type=str, default="encoder.pt", help="Where to save encoder weights")
+    pre.add_argument(
+        "--output",
+        type=str,
+        default="encoder.pt",
+        help=(
+            "Where to save JEPA encoder weights; if --contrastive is set,"
+            " contrastive weights are written to <output>_contrastive.pt"
+        ),
+    )
     pre.add_argument("--contrastive", action="store_true", help="Also run contrastive baseline")
+    pre.add_argument("--aug-rotate", action="store_true", help="Randomly rotate coordinates")
+    pre.add_argument("--aug-mask-angle", action="store_true", help="Mask bond angles")
+    pre.add_argument("--aug-dihedral", action="store_true", help="Perturb dihedral angles")
     _add_common_args(pre)
     pre.set_defaults(func=cmd_pretrain)
 
@@ -116,6 +127,48 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_args(ev)
     ev.set_defaults(func=cmd_evaluate)
 
+    # ------------------------------------------------------------------
+    # Benchmark
+    # ------------------------------------------------------------------
+    bench = sub.add_parser(
+        "benchmark", help="Compare JEPA and contrastive encoders on labelled data"
+    )
+    bench.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs")
+    bench.add_argument("--label-col", type=str, default="label", help="Label column name")
+    bench.add_argument("--jepa-encoder", required=True, help="Path to JEPA encoder checkpoint")
+    bench.add_argument(
+        "--contrastive-encoder",
+        required=False,
+        help="Path to contrastive encoder checkpoint",
+    )
+    bench.add_argument(
+        "--task-type", choices=["classification", "regression"], default="classification"
+    )
+    bench.add_argument("--epochs", type=int, default=1, help="Number of probe training epochs")
+    bench.add_argument("--patience", type=int, default=10, help="Early stopping patience")
+    _add_common_args(bench)
+    bench.set_defaults(func=cmd_benchmark)
+
+    # ------------------------------------------------------------------
+    # Tox21 case study
+    # ------------------------------------------------------------------
+    tox = sub.add_parser("tox21", help="Run Tox21 case-study ranking experiment")
+    tox.add_argument("--csv", required=True, help="Path to Tox21 CSV with SMILES and labels")
+    tox.add_argument("--task", required=True, help="Column name of toxicity task")
+    tox.add_argument("--pretrain-epochs", type=int, default=5, help="JEPA pretrain epochs")
+    tox.add_argument("--finetune-epochs", type=int, default=20, help="Regression head epochs")
+    tox.add_argument(
+        "--num-top-exclude", type=int, default=10, help="Top-k toxic molecules to exclude"
+    )
+    tox.add_argument(
+        "--device",
+        type=str,
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        help="Computation device",
+    )
+    _add_common_args(tox)
+    tox.set_defaults(func=cmd_tox21)
+
     return parser
 
 # Distinct exit codes so GitHub Actions can surface which step failed
@@ -123,6 +176,8 @@ DATA_LOAD_ERROR = 1
 PRETRAIN_ERROR = 2
 FINETUNE_ERROR = 3
 EVAL_ERROR = 4
+CASE_STUDY_ERROR = 5
+BENCHMARK_ERROR = 6
 
 
 # ---------------------------------------------------------------------------
@@ -168,36 +223,12 @@ class EvaluateError(RuntimeError):
     """Raised when evaluation fails."""
 
 
-def load_data(
-    unlabeled_dir: str, labeled_dir: str, label_col: str, wb
-):
-    """Load datasets and infer feature dimensions."""
+class CaseStudyError(RuntimeError):
+    """Raised when the Tox21 case study fails."""
 
-    wb.log({"phase": "data_load", "status": "start"})
-    try:
-        unlabeled = load_directory_dataset(unlabeled_dir)
-        labeled = load_directory_dataset(labeled_dir, label_col=label_col)
-        wb.log(
-            {
-                "phase": "data_load",
-                "status": "success",
-                "unlabeled_graphs": len(unlabeled),
-                "labeled_graphs": len(labeled),
-            }
-        )
-    except Exception as e:  # pragma: no cover - defensive
-        logger.exception("Failed to load datasets")
-        wb.log({"phase": "data_load", "status": "error"})
-        raise DataLoadError(str(e))
 
-    input_dim = unlabeled.graphs[0].x.shape[1]
-    edge_dim = (
-        None
-        if unlabeled.graphs[0].edge_attr is None
-        else unlabeled.graphs[0].edge_attr.shape[1]
-    )
-    return unlabeled, labeled, input_dim, edge_dim
-
+class BenchmarkError(RuntimeError):
+    """Raised when benchmarking fails."""
 
 def cmd_pretrain(args: argparse.Namespace) -> None:
 
@@ -263,6 +294,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             epochs=args.epochs,
             batch_size=args.batch_size,
             mask_ratio=args.mask_ratio,
+            random_rotate=args.aug_rotate,
+            mask_angle=args.aug_mask_angle,
+            perturb_dihedral=args.aug_dihedral,
             lr=args.lr,
             device=args.device,
             devices=args.devices,
@@ -285,6 +319,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 epochs=args.epochs,
                 batch_size=args.batch_size,
                 mask_ratio=args.mask_ratio,
+                random_rotate=args.aug_rotate,
+                mask_angle=args.aug_mask_angle,
+                perturb_dihedral=args.aug_dihedral,
                 lr=args.lr,
                 device=args.device,
                 devices=args.devices,
@@ -297,8 +334,12 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             logger.exception("Contrastive pretraining failed")
             wb.log({"phase": "pretrain_contrastive", "status": "error"})
             sys.exit(PRETRAIN_ERROR)
-    
+
     torch.save({"encoder": encoder.state_dict()}, args.output)
+    if args.contrastive and contrastive_encoder is not None:
+        contrastive_path = f"{os.path.splitext(args.output)[0]}_contrastive.pt"
+        torch.save({"encoder": contrastive_encoder.state_dict()}, contrastive_path)
+        wb.log({"contrastive_checkpoint": contrastive_path})
     wb.finish()
 
 def cmd_finetune(args: argparse.Namespace) -> None:
@@ -375,11 +416,30 @@ def cmd_finetune(args: argparse.Namespace) -> None:
 def cmd_evaluate(args: argparse.Namespace) -> None:
     """Evaluate a pretrained encoder on a labelled dataset."""
 
+    wb = maybe_init_wandb(
+        args.use_wandb,
+        project=args.wandb_project,
+        tags=args.wandb_tags,
+        config={
+            "labeled_dir": args.labeled_dir,
+            "gnn_type": args.gnn_type,
+            "hidden_dim": args.hidden_dim,
+            "num_layers": args.num_layers,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "lr": args.lr,
+            "ema_decay": args.ema_decay,
+            "task_type": args.task_type,
+        },
+    )
+
     try:
         labeled = load_directory_dataset(args.labeled_dir, label_col=args.label_col)
+        wb.log({"phase": "data_load", "labeled_graphs": len(labeled)})
     except Exception:
         logger.exception("Failed to load labelled dataset")
-        sys.exit(DATA_LOAD_ERROR)
+        wb.log({"phase": "data_load", "status": "error"})
+        raise DataLoadError("failed to load labelled dataset")
 
     input_dim = labeled.graphs[0].x.shape[1]
     edge_dim = None if labeled.graphs[0].edge_attr is None else labeled.graphs[0].edge_attr.shape[1]
@@ -396,19 +456,171 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     else:
         encoder.load_state_dict(state)
 
-    metrics = train_linear_head(
-        dataset=labeled,
-        encoder=encoder,
-        task_type=args.task_type,
-        epochs=args.epochs,
-        lr=args.lr,
-        batch_size=args.batch_size,
-        device=args.device,
-        patience=args.patience,
-        devices=args.devices,
+    try:
+        wb.log({"phase": "evaluate", "status": "start"})
+        metrics = train_linear_head(
+            dataset=labeled,
+            encoder=encoder,
+            task_type=args.task_type,
+            epochs=args.epochs,
+            lr=args.lr,
+            batch_size=args.batch_size,
+            device=args.device,
+            patience=args.patience,
+            devices=args.devices,
+        )
+        wb.log({"phase": "evaluate", "status": "success"})
+        metrics.pop("head", None)
+        for k, v in metrics.items():
+            wb.log({f"metric/{k}": v})
+        logger.info("Evaluation metrics: %s", metrics)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.exception("Evaluation failed")
+        wb.log({"phase": "evaluate", "status": "error"})
+        raise EvaluateError(str(e))
+    finally:
+        wb.finish()
+
+
+def cmd_benchmark(args: argparse.Namespace) -> None:
+    """Compare JEPA and contrastive encoders on the same labelled dataset."""
+
+    wb = maybe_init_wandb(
+        args.use_wandb,
+        project=args.wandb_project,
+        tags=args.wandb_tags,
+        config={
+            "labeled_dir": args.labeled_dir,
+            "task_type": args.task_type,
+            "epochs": args.epochs,
+        },
     )
-    metrics.pop("head", None)
-    logger.info("Evaluation metrics: %s", metrics)
+
+    try:
+        labeled = load_directory_dataset(args.labeled_dir, label_col=args.label_col)
+        wb.log({"phase": "data_load", "labeled_graphs": len(labeled)})
+    except Exception:
+        logger.exception("Failed to load labelled dataset")
+        wb.log({"phase": "data_load", "status": "error"})
+        raise DataLoadError("failed to load labelled dataset")
+
+    input_dim = labeled.graphs[0].x.shape[1]
+    edge_dim = None if labeled.graphs[0].edge_attr is None else labeled.graphs[0].edge_attr.shape[1]
+
+    results: Dict[str, Dict[str, float]] = {}
+    try:
+        wb.log({"phase": "benchmark", "status": "start"})
+        # JEPA evaluation
+        jepa_encoder = build_encoder(
+            gnn_type=args.gnn_type,
+            input_dim=input_dim,
+            hidden_dim=args.hidden_dim,
+            num_layers=args.num_layers,
+            edge_dim=edge_dim,
+        )
+        state = torch.load(args.jepa_encoder, map_location=args.device)
+        if isinstance(state, dict) and "encoder" in state:
+            jepa_encoder.load_state_dict(state["encoder"])
+        else:
+            jepa_encoder.load_state_dict(state)
+        metrics_j = train_linear_head(
+            dataset=labeled,
+            encoder=jepa_encoder,
+            task_type=args.task_type,
+            epochs=args.epochs,
+            lr=args.lr,
+            batch_size=args.batch_size,
+            device=args.device,
+            patience=args.patience,
+            devices=args.devices,
+        )
+        metrics_j.pop("head", None)
+        results["jepa"] = metrics_j
+
+        # Contrastive baseline
+        if args.contrastive_encoder:
+            cont_encoder = build_encoder(
+                gnn_type=args.gnn_type,
+                input_dim=input_dim,
+                hidden_dim=args.hidden_dim,
+                num_layers=args.num_layers,
+                edge_dim=edge_dim,
+            )
+            state_c = torch.load(args.contrastive_encoder, map_location=args.device)
+            if isinstance(state_c, dict) and "encoder" in state_c:
+                cont_encoder.load_state_dict(state_c["encoder"])
+            else:
+                cont_encoder.load_state_dict(state_c)
+            metrics_c = train_linear_head(
+                dataset=labeled,
+                encoder=cont_encoder,
+                task_type=args.task_type,
+                epochs=args.epochs,
+                lr=args.lr,
+                batch_size=args.batch_size,
+                device=args.device,
+                patience=args.patience,
+                devices=args.devices,
+            )
+            metrics_c.pop("head", None)
+            results["contrastive"] = metrics_c
+
+        wb.log({"phase": "benchmark", "status": "success"})
+        for method, mets in results.items():
+            for k, v in mets.items():
+                wb.log({f"{method}/{k}": v})
+        logger.info("Benchmark results: %s", results)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.exception("Benchmarking failed")
+        wb.log({"phase": "benchmark", "status": "error"})
+        raise BenchmarkError(str(e))
+    finally:
+        wb.finish()
+
+
+def cmd_tox21(args: argparse.Namespace) -> None:
+    """Run the Tox21 case study and log results."""
+
+    from experiments.case_study import run_tox21_case_study
+
+    wb = maybe_init_wandb(
+        args.use_wandb,
+        project=args.wandb_project,
+        tags=args.wandb_tags,
+        config={
+            "csv": args.csv,
+            "task": args.task,
+            "pretrain_epochs": args.pretrain_epochs,
+            "finetune_epochs": args.finetune_epochs,
+            "num_top_exclude": args.num_top_exclude,
+        },
+    )
+
+    try:
+        wb.log({"phase": "tox21", "status": "start"})
+        mean_true, mean_random, mean_jepa, baseline_means = run_tox21_case_study(
+            csv_path=args.csv,
+            task_name=args.task,
+            pretrain_epochs=args.pretrain_epochs,
+            finetune_epochs=args.finetune_epochs,
+            num_top_exclude=args.num_top_exclude,
+            device=args.device,
+        )
+        wb.log({
+            "phase": "tox21",
+            "status": "success",
+            "mean_true": mean_true,
+            "mean_random_after": mean_random,
+            "mean_jepa_after": mean_jepa,
+        })
+        for name, val in baseline_means.items():
+            wb.log({f"baseline/{name}": val})
+    except Exception as e:  # pragma: no cover - defensive
+        logger.exception("Tox21 case study failed")
+        wb.log({"phase": "tox21", "status": "error"})
+        raise CaseStudyError(str(e))
+    finally:
+        wb.finish()
 
 
 def main() -> None:  # pragma: no cover - CLI entry
@@ -428,4 +640,8 @@ if __name__ == "__main__":  # pragma: no cover
         sys.exit(FINETUNE_ERROR)
     except EvaluateError:
         sys.exit(EVAL_ERROR)
+    except CaseStudyError:
+        sys.exit(CASE_STUDY_ERROR)
+    except BenchmarkError:
+        sys.exit(BENCHMARK_ERROR)
 
