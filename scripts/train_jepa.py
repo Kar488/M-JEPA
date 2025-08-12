@@ -8,7 +8,14 @@ utilities to provide a minimal yet real example of the JEPA workflow:
 3. Load a **labelled** dataset and fine‑tune a linear head.
 4. Evaluate the head and report metrics.
 
-Each major step is logged to Weights & Biases when enabled.  Distinct exit
+The command line interface exposes these stages as separate subcommands so
+that deployment pipelines can invoke them independently::
+
+    python scripts/train_jepa.py pretrain --unlabeled-dir <path> [opts]
+    python scripts/train_jepa.py finetune --labeled-dir <path> --encoder encoder.pt [opts]
+    python scripts/train_jepa.py evaluate --labeled-dir <path> --encoder encoder.pt [opts]
+
+Each major step is logged to Weights & Biases when enabled. Distinct exit
 codes are used so that GitHub Actions can determine which stage failed.
 """
 
@@ -41,31 +48,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Pretrain JEPA then fine-tune")
-    p.add_argument("--unlabeled-dir", required=True, help="Directory of unlabeled graphs")
-    p.add_argument(
-        "--labeled-dir", required=True, help="Directory of labelled graphs for downstream tasks"
-    )
-    p.add_argument(
-        "--label-col", type=str, default="label", help="Column name for labels in the labelled set"
-    )
-
-    # Model hyperparameters
+def _add_common_args(p: argparse.ArgumentParser) -> None:
+    """Add arguments shared across subcommands."""
+    
+    # Training hyperparameters
     p.add_argument("--gnn-type", type=str, default="mpnn", help="Encoder architecture")
     p.add_argument("--hidden-dim", type=int, default=64, help="Hidden dimension size")
     p.add_argument("--num-layers", type=int, default=2, help="Number of GNN layers")
     p.add_argument("--ema-decay", type=float, default=0.99, help="EMA decay rate")
-
-    # Training hyperparameters
-    p.add_argument("--pretrain-epochs", type=int, default=1)
-    p.add_argument("--finetune-epochs", type=int, default=1)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--mask-ratio", type=float, default=0.15)
-    p.add_argument("--task-type", choices=["classification", "regression"], default="classification")
-    p.add_argument("--patience", type=int, default=10, help="Early stopping patience for fine-tune")
-
     p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP")
 
@@ -74,19 +66,51 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--wandb-project", type=str, default="m-jepa")
     p.add_argument("--wandb-tags", nargs="*", default=None)
 
-    # Vast.ai related options (currently informational only)
-    p.add_argument("--vast-ai", action="store_true", help="Flag indicating execution on Vast.ai")
-    p.add_argument("--vast-logdir", type=str, default=None, help="Optional log directory on Vast.ai")
+def build_parser() -> argparse.ArgumentParser:
+    """Create the top-level argument parser with subcommands."""
 
-    # Baseline comparison
-    p.add_argument(
-        "--contrastive",
-        action="store_true",
-        help="Also run contrastive pretraining baseline",
-    )
+    parser = argparse.ArgumentParser(description="JEPA training pipeline")
+    sub = parser.add_subparsers(dest="command", required=True)
 
-    return p.parse_args()
+    # ------------------------------------------------------------------
+    # Pretrain
+    # ------------------------------------------------------------------
+    pre = sub.add_parser("pretrain", help="Self-supervised pretraining")
+    pre.add_argument("--unlabeled-dir", required=True, help="Directory of unlabeled graphs")
+    pre.add_argument("--mask-ratio", type=float, default=0.15, help="Masking ratio for JEPA")
+    pre.add_argument("--epochs", type=int, default=1, help="Number of pretraining epochs")
+    pre.add_argument("--output", type=str, default="encoder.pt", help="Where to save encoder weights")
+    pre.add_argument("--contrastive", action="store_true", help="Also run contrastive baseline")
+    _add_common_args(pre)
+    pre.set_defaults(func=cmd_pretrain)
 
+    # ------------------------------------------------------------------
+    # Finetune
+    # ------------------------------------------------------------------
+    ft = sub.add_parser("finetune", help="Fine-tune a linear head on labelled data")
+    ft.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs")
+    ft.add_argument("--label-col", type=str, default="label", help="Label column name")
+    ft.add_argument("--encoder", required=True, help="Path to pretrained encoder checkpoint")
+    ft.add_argument("--task-type", choices=["classification", "regression"], default="classification")
+    ft.add_argument("--epochs", type=int, default=1, help="Number of fine-tuning epochs")
+    ft.add_argument("--patience", type=int, default=10, help="Early stopping patience")
+    _add_common_args(ft)
+    ft.set_defaults(func=cmd_finetune)
+
+    # ------------------------------------------------------------------
+    # Evaluate
+    # ------------------------------------------------------------------
+    ev = sub.add_parser("evaluate", help="Evaluate a pretrained encoder with a linear probe")
+    ev.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs")
+    ev.add_argument("--label-col", type=str, default="label", help="Label column name")
+    ev.add_argument("--encoder", required=True, help="Path to pretrained encoder checkpoint")
+    ev.add_argument("--task-type", choices=["classification", "regression"], default="classification")
+    ev.add_argument("--epochs", type=int, default=1, help="Number of probe training epochs")
+    ev.add_argument("--patience", type=int, default=10, help="Early stopping patience")
+    _add_common_args(ev)
+    ev.set_defaults(func=cmd_evaluate)
+
+    return parser
 
 # Distinct exit codes so GitHub Actions can surface which step failed
 DATA_LOAD_ERROR = 1
@@ -134,7 +158,7 @@ class FinetuneError(RuntimeError):
     """Raised when fine-tuning fails."""
 
 
-class EvalError(RuntimeError):
+class EvaluateError(RuntimeError):
     """Raised when evaluation fails."""
 
 
@@ -169,182 +193,9 @@ def load_data(
     return unlabeled, labeled, input_dim, edge_dim
 
 
-def pretrain(
-    unlabeled,
-    *,
-    gnn_type: str,
-    input_dim: int,
-    edge_dim: Optional[int],
-    hidden_dim: int,
-    num_layers: int,
-    ema_decay: float,
-    batch_size: int,
-    mask_ratio: float,
-    lr: float,
-    epochs: int,
-    device: str,
-    devices: int,
-    use_wandb: bool,
-    wandb_project: str,
-    wandb_tags,
-    contrastive: bool,
-    wb,
-):
-    """Run JEPA pretraining and optional contrastive baseline."""
+def cmd_pretrain(args: argparse.Namespace) -> None:
 
-    wb.log({"phase": "pretrain", "status": "start"})
-    try:
-        encoder, ema_encoder = _init_encoder(
-            gnn_type=gnn_type,
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            num_layers=num_layers,
-            edge_dim=edge_dim,
-        )
-        ema = EMA(encoder, decay=ema_decay)
-        predictor = MLPPredictor(embed_dim=hidden_dim, hidden_dim=hidden_dim * 2)
-
-        losses = train_jepa(
-            dataset=unlabeled,
-            encoder=encoder,
-            ema_encoder=ema_encoder,
-            predictor=predictor,
-            ema=ema,
-            epochs=epochs,
-            batch_size=batch_size,
-            mask_ratio=mask_ratio,
-            lr=lr,
-            device=device,
-            devices=devices,
-            use_wandb=use_wandb,
-            wandb_project=wandb_project,
-            wandb_tags=wandb_tags,
-        )
-        final_loss = losses[-1] if losses else None
-        wb.log({"phase": "pretrain", "status": "success", "final_loss": final_loss})
-    except Exception as e:  # pragma: no cover - defensive
-        logger.exception("Pretraining failed")
-        wb.log({"phase": "pretrain", "status": "error"})
-        raise PretrainError(str(e))
-
-    contrastive_encoder = None
-    if contrastive:
-        contrastive_encoder = build_encoder(
-            gnn_type=gnn_type,
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            num_layers=num_layers,
-            edge_dim=edge_dim,
-        )
-        try:
-            wb.log({"phase": "pretrain_contrastive", "status": "start"})
-            c_losses = train_contrastive(
-                dataset=unlabeled,
-                encoder=contrastive_encoder,
-                epochs=epochs,
-                batch_size=batch_size,
-                mask_ratio=mask_ratio,
-                lr=lr,
-                device=device,
-                devices=devices,
-                use_wandb=use_wandb,
-                wandb_project=wandb_project,
-                wandb_tags=wandb_tags,
-            )
-            c_final = c_losses[-1] if c_losses else None
-            wb.log(
-                {"phase": "pretrain_contrastive", "status": "success", "final_loss": c_final}
-            )
-        except Exception as e:  # pragma: no cover - defensive
-            logger.exception("Contrastive pretraining failed")
-            wb.log({"phase": "pretrain_contrastive", "status": "error"})
-            raise PretrainError(str(e))
-
-    return encoder, contrastive_encoder
-
-
-def finetune(
-    labeled,
-    *,
-    encoder,
-    task_type: str,
-    epochs: int,
-    lr: float,
-    batch_size: int,
-    device: str,
-    patience: int,
-    devices: int,
-    contrastive_encoder=None,
-    wb,
-):
-    """Fine-tune linear head on labelled data."""
-
-    wb.log({"phase": "finetune", "status": "start"})
-    try:
-        metrics: Dict[str, float] = train_linear_head(
-            dataset=labeled,
-            encoder=encoder,
-            task_type=task_type,
-            epochs=epochs,
-            lr=lr,
-            batch_size=batch_size,
-            device=device,
-            patience=patience,
-            devices=devices,
-        )
-        wb.log({"phase": "finetune", "status": "success"})
-    except Exception as e:  # pragma: no cover - defensive
-        logger.exception("Fine-tuning failed")
-        wb.log({"phase": "finetune", "status": "error"})
-        raise FinetuneError(str(e))
-
-    contrastive_metrics: Dict[str, float] = {}
-    if contrastive_encoder is not None:
-        try:
-            wb.log({"phase": "finetune_contrastive", "status": "start"})
-            contrastive_metrics = train_linear_head(
-                dataset=labeled,
-                encoder=contrastive_encoder,
-                task_type=task_type,
-                epochs=epochs,
-                lr=lr,
-                batch_size=batch_size,
-                device=device,
-                patience=patience,
-                devices=devices,
-            )
-            wb.log({"phase": "finetune_contrastive", "status": "success"})
-        except Exception as e:  # pragma: no cover - defensive
-            logger.exception("Contrastive fine-tuning failed")
-            wb.log({"phase": "finetune_contrastive", "status": "error"})
-            raise FinetuneError(str(e))
-
-    return metrics, contrastive_metrics
-
-
-def evaluate(metrics: Dict[str, float], contrastive_metrics: Dict[str, float], wb):
-    """Log evaluation metrics to W&B."""
-
-    wb.log({"phase": "evaluation", "status": "start"})
-    try:
-        if metrics:
-            wb.log({"phase": "evaluation", **{f"metric/{k}": v for k, v in metrics.items()}})
-        if contrastive_metrics:
-            wb.log(
-                {
-                    "phase": "evaluation",
-                    **{f"contrastive/{k}": v for k, v in contrastive_metrics.items()},
-                }
-            )
-        wb.log({"phase": "evaluation", "status": "success"})
-    except Exception as e:  # pragma: no cover
-        logger.exception("Evaluation logging failed")
-        wb.log({"phase": "evaluation", "status": "error"})
-        raise EvalError(str(e))
-
-
-def main() -> None:
-    args = parse_args()
+    """Run the self-supervised pretraining stage.""" 
 
     wb = maybe_init_wandb(
         args.use_wandb,
@@ -352,71 +203,223 @@ def main() -> None:
         tags=args.wandb_tags,
         config={
             "unlabeled_dir": args.unlabeled_dir,
-            "labeled_dir": args.labeled_dir,
             "gnn_type": args.gnn_type,
             "hidden_dim": args.hidden_dim,
             "num_layers": args.num_layers,
-            "pretrain_epochs": args.pretrain_epochs,
-            "finetune_epochs": args.finetune_epochs,
+            "epochs": args.epochs,
             "batch_size": args.batch_size,
             "lr": args.lr,
             "mask_ratio": args.mask_ratio,
             "ema_decay": args.ema_decay,
-            "vast_ai": args.vast_ai,
-            "vast_logdir": args.vast_logdir,
         },
     )
-
+        
     try:
-        unlabeled, labeled, input_dim, edge_dim = load_data(
-            args.unlabeled_dir, args.labeled_dir, args.label_col, wb
-        )
-        encoder, contrastive_encoder = pretrain(
-            unlabeled,
+        unlabeled = load_directory_dataset(args.unlabeled_dir)
+        wb.log({"phase": "data_load", "unlabeled_graphs": len(unlabeled)})
+    except Exception:
+        logger.exception("Failed to load unlabeled dataset")
+        wb.log({"phase": "data_load", "status": "error"})
+        sys.exit(DATA_LOAD_ERROR)
+
+    input_dim = unlabeled.graphs[0].x.shape[1]
+    edge_dim = None if unlabeled.graphs[0].edge_attr is None else unlabeled.graphs[0].edge_attr.shape[1]
+
+    encoder, ema_encoder = _init_encoder(
+        gnn_type=args.gnn_type,
+        input_dim=input_dim,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        edge_dim=edge_dim,
+    )
+
+    ema = EMA(encoder, decay=args.ema_decay)
+    predictor = MLPPredictor(embed_dim=args.hidden_dim, hidden_dim=args.hidden_dim * 2)
+
+    contrastive_encoder = None
+    if args.contrastive:
+        contrastive_encoder = build_encoder(
             gnn_type=args.gnn_type,
             input_dim=input_dim,
-            edge_dim=edge_dim,
             hidden_dim=args.hidden_dim,
             num_layers=args.num_layers,
-            ema_decay=args.ema_decay,
+            edge_dim=edge_dim,
+        )
+
+    try:
+        wb.log({"phase": "pretrain", "status": "start"})   
+        train_jepa(
+            dataset=unlabeled,
+            encoder=encoder,
+            ema_encoder=ema_encoder,
+            predictor=predictor,
+            ema=ema,
+            epochs=args.epochs,
             batch_size=args.batch_size,
             mask_ratio=args.mask_ratio,
             lr=args.lr,
-            epochs=args.pretrain_epochs,
             device=args.device,
             devices=args.devices,
             use_wandb=args.use_wandb,
             wandb_project=args.wandb_project,
             wandb_tags=args.wandb_tags,
-            contrastive=args.contrastive,
-            wb=wb,
         )
-        metrics, contrastive_metrics = finetune(
-            labeled,
+        wb.log({"phase": "pretrain", "status": "success"})
+    except Exception:
+        logger.exception("Pretraining failed")
+        wb.log({"phase": "pretrain", "status": "error"})
+        sys.exit(PRETRAIN_ERROR)
+
+    if args.contrastive and contrastive_encoder is not None:
+        try:
+            wb.log({"phase": "pretrain_contrastive", "status": "start"})
+            train_contrastive(
+                dataset=unlabeled,
+                encoder=contrastive_encoder,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                mask_ratio=args.mask_ratio,
+                lr=args.lr,
+                device=args.device,
+                devices=args.devices,
+                use_wandb=args.use_wandb,
+                wandb_project=args.wandb_project,
+                wandb_tags=args.wandb_tags,
+            )
+            wb.log({"phase": "pretrain_contrastive", "status": "success"})
+        except Exception:
+            logger.exception("Contrastive pretraining failed")
+            wb.log({"phase": "pretrain_contrastive", "status": "error"})
+            sys.exit(PRETRAIN_ERROR)
+    
+    torch.save({"encoder": encoder.state_dict()}, args.output)
+    wb.finish()
+
+def cmd_finetune(args: argparse.Namespace) -> None:
+    """Run the fine-tuning stage on labelled data."""
+
+    wb = maybe_init_wandb(
+        args.use_wandb,
+        project=args.wandb_project,
+        tags=args.wandb_tags,
+        config={
+            "labeled_dir": args.labeled_dir,
+            "gnn_type": args.gnn_type,
+            "hidden_dim": args.hidden_dim,
+            "num_layers": args.num_layers,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "lr": args.lr,
+            "ema_decay": args.ema_decay,
+            "task_type": args.task_type,
+        },
+    )
+
+    try:
+        labeled = load_directory_dataset(args.labeled_dir, label_col=args.label_col)
+        wb.log({"phase": "data_load", "labeled_graphs": len(labeled)})
+    except Exception:
+        logger.exception("Failed to load labelled dataset")
+        wb.log({"phase": "data_load", "status": "error"})
+        sys.exit(DATA_LOAD_ERROR)
+
+    input_dim = labeled.graphs[0].x.shape[1]
+    edge_dim = None if labeled.graphs[0].edge_attr is None else labeled.graphs[0].edge_attr.shape[1]
+    encoder = build_encoder(
+        gnn_type=args.gnn_type,
+        input_dim=input_dim,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        edge_dim=edge_dim,
+    )
+    state = torch.load(args.encoder, map_location=args.device)
+    if isinstance(state, dict) and "encoder" in state:
+        encoder.load_state_dict(state["encoder"])
+    else:
+        encoder.load_state_dict(state)
+
+    """Fine-tune linear head on labelled data."""
+
+    
+    try:
+        wb.log({"phase": "finetune", "status": "start"})
+        metrics: Dict[str, float] = train_linear_head(
+            dataset=labeled,
             encoder=encoder,
             task_type=args.task_type,
-            epochs=args.finetune_epochs,
+            epochs=args.epochs,
             lr=args.lr,
             batch_size=args.batch_size,
             device=args.device,
             patience=args.patience,
             devices=args.devices,
-            contrastive_encoder=contrastive_encoder,
-            wb=wb,
         )
-        evaluate(metrics, contrastive_metrics, wb)
+        wb.log({"phase": "finetune", "status": "success"})
+        for k, v in metrics.items():
+            if k != "head":
+                wb.log({f"metric/{k}": v})
+    except Exception as e:  # pragma: no cover - defensive
+        logger.exception("Fine-tuning failed")
+        wb.log({"phase": "finetune", "status": "error"})
+        raise FinetuneError(FINETUNE_ERROR)
+
+    wb.finish()
+
+
+def cmd_evaluate(args: argparse.Namespace) -> None:
+    """Evaluate a pretrained encoder on a labelled dataset."""
+
+    try:
+        labeled = load_directory_dataset(args.labeled_dir, label_col=args.label_col)
+    except Exception:
+        logger.exception("Failed to load labelled dataset")
+        sys.exit(DATA_LOAD_ERROR)
+
+    input_dim = labeled.graphs[0].x.shape[1]
+    edge_dim = None if labeled.graphs[0].edge_attr is None else labeled.graphs[0].edge_attr.shape[1]
+    encoder = build_encoder(
+        gnn_type=args.gnn_type,
+        input_dim=input_dim,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        edge_dim=edge_dim,
+    )
+    state = torch.load(args.encoder, map_location=args.device)
+    if isinstance(state, dict) and "encoder" in state:
+        encoder.load_state_dict(state["encoder"])
+    else:
+        encoder.load_state_dict(state)
+
+    metrics = train_linear_head(
+        dataset=labeled,
+        encoder=encoder,
+        task_type=args.task_type,
+        epochs=args.epochs,
+        lr=args.lr,
+        batch_size=args.batch_size,
+        device=args.device,
+        patience=args.patience,
+        devices=args.devices,
+    )
+    metrics.pop("head", None)
+    logger.info("Evaluation metrics: %s", metrics)
+
+
+def main() -> None:  # pragma: no cover - CLI entry
+    parser = build_parser()
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    try:
+        main()
     except DataLoadError:
         sys.exit(DATA_LOAD_ERROR)
     except PretrainError:
         sys.exit(PRETRAIN_ERROR)
     except FinetuneError:
         sys.exit(FINETUNE_ERROR)
-    except EvalError:
+    except EvaluateError:
         sys.exit(EVAL_ERROR)
-    finally:
-        wb.finish()
-
-
-if __name__ == "__main__":  # pragma: no cover
-    main()
 

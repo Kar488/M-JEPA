@@ -28,13 +28,29 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    - Large corpora such as **ZINC** and **PubChem** can be downloaded with
      `scripts/download_unlabeled.py`. The resulting Parquet shards are stored
      under `data/unlabeled/`.
-   - Labeled benchmarks from **MoleculeNet** (ESOL, FreeSolv, Lipophilicity,
-     BACE, BBBP, Tox21, ClinTox, SIDER) should be placed under `data/` as
-     scaffold‑split CSV/Parquet files. The repository previously downloaded
-     copies of ZINC, PubChem, Tox21 and MoleculeNet; if these folders are
-     absent, the code will attempt to fetch them on the fly.
-   - The test suite uses small synthetic or bundled samples and does **not**
-     require any of the large datasets.
+  - Labeled benchmarks from **MoleculeNet** (ESOL, FreeSolv, Lipophilicity,
+    BACE, BBBP, Tox21, ClinTox, SIDER) should be placed under `data/` as
+    scaffold‑split CSV/Parquet files. The repository previously downloaded
+    copies of ZINC, PubChem, Tox21 and MoleculeNet; if these folders are
+    absent, the code will attempt to fetch them on the fly.
+  - The test suite uses small synthetic or bundled samples and does **not**
+    require any of the large datasets.
+
+  - Pipeline usage
+    Individual stages of the JEPA workflow can be invoked via subcommands in
+    ``scripts/train_jepa.py``. This allows external deployment pipelines to run
+    only the required phase:
+    
+    ```bash
+    # Self-supervised pretraining
+    python scripts/train_jepa.py pretrain --unlabeled-dir data/unlabeled
+    
+    # Fine‑tune a linear head on labelled data
+    python scripts/train_jepa.py finetune --labeled-dir data/labeled --encoder encoder.pt
+    
+    # Evaluate a pretrained encoder with a fresh probe
+    python scripts/train_jepa.py evaluate --labeled-dir data/labeled --encoder encoder.pt
+  ```
 
 4. **Run tests**
    ```bash
