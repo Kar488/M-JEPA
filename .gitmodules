@@ -1,9 +1,0 @@
-[submodule "their_party/GeomGCL"]
-	path = their_party/GeomGCL
-	url = https://github.com/Kar488/M-JEPA.git
-[submodule "their_party/HiMol"]
-	path = their_party/HiMol
-	url = https://github.com/Kar488/M-JEPA.git
-[submodule "their_party/MolCLR"]
-	path = their_party/MolCLR
-	url = https://github.com/Kar488/M-JEPA.git
