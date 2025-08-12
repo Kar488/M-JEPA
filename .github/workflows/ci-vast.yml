@@ -19,6 +19,8 @@ jobs:
   tests_quick:
     name: Quick tests (no gpu, no slow)
     runs-on: ubuntu-latest
+    env:
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
     steps: 
       - uses: actions/checkout@v4
         # if you use submodules, add:
@@ -40,11 +42,15 @@ jobs:
       - name: Cache pip (CI)
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-3.10-${{ hashFiles('requirements.txt') }}
+          path: ${{ env.HOME }}/.cache/pip
+          key: pip-${{ runner.os }}-py3.10-torch${{ env.TORCH_VER }}-tscatter${{ env.TSCATTER_VER }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.10-
 
       - name: Install deps (CPU, in your order)
         shell: bash -l {0}
+        env:
+            PIP_CACHE_DIR: ${{ env.HOME }}/.cache/pip
         run: |
           python -m pip install --upgrade pip setuptools wheel "numpy<2"
           pip install "torch==2.2.1" --index-url https://download.pytorch.org/whl/cpu
