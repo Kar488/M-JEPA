@@ -3,7 +3,7 @@ name: CI → Vast GPU
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master, main ]
   workflow_dispatch: {}
 
 concurrency:
