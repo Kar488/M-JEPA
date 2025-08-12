@@ -34,3 +34,5 @@ outputs/tiny_grid_bar.png
 experiments/__pycache__/grid_search.cpython-312.pyc
 training/__pycache__/supervised.cpython-312.pyc
 training/__pycache__/unsupervised.cpython-312.pyc
+
+!.github/actions/**
