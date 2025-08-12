@@ -66,6 +66,12 @@ def _add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--wandb-project", type=str, default="m-jepa")
     p.add_argument("--wandb-tags", nargs="*", default=None)
 
+    # Pipeline stage control
+    p.add_argument("--stage", choices=["pretrain", "finetune", "eval"], default="eval",
+        help="Run pipeline up to this stage",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Create the top-level argument parser with subcommands."""
 
