@@ -128,6 +128,7 @@ jobs:
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}   # leave secret empty if no passphrase
+          envs: APP_DIR,BRANCH      # <-- allow these envs through to remote
           script: |
             set -euxo pipefail
             mkdir -p "$APP_DIR"
@@ -166,6 +167,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
+          envs: APP_DIR,BRANCH      # <-- allow these envs through to remote
           script: |
             set -euxo pipefail
             cd "$APP_DIR"
