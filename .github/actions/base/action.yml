@@ -25,7 +25,6 @@ runs:
         # PyTorch CPU for GitHub-hosted runners
         pip install "torch==2.2.1" --index-url https://download.pytorch.org/whl/cpu
         # PyG compiled wheels (match torch 2.2.1 CPU)
-        pip install torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.2.1+cpu.html
         pip install "torch-scatter==2.1.2" -f https://data.pyg.org/whl/torch-2.2.1+cpu.html
         pip install torch-geometric
         # project’s requirements last
