@@ -67,6 +67,7 @@ DATASETS: Dict[str, str] = {
     "bbbp": "classification",
     "clintox": "classification",
     "sider": "classification",
+    "tox21": "classification",
 }
 
 SEEDS: Iterable[int] = range(3)  # 0, 1, 2
