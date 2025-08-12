@@ -119,81 +119,49 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # OPTION A (delta): pull via git on Vast (requires a GitHub deploy key on Vast at ~/.ssh/id_github)
-      - name: Update code on Vast (git pull)
+      - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
+        env:
+          REPO_DEPLOY_KEY: ${{ secrets.REPO_DEPLOY_KEY }}  # private key contents
+          REPO: Kar488/M-JEPA
+          APP_DIR: /srv/mjepa
+          BRANCH: master
         with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}   # leave secret empty if no passphrase
-          envs: APP_DIR,BRANCH      # <-- allow these envs through to remote
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          envs: REPO_DEPLOY_KEY,REPO,APP_DIR,BRANCH
           script: |
-            set -euxo pipefail
+            set -euo pipefail
+
+            # 1) Prepare SSH for GitHub
+            mkdir -p ~/.ssh
+            umask 077
+            printf '%s\n' "$REPO_DEPLOY_KEY" > ~/.ssh/id_github
+            chmod 600 ~/.ssh/id_github
+            ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+
+            # 2) Delta deploy
             mkdir -p "$APP_DIR"
+            export GIT_SSH_COMMAND='ssh -i ~/.ssh/id_github -o StrictHostKeyChecking=yes'
+
             if [ -d "$APP_DIR/.git" ]; then
-              GIT_SSH_COMMAND="ssh -i ~/.ssh/id_github -o StrictHostKeyChecking=no" \
-                git -C "$APP_DIR" fetch --all
-              GIT_SSH_COMMAND="ssh -i ~/.ssh/id_github -o StrictHostKeyChecking=no" \
-                git -C "$APP_DIR" reset --hard origin/main
+              git -C "$APP_DIR" fetch --prune --tags --depth=50
+              git -C "$APP_DIR" checkout "$BRANCH"
+              git -C "$APP_DIR" pull --ff-only
             else
-              GIT_SSH_COMMAND="ssh -i ~/.ssh/id_github -o StrictHostKeyChecking=no" \
-                git clone git@github.com:Kar488/M-JEPA.git "$APP_DIR"
-            fi
-            # if you use submodules:
-            if [ -f "$APP_DIR/.gitmodules" ]; then
-              GIT_SSH_COMMAND="ssh -i ~/.ssh/id_github -o StrictHostKeyChecking=no" \
-                git -C "$APP_DIR" submodule update --init --recursive
+              git clone --depth=50 "git@github.com:${REPO}.git" "$APP_DIR"
+              git -C "$APP_DIR" checkout "$BRANCH"
             fi
 
-      # OPTION B (simple, not delta): use SCP instead of git pull
-      # - name: Upload code to Vast (SCP)
-      #   uses: appleboy/scp-action@v1
-      #   with:
-      #     host: ${{ secrets.VAST_HOST }}
-      #     username: ${{ secrets.VAST_USER }}
-      #     port: ${{ secrets.VAST_PORT }}
-      #     key: ${{ secrets.VAST_SSH_KEY }}
-      #     source: ".,!.git,!.github,!.pytest_cache,!**/__pycache__,!**/.ipynb_checkpoints"
-      #     target: "/srv/mjepa"
-      #     rm: true
-      #     overwrite: true
+            # 3) (Optional) Clean up the private key if you don't want it persisted
+            # shred -u ~/.ssh/id_github || true
 
-      - name: Prepare venv on Vast (reuse if deps unchanged)
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          envs: APP_DIR,BRANCH      # <-- allow these envs through to remote
-          script: |
-            set -euxo pipefail
-            cd "$APP_DIR"
-            mkdir -p "$PIP_CACHE_DIR"
+            unset REPO_DEPLOY_KEY
 
-            # hash your dependency files (add more if needed)
-            DEPS=("requirements.txt" "pyproject.toml" "setup.cfg")
-            HASH=$( (for f in "${DEPS[@]}"; do [ -f "$f" ] && sha256sum "$f"; done) | sha256sum | cut -d' ' -f1 )
-            echo "deps hash: $HASH"
-
-            if [ -d "$VENV_DIR-$HASH" ]; then
-              ln -snf "$VENV_DIR-$HASH" "$VENV_DIR"
-            else
-              python3 -m venv "$VENV_DIR-$HASH"
-              ln -snf "$VENV_DIR-$HASH" "$VENV_DIR"
-              . "$VENV_DIR/bin/activate"
-              python -m pip install -U pip wheel
-              # CUDA wheels on Vast (adjust cu version if needed)
-              pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-              pip install torch-scatter torch-sparse torch-cluster torch-spline-conv \
-                -f https://data.pyg.org/whl/torch-2.2.1+cu121.html
-              pip install torch-geometric
-              [ -f requirements.txt ] && pip install -r requirements.txt
-            fi
-
-      - name: Train on Vast (attached)
+      # Separate deployment phases: pretrain, finetune, benchmark and case study
+      - name: Pretrain on Vast
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VAST_HOST }}
@@ -206,18 +174,94 @@ jobs:
             cd "$APP_DIR"
             . "$VENV_DIR/bin/activate"
             nvidia-smi
+            mkdir -p logs outputs
+            # Pretraining stage
+            torchrun --standalone --nnodes=1 --nproc_per_node=1 \
+              train_jepa.py pretrain \
+              --unlabeled-dir data/BASF_AIPubChem_v4 \
+              --epochs 1 \
+              --batch-size 4 \
+              --contrastive \
+              --output outputs/encoder.pt \
+              --use-wandb \
+              --config default.yaml \
+              2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
+
+      - name: Finetune on Vast
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          script: |
+            set -euxo pipefail
+            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
+            cd "$APP_DIR"
+            . "$VENV_DIR/bin/activate"
             mkdir -p logs
+            # Finetune stage
             torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              scripts/train_jepa.py pretrain --unlabeled-dir data/BASF_AIPubChem_v4 \
-              --epochs 1 --batch-size 4 --contrastive --output outputs/encoder.pt \
-              --use-wandb 2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
+              train_jepa.py finetune \
+              --labeled-dir data/katielinkmoleculenet_benchmark/train \
+              --encoder outputs/encoder.pt \
+              --task-type classification \
+              --epochs 1 \
+              --batch-size 4 \
+              --patience 10 \
+              --use-wandb \
+              --config default.yaml \
+              2>&1 | tee -a logs/finetune_$(date +%F_%H-%M).log
+
+      - name: Benchmark on Vast
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          script: |
+            set -euxo pipefail
+            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
+            cd "$APP_DIR"
+            . "$VENV_DIR/bin/activate"
+            mkdir -p logs
+            # Benchmark stage
             torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              scripts/train_jepa.py benchmark --labeled-dir data/katielinkmoleculenet_benchmark/train \
+              train_jepa.py benchmark \
+              --labeled-dir data/katielinkmoleculenet_benchmark/train \
               --jepa-encoder outputs/encoder.pt \
               --contrastive-encoder outputs/encoder_contrastive.pt \
-              --epochs 1 --batch-size 4 --task-type classification --use-wandb \
+              --task-type classification \
+              --epochs 1 \
+              --batch-size 4 \
+              --patience 10 \
+              --use-wandb \
+              --config default.yaml \
               2>&1 | tee -a logs/benchmark_$(date +%F_%H-%M).log
+
+      - name: Tox21 case study on Vast
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          script: |
+            set -euxo pipefail
+            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
+            cd "$APP_DIR"
+            . "$VENV_DIR/bin/activate"
+            mkdir -p logs
+            # Case study stage
             torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              scripts/train_jepa.py tox21 --csv data/tox21/data.csv --task NR-AR \
-              --pretrain-epochs 1 --finetune-epochs 1 --num-top-exclude 5 --use-wandb \
+              train_jepa.py tox21 \
+              --csv data/tox21/data.csv \
+              --task NR-AR \
+              --pretrain-epochs 1 \
+              --finetune-epochs 1 \
+              --num-top-exclude 5 \
+              --use-wandb \
+              --config default.yaml \
               2>&1 | tee -a logs/tox21_$(date +%F_%H-%M).log
+

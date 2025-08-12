@@ -19,7 +19,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    ```bash
    wandb login
    ```
-   or set `WANDB_API_KEY` in the environment (e.g., `export WANDB_API_KEY=...`).
+   or set `WANDB_API_KEY` in the environment (e.g., `export WANDB_API_KEY=...` $env:WANDB_API_KEY = "your_api_key_here").
    This variable is used by `main.py`, plotting helpers, and the tests to
    establish a connection to W&B. Logging is disabled by default when the
    variable is absent.
@@ -89,6 +89,10 @@ VAST_USER = root (or the user Vast provided)
 VAST_SSH_KEY = contents of id_vast_ci (the private key)
 
 WANDB_API_KEY = your W&B key (optional, for logging)
+
+GH_PAT_RO = 
+PAT token (GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens - Gen new token & content/metata read for repo M-JEPA/90 day expiry -Nov11)
+And then set in repo secrets
 
 ### 4) Add a deploy workflow
 

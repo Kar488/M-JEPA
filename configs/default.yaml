@@ -1,8 +1,86 @@
-num_graphs: 8
-num_nodes: 5
-feat_dim: 4
-hidden_dim: 64
-epochs: 1
-batch_size: 4
-lr: 0.001
-ema_decay: 0.99
+# Default configuration for JEPA experiments and evaluation
+
+# These values define reasonable defaults for self‑supervised pretraining,
+# fine‑tuning, evaluation and benchmarking.  They are loaded by
+# ``scripts/train_jepa.py`` and can be overridden on the command line.
+
+###############################################################
+# Model and optimisation hyper‑parameters
+###############################################################
+
+model:
+  gnn_type: mpnn       # Encoder backbone (mpnn, gcn, gat, etc.)
+  hidden_dim: 256       # Hidden dimension of all GNN layers and embeddings
+  num_layers: 3         # Number of message passing layers
+  ema_decay: 0.99       # Exponential moving average decay for target encoder
+
+pretrain:
+  epochs: 100           # Number of epochs to run JEPA pretraining
+  batch_size: 256       # Batch size during pretraining
+  lr: 1.0e-4            # Learning rate for Adam during pretraining
+  mask_ratio: 0.15      # Fraction of nodes to mask for JEPA
+  augmentations:
+    rotate: false       # Randomly rotate atomic coordinates
+    mask_angle: false   # Mask bond angles
+    dihedral: false     # Perturb dihedral angles
+  contrastive: false    # Whether to also train a contrastive baseline
+
+finetune:
+  epochs: 50            # Training epochs for the linear probe
+  patience: 10          # Early stopping patience on validation set
+  lr: 1.0e-4            # Learning rate for fine‑tuning the probe
+  batch_size: 256       # Batch size for downstream training
+  seeds: [0, 1, 2]      # Random seeds over which to average downstream runs
+
+evaluate:
+  epochs: 50            # Training epochs for evaluation probe
+  patience: 10          # Early stopping patience on validation set
+  lr: 1.0e-4            # Learning rate for evaluation probe
+  batch_size: 256       # Batch size for downstream evaluation
+  seeds: [0, 1, 2]      # Seeds for evaluation averaging
+
+benchmark:
+  epochs: 50            # Training epochs for benchmark probes
+  patience: 10          # Early stopping patience
+  lr: 1.0e-4            # Learning rate for benchmarking probes
+  batch_size: 256       # Batch size for benchmarking
+  seeds: [0, 1, 2]      # Seeds for benchmarking
+
+###############################################################
+# Downstream datasets configuration
+###############################################################
+
+# List of MoleculeNet tasks for classification and regression.  These names
+# correspond to CSV/Parquet files under ``data/`` and can be passed to
+# ``scripts/train_jepa.py`` via the ``--dataset`` flag.
+downstream_datasets:
+  classification:
+    - ESOL
+    - FreeSolv
+    - Lipophilicity
+    - BACE
+    - BBBP
+    - Tox21
+    - ClinTox
+    - SIDER
+  regression:
+    - ESOL
+    - FreeSolv
+    - Lipophilicity
+
+###############################################################
+# Case study specific parameters
+###############################################################
+
+case_study:
+  pretrain_epochs: 5    # Number of JEPA pretrain epochs for the case study
+  finetune_epochs: 20    # Epochs for training a regression head in the case study
+  num_top_exclude: 10    # Number of top toxic molecules to exclude when ranking
+
+###############################################################
+# Weights & Biases settings
+###############################################################
+
+wandb:
+  project: m-jepa        # Default W&B project name
+  tags: []               # Optional list of tags
