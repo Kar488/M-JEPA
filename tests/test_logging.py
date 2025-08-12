@@ -34,10 +34,9 @@ def test_maybe_init_wandb_real():
     if not api_key:
         pytest.skip("WANDB_API_KEY not set")
     wandb = maybe_init_wandb(True, api_key=api_key)  # no monkeypatch here
-    run = wandb.init(project="m-jepa", name="m-jepa-unit-test", reinit=True)
+    assert wandb.run is not None, "maybe_init_wandb did not create a run"
     wandb.log({"ok": True})
-    url = run.url
-    wandb.finish()
+    url = wandb.run.url
     assert "wandb.ai" in url
 
 def test_maybe_init_wandb_warns_on_failure(monkeypatch, caplog):

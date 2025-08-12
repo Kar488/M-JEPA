@@ -4,10 +4,18 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("rdkit")
 
-from data.mdataset import GraphData, GraphDataset
 from models.ema import EMA
 from training.unsupervised import train_jepa, train_contrastive
 
+# Runtime import: needed because we *instantiate* GraphDataset
+from data.mdataset import GraphDataset, GraphData
+from torch import Tensor
+
+# Type-only import: avoids circular import / “variable in type expr”
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from data.mdataset import GraphData
+    
 
 class ConstantEncoder(torch.nn.Module):
     def __init__(self, in_dim: int = 2, out_dim: int = 4) -> None:
@@ -15,7 +23,7 @@ class ConstantEncoder(torch.nn.Module):
         self.fc = torch.nn.Linear(in_dim, out_dim, bias=False)
         torch.nn.init.constant_(self.fc.weight, 1.0)
 
-    def forward(self, g: GraphData) -> torch.Tensor:
+    def forward(self, g: "GraphData") -> Tensor:
         x = torch.from_numpy(g.x).float()
         if x.ndim == 1:
             x = x.unsqueeze(0)

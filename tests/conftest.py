@@ -32,8 +32,24 @@ def toy_smiles():
 
 @pytest.fixture(scope="session")
 def wb():
-    api_key = os.getenv("WANDB_API_KEY")
-    wb = maybe_init_wandb(enable=bool(api_key), api_key=api_key)
-    yield wb
+    import os, contextlib, wandb
+
+    project = os.getenv("WANDB_PROJECT", "m-jepa")
+    mode = "online" if os.getenv("WANDB_API_KEY") else "offline"
+
+    # 🛠 self-heal if another test has finished our run
+    if wandb.run is None:
+        wandb.init(
+                project=project,
+                mode=mode,
+                reinit="return_previous",     
+                settings=wandb.Settings(start_method="thread"),
+            )
+   
+
+    # Optional: belt-and-suspenders assert so failures point here
+    assert wandb.run is not None, "wandb.init() did not create a run"
+
+    yield wandb
     with contextlib.suppress(Exception):
-        wb.finish()
+        wandb.finish()

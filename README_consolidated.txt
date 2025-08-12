@@ -55,6 +55,8 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 4. **Run tests**
    ```bash
    pytest --cache-clear tests -v -q -s -o log_cli=true -W ignore
+   # or single one
+   pytest --cache-clear tests/test_plot_small.py -q -s -o log_cli=true -W ignore
    ```
 
 

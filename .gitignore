@@ -15,6 +15,9 @@ dist/
 *.egg-info/
 docs/_build/
 
+#logs
+wandb/
+
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 
