@@ -23,16 +23,10 @@ jobs:
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}   # leave secret empty if your key has no passphrase
-          source: "."
+          source: ".,!.git,!.github,!.pytest_cache,!node_modules,!venv,!logs,!*.ipynb_checkpoints,!*/.ipynb_checkpoints,!__pycache__"
           target: "/srv/mjepa"
           rm: true
           overwrite: true
-          exclude: |
-            .git/
-            .github/
-            .pytest_cache/
-            **/__pycache__/
-            *.ipynb_checkpoints/
 
       - name: Run training on Vast (attached)
         uses: appleboy/ssh-action@v1.0.3
