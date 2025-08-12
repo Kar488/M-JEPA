@@ -43,26 +43,22 @@ jobs:
         shell: bash -l {0}
         run: |
             mamba install -y python=3.10 rdkit
+      
+      - name: Set versions (for cache key)
+        run: |
+          echo "TORCH_VER=2.2.1" >> $GITHUB_ENV
+          echo "TSCATTER_VER=2.1.2" >> $GITHUB_ENV
 
       - name: Define cache dirs
         run: echo "PIP_CACHE=${GITHUB_WORKSPACE}/.pip-cache" >> $GITHUB_ENV
 
       - name: Prepare pip cache dir
         run: mkdir -p "$PIP_CACHE"
-
-      - name: Show pip cache dir
-        shell: bash -l {0}
-        run: pip cache dir
                             
-      - name: Set versions (for cache key)
-        run: |
-          echo "TORCH_VER=2.2.1" >> $GITHUB_ENV
-          echo "TSCATTER_VER=2.1.2" >> $GITHUB_ENV
-
       - name: Cache pip (CI)
         uses: actions/cache@v4
         with:
-          path: ${{ env.HOME }}/.cache/pip
+          path: ${{ env.PIP_CACHE }} # <-- use the same dir we created
           key: pip-${{ runner.os }}-py3.10-torch${{ env.TORCH_VER }}-tscatter${{ env.TSCATTER_VER }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.10-
@@ -70,7 +66,7 @@ jobs:
       - name: Install deps (CPU, in your order)
         shell: bash -l {0}
         env:
-            PIP_CACHE_DIR: ${{ env.HOME }}/.cache/pip
+            PIP_CACHE_DIR: ${{ env.PIP_CACHE }} # <-- use the same dir we created
         run: |
           python -m pip install --upgrade pip setuptools wheel "numpy<2"
           pip install "torch==2.2.1" --index-url https://download.pytorch.org/whl/cpu
@@ -78,6 +74,12 @@ jobs:
           pip install torch-geometric
           [ -f requirements.txt ] && pip install -r requirements.txt
 
+      - name: Show pip cache dir
+        shell: bash -l {0}
+        env:
+            PIP_CACHE_DIR: ${{ env.PIP_CACHE }}
+        run: pip cache dir
+      
       - name: Run quick tests
         shell: bash -l {0}
         run: pytest -m "not gpu and not slow"
@@ -136,7 +138,7 @@ jobs:
                 git -C "$APP_DIR" reset --hard origin/main
             else
               GIT_SSH_COMMAND="ssh -i ~/.ssh/id_github -o StrictHostKeyChecking=no" \
-                git clone git@github.com:<YOUR_ORG>/<YOUR_REPO>.git "$APP_DIR"
+                git clone git@github.com:Kar488/M-JEPA.git "$APP_DIR"
             fi
             # if you use submodules:
             if [ -f "$APP_DIR/.gitmodules" ]; then
