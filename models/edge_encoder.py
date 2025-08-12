@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from data.mdataset import GraphData
 from models.base import EncoderBase
-from utils.pooling import global_mean_pool
+from utils.graph_ops import _pool_graph_emb, _to_tensor
 
 
 class EdgeMPNNLayer(nn.Module):
@@ -74,23 +74,18 @@ class EdgeGNNEncoder(EncoderBase):
         )
         self.out_norm = nn.LayerNorm(hidden_dim)
 
-    @torch.no_grad()
-    def _to_tensors(
-        self, g: GraphData, device: torch.device
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        x = torch.as_tensor(g.x, dtype=torch.float32, device=device)  # [N, Din]
-        e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)  # [2, E]
-        if g.edge_attr is None:
-            raise ValueError(
-                "edge_attr is required for EdgeGNNEncoder (set add_3d=True in dataset to get bond lengths)."
-            )
-        a = torch.as_tensor(g.edge_attr, dtype=torch.float32, device=device)  # [E, Fe]
-        return x, e, a
 
     def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
-        x, e, a = self._to_tensors(g, device)
+        x = _to_tensor(g.x, dtype=torch.float32, device=device)  # [N, Din]
+        e = _to_tensor(g.edge_index, dtype=torch.long, device=device)  # [2, E]
+        edge_attr = getattr(g, "edge_attr", None)
+        if edge_attr is None:
+             raise ValueError(
+                "edge_attr is required for EdgeGNNEncoder (set add_3d=True in dataset to get bond lengths)."
+            )
+        a = _to_tensor(edge_attr, dtype=torch.float32, device=device)  # [E, Fe]
         x = self.proj(x)
         for layer in self.layers:
             x = layer(x, e, a)
         x = self.out_norm(x)
-        return global_mean_pool(x)  # [hidden]
+        return _pool_graph_emb(x, g)

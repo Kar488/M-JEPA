@@ -44,6 +44,16 @@ jobs:
         run: |
             mamba install -y python=3.10 rdkit
 
+      - name: Define cache dirs
+        run: echo "PIP_CACHE=${GITHUB_WORKSPACE}/.pip-cache" >> $GITHUB_ENV
+
+      - name: Prepare pip cache dir
+        run: mkdir -p "$PIP_CACHE"
+
+      - name: Show pip cache dir
+        shell: bash -l {0}
+        run: pip cache dir
+                            
       - name: Set versions (for cache key)
         run: |
           echo "TORCH_VER=2.2.1" >> $GITHUB_ENV

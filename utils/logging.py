@@ -32,12 +32,22 @@ class DummyWandb:
         """
         pass
 
+    def Image(self, *_a, **_k):
+        """Stand in for :func:`wandb.Image`.
+
+        Returns ``None`` so that calls like ``wb.Image(fig)`` succeed even when
+        the real wandb package is absent.
+        """
+        return None
+    
     def finish(self):
         """Say we're done logging.
 
         This method exists so calls to ``wandb.finish`` won't fail.
         """
         pass
+
+
 
 
 def maybe_init_wandb(

@@ -17,6 +17,8 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 import logging
+import os
+import contextlib
 
 # Structured logging
 logger = logging.getLogger(__name__)
@@ -25,6 +27,7 @@ logger = logging.getLogger(__name__)
 from data.mdataset import GraphData, GraphDataset
 from utils.checkpoint import save_checkpoint
 from utils.plotting import plot_training_curves
+from utils.logging import maybe_init_wandb
 
 # Models
 try:
@@ -235,10 +238,15 @@ def demonstration(device: str = "cpu", devices: int = 1, use_scaffold: bool = Fa
             temperature=0.1,
         )
 
+    from utils.logging import maybe_init_wandb
+
+    wb = maybe_init_wandb(enable=False)
+    
     plot_training_curves(
         {"JEPA": jepa_losses, "Contrastive": contrastive_losses},
         title="Toy Unsupervised Training Losses",
         normalize=True,
+        wb=wb,
     )
 
     # Tiny head
@@ -719,6 +727,14 @@ if __name__ == "__main__":
 
     args = p.parse_args()
 
+    
+    wb = maybe_init_wandb(
+        args.use_wandb,
+        project=args.wandb_project,
+        tags=args.wandb_tags,
+        api_key=os.getenv("WANDB_API_KEY"),  # requires WANDB_API_KEY env var
+    )
+
     if args.mode == "demo":
         demonstration(
             device=args.device, devices=args.devices, use_scaffold=args.use_scaffold
@@ -729,3 +745,5 @@ if __name__ == "__main__":
         run_grid_mode(args)
     else:
         run_full_mode(args)
+    with contextlib.suppress(Exception):
+        wb.finish()

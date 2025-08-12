@@ -53,6 +53,7 @@ def test_plot_small(wb):
             metric="roc_auc",
             title="ROC-AUC Across Hyper-parameters (Tiny Test)",
             top_n=min(15, len(df_plot)),
+            wb=wb,
         )
     else:
         # Fallback: simple matplotlib bar
@@ -69,8 +70,10 @@ def test_plot_small(wb):
         plt.xticks(range(len(vals)), labels, rotation=45, ha="right")
         plt.title(f"{metric} Across Configs (Tiny Test)")
         plt.tight_layout()
+        fig = plt.gcf()
         path = outdir / "tiny_grid_bar.png"
         plt.savefig(path)
         wb.log({"saved_plot": str(path)})
+        wb.log({"tiny_hparam_plot": wb.Image(fig)})
 
     wb.log({"plot_test": "done"})

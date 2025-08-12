@@ -19,8 +19,10 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    ```bash
    wandb login
    ```
-   or set `WANDB_API_KEY` in the environment. Logging is disabled by default in
-   tests and examples.
+   or set `WANDB_API_KEY` in the environment (e.g., `export WANDB_API_KEY=...`).
+   This variable is used by `main.py`, plotting helpers, and the tests to
+   establish a connection to W&B. Logging is disabled by default when the
+   variable is absent.
 
 3. **Datasets**
    - Large corpora such as **ZINC** and **PubChem** can be downloaded with
@@ -36,7 +38,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
 4. **Run tests**
    ```bash
-   pytest --cache-clear tests -v -q -s -o log_cli=true
+   pytest --cache-clear tests -v -q -s -o log_cli=true -W ignore
    ```
 
 
@@ -72,7 +74,7 @@ WANDB_API_KEY = your W&B key (optional, for logging)
 
 ### 4) Add a deploy workflow
 
-The workflow `.github/workflows/train.yml` will install dependencies on the
+The workflow `.github/workflows/ci-vast.yml` will install dependencies on the
 runner and launch `scripts/train_jepa.py`. Logs and metrics are sent to
 W&B automatically when the `WANDB_API_KEY` secret is present.
 
