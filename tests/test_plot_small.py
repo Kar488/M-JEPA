@@ -18,12 +18,11 @@ def test_plot_small(wb):
 
     try:
         from utils.plotting import plot_hyperparameter_results
-
         has_utils = True
     except Exception:
         has_utils = False
 
-    if csv.exists():
+    if csv.exists(): 
         df = pd.read_csv(csv)
     else:
         # Synthesize a minimal dataframe with expected columns
