@@ -16,26 +16,31 @@ jobs:
     env:
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
     steps:
-      - name: Base environment setup
-        uses: ./.github/actions/base
+      - uses: actions/checkout@v4 
+
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v1
+        with:
+          environment-name: jepa
+          create-args: >-
+            python=3.10 rdkit openbabel
+          condarc: |
+            channels:
+              - conda-forge
+            channel_priority: strict
+          cache-environment: true
+          cache-downloads: true
+
+      - name: Install Python deps (CPU on GitHub runner)
+        shell: bash -l {0}   # <- ensures the micromamba env is active
+        run: |
+          pip install -U pip wheel "numpy<2"
+          pip install "torch==2.2.1" --index-url https://download.pytorch.org/whl/cpu
+          pip install torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.2.1+cpu.html
+          pip install torch-geometric
+          [ -f requirements.txt ] && pip install -r requirements.txt
 
       - name: Train
         run: |
           torchrun --standalone --nproc_per_node=2 \
             scripts/train_jepa.py --config configs/default.yaml --devices 2 --patience 10
-
-      - name: Install micromamba
-        run: |
-          curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj bin/micromamba
-          mkdir -p ~/mamba && ./bin/micromamba shell init -s bash -p ~/mamba
-          echo 'eval "$(/root/mamba/bin/micromamba shell hook -s bash)"' >> $GITHUB_ENV
-
-      - name: Create & activate env
-        shell: bash
-        run: |
-          eval "$(/root/mamba/bin/micromamba shell hook -s bash)"
-          micromamba create -y -n jepa -c conda-forge python=3.10 rdkit openbabel
-          micromamba activate jepa
-          echo "MAMBA_RUN=eval \"$(/root/mamba/bin/micromamba shell hook -s bash)\" && micromamba activate jepa &&" >> \
-            $GITHUB_ENV
-
