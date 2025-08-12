@@ -1,4 +1,4 @@
-﻿name: Base environment setup
+name: Base environment setup
 runs:
   using: composite
   steps:
