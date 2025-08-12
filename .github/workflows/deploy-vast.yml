@@ -1,0 +1,87 @@
+name: Deploy to Vast (GPU)
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main ]   # change if you use a different default branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Upload code to Vast
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}   # leave secret empty if your key has no passphrase
+          source: "."
+          target: "/srv/mjepa"
+          rm: true
+          overwrite: true
+          exclude: |
+            .git/
+            .github/
+            .pytest_cache/
+            **/__pycache__/
+            *.ipynb_checkpoints/
+
+      - name: Run training on Vast (attached)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}   # leave secret empty if no passphrase
+          script: |
+            set -euxo pipefail
+            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
+
+            APP_DIR=/srv/mjepa
+            cd "$APP_DIR"
+
+            # Sanity: GPU present
+            nvidia-smi || { echo "No GPU/driver detected"; exit 1; }
+
+            # Python + venv
+            command -v python3 >/dev/null || (apt-get update && apt-get install -y python3 python3-venv python3-pip)
+            python3 -m venv .venv
+            . .venv/bin/activate
+            pip install -U pip wheel
+            if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+            mkdir -p logs
+            python scripts/train_jepa.py 2>&1 | tee -a logs/train_$(date +%F_%H-%M).log
+
+      # For launch and detach, replace the step above with:
+      # - name: Run training on Vast (detached)
+      #   uses: appleboy/ssh-action@v1.0.3
+      #   with:
+      #     host: ${{ secrets.VAST_HOST }}
+      #     username: ${{ secrets.VAST_USER }}
+      #     port: ${{ secrets.VAST_PORT }}
+      #     key: ${{ secrets.VAST_SSH_KEY }}
+      #     passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+      #     script: |
+      #       set -euxo pipefail
+      #       export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
+      #       APP_DIR=/srv/mjepa
+      #       cd "$APP_DIR"
+      #       nvidia-smi
+      #       command -v python3 >/dev/null || (apt-get update && apt-get install -y python3 python3-venv python3-pip)
+      #       python3 -m venv .venv
+      #       . .venv/bin/activate
+      #       pip install -U pip wheel
+      #       [ -f requirements.txt ] && pip install -r requirements.txt
+      #       mkdir -p logs
+      #       nohup bash -lc "source .venv/bin/activate && python scripts/train_jepa.py" \
+      #         > logs/train_$(date +%F_%H-%M).log 2>&1 < /dev/null &

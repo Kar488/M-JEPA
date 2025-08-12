@@ -39,19 +39,78 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    pytest --cache-clear tests -v -q -s -o log_cli=true
    ```
 
-## Running on a server (GitHub Actions + Vast.ai)
 
-1. **Provision a Vast.ai instance** with a GPU. Note the instance ID and the
-   IP/SSH credentials.
-2. **Register a self‑hosted GitHub runner** on that instance. Follow the
-   instructions under the repository’s *Settings → Actions → Runners*.
-3. **Repository secrets**
-   - `WANDB_API_KEY`: API key for Weights & Biases logging.
-   - `VAST_API_KEY`: key used by any automation scripts interacting with the
-     Vast API.
-4. The workflow `.github/workflows/train.yml` will install dependencies on the
-   runner and launch `scripts/train_jepa.py`. Logs and metrics are sent to
-   W&B automatically when the `WANDB_API_KEY` secret is present.
+## Running on a server (GitHub Actions ➜ Vast.ai via SSH)
+
+
+This setup uses a GitHub-hosted runner that SSHes into your Vast instance, uploads the repo, and runs commands there. No self-hosted runner needed.
+**Provision a Vast.ai instance** with a GPU. Note the instance ID and the IP/SSH credentials.
+
+### 1) Create an SSH key for CI (on your laptop)
+```bash
+ssh-keygen -t ed25519 -f ./id_vast_ci -N ""
+# creates: id_vast_ci (private) and id_vast_ci.pub (public)
+
+### 2) SSH to your Vast box (use the IP/port Vast shows you), then add the public key:
+ssh -p <VAST_SSH_PORT> root@<VAST_IP>
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+echo "<contents of id_vast_ci.pub>" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+
+### 3)  Add GitHub secrets
+In Repository → Settings → Secrets and variables → Actions → New repository secret add:
+
+VAST_HOST = your Vast IP
+
+VAST_PORT = your Vast SSH port (often a high, non-22 port)
+
+VAST_USER = root (or the user Vast provided)
+
+VAST_SSH_KEY = contents of id_vast_ci (the private key)
+
+WANDB_API_KEY = your W&B key (optional, for logging)
+
+### 4) Add a deploy workflow
+
+The workflow `.github/workflows/train.yml` will install dependencies on the
+runner and launch `scripts/train_jepa.py`. Logs and metrics are sent to
+W&B automatically when the `WANDB_API_KEY` secret is present.
+
+### Start vast ai
+
+1) Login into vas ai
+2) Open terminal from instances
+3) Launch with the provided SSH - e.g. ssh -p 40129 root@167.179.138.57 -L 8080:localhost:8080
+4) Use password when generating key - e.g., crypt
+5) Start runner -
+   5.1) su - runner
+   5.2) cd ~/actions-runner
+   5.3) pkill -f "Runner.Listener" || true   # clears any stuck runner process
+   5.4) ./run.sh
+   5.5) Verify on git hub actions - Repo → Settings → Actions → Runners → it should show Online.
+   or
+   5.6) tmux ls || true # check if its running already
+   5.7) tmux attach || true
+
+### Setting keys in vast ai
+
+In powershell
+
+1) New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh" | Out-Null
+2) ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\id_vast_ci" -C "vast-ci"
+set passphrase
+3) Get-ChildItem "$env:USERPROFILE\.ssh\id_vast_ci*"
+4) Get-Content "$env:USERPROFILE\.ssh\id_vast_ci.pub" -Raw |
+ssh -p 40129 root@167.179.138.57 'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys'
+5) ssh -p 40129 root@167.179.138.57 'chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys'
+6) in git secrets add
+VAST_SSH_PASSPHRASE = your passphrase
+VAST_HOST=167.179.138.57 (or the Vast hostname)
+VAST_PORT=40129
+VAST_USER=root
+VAST_SSH_KEY = contents of C:\Users\karth\.ssh\id_vast_ci
+
+steps 2 and 4 are required for every new computer we use to SSH to vast
 
 ## Notes
 
