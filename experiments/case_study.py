@@ -81,7 +81,8 @@ def run_tox21_case_study(
     finetune_epochs: int = 20,
     num_top_exclude: int = 10,
     device: str = "cpu",
-) -> Tuple[float, float, float]:
+    baseline_embeddings: dict[str, str] | None = None,
+) -> Tuple[float, float, float, dict[str, float]]:
     """Run a Tox21 ranking experiment using real labels.
 
     Args:
@@ -97,9 +98,14 @@ def run_tox21_case_study(
         num_top_exclude: Number of top predicted toxic compounds to exclude
             when computing the post-filter mean toxicity.
         device: Device on which to run computations.
+        baseline_embeddings: Optional mapping of baseline name to a file
+            containing precomputed embeddings (``.npy`` or ``.csv``) in the
+            same order as ``csv_path``.
 
     Returns:
-        Tuple of (mean_true, mean_random_after, mean_predicted_after).
+        ``(mean_true, mean_random_after, mean_jepa_after, baseline_means)``
+        where ``baseline_means`` maps each baseline name to its post-exclusion
+        mean toxicity.
 
     Raises:
         FileNotFoundError: If the CSV file cannot be located.
@@ -218,6 +224,30 @@ def run_tox21_case_study(
     remaining_pred = [i for i in range(num_total) if i not in exclude_pred]
     mean_pred = float(np.mean(all_labels[remaining_pred])) if remaining_pred else 0.0
 
+    baseline_means: dict[str, float] = {}
+    if baseline_embeddings:
+        from sklearn.linear_model import Ridge
+
+        train_val_idx = train_idx + val_idx
+        y_train_val = all_labels[train_val_idx]
+
+        for name, path in baseline_embeddings.items():
+            if path.lower().endswith(".npy"):
+                X = np.load(path)
+            else:
+                X = pd.read_csv(path).to_numpy()
+            if X.shape[0] != num_total:
+                raise ValueError(
+                    f"Embeddings for {name} have {X.shape[0]} rows, expected {num_total}"
+                )
+            reg = Ridge(alpha=1.0, random_state=seed).fit(X[train_val_idx], y_train_val)
+            pred = reg.predict(X)
+            top = np.argsort(-pred)[:num_top_exclude]
+            remain = [i for i in range(num_total) if i not in top]
+            baseline_means[name] = (
+                float(np.mean(all_labels[remain])) if remain else 0.0
+            )
+
     random_indices = np.arange(num_total)
     np.random.shuffle(random_indices)
     exclude_rand = random_indices[:num_top_exclude]
@@ -225,13 +255,13 @@ def run_tox21_case_study(
     mean_rand = float(np.mean(all_labels[remaining_rand])) if remaining_rand else 0.0
 
     mean_true = float(np.mean(all_labels))
-    return mean_true, mean_rand, mean_pred
+    return mean_true, mean_rand, mean_pred, baseline_means
 
 
 if __name__ == "__main__":
     csv = "samples/tox21_mini.csv"
     if os.path.exists(csv):
-        true_mean, rand_mean, pred_mean = run_tox21_case_study(
+        true_mean, rand_mean, pred_mean, baseline_means = run_tox21_case_study(
             csv_path=csv,
             task_name="NR-AR",
             pretrain_epochs=1,
@@ -240,7 +270,9 @@ if __name__ == "__main__":
         )
         logger.info("Mean true toxicity: %s", true_mean)
         logger.info("Mean toxicity after random exclusion: %s", rand_mean)
-        logger.info("Mean toxicity after predicted exclusion: %s", pred_mean)
+        logger.info("Mean toxicity after JEPA exclusion: %s", pred_mean)
+        for name, val in baseline_means.items():
+            logger.info("Mean toxicity after %s exclusion: %s", name, val)
     else:
         logger.error("Tox21 sample CSV not found: %s", csv)
 

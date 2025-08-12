@@ -20,11 +20,12 @@ def test_tox21_case_study_smoke(monkeypatch):
 
     from experiments.case_study import run_tox21_case_study
 
-    triple = run_tox21_case_study(
+    results = run_tox21_case_study(
         csv_path="samples/tox21_mini.csv",
         task_name="NR-AR",
         pretrain_epochs=1,
         finetune_epochs=1,
         num_top_exclude=1,
     )
-    assert all(isinstance(x, float) for x in triple)
+    assert all(isinstance(x, float) for x in results[:3])
+    assert isinstance(results[3], dict)
