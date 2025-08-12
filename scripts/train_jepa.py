@@ -28,7 +28,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from main import load_directory_dataset, build_encoder  # noqa: E402
 from models.ema import EMA  # noqa: E402
 from models.predictor import MLPPredictor  # noqa: E402
-from training.unsupervised import train_jepa  # noqa: E402
+from training.unsupervised import train_jepa, train_contrastive  # noqa: E402
 from training.supervised import train_linear_head  # noqa: E402
 from utils.logging import maybe_init_wandb  # noqa: E402
 
@@ -77,6 +77,13 @@ def parse_args() -> argparse.Namespace:
     # Vast.ai related options (currently informational only)
     p.add_argument("--vast-ai", action="store_true", help="Flag indicating execution on Vast.ai")
     p.add_argument("--vast-logdir", type=str, default=None, help="Optional log directory on Vast.ai")
+
+    # Baseline comparison
+    p.add_argument(
+        "--contrastive",
+        action="store_true",
+        help="Also run contrastive pretraining baseline",
+    )
 
     return p.parse_args()
 
@@ -171,6 +178,16 @@ def main() -> None:
     ema = EMA(encoder, decay=args.ema_decay)
     predictor = MLPPredictor(embed_dim=args.hidden_dim, hidden_dim=args.hidden_dim * 2)
 
+    contrastive_encoder = None
+    if args.contrastive:
+        contrastive_encoder = build_encoder(
+            gnn_type=args.gnn_type,
+            input_dim=input_dim,
+            hidden_dim=args.hidden_dim,
+            num_layers=args.num_layers,
+            edge_dim=edge_dim,
+        )
+
     # ------------------------------------------------------------------
     # Pretraining
     # ------------------------------------------------------------------
@@ -199,6 +216,32 @@ def main() -> None:
         wb.log({"phase": "pretrain", "status": "error"})
         sys.exit(PRETRAIN_ERROR)
 
+    contrastive_metrics: Dict[str, float] = {}
+    if args.contrastive and contrastive_encoder is not None:
+        try:
+            wb.log({"phase": "pretrain_contrastive", "status": "start"})
+            c_losses = train_contrastive(
+                dataset=unlabeled,
+                encoder=contrastive_encoder,
+                epochs=args.pretrain_epochs,
+                batch_size=args.batch_size,
+                mask_ratio=args.mask_ratio,
+                lr=args.lr,
+                device=args.device,
+                devices=args.devices,
+                use_wandb=args.use_wandb,
+                wandb_project=args.wandb_project,
+                wandb_tags=args.wandb_tags,
+            )
+            c_final = c_losses[-1] if c_losses else None
+            wb.log(
+                {"phase": "pretrain_contrastive", "status": "success", "final_loss": c_final}
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("Contrastive pretraining failed")
+            wb.log({"phase": "pretrain_contrastive", "status": "error"})
+            sys.exit(PRETRAIN_ERROR)
+
     # ------------------------------------------------------------------
     # Fine-tuning
     # ------------------------------------------------------------------
@@ -221,12 +264,39 @@ def main() -> None:
         wb.log({"phase": "finetune", "status": "error"})
         sys.exit(FINETUNE_ERROR)
 
+    if args.contrastive and contrastive_encoder is not None:
+        try:
+            wb.log({"phase": "finetune_contrastive", "status": "start"})
+            contrastive_metrics = train_linear_head(
+                dataset=labeled,
+                encoder=contrastive_encoder,
+                task_type=args.task_type,
+                epochs=args.finetune_epochs,
+                lr=args.lr,
+                batch_size=args.batch_size,
+                device=args.device,
+                patience=args.patience,
+                devices=args.devices,
+            )
+            wb.log({"phase": "finetune_contrastive", "status": "success"})
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("Contrastive fine-tuning failed")
+            wb.log({"phase": "finetune_contrastive", "status": "error"})
+            sys.exit(FINETUNE_ERROR)
+
     # ------------------------------------------------------------------
     # Evaluation
     # ------------------------------------------------------------------
     try:
         if metrics:
             wb.log({"phase": "evaluation", **{f"metric/{k}": v for k, v in metrics.items()}})
+        if contrastive_metrics:
+            wb.log(
+                {
+                    "phase": "evaluation",
+                    **{f"contrastive/{k}": v for k, v in contrastive_metrics.items()},
+                }
+            )
     except Exception:  # pragma: no cover
         logger.exception("Evaluation logging failed")
         wb.log({"phase": "evaluation", "status": "error"})
