@@ -105,8 +105,9 @@ jobs:
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}   # leave secret empty if no passphrase
           script: |
             set -e
-            nvidia-smi
-            python3 - <<'PY' || true
+            whoami
+            nvidia-smi || true
+            python3 - <<'PY'
             import torch
             print("torch:", getattr(torch,"__version__",None))
             print("cuda available:", torch.cuda.is_available())

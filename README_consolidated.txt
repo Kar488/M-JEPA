@@ -68,14 +68,37 @@ This setup uses a GitHub-hosted runner that SSHes into your Vast instance, uploa
 
 ### 1) Create an SSH key for CI (on your laptop)
 ```bash
-ssh-keygen -t ed25519 -f ./id_vast_ci -N ""
+ssh-keygen -t ed25519 -C "vast-deploy" -f $env:USERPROFILE\.ssh\vast_deploy
 # creates: id_vast_ci (private) and id_vast_ci.pub (public)
+#Private key: ~/.ssh/vast_deploy (keep secret)
+#Public key: ~/.ssh/vast_deploy.pub (safe to share)
 
 ### 2) SSH to your Vast box (use the IP/port Vast shows you), then add the public key:
-ssh -p <VAST_SSH_PORT> root@<VAST_IP>
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
-echo "<contents of id_vast_ci.pub>" >> ~/.ssh/authorized_keys
+
+ssh -p <VAST_SSH_PORT> root@<VAST_IP> (from from vast UI)
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+touch ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
+
+#on computer
+Get-Content $env:USERPROFILE\.ssh\vast_deploy.pub
+
+#back to vast to use the public key
+cat > ~/vast_deploy.pub
+#Now paste that single-line public key into the terminal.
+# Press Enter once if needed so the cursor moves to a new line.
+# Press Ctrl+D to finish the file.
+cat ~/vast_deploy.pub >> ~/.ssh/authorized_keys
+rm -f ~/vast_deploy.pub
+chmod 600 ~/.ssh/authorized_keys
+chmod 700 ~/.ssh
+chown -R "$(whoami)":"$(whoami)" ~/.ssh
+tail -n1 ~/.ssh/authorized_keys
+# You should see the key line you just added (ssh-ed25519 ... vast-deploy)
+sudo grep -E '^(Port|PubkeyAuthentication|PasswordAuthentication)' /etc/ssh/sshd_config
+# Expect at least: PubkeyAuthentication yes
+# Note the Port value — this must match secrets.VAST_PORT (22 if default)
 
 ### 3)  Add GitHub secrets
 In Repository → Settings → Secrets and variables → Actions → New repository secret add:
@@ -86,7 +109,7 @@ VAST_PORT = your Vast SSH port (often a high, non-22 port)
 
 VAST_USER = root (or the user Vast provided)
 
-VAST_SSH_KEY = contents of id_vast_ci (the private key)
+VAST_SSH_KEY = contents of id_vast_ci (the private key - use pw cmd Get-Content $env:USERPROFILE\.ssh\vast_deploy)
 
 WANDB_API_KEY = your W&B key (optional, for logging)
 
@@ -128,6 +151,7 @@ set passphrase
 ssh -p 40129 root@167.179.138.57 'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys'
 5) ssh -p 40129 root@167.179.138.57 'chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys'
 6) in git secrets add
+
 VAST_SSH_PASSPHRASE = your passphrase
 VAST_HOST=167.179.138.57 (or the Vast hostname)
 VAST_PORT=40129
