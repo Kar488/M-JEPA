@@ -16,7 +16,7 @@ env:
   PIP_CACHE_DIR: /srv/mjepa/.cache/pip
 
 jobs:
-  vast_smoke:
+  vast_smoke2:
     name: Smoke on Vast (GPU present?)
     runs-on: ubuntu-latest
     steps:
