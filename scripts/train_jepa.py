@@ -517,15 +517,19 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             num_top_exclude=args.num_top_exclude,
             device=resolve_device(args.device),
         )
-        wb.log({
+        # Assemble a single metrics dictionary so all values appear on the same
+        # W&B step.  We prefix baseline keys for clarity.  This allows
+        # convenient visualisation of all outputs together in the W&B UI.
+        metrics = {
             "phase": "tox21",
             "status": "success",
             "mean_true": mean_true,
             "mean_random_after": mean_random,
             "mean_jepa_after": mean_jepa,
-        })
+        }
         for name, val in baseline_means.items():
-            wb.log({f"baseline/{name}": val})
+            metrics[f"baseline/{name}"] = val
+        wb.log(metrics)
     except Exception:
         logger.exception("Tox21 case study failed")
         wb.log({"phase": "tox21", "status": "error"})
@@ -558,11 +562,37 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     else:
         seeds = tuple(CONFIG.get("finetune", {}).get("seeds", [42, 123, 456]))
 
-    # Create a dataset loader closure expected by run_grid_search.  It must accept
-    # ``add_3d`` and return a GraphDataset.  The label column is passed along
-    # for downstream tasks but ignored if the dataset is truly unlabeled.
-    def _dataset_fn(add_3d: bool = False):  # type: ignore[override]
-        return load_directory_dataset(args.dataset_dir, label_col=args.label_col, add_3d=add_3d)  # type: ignore[arg-type]
+    # Create dataset loader closures for run_grid_search.  We support three
+    # scenarios:
+    #   1. A unified dataset (--dataset-dir) used for both pretraining and evaluation.
+    #   2. Separate unlabeled and labeled datasets (--unlabeled-dir and/or --labeled-dir).
+    # A function must accept ``add_3d`` and return a GraphDataset.  If only
+    # unlabeled or labeled is provided, the missing one falls back to the
+    # unified dataset if available.
+    _dataset_fn = None
+    _unlabeled_fn = None
+    _eval_fn = None
+    if args.dataset_dir:
+        def _dataset_fn(add_3d: bool = False):  # type: ignore[override]
+            return load_directory_dataset(
+                args.dataset_dir,
+                label_col=args.label_col,
+                add_3d=add_3d,
+            )
+    # Define unlabeled and eval loaders if specified
+    if args.unlabeled_dir:
+        def _unlabeled_fn(add_3d: bool = False):  # type: ignore[override]
+            return load_directory_dataset(
+                args.unlabeled_dir,
+                add_3d=add_3d,
+            )
+    if args.labeled_dir:
+        def _eval_fn(add_3d: bool = False):  # type: ignore[override]
+            return load_directory_dataset(
+                args.labeled_dir,
+                label_col=args.label_col,
+                add_3d=add_3d,
+            )
 
     # Initialise optional W&B run for grid search
     wb = maybe_init_wandb(
@@ -571,7 +601,10 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
         tags=args.wandb_tags,
         config={
             "dataset_dir": args.dataset_dir,
+            "unlabeled_dir": args.unlabeled_dir,
+            "labeled_dir": args.labeled_dir,
             "task_type": args.task_type,
+            "methods": args.methods,
             "mask_ratios": args.mask_ratios,
             "contiguities": args.contiguities,
             "hidden_dims": args.hidden_dims,
@@ -592,7 +625,9 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     try:
         df = run_grid_search(
             dataset_fn=_dataset_fn,
-            methods=("jepa",),
+            unlabeled_dataset_fn=_unlabeled_fn,
+            eval_dataset_fn=_eval_fn,
+            methods=tuple(args.methods),
             task_type=args.task_type,
             seeds=seeds,
             mask_ratios=tuple(args.mask_ratios),
@@ -615,9 +650,22 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             warmup_steps=args.warmup_steps,
             out_csv=args.out_csv,
         )
-        # Summarise the best configuration: the last row of df contains best row(s)
+        # Log each row to W&B for comprehensive visualisation.  We assign a
+        # unique identifier to each configuration using its index.  This
+        # produces a separate log entry per configuration, enabling plots and
+        # tables in the W&B UI.
         best_conf = None
         if df is not None and not df.empty:
+            for idx, row in df.iterrows():
+                # Prepare a metrics dict excluding non‑numeric entries and
+                # include the index as "config_id".  Flatten any lists or
+                # arrays to scalars when possible.
+                metrics_dict = {"config_id": int(idx)}
+                for col, val in row.items():
+                    if isinstance(val, (list, tuple)) and len(val) == 1:
+                        val = val[0]
+                    metrics_dict[col] = val
+                wb.log(metrics_dict)
             best_conf = df.iloc[-1].to_dict()
             logger.info("Grid search completed. Best configuration: %s", best_conf)
         else:
@@ -736,10 +784,27 @@ def build_parser() -> argparse.ArgumentParser:
         "grid-search",
         help="Perform hyper‑parameter grid search for JEPA using run_grid_search",
     )
+    # Datasets for the sweep.  At least one of --dataset-dir or the pair
+    # (--unlabeled-dir, --labeled-dir) must be provided.  If only
+    # --dataset-dir is given it is used for both pretraining and evaluation.
     grid.add_argument(
         "--dataset-dir",
-        required=True,
-        help="Directory containing a labelled graph dataset (CSV or Parquet) used for both pretraining and evaluation",
+        required=False,
+        default=None,
+        help="Path to a graph dataset used for both pretraining and evaluation."
+             " If omitted, you must specify --unlabeled-dir and/or --labeled-dir.",
+    )
+    grid.add_argument(
+        "--unlabeled-dir",
+        type=str,
+        default=None,
+        help="Directory of an unlabeled graph dataset for JEPA pretraining (e.g. ZINC/PubChem).",
+    )
+    grid.add_argument(
+        "--labeled-dir",
+        type=str,
+        default=None,
+        help="Directory of a labeled graph dataset for downstream evaluation (e.g. MoleculeNet).",
     )
     grid.add_argument(
         "--label-col",
@@ -752,6 +817,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["classification", "regression"],
         default="classification",
         help="Task type for downstream evaluation",
+    )
+    grid.add_argument(
+        "--methods",
+        nargs="+",
+        default=["jepa"],
+        help="Names of methods to include in the sweep (e.g. jepa contrastive)",
     )
     # Search space parameters
     grid.add_argument(

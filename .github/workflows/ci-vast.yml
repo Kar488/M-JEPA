@@ -161,21 +161,6 @@ jobs:
             unset REPO_DEPLOY_KEY
 
       # Separate deployment phases: pretrain, finetune, benchmark and case study
-      - name: Grid search on a small dataset      # <–– insert here
-        run: |
-          torchrun --standalone … train_jepa.py grid-search \
-            --dataset-dir data/BASF_AIPubChem_v4 \
-            --mask-ratios 0.15 \
-            --num-layers-list 3 \
-            --hidden-dims 256 \
-            --gnn-types mpnn \
-            --ema-decays 0.99 \
-            --pretrain-batch-sizes 4 \
-            --finetune-batch-sizes 4 \
-            --pretrain-epochs-options 1 \
-            --finetune-epochs-options 1 \
-            --out-csv outputs/grid_results.csv
-
       - name: Pretrain on Vast
         uses: appleboy/ssh-action@v1
         with:
@@ -201,6 +186,52 @@ jobs:
               --use-wandb \
               --config default.yaml \
               2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
+
+      - name: Grid search on Vast
+        # Run a small hyper‑parameter sweep after pretraining to test the new
+        # `grid-search` subcommand.  This step uses separate unlabeled and
+        # labelled datasets to sweep over a narrow search space and logs
+        # results to Weights & Biases.  It produces a CSV in the outputs
+        # directory for offline inspection and logs each configuration and
+        # its metrics to W&B for interactive visualisation.
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          script: |
+            set -euxo pipefail
+            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
+            cd "$APP_DIR"
+            . "$VENV_DIR/bin/activate"
+            mkdir -p logs outputs
+            # Perform a hyper‑parameter grid search with a restricted search space
+            # using separate unlabeled and labelled datasets.  Both JEPA and
+            # contrastive baselines are included in the sweep via --methods.
+            torchrun --standalone --nnodes=1 --nproc_per_node=1 \
+              train_jepa.py grid-search \
+              --unlabeled-dir data/BASF_AIPubChem_v4 \
+              --labeled-dir data/katielinkmoleculenet_benchmark/train \
+              --label-col label \
+              --task-type classification \
+              --methods jepa contrastive \
+              --mask-ratios 0.15 \
+              --contiguities 0 \
+              --hidden-dims 256 \
+              --num-layers-list 3 \
+              --gnn-types mpnn \
+              --ema-decays 0.99 \
+              --add-3d-options 0 \
+              --pretrain-batch-sizes 4 \
+              --finetune-batch-sizes 4 \
+              --pretrain-epochs-options 1 \
+              --finetune-epochs-options 1 \
+              --learning-rates 1e-4 \
+              --seeds 42 \
+              --out-csv outputs/grid_results.csv \
+              --use-wandb \
+              2>&1 | tee -a logs/grid_search_$(date +%F_%H-%M).log
 
       - name: Finetune on Vast
         uses: appleboy/ssh-action@v1
