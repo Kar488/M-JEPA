@@ -37,7 +37,7 @@ def wb():
     project = os.getenv("WANDB_PROJECT", "m-jepa")
     mode = "online" if os.getenv("WANDB_API_KEY") else "offline"
 
-    # 🛠 self-heal if another test has finished our run
+    # self-heal if another test has finished our run
     if wandb.run is None:
         wandb.init(
                 project=project,

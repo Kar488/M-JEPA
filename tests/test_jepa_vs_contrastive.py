@@ -86,3 +86,72 @@ def test_jepa_vs_contrastive():
 
     assert jepa_losses and contrastive_losses
     assert jepa_losses[-1] <= contrastive_losses[-1]
+
+
+def test_grid_search_best_config(tmp_path, monkeypatch):
+    """Ensure that cmd_grid_search writes the best config to JSON."""
+    import argparse
+    import json
+    import pandas as pd
+    from scripts import train_jepa
+
+    # Fake run_grid_search that returns a one‑row DataFrame
+    def fake_run_grid_search(**kwargs):
+        return pd.DataFrame([
+            {
+                'mask_ratio': 0.1,
+                'contiguous': False,
+                'hidden_dim': 64,
+                'num_layers': 2,
+                'gnn_type': 'mpnn',
+                'ema_decay': 0.99,
+                'lr': 1e-4,
+                'pretrain_batch_size': 32,
+                'finetune_batch_size': 16,
+                'pretrain_epochs': 1,
+                'finetune_epochs': 1,
+            }
+        ])
+
+    # Monkeypatch run_grid_search in the train_jepa module
+    monkeypatch.setattr(train_jepa, 'run_grid_search', fake_run_grid_search)
+    # Build dummy args namespace.  Many fields are unused because the fake
+    # run_grid_search ignores them; they are included for completeness.
+    args = argparse.Namespace(
+        dataset_dir=None,
+        unlabeled_dir=None,
+        labeled_dir=None,
+        label_col='label',
+        task_type='classification',
+        methods=['jepa'],
+        mask_ratios=[0.1],
+        contiguities=[0],
+        hidden_dims=[64],
+        num_layers_list=[2],
+        gnn_types=['mpnn'],
+        ema_decays=[0.99],
+        add_3d_options=[0],
+        pretrain_batch_sizes=[32],
+        finetune_batch_sizes=[16],
+        pretrain_epochs_options=[1],
+        finetune_epochs_options=[1],
+        learning_rates=[1e-4],
+        seeds=[42],
+        device='cpu',
+        out_csv=None,
+        ckpt_dir=str(tmp_path),
+        ckpt_every=1,
+        use_scheduler=False,
+        warmup_steps=1000,
+        use_wandb=False,
+        wandb_project='test',
+        wandb_tags=[],
+        best_config_out=str(tmp_path / 'best_config.json'),
+    )
+    # Invoke grid search
+    train_jepa.cmd_grid_search(args)
+    # Check that the JSON file is created and contains the expected keys
+    with open(args.best_config_out, 'r', encoding='utf-8') as f:
+        conf = json.load(f)
+    assert conf.get('hidden_dim') == 64
+    assert conf.get('gnn_type') == 'mpnn'

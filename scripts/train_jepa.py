@@ -668,6 +668,15 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
                 wb.log(metrics_dict)
             best_conf = df.iloc[-1].to_dict()
             logger.info("Grid search completed. Best configuration: %s", best_conf)
+            # Optionally write the best configuration to a JSON file for later use.
+            if args.best_config_out:
+                try:
+                    import json
+                    with open(args.best_config_out, "w", encoding="utf-8") as f:
+                        json.dump(best_conf, f, indent=2)
+                    logger.info("Saved best configuration to %s", args.best_config_out)
+                except Exception:
+                    logger.exception("Failed to write best configuration to JSON")
         else:
             logger.info("Grid search returned no results.")
         wb.log({"phase": "grid_search", "status": "success", "best": best_conf})
@@ -949,6 +958,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1000,
         help="Number of warmup steps for the scheduler during grid search",
+    )
+    grid.add_argument(
+        "--best-config-out",
+        type=str,
+        default=None,
+        help=(
+            "Optional path to write the best hyper‑parameter configuration as a JSON file. "
+            "This file can be parsed later to drive a production pretraining run."
+        ),
     )
     grid.add_argument(
         "--use-wandb",

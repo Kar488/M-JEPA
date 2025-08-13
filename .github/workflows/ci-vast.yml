@@ -161,34 +161,11 @@ jobs:
             unset REPO_DEPLOY_KEY
 
       # Separate deployment phases: pretrain, finetune, benchmark and case study
-      - name: Pretrain on Vast
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          script: |
-            set -euxo pipefail
-            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
-            cd "$APP_DIR"
-            . "$VENV_DIR/bin/activate"
-            nvidia-smi
-            mkdir -p logs outputs
-            # Pretraining stage
-            torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              train_jepa.py pretrain \
-              --unlabeled-dir data/BASF_AIPubChem_v4 \
-              --epochs 1 \
-              --batch-size 4 \
-              --contrastive \
-              --output outputs/encoder.pt \
-              --use-wandb \
-              --config default.yaml \
-              2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
-
+      # In production‑like workflows the hyper‑parameter sweep is run
+      # before the full pretraining to identify the best settings.  The grid
+      # search step therefore comes first.
       - name: Grid search on Vast
-        # Run a small hyper‑parameter sweep after pretraining to test the new
+        # Run a small hyper‑parameter sweep to test the new
         # `grid-search` subcommand.  This step uses separate unlabeled and
         # labelled datasets to sweep over a narrow search space and logs
         # results to Weights & Biases.  It produces a CSV in the outputs
@@ -230,8 +207,66 @@ jobs:
               --learning-rates 1e-4 \
               --seeds 42 \
               --out-csv outputs/grid_results.csv \
+              --best-config-out outputs/best_grid_config.json \
               --use-wandb \
               2>&1 | tee -a logs/grid_search_$(date +%F_%H-%M).log
+
+      - name: Pretrain on Vast
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          script: |
+            set -euxo pipefail
+            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
+            cd "$APP_DIR"
+            . "$VENV_DIR/bin/activate"
+            nvidia-smi
+            mkdir -p logs outputs
+            # Determine hyper‑parameters from the grid search.  If the JSON
+            # file exists, parse it and construct CLI flags for the pretrain
+            # command.  Otherwise fall back to minimal defaults (1 epoch,
+            # batch size 4, default config values).  This allows the
+            # workflow to remain functional even if the grid search skipped.
+            PRETRAIN_ARGS=""
+            if [ -f outputs/best_grid_config.json ]; then
+              python - <<'PY' > /tmp/pretrain_args.txt
+              import json, os, sys
+              conf = json.load(open('outputs/best_grid_config.json'))
+              args = []
+              # Map keys from the grid search result to pretrain CLI args
+              if 'gnn_type' in conf: args += ['--gnn-type', str(conf['gnn_type'])]
+              if 'hidden_dim' in conf: args += ['--hidden-dim', str(int(conf['hidden_dim']))]
+              if 'num_layers' in conf: args += ['--num-layers', str(int(conf['num_layers']))]
+              if 'mask_ratio' in conf: args += ['--mask-ratio', str(conf['mask_ratio'])]
+              if 'contiguous' in conf or 'contiguity' in conf:
+                  # Convert boolean or int to flag name
+                  flag = conf.get('contiguous') if 'contiguous' in conf else conf.get('contiguity')
+                  args += ['--contiguous'] if flag else []
+              if 'ema_decay' in conf: args += ['--ema-decay', str(conf['ema_decay'])]
+              if 'lr' in conf: args += ['--lr', str(conf['lr'])]
+              if 'pretrain_epochs' in conf or 'epochs' in conf:
+                  args += ['--epochs', str(int(conf.get('pretrain_epochs', conf.get('epochs', 1))))]
+              if 'pretrain_batch_size' in conf or 'batch_size' in conf:
+                  args += ['--batch-size', str(int(conf.get('pretrain_batch_size', conf.get('batch_size', 4))))]
+              print(' '.join(args))
+              PY
+                            PRETRAIN_ARGS=$(cat /tmp/pretrain_args.txt)
+                          fi
+            # Pretraining stage with selected hyper‑parameters.  Contrastive
+            # baseline is enabled by default to match earlier behaviour.
+            torchrun --standalone --nnodes=1 --nproc_per_node=1 \
+              train_jepa.py pretrain \
+              --unlabeled-dir data/BASF_AIPubChem_v4 \
+              $PRETRAIN_ARGS \
+              --contrastive \
+              --output outputs/encoder.pt \
+              --use-wandb \
+              --config default.yaml \
+              2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
+
 
       - name: Finetune on Vast
         uses: appleboy/ssh-action@v1
