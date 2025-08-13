@@ -69,11 +69,7 @@ jobs:
           restore-keys: |
             pip-${{ runner.os }}-py${{ env.PY_VER }}-
       
-      - name: Filter pip requirements (exclude conda/pinned bins)
-        if: hashFiles('requirements.txt') != ''
-        run: |
-          grep -viE '^(rdkit|deepchem|scipy|torch|torch-scatter|torch-sparse|torch-cluster|torch-spline-conv|torch-geometric|networkx)([=<>].*)?$' requirements.txt > req-no-bin.txt || true
-                  
+
       - name: Install deps (CPU, pinned to torch 2.2.1)
         shell: bash -l {0}
         env:
@@ -91,11 +87,7 @@ jobs:
           # Install torch-geometric WITHOUT deps so it doesn’t upgrade the above
           mamba run -n mjepa python -m pip install --no-deps "torch-geometric==2.5.3"
 
-          # DeepChem 2.7.x prefers networkx 2.x
-          # mamba run -n mjepa python -m pip install "networkx<3"
-
-          if [ -f req-no-bin.txt ]; then
-            mamba run -n mjepa python -m pip install -r req-no-bin.txt
+          mamba run -n mjepa python -m pip install requirements.txt
           fi
 
       # Sanity check Murcko is available (fail early if not)

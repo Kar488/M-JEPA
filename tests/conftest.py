@@ -9,6 +9,24 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from utils.logging import maybe_init_wandb
 
+# adding this to support MurckoScaffold failures  in moleculenet_dc tests
+def pytest_sessionstart(session):
+    try:
+        from rdkit import Chem
+        from rdkit.Chem.Scaffolds import MurckoScaffold as MS
+        if not hasattr(MS, "MurckoScaffoldSmiles"):
+            def MurckoScaffoldSmiles(*, smiles=None, mol=None, includeChirality=False):
+                if mol is None:
+                    if smiles is None:
+                        raise ValueError("Provide SMILES or mol")
+                    mol = Chem.MolFromSmiles(smiles)
+                scaf = MS.GetScaffoldForMol(mol)
+                return Chem.MolToSmiles(scaf, isomericSmiles=includeChirality)
+            MS.MurckoScaffoldSmiles = MurckoScaffoldSmiles
+    except Exception:
+        # If RDKit isn't present at all, relevant tests will skip/fail as usual.
+        pass
+
 @pytest.fixture(scope="session")
 def tiny_parquet(tmp_path_factory):
     # Create a tiny parquet with just a few SMILES

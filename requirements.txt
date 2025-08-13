@@ -22,6 +22,7 @@ seaborn
 #deepchem                # optional, only for MoleculeNet downloads, # done through git workflow
 tqdm
 psutil
+scikit-learn
 
 # Testing
 pytest
