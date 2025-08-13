@@ -5,6 +5,8 @@ import torch
 
 
 def test_tox21_case_study_smoke(monkeypatch):
+    
+    
     unsup = types.ModuleType("training.unsupervised")
     unsup.train_jepa = lambda *args, **kwargs: {}
     monkeypatch.setitem(sys.modules, "training.unsupervised", unsup)

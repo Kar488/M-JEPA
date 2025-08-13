@@ -170,7 +170,11 @@ def run_tox21_case_study(
     ema_helper = EMA(encoder, decay=0.99)
     predictor = MLPPredictor(embed_dim=hidden_dim, hidden_dim=hidden_dim * 2)
 
-    train_jepa(
+    import importlib
+    sup = importlib.import_module("training.supervised")
+    unsup = importlib.import_module("training.unsupervised")
+    
+    unsup.train_jepa(
         dataset=dataset,
         encoder=encoder,
         ema_encoder=ema_encoder,
@@ -194,7 +198,7 @@ def run_tox21_case_study(
     combined_ds_labels = np.concatenate([train_ds.labels, val_ds.labels])
     combined_ds = GraphDatasetCls(combined_ds_graphs, combined_ds_labels)
 
-    regression_metrics = train_linear_head(
+    regression_metrics = sup.train_linear_head(
         dataset=combined_ds,
         encoder=encoder,
         task_type="regression",
