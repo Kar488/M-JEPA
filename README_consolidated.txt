@@ -128,6 +128,11 @@ W&B automatically when the `WANDB_API_KEY` secret is present.
 1) Login into vas ai
 2) Open terminal from instances
 3) Launch with the provided SSH - e.g. ssh -p 40129 root@167.179.138.57 -L 8080:localhost:8080
+ssh -o IdentitiesOnly=yes -o PasswordAuthentication=no `
+    -i $env:USERPROFILE\.ssh\vast_deploy `
+    -p 40129 `
+    root@167.179.138.57 -vv
+
 4) Use password when generating key - e.g., crypt
 5) Start runner -
    5.1) su - runner
