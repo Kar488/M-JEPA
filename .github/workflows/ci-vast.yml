@@ -80,7 +80,8 @@ jobs:
             PIP_CACHE_DIR: ${{ env.PIP_CACHE }} # <-- use the same dir we created
         run: |
           mamba run -n mjepa python -m pip install --upgrade pip setuptools wheel "numpy<2"
-          mamba run -n mjepa python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VER}" PYG_URL="https://data.pyg.org/whl/torch-2.2.1+cpu.html"
+          mamba run -n mjepa python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VER}" 
+          PYG_URL="https://data.pyg.org/whl/torch-2.2.1+cpu.html"
           # Install low-level PyG wheels from the SAME index (and versions that include scatter_mean)
           mamba run -n mjepa python -m pip install -f "$PYG_URL" \
             "torch-scatter==2.1.2" 
@@ -212,8 +213,7 @@ jobs:
             python -m pip install -U pip setuptools wheel "numpy<2"
             python -m pip install --index-url https://download.pytorch.org/whl/cu121 "torch==2.2.1"
             PYG_URL="https://data.pyg.org/whl/torch-2.2.1+cu121.html"
-            python -m pip install -f "$PYG_URL" \
-              torch-scatter==2.1.2
+            python -m pip install -f "$PYG_URL" torch-scatter==2.1.2
             python -m pip install torch-geometric==2.5.3 --no-deps
 
             # 4) Project requirements (if present)
