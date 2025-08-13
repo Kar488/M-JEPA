@@ -31,30 +31,34 @@ jobs:
         ssh-keygen -y -P "${{ secrets.VAST_SSH_PASSPHRASE }}" -f /tmp/vast_key | ssh-keygen -lf -  
 
     - name: SSH preflight (whoami with passphrase key)
+      env:
+        VAST_SSH_PASSPHRASE: 2hJxySm9!
       run: |
         set -euxo pipefail
         umask 077
         printf '%s\n' "${{ secrets.VAST_SSH_KEY }}" > /tmp/vast_key
         chmod 600 /tmp/vast_key
 
-        # Start agent and feed passphrase via askpass
+        # Start agent
         eval "$(ssh-agent -s)"
+
+        # Provide passphrase via askpass
         cat > /tmp/askpass.sh <<'SH'
         #!/usr/bin/env bash
-        printf '%s' "${VAST_SSH_PASSPHRASE}"
+        printf '%s' "$VAST_SSH_PASSPHRASE"
         SH
             chmod +x /tmp/askpass.sh
             export SSH_ASKPASS=/tmp/askpass.sh
-            export DISPLAY=:0  # needed for SSH_ASKPASS to be used non-interactively
-            setsid -w ssh-add /tmp/vast_key < /dev/null
+            export SSH_ASKPASS_REQUIRE=force
 
-            echo "Trying whoami on remote..."
-            ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o PasswordAuthentication=no \
-                -p "40129" \
-                root@167.179.138.57 \
-                whoami
-          env:
-            VAST_SSH_PASSPHRASE: ${{ secrets.VAST_SSH_PASSPHRASE }}
+        # Add the key to the agent (must be detached from TTY)
+        setsid -w ssh-add /tmp/vast_key < /dev/null
+
+        # Now the agent holds the key; do the whoami test
+        ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o IdentitiesOnly=yes \
+            -p "40129" \
+            root@167.179.138.57 \
+            whoami
 
     - name: GPU sanity
       uses: appleboy/ssh-action@v1
