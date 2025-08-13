@@ -88,7 +88,7 @@ jobs:
       - name: Verify RDKit Murcko function
         shell: bash -l {0}
         run: |
-          python - <<'PY'
+          mamba run -n mjepa python - <<'PY'
           from rdkit.Chem.Scaffolds import MurckoScaffold as MS
           assert hasattr(MS, "MurckoScaffoldSmiles"), "MurckoScaffoldSmiles missing"
           print("MurckoScaffoldSmiles present ✓")
