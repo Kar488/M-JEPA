@@ -47,7 +47,7 @@ jobs:
       - name: Install DeepChem (pip, no deps)
         shell: bash -l {0}
         run: |
-          mamba run -n mjepa python -m pip install --no-deps deepchem==2.8.0
+          mamba run -n mjepa python -m pip install deepchem==2.8.0
           
       - name: Set versions (for cache key)
         run: |
@@ -85,10 +85,9 @@ jobs:
             "torch-scatter==${TSCATTER_VER}"
             
           # Install torch-geometric WITHOUT deps so it doesn’t upgrade the above
-          mamba run -n mjepa python -m pip install --no-deps "torch-geometric==2.5.3"
+          mamba run -n mjepa python -m pip install "torch-geometric==2.5.3"
 
           mamba run -n mjepa python -m pip install -r requirements.txt
-          fi
 
       # Sanity check Murcko is available (fail early if not)
       - name: Verify RDKit Murcko function
