@@ -17,32 +17,32 @@ env:
 
 jobs:
     vast_smoke:
-    name: Smoke on Vast (GPU present?)
-    runs-on: ubuntu-latest
-    steps:
-      - name: GPU sanity
-        uses: appleboy/ssh-action@v1
-        with:
-          host: 167.179.138.57
-          username: root
-          port: 40129
-          key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: 2hJxySm9!   # leave secret empty if no passphrase
-          script: |
-            set -euo pipefail
-            echo "user: $(whoami)"
+      name: Smoke on Vast (GPU present?)
+      runs-on: ubuntu-latest
+      steps:
+        - name: GPU sanity
+          uses: appleboy/ssh-action@v1
+          with:
+            host: 167.179.138.57
+            username: root
+            port: 40129
+            key: ${{ secrets.VAST_SSH_KEY }}
+            passphrase: 2hJxySm9!   # leave secret empty if no passphrase
+            script: |
+              set -euo pipefail
+              echo "user: $(whoami)"
 
-            # GPU present?
-            if command -v nvidia-smi >/dev/null 2>&1; then
+              # GPU present?
+              if command -v nvidia-smi >/dev/null 2>&1; then
+                nvidia-smi --query-gpu=name,driver_version,cuda_version --format=csv,noheader
+              else
+                echo "nvidia-smi not found"; exit 1
+              fi
               nvidia-smi --query-gpu=name,driver_version,cuda_version --format=csv,noheader
-            else
-              echo "nvidia-smi not found"; exit 1
-            fi
-             nvidia-smi --query-gpu=name,driver_version,cuda_version --format=csv,noheader
-            # Optional: ensure CUDA 12.x if you plan cu121 wheels
-            if ! nvidia-smi --query-gpu=cuda_version --format=csv,noheader | grep -q '^12'; then
-              echo "Expected CUDA 12.x for cu121 wheels"; exit 1
-            fi
+              # Optional: ensure CUDA 12.x if you plan cu121 wheels
+              if ! nvidia-smi --query-gpu=cuda_version --format=csv,noheader | grep -q '^12'; then
+                echo "Expected CUDA 12.x for cu121 wheels"; exit 1
+              fi
 
   tests_quick:
     name: Quick tests (no gpu, no slow)
