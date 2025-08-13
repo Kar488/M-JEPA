@@ -87,7 +87,7 @@ jobs:
           # Install torch-geometric WITHOUT deps so it doesn’t upgrade the above
           mamba run -n mjepa python -m pip install --no-deps "torch-geometric==2.5.3"
 
-          mamba run -n mjepa python -m pip install requirements.txt
+          mamba run -n mjepa python -m pip install -r requirements.txt
           fi
 
       # Sanity check Murcko is available (fail early if not)
