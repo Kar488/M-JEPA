@@ -87,7 +87,6 @@ jobs:
             "torch-scatter==2.1.2" 
           # Install torch-geometric WITHOUT deps so it doesn’t upgrade the above
           mamba run -n mjepa python -m pip install "torch-geometric==2.5.3" --no-deps
-          mamba run -n mjepa python -m pip install torch-geometric
           if [ -f req-no-bin.txt ]; then
             mamba run -n mjepa python -m pip install -r req-no-bin.txt
           fi
@@ -100,6 +99,14 @@ jobs:
           from rdkit.Chem.Scaffolds import MurckoScaffold as MS
           assert hasattr(MS, "MurckoScaffoldSmiles"), "MurckoScaffoldSmiles missing"
           print("MurckoScaffoldSmiles present ✓")
+          PY
+
+      - name: Verify torch-scatter symbol
+        shell: bash -l {0}
+        run: |
+          mamba run -n mjepa python - <<'PY'
+          from torch_scatter import scatter_mean
+          print("scatter_mean OK ✓", scatter_mean)
           PY
 
       - name: Show pip cache dir
