@@ -56,30 +56,30 @@ jobs:
           env:
             VAST_SSH_PASSPHRASE: ${{ secrets.VAST_SSH_PASSPHRASE }}
 
-        - name: GPU sanity
-          uses: appleboy/ssh-action@v1
-          with:
-            host: ${{ secrets.VAST_HOST }}
-            username: ${{ secrets.VAST_USER }}
-            port: ${{ secrets.VAST_PORT }}
-            key: ${{ secrets.VAST_SSH_KEY }}
-            passphrase: 2hJxySm9!   # only include if your key is encrypted
-            script: |
-              set -euo pipefail
-              whoami
-              nvidia-smi
-              python3 - <<'PY' || true
-              import importlib, sys
-              m = importlib.util.find_spec("torch")
-              print("torch installed?", bool(m))
-              if not m:
-                  sys.exit(0)
-              import torch
-              print("torch:", torch.__version__)
-              print("cuda available:", torch.cuda.is_available())
-              if torch.cuda.is_available():
-                  print("device 0:", torch.cuda.get_device_name(0))
-              PY
+    - name: GPU sanity
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.VAST_HOST }}
+        username: ${{ secrets.VAST_USER }}
+        port: ${{ secrets.VAST_PORT }}
+        key: ${{ secrets.VAST_SSH_KEY }}
+        passphrase: 2hJxySm9!   # only include if your key is encrypted
+        script: |
+          set -euo pipefail
+          whoami
+          nvidia-smi
+          python3 - <<'PY' || true
+          import importlib, sys
+          m = importlib.util.find_spec("torch")
+          print("torch installed?", bool(m))
+          if not m:
+              sys.exit(0)
+          import torch
+          print("torch:", torch.__version__)
+          print("cuda available:", torch.cuda.is_available())
+          if torch.cuda.is_available():
+              print("device 0:", torch.cuda.get_device_name(0))
+          PY
 
   tests_quick:
     name: Quick tests (no gpu, no slow)
