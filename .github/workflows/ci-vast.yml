@@ -50,9 +50,13 @@ jobs:
             chmod +x /tmp/askpass.sh
             export SSH_ASKPASS=/tmp/askpass.sh
             export SSH_ASKPASS_REQUIRE=force
+            export DISPLAY=:9999
 
-        # Add the key to the agent (must be detached from TTY)
-        setsid -w ssh-add /tmp/vast_key < /dev/null
+        # Load key into agent (non-interactive)
+        setsid -w sh -c 'ssh-add /tmp/vast_key < /dev/null'
+
+        # Confirm the agent actually holds the key
+        ssh-add -l
 
         # Now the agent holds the key; do the whoami test
         ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o IdentitiesOnly=yes \
