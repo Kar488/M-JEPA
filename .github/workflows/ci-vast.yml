@@ -161,6 +161,21 @@ jobs:
             unset REPO_DEPLOY_KEY
 
       # Separate deployment phases: pretrain, finetune, benchmark and case study
+      - name: Grid search on a small dataset      # <–– insert here
+        run: |
+          torchrun --standalone … train_jepa.py grid-search \
+            --dataset-dir data/BASF_AIPubChem_v4 \
+            --mask-ratios 0.15 \
+            --num-layers-list 3 \
+            --hidden-dims 256 \
+            --gnn-types mpnn \
+            --ema-decays 0.99 \
+            --pretrain-batch-sizes 4 \
+            --finetune-batch-sizes 4 \
+            --pretrain-epochs-options 1 \
+            --finetune-epochs-options 1 \
+            --out-csv outputs/grid_results.csv
+
       - name: Pretrain on Vast
         uses: appleboy/ssh-action@v1
         with:
