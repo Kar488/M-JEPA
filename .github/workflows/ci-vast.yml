@@ -30,45 +30,56 @@ jobs:
         echo "Runner sees private-key fingerprint:"
         ssh-keygen -y -P "${{ secrets.VAST_SSH_PASSPHRASE }}" -f /tmp/vast_key | ssh-keygen -lf -  
 
-    - name: SSH preflight (fingerprint + whoami)
-      
+    - name: SSH preflight (whoami with passphrase key)
       run: |
         set -euxo pipefail
         umask 077
         printf '%s\n' "${{ secrets.VAST_SSH_KEY }}" > /tmp/vast_key
         chmod 600 /tmp/vast_key
-        echo "Runner sees private-key fingerprint:"
-        ssh-keygen -y -f /tmp/vast_key | ssh-keygen -lf -
-        echo "Trying whoami on remote..."
-        ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes \
-            -i /tmp/vast_key \
-            -p "40129" \
-            "root@$167.179.138.57" \
-            whoami
 
-    - name: GPU sanity
-      uses: appleboy/ssh-action@v1
-      with:
-        host: ${{ secrets.VAST_HOST }}
-        username: ${{ secrets.VAST_USER }}
-        port: ${{ secrets.VAST_PORT }}
-        key: ${{ secrets.VAST_SSH_KEY }}
-        script: |
-          set -euo pipefail
-          whoami
-          nvidia-smi
-          python3 - <<'PY' || true
-          import importlib, sys
-          m = importlib.util.find_spec("torch")
-          print("torch installed?", bool(m))
-          if not m:
-              sys.exit(0)
-          import torch
-          print("torch:", torch.__version__)
-          print("cuda available:", torch.cuda.is_available())
-          if torch.cuda.is_available():
-              print("device 0:", torch.cuda.get_device_name(0))
-          PY
+        # Start agent and feed passphrase via askpass
+        eval "$(ssh-agent -s)"
+        cat > /tmp/askpass.sh <<'SH'
+        #!/usr/bin/env bash
+        printf '%s' "${VAST_SSH_PASSPHRASE}"
+        SH
+            chmod +x /tmp/askpass.sh
+            export SSH_ASKPASS=/tmp/askpass.sh
+            export DISPLAY=:0  # needed for SSH_ASKPASS to be used non-interactively
+            setsid -w ssh-add /tmp/vast_key < /dev/null
+
+            echo "Trying whoami on remote..."
+            ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o PasswordAuthentication=no \
+                -p "40129" \
+                root@167.179.138.57 \
+                whoami
+          env:
+            VAST_SSH_PASSPHRASE: ${{ secrets.VAST_SSH_PASSPHRASE }}
+
+        - name: GPU sanity
+          uses: appleboy/ssh-action@v1
+          with:
+            host: ${{ secrets.VAST_HOST }}
+            username: ${{ secrets.VAST_USER }}
+            port: ${{ secrets.VAST_PORT }}
+            key: ${{ secrets.VAST_SSH_KEY }}
+            passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}   # only include if your key is encrypted
+            script: |
+              set -euo pipefail
+              whoami
+              nvidia-smi
+              python3 - <<'PY' || true
+              import importlib, sys
+              m = importlib.util.find_spec("torch")
+              print("torch installed?", bool(m))
+              if not m:
+                  sys.exit(0)
+              import torch
+              print("torch:", torch.__version__)
+              print("cuda available:", torch.cuda.is_available())
+              if torch.cuda.is_available():
+                  print("device 0:", torch.cuda.get_device_name(0))
+              PY
 
   tests_quick:
     name: Quick tests (no gpu, no slow)
