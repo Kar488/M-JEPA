@@ -137,11 +137,11 @@ jobs:
       - name: GPU sanity
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
+          host: 167.179.138.57
+          username: root
+          port: 40129
           key: ${{ secrets.VAST_SSH_KEY }}
-          
+          passphrase: 2hJxySm9!   # leave secret empty if no passphrase
           script: |
             set -euo pipefail
             echo "user: $(whoami)"
@@ -174,8 +174,8 @@ jobs:
           BRANCH: master
           VENV_DIR: /srv/mjepa/.venv
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }} 
           envs: REPO_DEPLOY_KEY,REPO,APP_DIR,BRANCH,VENV_DIR
@@ -211,7 +211,7 @@ jobs:
                 micromamba create -y -n "$ENV_NAME" -c conda-forge \
                   python=3.10 rdkit=2023.09.5 scipy=1.10.1 pip
               fi
-              micromamba run -n "$ENV_NAME" python -m pip install --no-deps deepchem==2.7.1
+              micromamba run -n "$ENV_NAME" python -m pip install deepchem==2.7.1
               micromamba activate "$ENV_NAME"
 
             # 3) Torch (GPU, cu121) + PyG pinned to torch 2.2.1
@@ -219,7 +219,7 @@ jobs:
             python -m pip install --index-url https://download.pytorch.org/whl/cu121 "torch==2.2.1"
             PYG_URL="https://data.pyg.org/whl/torch-2.2.1+cu121.html"
             python -m pip install -f "$PYG_URL" torch-scatter==2.1.2
-            python -m pip install torch-geometric==2.5.3 --no-deps
+            python -m pip install torch-geometric==2.5.3
 
             # 4) Project requirements (if present)
             if [ -f "$APP_DIR/requirements.txt" ]; then
