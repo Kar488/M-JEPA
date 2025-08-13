@@ -47,7 +47,7 @@ jobs:
       - name: Install DeepChem (pip, no deps)
         shell: bash -l {0}
         run: |
-          mamba run -n mjepa python -m pip install --no-deps deepchem==2.7.1
+          mamba run -n mjepa python -m pip install --no-deps deepchem==2.8.0
           
       - name: Set versions (for cache key)
         run: |
@@ -86,15 +86,13 @@ jobs:
           # Install low-level PyG wheels from the SAME index (and versions that include scatter_mean)
           # install low-level wheels that DeepChem/torch-geometric may touch
           mamba run -n mjepa python -m pip install --no-cache-dir -f "$PYG_URL" \
-            "torch-scatter==${TSCATTER_VER}" \
-            "torch-sparse==0.6.18" \
-            "torch-cluster==1.6.3" \
-            "torch-spline-conv==1.2.2"
-
+            "torch-scatter==${TSCATTER_VER}"
+            
           # Install torch-geometric WITHOUT deps so it doesn’t upgrade the above
           mamba run -n mjepa python -m pip install --no-deps "torch-geometric==2.5.3"
+
           # DeepChem 2.7.x prefers networkx 2.x
-          mamba run -n mjepa python -m pip install "networkx<3"
+          # mamba run -n mjepa python -m pip install "networkx<3"
 
           if [ -f req-no-bin.txt ]; then
             mamba run -n mjepa python -m pip install -r req-no-bin.txt
