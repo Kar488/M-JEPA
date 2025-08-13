@@ -1,7 +1,8 @@
 import pytest
 import torch
+import yaml
 
-from scripts.train_jepa import aggregate_metrics, resolve_device
+from scripts.train_jepa import aggregate_metrics, load_config, resolve_device
 
 
 def test_aggregate_metrics_empty():
@@ -30,3 +31,17 @@ def test_resolve_device_prefers_gpu(monkeypatch):
 def test_resolve_device_falls_back_to_cpu(monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     assert resolve_device("cuda:1") == "cpu"
+
+
+def test_load_config_valid(tmp_path):
+    content = {"a": 1, "b": {"c": 2}}
+    cfg_file = tmp_path / "cfg.yaml"
+    cfg_file.write_text(yaml.safe_dump(content))
+    loaded = load_config(str(cfg_file))
+    assert loaded == content
+
+
+def test_load_config_missing(tmp_path):
+    missing = tmp_path / "missing.yaml"
+    with pytest.raises(FileNotFoundError):
+        load_config(str(missing))
