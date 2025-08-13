@@ -42,11 +42,16 @@ jobs:
       - name: Install RDKit + DeepChem (conda-forge)
         shell: bash -l {0}
         run: |
-            mamba create -y -n mjepa -c conda-forge python=3.9 rdkit=2023.09.5 deepchem=2.7.1 pip
+            mamba create -y -n mjepa -c conda-forge python=3.10 rdkit=2023.09.5 scipy=1.10.1 pip
       
+      - name: Install DeepChem (pip, no deps)
+        shell: bash -l {0}
+        run: |
+          mamba run -n mjepa python -m pip install --no-deps deepchem==2.7.1
+          
       - name: Set versions (for cache key)
         run: |
-          echo "PY_VER=3.9" >> $GITHUB_ENV
+          echo "PY_VER=3.10" >> $GITHUB_ENV
           echo "TORCH_VER=2.2.1" >> $GITHUB_ENV
           echo "TSCATTER_VER=2.1.2" >> $GITHUB_ENV
 
@@ -60,9 +65,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PIP_CACHE }} # <-- use the same dir we created
-          key: pip-${{ runner.os }}-py3.10-torch${{ env.TORCH_VER }}-tscatter${{ env.TSCATTER_VER }}-${{ hashFiles('requirements.txt') }}
+          key: pip-${{ runner.os }}-py${{ env.PY_VER }}-torch${{ env.TORCH_VER }}-tscatter${{ env.TSCATTER_VER }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            pip-${{ runner.os }}-py3.10-
+            pip-${{ runner.os }}-py${{ env.PY_VER }}-
       
       - name: Filter pip requirements (exclude rdkit/deepchem)
         if: hashFiles('requirements.txt') != ''
@@ -79,10 +84,8 @@ jobs:
           mamba run -n mjepa python -m pip install -f https://data.pyg.org/whl/torch-${TORCH_VER}+cpu.html "torch-scatter==${TSCATTER_VER}"
           mamba run -n mjepa python -m pip install torch-geometric
           if [ -f req-no-bin.txt ]; then
-                mamba run -n mjepa python -m pip install -r req-no-bin.txt
-              elif [ -f requirements.txt ]; then
-                mamba run -n mjepa python -m pip install -r requirements.txt
-              fi
+            mamba run -n mjepa python -m pip install -r req-no-bin.txt
+          fi
 
       # Sanity check Murcko is available (fail early if not)
       - name: Verify RDKit Murcko function
@@ -196,8 +199,9 @@ jobs:
               eval "$("$MM/bin/micromamba" shell hook -s bash)"
               if ! micromamba env list | grep -q "^$ENV_NAME "; then
                 micromamba create -y -n "$ENV_NAME" -c conda-forge \
-                  python=3.10 rdkit=2023.09.5 deepchem=2.7.1 pip
+                  python=3.10 rdkit=2023.09.5 scipy=1.10.1 pip
               fi
+              micromamba run -n "$ENV_NAME" python -m pip install --no-deps deepchem==2.7.1
               micromamba activate "$ENV_NAME"
 
             # 3) Torch (GPU, cu121) + PyG pinned to torch 2.2.1

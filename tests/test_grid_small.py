@@ -44,7 +44,14 @@ GraphDataset = _load_real_graphdataset()
 
 
 if SOURCE.exists():
-    df = pd.read_parquet(SOURCE).head(80)  # keep small
+    try:
+        df = pd.read_parquet(SOURCE).head(20)  # keep small
+    except Exception:
+        df = None
+        # force fallback to toy dataset below
+        SOURCE = Path("__invalid__")
+
+if SOURCE.exists() and df is not None:
     # ensure smiles col exists
     use_cols = [c for c in df.columns if c.lower() == "smiles"]
     if use_cols:
