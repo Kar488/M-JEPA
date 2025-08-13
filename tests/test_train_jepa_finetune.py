@@ -127,6 +127,8 @@ def test_cmd_finetune_aggregates_metrics(tmp_path, monkeypatch):
         return captured_metrics["out"]
 
     monkeypatch.setattr(tj, "aggregate_metrics", aggregate_stub)
+    #forces scripts.train_jepa to see a harmless checkpoint dict during the test, so cmd_finetune won’t choke on the "stub" file.
+    monkeypatch.setattr(tj.torch, "load", lambda *a, **k: {"encoder": {}}, raising=True)
 
     args = make_args(tmp_path, seeds=[0, 1, 2])
     tj.cmd_finetune(args)
