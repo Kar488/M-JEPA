@@ -3,7 +3,6 @@ omit =
     */__init__.py
     main.py 
     third_party/*
-    tests/*
 
 [report]
 omit =
