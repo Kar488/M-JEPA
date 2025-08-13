@@ -74,7 +74,8 @@ class GraphSAGE(EncoderBase):
         for layer in self.layers:
             x = layer(x, e)
         x = self.out_norm(x)
-        return global_mean_pool(x)
+
+        return global_mean_pool(x, getattr(g, "graph_ptr", None))
 
 
 class GINLayer(nn.Module):
@@ -114,7 +115,8 @@ class GIN(EncoderBase):
         for layer in self.layers:
             x = layer(x, e)
         x = self.out_norm(x)
-        return global_mean_pool(x)
+
+        return global_mean_pool(x, getattr(g, "graph_ptr", None))
 
 
 class MultiHeadGATLayer(nn.Module):
@@ -199,4 +201,4 @@ class GATMultiHead(EncoderBase):
         for layer in self.layers:
             x = layer(x, e)
         x = self.out_norm(x)
-        return global_mean_pool(x)
+        return global_mean_pool(x, getattr(g, "graph_ptr", None))
