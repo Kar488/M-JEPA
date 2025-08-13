@@ -20,8 +20,18 @@ jobs:
     name: Smoke on Vast (GPU present?)
     runs-on: ubuntu-latest
     steps:
-   # PRE-FLIGHT: prove the key+secrets work from the GitHub runner
+    # PRE-FLIGHT: prove the key+secrets work from the GitHub runner
+    - name: SSH preflight (fingerprint only, passphrase key)
+      run: |
+        set -euxo pipefail
+        umask 077
+        printf '%s\n' "${{ secrets.VAST_SSH_KEY }}" > /tmp/vast_key
+        chmod 600 /tmp/vast_key
+        echo "Runner sees private-key fingerprint:"
+        ssh-keygen -y -P "${{ secrets.VAST_SSH_PASSPHRASE }}" -f /tmp/vast_key | ssh-keygen -lf -  
+
     - name: SSH preflight (fingerprint + whoami)
+      
       run: |
         set -euxo pipefail
         umask 077
@@ -32,8 +42,8 @@ jobs:
         echo "Trying whoami on remote..."
         ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes \
             -i /tmp/vast_key \
-            -p "${{ secrets.VAST_PORT }}" \
-            "${{ secrets.VAST_USER }}@${{ secrets.VAST_HOST }}" \
+            -p "40129" \
+            "root@$167.179.138.57" \
             whoami
 
     - name: GPU sanity
