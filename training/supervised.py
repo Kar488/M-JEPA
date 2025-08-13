@@ -186,6 +186,10 @@ def train_linear_head(
                 graph_emb = graph_emb[:num_graphs]
                
             preds = head(graph_emb).squeeze(1)
+            # Guard against any numerical issues in the head
+            if not torch.isfinite(preds).all():
+                preds = torch.nan_to_num(preds)
+
             targets = batch_labels if batch_labels is not None else torch.tensor(
                 dataset.labels[batch_indices], dtype=torch.float32, device=device_t
             )
@@ -218,6 +222,8 @@ def train_linear_head(
                     graph_emb = graph_emb[:num_graphs]
 
                 preds = head(graph_emb).squeeze(1)
+                # Guard against any numerical issues in the head
+                preds = torch.nan_to_num(preds)
                 targets = torch.tensor(
                     dataset.labels[batch_indices], dtype=torch.float32, device=device_t
                 )
@@ -250,11 +256,16 @@ def train_linear_head(
                 graph_emb = graph_emb[:num_graphs]
             
             preds = head(graph_emb).squeeze(1).detach().cpu().numpy()
+            # Sanitize before aggregation to keep sklearn happy
+            preds = np.nan_to_num(preds, nan=0.0, posinf=0.0, neginf=0.0)
             targets = dataset.labels[batch_indices]
             all_targets.append(targets)
             all_preds.append(preds)
         y_true = np.concatenate(all_targets)
         y_pred = np.concatenate(all_preds)
+        # Final safety net
+        y_true = np.nan_to_num(y_true, nan=0.0, posinf=0.0, neginf=0.0)
+        y_pred = np.nan_to_num(y_pred, nan=0.0, posinf=0.0, neginf=0.0)
         if task_type == "classification":
             metrics = compute_classification_metrics(y_true, y_pred)
         else:

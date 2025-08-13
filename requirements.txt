@@ -19,7 +19,7 @@ matplotlib
 seaborn
 
 # Data utilities
-deepchem                # optional, only for MoleculeNet downloads
+#deepchem                # optional, only for MoleculeNet downloads, # done through git workflow
 
 # Testing
 pytest

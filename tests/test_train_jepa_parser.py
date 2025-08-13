@@ -12,6 +12,14 @@ from scripts.train_jepa import (
     cmd_grid_search,
 )
 
+import pytest, argparse
+
+@pytest.fixture(autouse=True)
+def _silence_argparse_usage(monkeypatch):
+    def _quiet_error(self, message):
+        raise SystemExit(2)
+    monkeypatch.setattr(argparse.ArgumentParser, "error", _quiet_error, raising=False)
+ 
 
 def test_pretrain_parser_defaults_and_handler(tmp_path):
     parser = build_parser()

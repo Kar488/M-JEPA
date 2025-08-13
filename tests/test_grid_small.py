@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 # Configure a source parquet (adjust path to one of your shards)
-SOURCE = Path("data/ZINC_canonicalized/train-00000-of-00003-1dd8e62fc2556455.parquet")  # change if needed
+SOURCE = Path("data/ZINC-canonicalized/train-00000-of-00003-1dd8e62fc2556455.parquet")  # change if needed
 TMP = Path("data/tmp_small.parquet")
 TMP.parent.mkdir(parents=True, exist_ok=True)
  
