@@ -99,10 +99,16 @@ jobs:
         env:
             PIP_CACHE_DIR: ${{ env.PIP_CACHE }}
         run: pip cache dir
+        
+      - name: Install test tooling
+        shell: bash -l {0}
+        run: |
+          mamba run -n mjepa python -m pip install -U pytest pytest-xdist
       
       - name: Run quick tests
         shell: bash -l {0}
-        run: pytest -m "not gpu and not slow"
+        run: |
+          mamba run -n mjepa python -m pytest -m "not gpu and not slow" -q
 
   # tests_slow:
     # Future enhancements to long running tests locally
