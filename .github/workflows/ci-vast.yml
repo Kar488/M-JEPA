@@ -47,7 +47,7 @@ jobs:
       - name: Install DeepChem (pip, no deps)
         shell: bash -l {0}
         run: |
-          mamba run -n mjepa python -m pip install deepchem==2.7.1
+          mamba run -n mjepa python -m pip install --no-deps deepchem==2.7.1
           
       - name: Set versions (for cache key)
         run: |
@@ -65,15 +65,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PIP_CACHE }} # <-- use the same dir we created
-          key: pip-${{ runner.os }}-py${{ env.PY_VER }}-torch${{ env.TORCH_VER }}-tscatter${{ env.TSCATTER_VER }}-v2${{ hashFiles('requirements.txt') }}
+          key: pip-${{ runner.os }}-py${{ env.PY_VER }}-torch${{ env.TORCH_VER }}-tscatter${{ env.TSCATTER_VER }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py${{ env.PY_VER }}-
       
-      - name: Filter pip requirements (exclude rdkit/deepchem)
+      - name: Filter pip requirements (exclude conda/pinned bins)
         if: hashFiles('requirements.txt') != ''
         run: |
-          grep -viE '^(rdkit|deepchem)([=<>].*)?$' requirements.txt > req-no-bin.txt || true
-
+          grep -viE '^(rdkit|deepchem|scipy|torch|torch-scatter|torch-sparse|torch-cluster|torch-spline-conv|torch-geometric|networkx)([=<>].*)?$' requirements.txt > req-no-bin.txt || true
+                  
       - name: Install deps (CPU, pinned to torch 2.2.1)
         shell: bash -l {0}
         env:
@@ -81,12 +81,21 @@ jobs:
         run: |
           mamba run -n mjepa python -m pip install --upgrade pip setuptools wheel "numpy<2"
           mamba run -n mjepa python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VER}" 
+
           PYG_URL="https://data.pyg.org/whl/torch-2.2.1+cpu.html"
           # Install low-level PyG wheels from the SAME index (and versions that include scatter_mean)
-          mamba run -n mjepa python -m pip install -f "$PYG_URL" "torch-scatter==2.1.2" 
-          mamba run -n mjepa python -m pip show torch-scatter
+          # install low-level wheels that DeepChem/torch-geometric may touch
+          mamba run -n mjepa python -m pip install --no-cache-dir -f "$PYG_URL" \
+            "torch-scatter==${TSCATTER_VER}" \
+            "torch-sparse==0.6.18" \
+            "torch-cluster==1.6.3" \
+            "torch-spline-conv==1.2.2"
+
           # Install torch-geometric WITHOUT deps so it doesn’t upgrade the above
-          mamba run -n mjepa python -m pip install "torch-geometric==2.5.3" --no-deps
+          mamba run -n mjepa python -m pip install --no-deps "torch-geometric==2.5.3"
+          # DeepChem 2.7.x prefers networkx 2.x
+          mamba run -n mjepa python -m pip install "networkx<3"
+
           if [ -f req-no-bin.txt ]; then
             mamba run -n mjepa python -m pip install -r req-no-bin.txt
           fi
@@ -108,10 +117,6 @@ jobs:
           from torch_scatter import scatter_mean
           print("scatter_mean OK ✓", scatter_mean)
           PY
-      - name: Reinstall torch-scatter
-        shell: bash -l {0}
-        run: |
-          mamba run -n mjepa python -m pip install --force-reinstall -f "https://data.pyg.org/whl/torch-2.2.1+cpu.html" "torch-scatter==2.1.2"
           
       - name: Show pip cache dir
         shell: bash -l {0}
