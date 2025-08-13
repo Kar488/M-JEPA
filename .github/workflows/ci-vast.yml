@@ -39,14 +39,14 @@ jobs:
           miniforge-version: latest
           use-mamba: true
 
-      - name: Install RDKit (conda)
+      - name: Install RDKit + DeepChem (conda-forge)
         shell: bash -l {0}
         run: |
-            mamba create -n mjepa -c conda-forge python=3.9 rdkit=2023.09.5 deepchem=2.7.1 -y
-            mamba activate mjepa
+            mamba create -y -n mjepa -c conda-forge python=3.9 rdkit=2023.09.5 deepchem=2.7.1 pip
       
       - name: Set versions (for cache key)
         run: |
+          echo "PY_VER=3.9" >> $GITHUB_ENV
           echo "TORCH_VER=2.2.1" >> $GITHUB_ENV
           echo "TSCATTER_VER=2.1.2" >> $GITHUB_ENV
 
@@ -69,16 +69,20 @@ jobs:
         run: |
           grep -viE '^(rdkit|deepchem)([=<>].*)?$' requirements.txt > req-no-bin.txt || true
 
-      - name: Install deps (CPU, in your order)
+      - name: Install deps (CPU, pinned to torch 2.2.1)
         shell: bash -l {0}
         env:
             PIP_CACHE_DIR: ${{ env.PIP_CACHE }} # <-- use the same dir we created
         run: |
-          python -m pip install --upgrade pip setuptools wheel "numpy<2"
-          pip install "torch==2.2.1" --index-url https://download.pytorch.org/whl/cpu
-          pip install "torch-scatter==2.1.2" -f https://data.pyg.org/whl/torch-2.2.1+cpu.html
-          pip install torch-geometric
-          [ -f requirements.txt ] && pip install -r requirements.txt
+          mamba run -n mjepa python -m pip install --upgrade pip setuptools wheel "numpy<2"
+          mamba run -n mjepa python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VER}"
+          mamba run -n mjepa python -m pip install -f https://data.pyg.org/whl/torch-${TORCH_VER}+cpu.html "torch-scatter==${TSCATTER_VER}"
+          mamba run -n mjepa python -m pip install torch-geometric
+          if [ -f req-no-bin.txt ]; then
+                mamba run -n mjepa python -m pip install -r req-no-bin.txt
+              elif [ -f requirements.txt ]; then
+                mamba run -n mjepa python -m pip install -r requirements.txt
+              fi
 
       # Sanity check Murcko is available (fail early if not)
       - name: Verify RDKit Murcko function
