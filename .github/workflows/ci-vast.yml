@@ -42,7 +42,8 @@ jobs:
       - name: Install RDKit (conda)
         shell: bash -l {0}
         run: |
-            mamba install -y -c conda-forge python=3.10 rdkit=2023.09.5 deepchem=2.7.
+            mamba create -n mjepa -c conda-forge python=3.9 rdkit=2023.09.5 deepchem=2.7.1 -y
+            mamba activate mjepa
       
       - name: Set versions (for cache key)
         run: |
