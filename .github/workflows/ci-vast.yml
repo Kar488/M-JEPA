@@ -63,7 +63,7 @@ jobs:
             username: ${{ secrets.VAST_USER }}
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
-            passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}   # only include if your key is encrypted
+            passphrase: 2hJxySm9!   # only include if your key is encrypted
             script: |
               set -euo pipefail
               whoami
