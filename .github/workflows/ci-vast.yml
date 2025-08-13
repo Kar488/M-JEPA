@@ -47,7 +47,7 @@ jobs:
       - name: Install DeepChem (pip, no deps)
         shell: bash -l {0}
         run: |
-          mamba run -n mjepa python -m pip install --no-deps deepchem==2.7.1
+          mamba run -n mjepa python -m pip install deepchem==2.7.1
           
       - name: Set versions (for cache key)
         run: |
@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PIP_CACHE }} # <-- use the same dir we created
-          key: pip-${{ runner.os }}-py${{ env.PY_VER }}-torch${{ env.TORCH_VER }}-tscatter${{ env.TSCATTER_VER }}-${{ hashFiles('requirements.txt') }}
+          key: pip-${{ runner.os }}-py${{ env.PY_VER }}-torch${{ env.TORCH_VER }}-tscatter${{ env.TSCATTER_VER }}-v2${{ hashFiles('requirements.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py${{ env.PY_VER }}-
       
@@ -83,8 +83,8 @@ jobs:
           mamba run -n mjepa python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VER}" 
           PYG_URL="https://data.pyg.org/whl/torch-2.2.1+cpu.html"
           # Install low-level PyG wheels from the SAME index (and versions that include scatter_mean)
-          mamba run -n mjepa python -m pip install -f "$PYG_URL" \
-            "torch-scatter==2.1.2" 
+          mamba run -n mjepa python -m pip install -f "$PYG_URL" "torch-scatter==2.1.2" 
+          mamba run -n mjepa python -m pip show torch-scatter
           # Install torch-geometric WITHOUT deps so it doesn’t upgrade the above
           mamba run -n mjepa python -m pip install "torch-geometric==2.5.3" --no-deps
           if [ -f req-no-bin.txt ]; then
@@ -108,7 +108,11 @@ jobs:
           from torch_scatter import scatter_mean
           print("scatter_mean OK ✓", scatter_mean)
           PY
-
+      - name: Reinstall torch-scatter
+        shell: bash -l {0}
+        run: |
+          mamba run -n mjepa python -m pip install --force-reinstall -f "https://data.pyg.org/whl/torch-2.2.1+cpu.html" "torch-scatter==2.1.2"
+          
       - name: Show pip cache dir
         shell: bash -l {0}
         env:
