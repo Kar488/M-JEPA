@@ -550,7 +550,7 @@ jobs:
               # baseline is enabled by default to match earlier behaviour.
 
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
-              "$MMBIN" run -n mjepa python -m scripts/train_jepa.py pretrain \
+              "$MMBIN" run -n mjepa python scripts/train_jepa.py pretrain \
                 --unlabeled-dir data/BASF_AIPubChem_v4 \
                 $PRETRAIN_ARGS \
                 --contrastive \
@@ -613,7 +613,7 @@ jobs:
 
               # Finetune stage
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
-              "$MMBIN" run -n mjepa python -m scripts/train_jepa.py finetune \
+              "$MMBIN" run -n mjepa python scripts/train_jepa.py finetune \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --encoder outputs/encoder.pt \
                 --task-type classification \
@@ -667,7 +667,7 @@ jobs:
 
               # Benchmark stage
               export PYTHONPATH="$APP_DIR:$PYTHONPATH"
-              "$MMBIN" run -n mjepa python -m scripts/train_jepa.py benchmark \
+              "$MMBIN" run -n mjepa python scripts/train_jepa.py benchmark \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --jepa-encoder outputs/encoder.pt \
                 --contrastive-encoder outputs/encoder_contrastive.pt \
@@ -697,8 +697,7 @@ jobs:
               cd "$APP_DIR"
               mkdir -p logs
               # Case study stage
-              "$MMBIN" run -n mjepa python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=1 \
-                scripts/train_jepa.py tox21 \
+              "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
                 --csv data/tox21/data.csv \
                 --task NR-AR \
                 --pretrain-epochs 1 \
