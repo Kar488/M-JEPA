@@ -242,9 +242,12 @@ jobs:
 
             if [ -d "$APP_DIR/.git" ]; then
               git -C "$APP_DIR" remote set-url origin "$AUTH_URL"
-              git -C "$APP_DIR" fetch --prune --depth=1 --filter=blob:none
-              git -C "$APP_DIR" checkout "$BRANCH"
-              git -C "$APP_DIR" pull --ff-only
+              # Shallow fetch the exact branch
+              git -C "$APP_DIR" fetch --prune --depth=1 --filter=blob:none origin "$BRANCH"
+              # Make local branch exactly match remote (handles forced updates/divergence)
+              git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
+              git -C "$APP_DIR" reset --hard "origin/$BRANCH"
+              git -C "$APP_DIR" clean -fdx
             else
               git clone --depth=1 --filter=blob:none "$AUTH_URL" "$APP_DIR"
               git -C "$APP_DIR" checkout "$BRANCH"
