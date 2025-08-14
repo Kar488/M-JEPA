@@ -223,7 +223,7 @@ jobs:
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }} 
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          envs: REPO_DEPLOY_KEY,REPO,APP_DIR,BRANCH,VENV_DIR
+          envs: REPO_TOKEN,REPO,APP_DIR,BRANCH,VENV_DIR
           script: |
             set -euo pipefail
             # 0) GitHub SSH for cloning
