@@ -5,6 +5,7 @@ import pickle
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
+import logging
 import numpy as np
 import torch
 
@@ -22,6 +23,7 @@ except Exception as e:
 import pandas as pd
 
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class GraphData:
@@ -60,6 +62,11 @@ class GraphDataset:
         self.graphs = graphs
         self.labels = labels
         self.smiles = smiles
+        logger.debug(
+            "Initialized GraphDataset with %d graphs%s",
+            len(graphs),
+            " and labels" if labels is not None else "",
+        )
 
     def __len__(self) -> int:
         return len(self.graphs)
@@ -83,9 +90,17 @@ class GraphDataset:
         """
         
         if not indices:
-                raise ValueError("Empty batch indices")
+            logger.error("get_batch called with empty indices")
+            raise ValueError("Empty batch indices")
         if max(indices) >= len(self.graphs):
-            raise IndexError(f"Index out of bounds: max {max(indices)} vs {len(self.graphs)} graphs")
+            logger.error(
+                "get_batch index out of bounds: max %d vs %d graphs",
+                max(indices),
+                len(self.graphs),
+            )
+            raise IndexError(
+                f"Index out of bounds: max {max(indices)} vs {len(self.graphs)} graphs"
+            )
 
         node_features: List[torch.Tensor] = []
         adj_blocks: List[torch.Tensor] = []
@@ -94,6 +109,7 @@ class GraphDataset:
             x_i, adj_i = self.graphs[idx].to_tensors()
             n_i = int(x_i.size(0))
             if n_i <= 0:
+                logger.error("Graph at idx %d has 0 nodes", idx)
                 raise ValueError(f"Graph at idx {idx} has 0 nodes")
             node_features.append(x_i)
             adj_blocks.append(adj_i)
@@ -138,16 +154,17 @@ class GraphDataset:
         Falls back to a small synthetic graph if RDKit/embedding fails.
         """
         # --- graceful fallback if RDKit missing ---
-        try: 
+        try:
             from rdkit import Chem
             from rdkit.Chem import AllChem
         except Exception:
+            logger.debug("RDKit not available; using fallback graph for %s", smiles)
             return _fallback_graph_from_string(smiles)
 
         try:
             mol = Chem.MolFromSmiles(smiles)
             if mol is None:
-                # invalid SMILES -> fallback
+                logger.debug("Invalid SMILES %s; using fallback graph", smiles)
                 return _fallback_graph_from_string(smiles)
 
             # sanitization + explicit H (safer for 3D)
@@ -189,6 +206,7 @@ class GraphDataset:
                         if coords.shape[0] == X.shape[0]:
                             X = np.concatenate([X, coords], axis=1)
                 except Exception:
+                    logger.debug("3D embedding failed for %s", smiles)
                     coords = None  # just proceed without 3D
 
             # Edges + attrs

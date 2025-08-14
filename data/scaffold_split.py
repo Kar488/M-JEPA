@@ -10,6 +10,9 @@ import pandas as pd
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 def smiles_to_scaffold(smiles: str) -> str:
     """Convert a SMILES string to its Bemis–Murcko scaffold SMILES."""
@@ -30,6 +33,12 @@ def scaffold_split_indices(
     seed: int = 42,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Split indices into train/val/test by Bemis–Murcko scaffolds."""
+    logger.debug(
+        "scaffold_split_indices on %d smiles (train_frac=%.2f val_frac=%.2f)",
+        len(smiles),
+        train_frac,
+        val_frac,
+    )
     rng = np.random.RandomState(seed)
     by_scaffold: Dict[str, List[int]] = defaultdict(list)
     for i, sm in enumerate(smiles):
@@ -55,7 +64,12 @@ def scaffold_split_indices(
         else:
             test_idx.extend(g)
         total += len(g)
-
+    logger.info(
+        "Scaffold split sizes: train=%d val=%d test=%d",
+        len(train_idx),
+        len(val_idx),
+        len(test_idx),
+    )
     return np.array(train_idx), np.array(val_idx), np.array(test_idx)
 
 
@@ -69,6 +83,9 @@ def write_scaffold_splits(
     seed: int = 42,
 ) -> None:
     """Write scaffold-based train/val/test splits of a DataFrame to disk."""
+    logger.info(
+        "Writing scaffold splits to %s (fmt=%s)", out_dir, fmt
+    )
     train_idx, val_idx, test_idx = scaffold_split_indices(
         df[smiles_col].astype(str).tolist(), train_frac, val_frac, seed
     )
@@ -86,6 +103,7 @@ def write_scaffold_splits(
             sub.to_csv(out_file, index=False)
         else:
             raise ValueError("fmt must be parquet or csv")
+        logger.debug("Wrote %d rows to %s", len(sub), out_file)
 
 
 __all__ = ["smiles_to_scaffold", "scaffold_split_indices", "write_scaffold_splits"]

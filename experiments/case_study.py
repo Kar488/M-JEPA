@@ -112,6 +112,7 @@ def run_tox21_case_study(
         ValueError: If the required columns are missing.
     """
 
+    logger.info("Running Tox21 case study on %s", csv_path)
     if not os.path.isfile(csv_path):
         raise FileNotFoundError(f"CSV file not found: {csv_path}")
 
@@ -124,6 +125,7 @@ def run_tox21_case_study(
     df = df[[smiles_col, task_name]].dropna(subset=[task_name])
     smiles_list = df[smiles_col].astype(str).tolist()
     labels_list = df[task_name].astype(float).tolist()
+    logger.debug("Loaded %d molecules", len(smiles_list))
 
     set_seed(seed)
 
@@ -155,6 +157,11 @@ def run_tox21_case_study(
     hidden_dim = 256
     num_layers = 3
     gnn_type = "mpnn"
+    logger.info(
+        "Pretraining for %d epochs then finetuning for %d epochs",
+        pretrain_epochs,
+        finetune_epochs,
+    )
     encoder = GNNEncoder(
         input_dim=input_dim,
         hidden_dim=hidden_dim,
@@ -236,6 +243,7 @@ def run_tox21_case_study(
         y_train_val = all_labels[train_val_idx]
 
         for name, path in baseline_embeddings.items():
+            logger.debug("Evaluating baseline %s from %s", name, path)
             if path.lower().endswith(".npy"):
                 X = np.load(path)
             else:

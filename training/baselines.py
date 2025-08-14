@@ -4,12 +4,16 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+import logging
+
 # ---------------------------------------------------------------------------
 # Third-party baselines live under third_party/.  We add their directories to
 # sys.path so they can be imported like regular modules.
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 THIRD_PARTY = PROJECT_ROOT / "third_party"
+
+logger = logging.getLogger(__name__)
  
 def _add_repo_to_path(repo: str) -> None:
     repo_path = THIRD_PARTY / repo
@@ -53,7 +57,9 @@ def run_baseline(
 ) -> Any:
     """Dispatch to a third-party baseline training routine."""
     name = name.lower()
+    logger.info("Running baseline %s on device %s", name, device)
     if name not in BASELINES:
+        logger.error("Unknown baseline '%s'", name)
         raise ValueError(f"Unknown baseline '{name}'")
     fn = BASELINES[name]()
     cfg = dict(cfg or {})

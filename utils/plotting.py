@@ -18,6 +18,10 @@ import seaborn as sns
 import os
 from utils.logging import maybe_init_wandb
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 def plot_training_curves(
     curves: Dict[str, List[float]],
     title: str = "Training Loss",
@@ -39,6 +43,7 @@ def plot_training_curves(
         wandb_project: W&B project name when logging.
         wandb_tags: Optional list of W&B tags.
     """
+    logger.debug("Plotting %d curves (normalize=%s)", len(curves), normalize)
     # Set seaborn style for a clean look
     sns.set(style="whitegrid")
     plt.figure(figsize=(8, 4))
@@ -98,7 +103,11 @@ def plot_hyperparameter_results(
         top_n: Number of top configurations to display (default: 10). If
             top_n <= 0, all configurations will be shown.
     """
+    logger.debug(
+        "Plotting hyperparameter results for metric %s (top_n=%d)", metric, top_n
+    )
     if df.empty or metric not in df.columns:
+        logger.warning("No data for metric %s", metric)
         if wb is None:
             wb = maybe_init_wandb(enable=False)
         try:
