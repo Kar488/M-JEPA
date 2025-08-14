@@ -175,3 +175,7 @@ steps 2 and 4 are required for every new computer we use to SSH to vast
 - The repository includes sample CSVs (e.g. `samples/tox21_mini.csv`) for quick
   smoke tests.
   - Scripts repo does not have a _init_.py as so its not treated as a package or module. note while deploying
+
+## Links for data
+https://huggingface.co/datasets/BASF-AI/PubChem-Raw - 2.09M
+https://huggingface.co/datasets/sagawa/ZINC-canonicalized - 20.7M
