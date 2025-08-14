@@ -344,7 +344,7 @@ jobs:
 
               cd "$APP_DIR"
               mkdir -p logs outputs
-              export WANDB_API_KEY='${{WANDB_API_KEY:-}}'
+              export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
 
               # Perform a hyper‑parameter grid search with a restricted search space
               # using separate unlabeled and labelled datasets.  Both JEPA and
@@ -404,7 +404,7 @@ jobs:
 
               cd "$APP_DIR"
               mkdir -p logs outputs
-              export WANDB_API_KEY='${{WANDB_API_KEY:-}}'
+              export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
 
               # Determine hyper‑parameters from the grid search.  If the JSON
               # file exists, parse it and construct CLI flags for the pretrain
@@ -486,7 +486,7 @@ jobs:
 
               cd "$APP_DIR"
               mkdir -p logs outputs
-              export WANDB_API_KEY='${{WANDB_API_KEY:-}}'
+              export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
 
               # Finetune stage
               "$MMBIN" run -n mjepa python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=1 \
@@ -540,7 +540,7 @@ jobs:
 
               cd "$APP_DIR"
               mkdir -p logs outputs
-              export WANDB_API_KEY='${{WANDB_API_KEY:-}}'
+              export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
 
               # Benchmark stage
               "$MMBIN" run -n mjepa python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=1 \
