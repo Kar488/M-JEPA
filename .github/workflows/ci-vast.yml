@@ -550,7 +550,7 @@ jobs:
               # baseline is enabled by default to match earlier behaviour.
 
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
-              "$MMBIN" run -n mjepa python -m scripts.train_jepa.py pretrain \
+              "$MMBIN" run -n mjepa python -m scripts/train_jepa.py pretrain \
                 --unlabeled-dir data/BASF_AIPubChem_v4 \
                 $PRETRAIN_ARGS \
                 --contrastive \
@@ -613,7 +613,7 @@ jobs:
 
               # Finetune stage
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
-              "$MMBIN" run -n mjepa python -m scripts.train_jepa.py finetune \
+              "$MMBIN" run -n mjepa python -m scripts/train_jepa.py finetune \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --encoder outputs/encoder.pt \
                 --task-type classification \
