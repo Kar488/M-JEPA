@@ -225,7 +225,7 @@ jobs:
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           envs: REPO_TOKEN,REPO,APP_DIR,BRANCH,VENV_DIR
           script: |
-            set -euo pipefail
+            set -euxo pipefail
             
             # 0) GitHub SSH for cloning
             #mkdir -p ~/.ssh
@@ -434,8 +434,9 @@ jobs:
               fi
               export MAMBA_ROOT_PREFIX="$HOME/micromamba"
               # ensure micromamba’s shell functions are available in this non-login shell
-              eval "$("$MMBIN" shell hook -s bash)"
-
+              eval "$("$MMBIN" shell hook -s bash)" || true
+              
+              : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
               mkdir -p logs outputs
               export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
@@ -446,7 +447,7 @@ jobs:
 
               # Removed python -m torch.distributed.run due to PATH issues with entrypoints
 
-              export PYTHONPATH="$APP_DIR:$PYTHONPATH"
+              export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
               "$MMBIN" run -n mjepa python -m scripts/train_jepa.py grid-search \
                 --unlabeled-dir data/BASF_AIPubChem_v4 \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
@@ -496,8 +497,9 @@ jobs:
               fi
               export MAMBA_ROOT_PREFIX="$HOME/micromamba"
               # ensure micromamba’s shell functions are available in this non-login shell
-              eval "$("$MMBIN" shell hook -s bash)"
+              eval "$("$MMBIN" shell hook -s bash)" || true
 
+              : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
               mkdir -p logs outputs
               export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
@@ -507,7 +509,18 @@ jobs:
               # command.  Otherwise fall back to minimal defaults (1 epoch,
               # batch size 4, default config values).  This allows the
               # workflow to remain functional even if the grid search skipped.
+
               PRETRAIN_ARGS=""
+              CKPT_DIR="outputs/ckpts/finetune"
+              mkdir -p "$CKPT_DIR"
+
+              RESUME_FLAG=""
+              LATEST=$(ls -1t "$CKPT_DIR"/seed_*/ft_epoch_*.pt 2>/dev/null | head -n 1 || true)
+              if [ -n "$LATEST" ]; then
+                echo "Resuming from $LATEST"
+                RESUME_FLAG="--resume-ckpt \"$LATEST\""
+              fi
+
               if [ -f outputs/best_grid_config.json ]; then
                 "$MMBIN" run -n mjepa python - <<'PY' > /tmp/pretrain_args.txt
                 import json, os, sys
@@ -532,17 +545,19 @@ jobs:
                 PY
                 PRETRAIN_ARGS=$(cat /tmp/pretrain_args.txt)
               fi
+
               # Pretraining stage with selected hyper‑parameters.  Contrastive
               # baseline is enabled by default to match earlier behaviour.
-              export PYTHONPATH="$APP_DIR:$PYTHONPATH"
-              "$MMBIN" run -n mjepa python -m scripts/train_jepa.py pretrain \
+
+              export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
+              "$MMBIN" run -n mjepa python -m scripts.train_jepa.py pretrain \
                 --unlabeled-dir data/BASF_AIPubChem_v4 \
                 $PRETRAIN_ARGS \
                 --contrastive \
                 --ckpt-dir outputs/ckpts/pretrain \
                 --save-every 1 \
                 --output outputs/encoder.pt \
-                # --resume-ckpt outputs/ckpts/pretrain/pt_epoch_XX.pt   # (uncomment to resume)
+                $RESUME_FLAG \
                 --use-wandb \
                 --seeds 42 \
                 --config default.yaml \
@@ -578,15 +593,27 @@ jobs:
               fi
               export MAMBA_ROOT_PREFIX="$HOME/micromamba"
               # ensure micromamba’s shell functions are available in this non-login shell
-              eval "$("$MMBIN" shell hook -s bash)"
+              eval "$("$MMBIN" shell hook -s bash)" || true
 
+              : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
               mkdir -p logs outputs
               export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
 
+              CKPT_DIR="outputs/ckpts/finetune"
+              mkdir -p "$CKPT_DIR"
+              RESUME_FLAG=""
+
+               # our finetune checkpoints live under seed_<n>/ft_epoch_*.pt
+              LATEST=$(ls -1t "$CKPT_DIR"/seed_*/ft_epoch_*.pt 2>/dev/null | head -n 1 || true)
+              if [ -n "$LATEST" ]; then
+                echo "Resuming from $LATEST"
+                RESUME_FLAG="--resume-ckpt \"$LATEST\""
+              fi
+
               # Finetune stage
-              export PYTHONPATH="$APP_DIR:$PYTHONPATH"
-              "$MMBIN" run -n mjepa python -m scripts/train_jepa.py finetune \
+              export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
+              "$MMBIN" run -n mjepa python -m scripts.train_jepa.py finetune \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --encoder outputs/encoder.pt \
                 --task-type classification \
@@ -596,7 +623,7 @@ jobs:
                 --ckpt-dir outputs/ckpts/finetune \
                 --save-every 1 \
                 --metric val_loss \
-                # --resume-ckpt outputs/ckpts/finetune/seed_0/ft_epoch_XX.pt   # (uncomment to resume)
+                $RESUME_FLAG \
                 --use-wandb \
                 --seeds 42 \
                 --config default.yaml \
