@@ -1055,7 +1055,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             logger.info("Grid search returned no results.")
         wb.log({"phase": "grid_search", "status": "success", "best": best_conf})
     except Exception:
-        logger.warning("Grid search failed")
+        logger.exception("Grid search failed")
         wb.log({"phase": "grid_search", "status": "error"})
         # exit with distinct code for grid search failures
         sys.exit(7)

@@ -448,6 +448,7 @@ jobs:
               # Removed python -m torch.distributed.run due to PATH issues with entrypoints
 
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
+              # grid search results are in best-config-out so it can used in training
               "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
                 --unlabeled-dir data/BASF_AIPubChem_v4 \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
@@ -524,6 +525,7 @@ jobs:
               if [ -f outputs/best_grid_config.json ]; then
                 "$MMBIN" run -n mjepa python - <<'PY' > /tmp/pretrain_args.txt
                 import json, os, sys
+                # loads the output of grid search results so it can be used for hyper parameter selection
                 conf = json.load(open('outputs/best_grid_config.json'))
                 args = []
                 # Map keys from the grid search result to pretrain CLI args
