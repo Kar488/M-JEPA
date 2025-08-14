@@ -450,7 +450,7 @@ jobs:
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
               # grid search results are in best-config-out so it can used in training
               "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
-                --unlabeled-dir data/BASF_AIPubChem_v4 \
+                --unlabeled-dir data/data/ZINC-canonicalized \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --label-col label \
                 --task-type classification \
