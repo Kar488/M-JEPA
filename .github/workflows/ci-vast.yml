@@ -275,6 +275,15 @@ jobs:
               "$MMBIN" create -y -n "$ENV_NAME" -c conda-forge python=3.10 rdkit=2023.09.5 scipy=1.10.1 pip
             fi
 
+            4) put pip temp/cache on your big volume + pre-clean ---
+            mkdir -p "$APP_DIR/.pip-cache" "$APP_DIR/.tmp"
+            export PIP_CACHE_DIR="$APP_DIR/.pip-cache"
+            export TMPDIR="$APP_DIR/.tmp"
+            export PIP_DISABLE_PIP_VERSION_CHECK=1
+            "$MMBIN" clean -y --all --force-pkgs-dirs || true
+            "$MMBIN" run -n "$ENV_NAME" python -m pip cache purge || true
+            rm -rf "$APP_DIR/.tmp"/pip-* || true
+
             # 5) Base Python deps + DeepChem
             "$MMBIN" run -n "$ENV_NAME" python -m pip install -U pip setuptools wheel "numpy<2"
             "$MMBIN" run -n "$ENV_NAME" python -m pip install deepchem==2.8.0
@@ -299,17 +308,63 @@ jobs:
               fi
 
             # 7) (Optional) PyG pieces — only if you actually need them on Vast
-            PYG_URL="https://data.pyg.org/whl/torch-2.2.1+cu121.html"
-            "$MMBIN" run -n "$ENV_NAME" python -m pip install --no-cache-dir -f "$PYG_URL" torch-scatter==2.1.2
-            "$MMBIN" run -n "$ENV_NAME" python -m pip install --no-deps --no-cache-dir torch-geometric==2.5.3
+            #PYG_URL="https://data.pyg.org/whl/torch-2.2.1+cu121.html"
+            #"$MMBIN" run -n "$ENV_NAME" python -m pip install --no-cache-dir -f "$PYG_URL" torch-scatter==2.1.2
+            #"$MMBIN" run -n "$ENV_NAME" python -m pip install --no-deps --no-cache-dir torch-geometric==2.5.3
+            
+            # Detect if DeepChem / your code needs torch_scatter / torch_geometric
+            PYG_URL=$("$MMBIN" run -n "$ENV_NAME" python - <<'PY'
+            import torch
+            ver = torch.__version__.split('+')[0]         # e.g. 2.2.1
+            cuda = torch.version.cuda                     # e.g. 12.1 or None
+            suffix = f"cu{cuda.replace('.','')}" if cuda else "cpu"
+            print(f"https://data.pyg.org/whl/torch-{ver}+{suffix}.html")
+            PY
+            )
 
-            # 8) Project requirements (avoid clobbering rdkit/torch)
-            if [ -f "$APP_DIR/requirements.txt" ]; then
-              grep -viE '^(rdkit|torch|torch-geometric|torch-scatter)([=<>].*)?$' "$APP_DIR/requirements.txt" > /tmp/req-safe.txt || true
-              if [ -s /tmp/req-safe.txt ]; then
-                "$MMBIN" run -n "$ENV_NAME" python -m pip install -r /tmp/req-safe.txt
-              fi
+            # Detect if we really need PyG bits
+            "$MMBIN" run -n "$ENV_NAME" python - <<'PY' >/tmp/pyg_need.json || true
+            import json, importlib.util
+            needs = {"torch_scatter": False, "torch_geometric": False, "torch_sparse": False}
+            miss = lambda m: importlib.util.find_spec(m) is None
+
+            # direct module probes
+            needs["torch_scatter"]   = miss("torch_scatter")
+            needs["torch_geometric"] = miss("torch_geometric")
+
+            # DeepChem path sometimes touches scatter/layers
+            try:
+                import deepchem as dc
+                from deepchem.models.torch_models import layers as dcl
+                _ = getattr(dcl, "scatter_mean", None)
+            except Exception as e:
+                s = str(e).lower()
+                if "torch_scatter" in s: needs["torch_scatter"] = True
+                if "torch_geometric" in s or "torch_sparse" in s:
+                    needs["torch_geometric"] = True
+                    needs["torch_sparse"] = True
+
+            print(json.dumps(needs))
+            PY
+
+            # Enforce RDKit scaffold availability (you already install RDKit; this is just a guard)
+            if grep -q '"murcko": true' /tmp/need.json; then
+              echo "RDKit scaffolds missing; ensure rdkit from conda-forge is installed." >&2
+              exit 1
             fi
+
+            # Install only what’s required (matching your Torch/CUDA)
+            if grep -q '"torch_scatter": true' /tmp/pyg_need.json; then
+              "$MMBIN" run -n "$ENV_NAME" python -m pip install --no-cache-dir -f "$PYG_URL" torch-scatter==2.1.2
+            fi
+            if grep -q '"torch_sparse": true' /tmp/pyg_need.json; then
+              "$MMBIN" run -n "$ENV_NAME" python -m pip install --no-cache-dir -f "$PYG_URL" \
+                torch-sparse==0.6.18 torch-cluster==1.6.3 torch-spline-conv==1.2.2
+            fi
+            if grep -q '"torch_geometric": true' /tmp/pyg_need.json; then
+              "$MMBIN" run -n "$ENV_NAME" python -m pip install --no-deps --no-cache-dir torch-geometric==2.5.3
+            fi
+
 
             # 8) Project requirements (avoid clobbering rdkit/torch)
             if [ -f "$APP_DIR/requirements.txt" ]; then
@@ -322,9 +377,10 @@ jobs:
             # 9) Clean caches to reclaim space
             "$MMBIN" run -n "$ENV_NAME" python -m pip cache purge || true
             "$MMBIN" clean -y --all --force-pkgs-dirs || true
+            rm -rf "$APP_DIR/.tmp"/pip-* || true
 
             # 10) Sanity (CUDA + Murcko) — heredoc piped to avoid indent issues
-            cat <<'PY' | "$MMBIN" run -n "$ENV_NAME" python -
+            "$MMBIN" run -n "$ENV_NAME" python - <<'PY'
             import torch
             from rdkit.Chem.Scaffolds import MurckoScaffold as MS
             print("torch:", torch.__version__, "cuda avail:", torch.cuda.is_available())
@@ -387,9 +443,11 @@ jobs:
               # Perform a hyper‑parameter grid search with a restricted search space
               # using separate unlabeled and labelled datasets.  Both JEPA and
               # contrastive baselines are included in the sweep via --methods.
-              # Use python -m torch.distributed.run to avoid PATH issues with entrypoints
-              "$MMBIN" run -n mjepa python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=1 \
-                scripts/train_jepa.py grid-search \
+
+              # Removed python -m torch.distributed.run due to PATH issues with entrypoints
+
+              export PYTHONPATH="$APP_DIR:$PYTHONPATH"
+              "$MMBIN" run -n mjepa python -m scripts/train_jepa.py grid-search \
                 --unlabeled-dir data/BASF_AIPubChem_v4 \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --label-col label \
@@ -476,8 +534,8 @@ jobs:
               fi
               # Pretraining stage with selected hyper‑parameters.  Contrastive
               # baseline is enabled by default to match earlier behaviour.
-              "$MMBIN" run -n mjepa python -m torch.distributed.run  --standalone --nnodes=1 --nproc_per_node=1 \
-                scripts/train_jepa.py pretrain \
+              export PYTHONPATH="$APP_DIR:$PYTHONPATH"
+              "$MMBIN" run -n mjepa python -m scripts/train_jepa.py pretrain \
                 --unlabeled-dir data/BASF_AIPubChem_v4 \
                 $PRETRAIN_ARGS \
                 --contrastive \
@@ -527,8 +585,8 @@ jobs:
               export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
 
               # Finetune stage
-              "$MMBIN" run -n mjepa python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=1 \
-                scripts/train_jepa.py finetune \
+              export PYTHONPATH="$APP_DIR:$PYTHONPATH"
+              "$MMBIN" run -n mjepa python -m scripts/train_jepa.py finetune \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --encoder outputs/encoder.pt \
                 --task-type classification \
@@ -581,8 +639,8 @@ jobs:
               export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
 
               # Benchmark stage
-              "$MMBIN" run -n mjepa python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=1 \
-                scripts/train_jepa.py benchmark \
+              export PYTHONPATH="$APP_DIR:$PYTHONPATH"
+              "$MMBIN" run -n mjepa python -m scripts/train_jepa.py benchmark \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --jepa-encoder outputs/encoder.pt \
                 --contrastive-encoder outputs/encoder_contrastive.pt \
