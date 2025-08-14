@@ -65,7 +65,7 @@ def stream_zinc(
         url = f"https://zinc15.docking.org/substances.txt?count={batch_size}&page={page}"
         try:
             res = requests.get(url, timeout=30)
-        except Exception as exc:  # network hiccup
+        except Exception as exc:  # pragma: no cover - network hiccup
             logger.warning("ZINC request failed: %s", exc)
             time.sleep(sleep)
             continue
@@ -114,7 +114,7 @@ def stream_pubchem(
         )
         try:
             res = requests.get(url, timeout=30)
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover
             logger.warning("PubChem request failed: %s", exc)
             time.sleep(sleep)
             continue
@@ -134,26 +134,38 @@ def stream_pubchem(
 # Saving helper
 # ----------------------------------------------------------------------------
 
+def _rows_from_smiles(smiles: List[str]) -> List[dict]:
+    ds = GraphDataset.from_smiles_list(smiles)
+    rows = []
+    for sm, g in zip(ds.smiles, ds.graphs):
+        rows.append(
+            {
+                "smiles": sm,
+                "x": g.x.tolist(),
+                "edge_index": g.edge_index.tolist(),
+                "edge_attr": None if g.edge_attr is None else g.edge_attr.tolist(),
+            }
+        )
+    return rows
+
+
 def save_shards(smiles: List[str], out_dir: Path, shard_size: int) -> None:
     """Convert SMILES to graphs and write sharded parquet files."""
 
     out_dir.mkdir(parents=True, exist_ok=True)
     for idx in range(0, len(smiles), shard_size):
         chunk = smiles[idx : idx + shard_size]
-        ds = GraphDataset.from_smiles_list(chunk)
-        rows = []
-        for sm, g in zip(ds.smiles, ds.graphs):
-            rows.append(
-                {
-                    "smiles": sm,
-                    "x": g.x.tolist(),
-                    "edge_index": g.edge_index.tolist(),
-                    "edge_attr": None if g.edge_attr is None else g.edge_attr.tolist(),
-                }
-            )
-        df = pd.DataFrame(rows)
+        df = pd.DataFrame(_rows_from_smiles(chunk))
         shard_path = out_dir / f"{idx // shard_size:04d}.parquet"
         df.to_parquet(shard_path, index=False)
+
+
+def save_parquet(smiles: List[str], out_file: Path) -> None:
+    """Convert SMILES to graphs and write a single parquet file."""
+
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(_rows_from_smiles(smiles))
+    df.to_parquet(out_file, index=False)
 
 
 # ----------------------------------------------------------------------------
@@ -169,10 +181,22 @@ def main() -> None:
         help="Output directory root",
     )
     parser.add_argument(
+        "--out-file",
+        type=Path,
+        default=None,
+        help="Write all molecules to a single parquet file instead of sharded splits",
+    )
+    parser.add_argument(
         "--total",
         type=int,
         default=1000,
         help="Total number of molecules to fetch from all sources",
+    )
+    parser.add_argument(
+        "--size",
+        type=int,
+        default=None,
+        help="Alias for --total",
     )
     parser.add_argument(
         "--batch-size",
@@ -208,6 +232,9 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.size is not None:
+        args.total = args.size
 
     progress_path = args.out_root / "progress.json"
     start_page = 1
@@ -245,16 +272,19 @@ def main() -> None:
         smiles.extend(batch)
         last_cid = cid + args.batch_size
 
-    random.shuffle(smiles)
-    n_train = int(len(smiles) * args.split[0])
-    n_val = int(len(smiles) * args.split[1])
-    splits = {
-        "train": smiles[:n_train],
-        "val": smiles[n_train : n_train + n_val],
-        "test": smiles[n_train + n_val :],
-    }
-    for split, sm_list in splits.items():
-        save_shards(sm_list, args.out_root / split, args.shard_size)
+    if args.out_file:
+        save_parquet(smiles, args.out_file)
+    else:
+        random.shuffle(smiles)
+        n_train = int(len(smiles) * args.split[0])
+        n_val = int(len(smiles) * args.split[1])
+        splits = {
+            "train": smiles[:n_train],
+            "val": smiles[n_train : n_train + n_val],
+            "test": smiles[n_train + n_val :],
+        }
+        for split, sm_list in splits.items():
+            save_shards(sm_list, args.out_root / split, args.shard_size)
 
     progress = {"zinc_page": last_page, "pubchem_cid": last_cid}
     args.out_root.mkdir(parents=True, exist_ok=True)
