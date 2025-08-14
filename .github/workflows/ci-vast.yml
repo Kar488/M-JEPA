@@ -275,7 +275,7 @@ jobs:
               "$MMBIN" create -y -n "$ENV_NAME" -c conda-forge python=3.10 rdkit=2023.09.5 scipy=1.10.1 pip
             fi
 
-            4) put pip temp/cache on your big volume + pre-clean ---
+            # 4) put pip temp/cache on your big volume + pre-clean ---
             mkdir -p "$APP_DIR/.pip-cache" "$APP_DIR/.tmp"
             export PIP_CACHE_DIR="$APP_DIR/.pip-cache"
             export TMPDIR="$APP_DIR/.tmp"
@@ -290,7 +290,7 @@ jobs:
             
             
             # 6) Torch (skip install if already present with CUDA to save space)
-              cat <<'PY' | "$MMBIN" run -n "$ENV_NAME" python - >/tmp/torch_check.json || true
+            cat <<'PY' | "$MMBIN" run -n "$ENV_NAME" python - >/tmp/torch_check.json || true
             try:
                 import torch, json
                 print(json.dumps({"present": True,
