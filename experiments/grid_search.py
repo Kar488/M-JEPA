@@ -4,16 +4,19 @@ from dataclasses import asdict, dataclass
 from itertools import product
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Sequence
 
-ds_pre: Optional[Any] = None    
+ds_pre: Optional[Any] = None
 ds_eval: Optional[Any] = None
 
+import logging
 import numpy as np
-import pandas as pd 
+import pandas as pd
 
 import torch
 from torch_geometric.loader import DataLoader as GeoLoader
-from torch_geometric.data import Data as PyGData 
+from torch_geometric.data import Data as PyGData
 import warnings
+
+logger = logging.getLogger(__name__)
 
 # Encoder factory
 try:
@@ -102,6 +105,7 @@ def _extract_attr(seq: Sequence[Any], name: str):
 def _ensure_graph_dataset(obj: Any) -> Any:
     """Return object with `.graphs` and `.labels` if possible."""
     if obj is None:
+        logger.debug("_ensure_graph_dataset received None")
         return None
     if hasattr(obj, "graphs"):
         if getattr(obj, "labels", None) is None:
@@ -113,22 +117,26 @@ def _ensure_graph_dataset(obj: Any) -> Any:
         graphs = list(obj)
         labels = getattr(obj, "labels", None) or _extract_attr(graphs, "y")
         smiles = getattr(obj, "smiles", None) or _extract_attr(graphs, "smiles")
+        logger.debug("Built GraphDataset shim with %d graphs", len(graphs))
         return _GraphDatasetShim(graphs=graphs, labels=labels, smiles=smiles)
     if isinstance(obj, PyGData) or hasattr(obj, "x") or hasattr(obj, "edge_index") or hasattr(obj, "adj"):
         label = getattr(obj, "y", None)
         if isinstance(label, torch.Tensor) and label.numel() == 1:
             label = np.asarray([label.item()])
         return _GraphDatasetShim(graphs=[obj], labels=label)
+    logger.debug("_ensure_graph_dataset returning original object of type %s", type(obj))
     return obj
 
 def _dataset_from_loader(loader: Any) -> Any:
     """Get a dataset from a loader. If `.dataset` missing, materialize from the loader."""
     if loader is None:
+        logger.debug("_dataset_from_loader received None")
         return None
     
     ds = getattr(loader, "dataset", None)
    
     if ds is not None:
+        logger.debug("Loader already has dataset: %s", type(ds))
         return _ensure_graph_dataset(ds)
 
     # Materialize small loaders: consume items into a shim
@@ -147,6 +155,7 @@ def _dataset_from_loader(loader: Any) -> Any:
         elif y is not None:
             labels.append(y)
     labs = np.asarray(labels) if len(labels) else None
+    logger.debug("Materialized dataset from loader with %d graphs", len(graphs))
     return _GraphDatasetShim(graphs=graphs, labels=labs)
 
 def _build_configs(
@@ -177,7 +186,9 @@ def _build_configs(
         finetune_epochs_options,
         lrs,
     )
-    return [Config(*tpl) for tpl in combos]
+    configs = [Config(*tpl) for tpl in combos]
+    logger.debug("Generated %d grid search configurations", len(configs))
+    return configs
 
 
 def _edge_dim_or_none(ds) -> Optional[int]:
@@ -380,7 +391,8 @@ def _run_one_config_method(
     prebuilt_loaders: Optional[Tuple[Any, Any, Any]] = None,
     prebuilt_datasets: Optional[Tuple[Any, Any, Any]] = None,  
 ) -> Dict[str, Any]:
-    
+    logger.info("Running method %s with config %s", method, asdict(cfg))
+
     if prebuilt_datasets is not None:
         tr_ds, va_ds, te_ds = prebuilt_datasets
         ds_pre  = _ensure_graph_dataset(tr_ds)
@@ -426,6 +438,7 @@ def _run_one_config_method(
 
     seed_metrics: List[Dict[str, float]] = []
     for seed in seeds:
+        logger.debug("Training seed %d", seed)
         np.random.seed(seed)
         if method.lower() == "jepa":
             encoder = build_encoder(
@@ -748,8 +761,11 @@ def run_grid_search(
     # We ONLY decide which path to use here; we DO NOT build datasets yet.
     use_single_builder = dataset_fn is not None
         
+    logger.info("Running grid search over %d configs", len(cfgs))
+
     rows: List[Dict[str, Any]] = []
     for cfg in cfgs:
+        logger.debug("Processing configuration %s", asdict(cfg))
         add_3d = _cfg_get(cfg, "add_3d", False)  # tests sweep over this
 
         # If tests provided dataset_fn, build loaders per-config

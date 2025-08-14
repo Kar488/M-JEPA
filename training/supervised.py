@@ -13,6 +13,8 @@ from __future__ import annotations
 import random
 from typing import Dict, List, Optional, Tuple
 
+import logging
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -24,6 +26,8 @@ from models.encoder import GNNEncoder
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.pooling import global_mean_pool
 from utils.early_stopping import EarlyStopping
+
+logger = logging.getLogger(__name__)
 
 
 def stratified_split(
@@ -43,6 +47,11 @@ def stratified_split(
         train_idx, val_idx, test_idx: Three lists of indices.
     """
     unique = np.unique(labels)
+    logger.debug(
+        "stratified_split with %d indices and classes %s",
+        len(indices),
+        unique,
+    )
     if len(unique) < 2:
         # Only one class present; perform a random split
         random.shuffle(indices)
@@ -112,6 +121,9 @@ def train_linear_head(
     Returns:
         A dictionary of metrics on the test set (only populated on rank 0).
     """
+    logger.info(
+        "Training linear head on %d graphs for %s task", len(dataset), task_type
+    )
     assert dataset.labels is not None, "Dataset must have labels."
     assert task_type in {"classification", "regression"}
 
@@ -205,6 +217,7 @@ def train_linear_head(
             loss.backward()
             optimiser.step()
 
+        logger.debug("Epoch %d training loss %.4f", epoch, float(np.mean(batch_losses)))
         if early_stopper is not None:
             encoder.eval()
             head.eval()
@@ -235,6 +248,7 @@ def train_linear_head(
                 torch.distributed.all_reduce(avg_t, op=torch.distributed.ReduceOp.AVG)
             avg_val_loss = avg_t.item()
             if early_stopper.step(avg_val_loss):
+                logger.info("Early stopping at epoch %d", epoch)
                 break
 
     metrics: Dict[str, float] = {}

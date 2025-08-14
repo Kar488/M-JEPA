@@ -279,6 +279,7 @@ def resolve_device(preferred: str) -> str:
 
 def cmd_pretrain(args: argparse.Namespace) -> None:
     """Self‑supervised pretraining of a JEPA encoder and optional contrastive baseline."""
+    logger.info("Starting pretrain with args: %s", args)
     if load_directory_dataset is None or build_encoder is None or train_jepa is None:
         logger.error("Pretraining modules are unavailable.")
         sys.exit(2)
@@ -441,6 +442,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
 def cmd_finetune(args: argparse.Namespace) -> None:
     """Fine‑tune a linear head on labelled data across multiple seeds resume & checkpoints."""
+    logger.info("Starting finetune with args: %s", args)
     
     from utils.checkpoint import save_checkpoint, load_checkpoint
 
@@ -667,6 +669,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
     """Evaluate a pretrained encoder by training a linear probe across seeds."""
+    logger.info("Starting evaluate with args: %s", args)
     # Reuse finetune implementation with a different default config section
     cmd_finetune(args)
 
@@ -678,6 +681,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     performance based on ROC‑AUC (classification) or RMSE (regression).
     """
 
+    logger.info("Starting benchmark with args: %s", args)
     if load_directory_dataset is None or build_encoder is None or train_linear_head is None:
         logger.warning("Benchmark modules are unavailable.")
         sys.exit(6)
@@ -864,6 +868,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
 def cmd_tox21(args: argparse.Namespace) -> None:
     """Run the Tox21 ranking case study."""
+    logger.info("Starting Tox21 case study with args: %s", args)
     if run_tox21_case_study is None:
         logger.error("Case study module is unavailable.")
         sys.exit(5)
@@ -922,6 +927,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     search completes, the best configuration and its metric are reported.
     """
     # If the experiments module is unavailable, abort with a distinct exit code
+    logger.info("Starting grid search with args: %s", args)
     if run_grid_search is None:
         logger.error("Grid search functionality is unavailable. Install the experiments package or check the import.")
         sys.exit(7)
@@ -1385,6 +1391,7 @@ def main() -> None:
     args = parser.parse_args()
     if not hasattr(args, "func"):
         parser.error("No subcommand provided")
+    logger.info("Invoking subcommand %s", getattr(args, 'func', None))
     args.func(args)
 
 
