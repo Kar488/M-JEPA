@@ -448,7 +448,7 @@ jobs:
               # Removed python -m torch.distributed.run due to PATH issues with entrypoints
 
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
-              "$MMBIN" run -n mjepa python -m scripts/train_jepa.py grid-search \
+              "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
                 --unlabeled-dir data/BASF_AIPubChem_v4 \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --label-col label \
