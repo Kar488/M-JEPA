@@ -212,7 +212,7 @@ jobs:
       - name: Deploy, install deps (CUDA)
         uses: appleboy/ssh-action@v1
         env:
-          REPO_DEPLOY_KEY: ${{ secrets.GH_PAT_RO }}  # GitHub repo deploy key (private)
+          REPO_TOKEN: ${{ secrets.GH_PAT_RO }}       # PAT with repo read access
           REPO: Kar488/M-JEPA
           APP_DIR: /srv/mjepa
           BRANCH: master
@@ -227,21 +227,23 @@ jobs:
           script: |
             set -euo pipefail
             # 0) GitHub SSH for cloning
-            mkdir -p ~/.ssh
-            umask 077
-            printf '%s\n' "$REPO_DEPLOY_KEY" > ~/.ssh/id_github
-            chmod 600 ~/.ssh/id_github
-            ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-            export GIT_SSH_COMMAND='ssh -i ~/.ssh/id_github -o StrictHostKeyChecking=yes'
+            #mkdir -p ~/.ssh
+            #umask 077
+            #printf '%s\n' "$REPO_DEPLOY_KEY" > ~/.ssh/id_github
+            #chmod 600 ~/.ssh/id_github
+            #ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+            #export GIT_SSH_COMMAND='ssh -i ~/.ssh/id_github -o StrictHostKeyChecking=yes'
 
-            # 1) Delta deploy repo
+            # 1) Delta deploy repo  
+            AUTH_URL="https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git"
             mkdir -p "$APP_DIR"
+            
             if [ -d "$APP_DIR/.git" ]; then
-              git -C "$APP_DIR" fetch --prune --tags --depth=50
+               git -C "$APP_DIR" remote set-url origin "$AUTH_URL"
               git -C "$APP_DIR" checkout "$BRANCH"
               git -C "$APP_DIR" pull --ff-only
             else
-              git clone --depth=50 "git@github.com:${REPO}.git" "$APP_DIR"
+              git clone --depth=50 "$AUTH_URL" "$APP_DIR"
               git -C "$APP_DIR" checkout "$BRANCH"
             fi
 
