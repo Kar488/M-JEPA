@@ -173,8 +173,8 @@ jobs:
 
         # Now the agent holds the key; do the whoami test
         ssh -o BatchMode=yes -o StrictHostKeyChecking=no \
-            -p "40129" \
-            root@167.179.138.57 \
+              -p "${{ secrets.VAST_PORT }}" \
+              "${{ secrets.VAST_USER }}@${{ secrets.VAST_HOST }}" \
             whoami
 
     - name: GPU sanity
@@ -202,7 +202,7 @@ jobs:
               print("device 0:", torch.cuda.get_device_name(0))
           PY
 
-  vast_deploy_and_train:
+  vast_deploy_and_prepare_environment:
     name: Deploy + Prepare environment Vast
     runs-on: ubuntu-latest
     needs: [tests_quick, vast_smoke]
@@ -212,7 +212,7 @@ jobs:
       - name: Deploy, install deps (CUDA)
         uses: appleboy/ssh-action@v1
         env:
-          REPO_DEPLOY_KEY: ${{ secrets.REPO_DEPLOY_KEY }}  # GitHub repo deploy key (private)
+          REPO_DEPLOY_KEY: ${{ secrets.GH_PAT_RO }}  # GitHub repo deploy key (private)
           REPO: Kar488/M-JEPA
           APP_DIR: /srv/mjepa
           BRANCH: master
@@ -222,6 +222,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }} 
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           envs: REPO_DEPLOY_KEY,REPO,APP_DIR,BRANCH,VENV_DIR
           script: |
             set -euo pipefail
@@ -246,33 +247,30 @@ jobs:
 
             # 2) Micromamba env (RDKit + DeepChem from conda-forge)
             ENV_NAME="mjepa"
-              MM="$HOME/micromamba"
-              if [ ! -x "$MM/bin/micromamba" ]; then
-                curl -Ls https://micro.mamba.pm/install.sh | bash -s -- -b -p "$MM"
-              fi
-              eval "$("$MM/bin/micromamba" shell hook -s bash)"
-              if ! micromamba env list | grep -q "^$ENV_NAME "; then
-                micromamba create -y -n "$ENV_NAME" -c conda-forge \
-                  python=3.10 rdkit=2023.09.5 scipy=1.10.1 pip
-              fi
-              micromamba run -n "$ENV_NAME" python -m pip install deepchem==2.7.1
-              micromamba activate "$ENV_NAME"
+            MMBIN="$HOME/micromamba/bin/micromamba"
+            if [ ! -x "$MMBIN" ]; then
+              curl -Ls https://micro.mamba.pm/install.sh | bash -s -- -b -p "$HOME/micromamba"
+            fi
+            eval "$("$MMBIN" shell hook -s bash)"
+            if ! "$MMBIN" env list | grep -q "^$ENV_NAME "; then
+              "$MMBIN" create -y -n "$ENV_NAME" -c conda-forge python=3.10 rdkit=2023.09.5 scipy=1.10.1 pip
+            fi
+            "$MMBIN" run -n "$ENV_NAME" python -m pip install deepchem==2.8.0
 
             # 3) Torch (GPU, cu121) + PyG pinned to torch 2.2.1
-            python -m pip install -U pip setuptools wheel "numpy<2"
-            python -m pip install --index-url https://download.pytorch.org/whl/cu121 "torch==2.2.1"
+            "$MMBIN" run -n "$ENV_NAME" python -m pip install -U pip setuptools wheel "numpy<2"
+            "$MMBIN" run -n "$ENV_NAME" python -m pip install --index-url https://download.pytorch.org/whl/cu121 "torch==2.2.1"
             PYG_URL="https://data.pyg.org/whl/torch-2.2.1+cu121.html"
-            python -m pip install -f "$PYG_URL" torch-scatter==2.1.2
-            python -m pip install torch-geometric==2.5.3
+            "$MMBIN" run -n "$ENV_NAME" python -m pip install -f "$PYG_URL" torch-scatter==2.1.2
+            "$MMBIN" run -n "$ENV_NAME" python -m pip install torch-geometric==2.5.3
 
             # 4) Project requirements (if present)
             if [ -f "$APP_DIR/requirements.txt" ]; then
-              grep -viE '^(rdkit|deepchem)([=<>].*)?$' "$APP_DIR/requirements.txt" > /tmp/req-no-bin.txt || true
-              python -m pip install -r /tmp/req-no-bin.txt
+              "$MMBIN" run -n "$ENV_NAME" python -m pip install -r "$APP_DIR/requirements.txt"
             fi
             
             # 6) Sanity checks (CUDA + Murcko)
-            python - <<'PY'
+            "$MMBIN" run -n "$ENV_NAME" python - <<'PY'
             import torch
             from rdkit.Chem.Scaffolds import MurckoScaffold as MS
             print("torch:", torch.__version__)
@@ -287,189 +285,222 @@ jobs:
           # shred -u ~/.ssh/id_github || true
           # unset REPO_DEPLOY_KEY
 
-      # Separate deployment phases: pretrain, finetune, benchmark and case study
-      # In production‑like workflows the hyper‑parameter sweep is run
-      # before the full pretraining to identify the best settings.  The grid
-      # search step therefore comes first.
-      - name: Grid search on Vast
-        # Run a small hyper‑parameter sweep to test the new
-        # `grid-search` subcommand.  This step uses separate unlabeled and
-        # labelled datasets to sweep over a narrow search space and logs
-        # results to Weights & Biases.  It produces a CSV in the outputs
-        # directory for offline inspection and logs each configuration and
-        # its metrics to W&B for interactive visualisation.
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          script: |
-            set -euxo pipefail
-            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
-            cd "$APP_DIR"
-            . "$VENV_DIR/bin/activate"
-            mkdir -p logs outputs
-            # Perform a hyper‑parameter grid search with a restricted search space
-            # using separate unlabeled and labelled datasets.  Both JEPA and
-            # contrastive baselines are included in the sweep via --methods.
-            torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              train_jepa.py grid-search \
-              --unlabeled-dir data/BASF_AIPubChem_v4 \
-              --labeled-dir data/katielinkmoleculenet_benchmark/train \
-              --label-col label \
-              --task-type classification \
-              --methods jepa contrastive \
-              --mask-ratios 0.15 \
-              --contiguities 0 \
-              --hidden-dims 256 \
-              --num-layers-list 3 \
-              --gnn-types mpnn \
-              --ema-decays 0.99 \
-              --add-3d-options 0 \
-              --pretrain-batch-sizes 4 \
-              --finetune-batch-sizes 4 \
-              --pretrain-epochs-options 1 \
-              --finetune-epochs-options 1 \
-              --learning-rates 1e-4 \
-              --seeds 42 \
-              --out-csv outputs/grid_results.csv \
-              --best-config-out outputs/best_grid_config.json \
-              --use-wandb \
-              2>&1 | tee -a logs/grid_search_$(date +%F_%H-%M).log
+  vast_train:
+    name: Train the JEPA Model
+    runs-on: ubuntu-latest
+    needs: vast_deploy_and_prepare_environment
+    steps:
+        # Separate deployment phases: pretrain, finetune, benchmark and case study
+        # In production‑like workflows the hyper‑parameter sweep is run
+        # before the full pretraining to identify the best settings.  The grid
+        # search step therefore comes first.
+        - name: Grid search on Vast
+          # Run a small hyper‑parameter sweep to test the new
+          # `grid-search` subcommand.  This step uses separate unlabeled and
+          # labelled datasets to sweep over a narrow search space and logs
+          # results to Weights & Biases.  It produces a CSV in the outputs
+          # directory for offline inspection and logs each configuration and
+          # its metrics to W&B for interactive visualisation.
+          uses: appleboy/ssh-action@v1
+          with:
+            host: ${{ secrets.VAST_HOST }}
+            username: ${{ secrets.VAST_USER }}
+            port: ${{ secrets.VAST_PORT }}
+            key: ${{ secrets.VAST_SSH_KEY }}
+            passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+            envs: APP_DIR
+            script: |
+              set -euxo pipefail
+              MMBIN="$HOME/micromamba/bin/micromamba"
+              cd "$APP_DIR"
+              mkdir -p logs outputs
+              # Perform a hyper‑parameter grid search with a restricted search space
+              # using separate unlabeled and labelled datasets.  Both JEPA and
+              # contrastive baselines are included in the sweep via --methods.
+              # Use python -m torch.distributed.run to avoid PATH issues with entrypoints
+              "$MMBIN" run -n mjepa python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=1 \
+                scripts/train_jepa.py grid-search \
+                --unlabeled-dir data/BASF_AIPubChem_v4 \
+                --labeled-dir data/katielinkmoleculenet_benchmark/train \
+                --label-col label \
+                --task-type classification \
+                --methods jepa contrastive \
+                --mask-ratios 0.15 \
+                --contiguities 0 \
+                --hidden-dims 256 \
+                --num-layers-list 3 \
+                --gnn-types mpnn \
+                --ema-decays 0.99 \
+                --add-3d-options 0 \
+                --pretrain-batch-sizes 4 \
+                --finetune-batch-sizes 4 \
+                --pretrain-epochs-options 1 \
+                --finetune-epochs-options 1 \
+                --learning-rates 1e-4 \
+                --seeds 42 \
+                --out-csv outputs/grid_results.csv \
+                --best-config-out outputs/best_grid_config.json \
+                --use-wandb \
+                2>&1 | tee -a logs/grid_search_$(date +%F_%H-%M).log
 
-      - name: Pretrain on Vast
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          script: |
-            set -euxo pipefail
-            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
-            cd "$APP_DIR"
-            . "$VENV_DIR/bin/activate"
-            nvidia-smi
-            mkdir -p logs outputs
-            # Determine hyper‑parameters from the grid search.  If the JSON
-            # file exists, parse it and construct CLI flags for the pretrain
-            # command.  Otherwise fall back to minimal defaults (1 epoch,
-            # batch size 4, default config values).  This allows the
-            # workflow to remain functional even if the grid search skipped.
-            PRETRAIN_ARGS=""
-            if [ -f outputs/best_grid_config.json ]; then
-              python - <<'PY' > /tmp/pretrain_args.txt
-              import json, os, sys
-              conf = json.load(open('outputs/best_grid_config.json'))
-              args = []
-              # Map keys from the grid search result to pretrain CLI args
-              if 'gnn_type' in conf: args += ['--gnn-type', str(conf['gnn_type'])]
-              if 'hidden_dim' in conf: args += ['--hidden-dim', str(int(conf['hidden_dim']))]
-              if 'num_layers' in conf: args += ['--num-layers', str(int(conf['num_layers']))]
-              if 'mask_ratio' in conf: args += ['--mask-ratio', str(conf['mask_ratio'])]
-              if 'contiguous' in conf or 'contiguity' in conf:
-                  # Convert boolean or int to flag name
-                  flag = conf.get('contiguous') if 'contiguous' in conf else conf.get('contiguity')
-                  args += ['--contiguous'] if flag else []
-              if 'ema_decay' in conf: args += ['--ema-decay', str(conf['ema_decay'])]
-              if 'lr' in conf: args += ['--lr', str(conf['lr'])]
-              if 'pretrain_epochs' in conf or 'epochs' in conf:
-                  args += ['--epochs', str(int(conf.get('pretrain_epochs', conf.get('epochs', 1))))]
-              if 'pretrain_batch_size' in conf or 'batch_size' in conf:
-                  args += ['--batch-size', str(int(conf.get('pretrain_batch_size', conf.get('batch_size', 4))))]
-              print(' '.join(args))
-              PY
-                            PRETRAIN_ARGS=$(cat /tmp/pretrain_args.txt)
-                          fi
-            # Pretraining stage with selected hyper‑parameters.  Contrastive
-            # baseline is enabled by default to match earlier behaviour.
-            torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              train_jepa.py pretrain \
-              --unlabeled-dir data/BASF_AIPubChem_v4 \
-              $PRETRAIN_ARGS \
-              --contrastive \
-              --output outputs/encoder.pt \
-              --use-wandb \
-              --config default.yaml \
-              2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
+        - name: Pretrain on Vast
+          uses: appleboy/ssh-action@v1
+          with:
+            host: ${{ secrets.VAST_HOST }}
+            username: ${{ secrets.VAST_USER }}
+            port: ${{ secrets.VAST_PORT }}
+            key: ${{ secrets.VAST_SSH_KEY }}
+            passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+            envs: APP_DIR
+            script: |
+              set -euxo pipefail
+              export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
+              MMBIN="$HOME/micromamba/bin/micromamba"
+              cd "$APP_DIR"
+              mkdir -p logs outputs
+              # Determine hyper‑parameters from the grid search.  If the JSON
+              # file exists, parse it and construct CLI flags for the pretrain
+              # command.  Otherwise fall back to minimal defaults (1 epoch,
+              # batch size 4, default config values).  This allows the
+              # workflow to remain functional even if the grid search skipped.
+              PRETRAIN_ARGS=""
+              if [ -f outputs/best_grid_config.json ]; then
+                "$MMBIN" run -n mjepa python - <<'PY' > /tmp/pretrain_args.txt
+                import json, os, sys
+                conf = json.load(open('outputs/best_grid_config.json'))
+                args = []
+                # Map keys from the grid search result to pretrain CLI args
+                if 'gnn_type' in conf: args += ['--gnn-type', str(conf['gnn_type'])]
+                if 'hidden_dim' in conf: args += ['--hidden-dim', str(int(conf['hidden_dim']))]
+                if 'num_layers' in conf: args += ['--num-layers', str(int(conf['num_layers']))]
+                if 'mask_ratio' in conf: args += ['--mask-ratio', str(conf['mask_ratio'])]
+                if 'contiguous' in conf or 'contiguity' in conf:
+                    # Convert boolean or int to flag name
+                    flag = conf.get('contiguous') if 'contiguous' in conf else conf.get('contiguity')
+                    args += ['--contiguous'] if flag else []
+                if 'ema_decay' in conf: args += ['--ema-decay', str(conf['ema_decay'])]
+                if 'lr' in conf: args += ['--lr', str(conf['lr'])]
+                if 'pretrain_epochs' in conf or 'epochs' in conf:
+                    args += ['--epochs', str(int(conf.get('pretrain_epochs', conf.get('epochs', 1))))]
+                if 'pretrain_batch_size' in conf or 'batch_size' in conf:
+                    args += ['--batch-size', str(int(conf.get('pretrain_batch_size', conf.get('batch_size', 4))))]
+                print(' '.join(args))
+                PY
+                PRETRAIN_ARGS=$(cat /tmp/pretrain_args.txt)
+              fi
+              # Pretraining stage with selected hyper‑parameters.  Contrastive
+              # baseline is enabled by default to match earlier behaviour.
+              "$MMBIN" run -n mjepa python -m torch.distributed.run  --standalone --nnodes=1 --nproc_per_node=1 \
+                scripts/train_jepa.py pretrain \
+                --unlabeled-dir data/BASF_AIPubChem_v4 \
+                $PRETRAIN_ARGS \
+                --contrastive \
+                --ckpt-dir outputs/ckpts/pretrain \
+                --save-every 1 \
+                --output outputs/encoder.pt \
+                # --resume-ckpt outputs/ckpts/pretrain/pt_epoch_XX.pt   # (uncomment to resume)
+                --use-wandb \
+                --seeds 42 \
+                --config default.yaml \
+                2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
 
+  vast_finetune:
+    runs-on: ubuntu-latest
+    needs: vast_train
+    steps:
+        - name: Finetune on Vast
+          uses: appleboy/ssh-action@v1
+          with:
+            host: ${{ secrets.VAST_HOST }}
+            username: ${{ secrets.VAST_USER }}
+            port: ${{ secrets.VAST_PORT }}
+            key: ${{ secrets.VAST_SSH_KEY }}
+            passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+            envs: APP_DIR
+            script: |
+              set -euxo pipefail
+              export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
+              MMBIN="$HOME/micromamba/bin/micromamba"
+              cd "$APP_DIR"
+              mkdir -p logs
+              # Finetune stage
+              "$MMBIN" run -n mjepa python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=1 \
+                scripts/train_jepa.py finetune \
+                --labeled-dir data/katielinkmoleculenet_benchmark/train \
+                --encoder outputs/encoder.pt \
+                --task-type classification \
+                --epochs 1 \
+                --batch-size 4 \
+                --patience 10 \
+                --ckpt-dir outputs/ckpts/finetune \
+                --save-every 1 \
+                --metric val_loss \
+                # --resume-ckpt outputs/ckpts/finetune/seed_0/ft_epoch_XX.pt   # (uncomment to resume)
+                --use-wandb \
+                --seeds 42 \
+                --config default.yaml \
+                2>&1 | tee -a logs/finetune_$(date +%F_%H-%M).log
 
-      - name: Finetune on Vast
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          script: |
-            set -euxo pipefail
-            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
-            cd "$APP_DIR"
-            . "$VENV_DIR/bin/activate"
-            mkdir -p logs
-            # Finetune stage
-            torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              train_jepa.py finetune \
-              --labeled-dir data/katielinkmoleculenet_benchmark/train \
-              --encoder outputs/encoder.pt \
-              --task-type classification \
-              --epochs 1 \
-              --batch-size 4 \
-              --patience 10 \
-              --use-wandb \
-              --config default.yaml \
-              2>&1 | tee -a logs/finetune_$(date +%F_%H-%M).log
+  vast_benchmark:
+    name: Benchmark + Tox21
+    needs: vast_finetune
+    runs-on: ubuntu-latest
+    steps:          
+        - name: Benchmark on Vast
+          uses: appleboy/ssh-action@v1
+          with:
+            host: ${{ secrets.VAST_HOST }}
+            username: ${{ secrets.VAST_USER }}
+            port: ${{ secrets.VAST_PORT }}
+            key: ${{ secrets.VAST_SSH_KEY }}
+            passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+            envs: APP_DIR
+            script: |
+              set -euxo pipefail
+              export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
+              MMBIN="$HOME/micromamba/bin/micromamba"
+              cd "$APP_DIR"
+              mkdir -p logs
+              # Benchmark stage
+              "$MMBIN" run -n mjepa python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=1 \
+                scripts/train_jepa.py benchmark \
+                --labeled-dir data/katielinkmoleculenet_benchmark/train \
+                --jepa-encoder outputs/encoder.pt \
+                --contrastive-encoder outputs/encoder_contrastive.pt \
+                --ft-ckpt outputs/ckpts/finetune/seed_0/ft_best.pt \
+                --report-dir outputs/reports \
+                --task-type classification \
+                --epochs 1 \
+                --batch-size 4 \
+                --patience 10 \
+                --use-wandb \
+                --seeds 42 \
+                --config default.yaml \
+                2>&1 | tee -a logs/benchmark_$(date +%F_%H-%M).log
 
-      - name: Benchmark on Vast
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          script: |
-            set -euxo pipefail
-            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
-            cd "$APP_DIR"
-            . "$VENV_DIR/bin/activate"
-            mkdir -p logs
-            # Benchmark stage
-            torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              train_jepa.py benchmark \
-              --labeled-dir data/katielinkmoleculenet_benchmark/train \
-              --jepa-encoder outputs/encoder.pt \
-              --contrastive-encoder outputs/encoder_contrastive.pt \
-              --task-type classification \
-              --epochs 1 \
-              --batch-size 4 \
-              --patience 10 \
-              --use-wandb \
-              --config default.yaml \
-              2>&1 | tee -a logs/benchmark_$(date +%F_%H-%M).log
-
-      - name: Tox21 case study on Vast
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          script: |
-            set -euxo pipefail
-            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
-            cd "$APP_DIR"
-            . "$VENV_DIR/bin/activate"
-            mkdir -p logs
-            # Case study stage
-            torchrun --standalone --nnodes=1 --nproc_per_node=1 \
-              train_jepa.py tox21 \
-              --csv data/tox21/data.csv \
-              --task NR-AR \
-              --pretrain-epochs 1 \
-              --finetune-epochs 1 \
-              --num-top-exclude 5 \
-              --use-wandb \
-              --config default.yaml \
-              2>&1 | tee -a logs/tox21_$(date +%F_%H-%M).log
+        - name: Tox21 case study on Vast
+          uses: appleboy/ssh-action@v1
+          with:
+            host: ${{ secrets.VAST_HOST }}
+            username: ${{ secrets.VAST_USER }}
+            port: ${{ secrets.VAST_PORT }}
+            key: ${{ secrets.VAST_SSH_KEY }}
+            passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+            envs: APP_DIR
+            script: |
+              set -euxo pipefail
+              MMBIN="$HOME/micromamba/bin/micromamba"
+              cd "$APP_DIR"
+              mkdir -p logs
+              # Case study stage
+              "$MMBIN" run -n mjepa python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=1 \
+                scripts/train_jepa.py tox21 \
+                --csv data/tox21/data.csv \
+                --task NR-AR \
+                --pretrain-epochs 1 \
+                --finetune-epochs 1 \
+                --num-top-exclude 5 \
+                --use-wandb \
+                --config default.yaml \
+                2>&1 | tee -a logs/tox21_$(date +%F_%H-%M).log
 
