@@ -394,8 +394,8 @@ jobs:
           # shred -u ~/.ssh/id_github || true
           # unset REPO_DEPLOY_KEY
 
-  vast_learn_hyperparameters_and_pretrain:
-    name: Learn hyperparameters and pretrain JEPA model
+  vast_learn_hyperparameters:
+    name: Learn hyperparameters
     runs-on: ubuntu-latest
     needs: vast_deploy_and_prepare_environment 
     steps:
@@ -411,6 +411,7 @@ jobs:
           # directory for offline inspection and logs each configuration and
           # its metrics to W&B for interactive visualisation.
           uses: appleboy/ssh-action@v1
+          timeout-minutes: 180            # GitHub step timeout
           with:
             host: ${{ secrets.VAST_HOST }}
             username: ${{ secrets.VAST_USER }}
@@ -418,7 +419,7 @@ jobs:
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR
-            timeout: 180m
+            command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
 
@@ -479,106 +480,113 @@ jobs:
                 --use-wandb \
                 2>&1 | tee -a logs/grid_search_$(date +%F_%H-%M).log
 
-        - name: Pretrain on Vast
-          uses: appleboy/ssh-action@v1
-          with:
-            host: ${{ secrets.VAST_HOST }}
-            username: ${{ secrets.VAST_USER }}
-            port: ${{ secrets.VAST_PORT }}
-            key: ${{ secrets.VAST_SSH_KEY }}
-            passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR
-            timeout: 720m
-            script: |
-              set -euxo pipefail
+  vast_pretrain:
+    name: Pretain JEPA Model
+    runs-on: ubuntu-latest
+    needs: vast_learn_hyperparameters
+    steps:
+    - name: Finetune on Vast
+      uses: appleboy/ssh-action@v1
+      timeout-minutes: 180            # GitHub step timeout
+      with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          envs: APP_DIR
+          command_timeout: 180m         # <-- default is 10m; bump this
+          script: |
+            set -euxo pipefail
 
-              # --- locate micromamba robustly ---
-              if command -v micromamba >/dev/null 2>&1; then
-                MMBIN="$(command -v micromamba)"
-              elif [ -x "$HOME/.local/bin/micromamba" ]; then
-                MMBIN="$HOME/.local/bin/micromamba"
-              elif [ -x "$HOME/micromamba/bin/micromamba" ]; then
-                MMBIN="$HOME/micromamba/bin/micromamba"
-              else
-                echo "micromamba not found; run the prepare step first." >&2
-                exit 1
-              fi
-              export MAMBA_ROOT_PREFIX="$HOME/micromamba"
-              # ensure micromamba’s shell functions are available in this non-login shell
-              eval "$("$MMBIN" shell hook -s bash)" || true
+            # --- locate micromamba robustly ---
+            if command -v micromamba >/dev/null 2>&1; then
+              MMBIN="$(command -v micromamba)"
+            elif [ -x "$HOME/.local/bin/micromamba" ]; then
+              MMBIN="$HOME/.local/bin/micromamba"
+            elif [ -x "$HOME/micromamba/bin/micromamba" ]; then
+              MMBIN="$HOME/micromamba/bin/micromamba"
+            else
+              echo "micromamba not found; run the prepare step first." >&2
+              exit 1
+            fi
+            export MAMBA_ROOT_PREFIX="$HOME/micromamba"
+            # ensure micromamba’s shell functions are available in this non-login shell
+            eval "$("$MMBIN" shell hook -s bash)" || true
 
-              : "${APP_DIR:?APP_DIR not set}"
-              cd "$APP_DIR"
-              mkdir -p logs outputs
-              export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
+            : "${APP_DIR:?APP_DIR not set}"
+            cd "$APP_DIR"
+            mkdir -p logs outputs
+            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
 
-              # Determine hyper‑parameters from the grid search.  If the JSON
-              # file exists, parse it and construct CLI flags for the pretrain
-              # command.  Otherwise fall back to minimal defaults (1 epoch,
-              # batch size 4, default config values).  This allows the
-              # workflow to remain functional even if the grid search skipped.
+            # Determine hyper‑parameters from the grid search.  If the JSON
+            # file exists, parse it and construct CLI flags for the pretrain
+            # command.  Otherwise fall back to minimal defaults (1 epoch,
+            # batch size 4, default config values).  This allows the
+            # workflow to remain functional even if the grid search skipped.
 
-              PRETRAIN_ARGS=""
-              CKPT_DIR="outputs/ckpts/finetune"
-              mkdir -p "$CKPT_DIR"
+            PRETRAIN_ARGS=""
+            CKPT_DIR="outputs/ckpts/finetune"
+            mkdir -p "$CKPT_DIR"
 
-              RESUME_FLAG=""
-              LATEST=$(ls -1t "$CKPT_DIR"/seed_*/ft_epoch_*.pt 2>/dev/null | head -n 1 || true)
-              if [ -n "$LATEST" ]; then
-                echo "Resuming from $LATEST"
-                RESUME_FLAG="--resume-ckpt \"$LATEST\""
-              fi
+            RESUME_FLAG=""
+            LATEST=$(ls -1t "$CKPT_DIR"/seed_*/ft_epoch_*.pt 2>/dev/null | head -n 1 || true)
+            if [ -n "$LATEST" ]; then
+              echo "Resuming from $LATEST"
+              RESUME_FLAG="--resume-ckpt \"$LATEST\""
+            fi
 
-              if [ -f outputs/best_grid_config.json ]; then
-                "$MMBIN" run -n mjepa python - <<'PY' > /tmp/pretrain_args.txt
-                import json, os, sys
-                # loads the output of grid search results so it can be used for hyper parameter selection
-                conf = json.load(open('outputs/best_grid_config.json'))
-                args = []
-                # Map keys from the grid search result to pretrain CLI args
-                if 'gnn_type' in conf: args += ['--gnn-type', str(conf['gnn_type'])]
-                if 'hidden_dim' in conf: args += ['--hidden-dim', str(int(conf['hidden_dim']))]
-                if 'num_layers' in conf: args += ['--num-layers', str(int(conf['num_layers']))]
-                if 'mask_ratio' in conf: args += ['--mask-ratio', str(conf['mask_ratio'])]
-                if 'contiguous' in conf or 'contiguity' in conf:
-                    # Convert boolean or int to flag name
-                    flag = conf.get('contiguous') if 'contiguous' in conf else conf.get('contiguity')
-                    args += ['--contiguous'] if flag else []
-                if 'ema_decay' in conf: args += ['--ema-decay', str(conf['ema_decay'])]
-                if 'lr' in conf: args += ['--lr', str(conf['lr'])]
-                if 'pretrain_epochs' in conf or 'epochs' in conf:
-                    args += ['--epochs', str(int(conf.get('pretrain_epochs', conf.get('epochs', 1))))]
-                if 'pretrain_batch_size' in conf or 'batch_size' in conf:
-                    args += ['--batch-size', str(int(conf.get('pretrain_batch_size', conf.get('batch_size', 4))))]
-                print(' '.join(args))
-                PY
-                PRETRAIN_ARGS=$(cat /tmp/pretrain_args.txt)
-              fi
+            if [ -f outputs/best_grid_config.json ]; then
+              "$MMBIN" run -n mjepa python - <<'PY' > /tmp/pretrain_args.txt
+              import json, os, sys
+              # loads the output of grid search results so it can be used for hyper parameter selection
+              conf = json.load(open('outputs/best_grid_config.json'))
+              args = []
+              # Map keys from the grid search result to pretrain CLI args
+              if 'gnn_type' in conf: args += ['--gnn-type', str(conf['gnn_type'])]
+              if 'hidden_dim' in conf: args += ['--hidden-dim', str(int(conf['hidden_dim']))]
+              if 'num_layers' in conf: args += ['--num-layers', str(int(conf['num_layers']))]
+              if 'mask_ratio' in conf: args += ['--mask-ratio', str(conf['mask_ratio'])]
+              if 'contiguous' in conf or 'contiguity' in conf:
+                  # Convert boolean or int to flag name
+                  flag = conf.get('contiguous') if 'contiguous' in conf else conf.get('contiguity')
+                  args += ['--contiguous'] if flag else []
+              if 'ema_decay' in conf: args += ['--ema-decay', str(conf['ema_decay'])]
+              if 'lr' in conf: args += ['--lr', str(conf['lr'])]
+              if 'pretrain_epochs' in conf or 'epochs' in conf:
+                  args += ['--epochs', str(int(conf.get('pretrain_epochs', conf.get('epochs', 1))))]
+              if 'pretrain_batch_size' in conf or 'batch_size' in conf:
+                  args += ['--batch-size', str(int(conf.get('pretrain_batch_size', conf.get('batch_size', 4))))]
+              print(' '.join(args))
+              PY
+              PRETRAIN_ARGS=$(cat /tmp/pretrain_args.txt)
+            fi
 
-              # Pretraining stage with selected hyper‑parameters.  Contrastive
-              # baseline is enabled by default to match earlier behaviour.
+            # Pretraining stage with selected hyper‑parameters.  Contrastive
+            # baseline is enabled by default to match earlier behaviour.
 
-              export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
-              "$MMBIN" run -n mjepa python scripts/train_jepa.py pretrain \
-                --unlabeled-dir data/BASF_AIPubChem_v4 \
-                $PRETRAIN_ARGS \
-                --contrastive \
-                --ckpt-dir outputs/ckpts/pretrain \
-                --save-every 1 \
-                --output outputs/encoder.pt \
-                $RESUME_FLAG \
-                --use-wandb \
-                --seeds 42 \
-                --config default.yaml \
-                2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
+            export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
+            "$MMBIN" run -n mjepa python scripts/train_jepa.py pretrain \
+              --unlabeled-dir data/BASF_AIPubChem_v4 \
+              $PRETRAIN_ARGS \
+              --contrastive \
+              --ckpt-dir outputs/ckpts/pretrain \
+              --save-every 1 \
+              --output outputs/encoder.pt \
+              $RESUME_FLAG \
+              --use-wandb \
+              --seeds 42 \
+              --config default.yaml \
+              2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
 
   vast_finetune:
     name: Apply fine tuning
     runs-on: ubuntu-latest
-    needs: vast_learn_hyperparameters_and_pretrain
+    needs: vast_pretrain
     steps:
         - name: Finetune on Vast
           uses: appleboy/ssh-action@v1
+          timeout-minutes: 180            # GitHub step timeout
           with:
             host: ${{ secrets.VAST_HOST }}
             username: ${{ secrets.VAST_USER }}
@@ -586,6 +594,7 @@ jobs:
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR
+            command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
 
@@ -639,12 +648,13 @@ jobs:
                 2>&1 | tee -a logs/finetune_$(date +%F_%H-%M).log
 
   vast_benchmark:
-    name: Conduct Benchmarks and Tox21 application
+    name: Conduct Benchmarks
     needs: vast_finetune
     runs-on: ubuntu-latest
     steps:          
         - name: Benchmark on Vast
           uses: appleboy/ssh-action@v1
+          timeout-minutes: 180            # GitHub step timeout
           with:
             host: ${{ secrets.VAST_HOST }}
             username: ${{ secrets.VAST_USER }}
@@ -652,6 +662,7 @@ jobs:
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR
+            command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
             
@@ -691,8 +702,14 @@ jobs:
                 --config default.yaml \
                 2>&1 | tee -a logs/benchmark_$(date +%F_%H-%M).log
 
+  vast_tox21:
+    name: Execute Tox21 Study
+    needs: vast_finetune
+    runs-on: ubuntu-latest
+    steps:                     
         - name: Tox21 case study on Vast
           uses: appleboy/ssh-action@v1
+          timeout-minutes: 180            # GitHub step timeout
           with:
             host: ${{ secrets.VAST_HOST }}
             username: ${{ secrets.VAST_USER }}
@@ -700,6 +717,7 @@ jobs:
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR
+            command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
               MMBIN="$HOME/micromamba/bin/micromamba"
