@@ -106,6 +106,7 @@ def train_jepa(
     *,
     max_batches: int = 0,
     time_budget_mins: int = 0,
+    disable_tqdm: bool = False,
 ) -> List[float]:
     distributed = init_distributed()
     device_t = torch.device(device)
@@ -167,6 +168,7 @@ def train_jepa(
 
     # Create a single progress bar over all epochs and batches.  This avoids
     # creating a new bar per epoch and “flashing” in the console.
+    # If disable_tqdm is True, suppress the progress bar; otherwise enable it for the main process.
     start_epoch = 1
     pbar = (
         tqdm.tqdm(
@@ -174,7 +176,7 @@ def train_jepa(
             desc=f"Epoch {start_epoch}/{epochs}",
             leave=False,
         )
-        if is_main_process()
+        if is_main_process() and not disable_tqdm
         else None
     )
     for ep in range(start_epoch, epochs + 1):
@@ -330,6 +332,7 @@ def train_contrastive(
     *,
     max_batches: int = 0,
     time_budget_mins: int = 0,
+    disable_tqdm: bool = False,
 ) -> List[float]:
     distributed = init_distributed()
     device_t = torch.device(device)
@@ -389,6 +392,7 @@ def train_contrastive(
     
     # Create a single progress bar over all epochs and batches.  This avoids
     # creating a new bar per epoch and “flashing” in the console.
+    # If disable_tqdm is True, suppress the progress bar; otherwise enable it for the main process.
     start_epoch = 1
     pbar = (
         tqdm.tqdm(
@@ -396,7 +400,7 @@ def train_contrastive(
             desc=f"Epoch {start_epoch}/{epochs}",
             leave=False,
         )
-        if is_main_process()
+        if is_main_process() and not disable_tqdm
         else None
     )
 

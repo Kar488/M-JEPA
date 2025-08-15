@@ -423,8 +423,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 predictor=predictor,
                 ema=ema_helper,
                 epochs=1,  # one epoch per loop so we can checkpoint each epoch
-                max_batches=args.max_pretrain_batches,
-                time_budget_mins=args.time_budget_mins,
+                max_batches=getattr(args, "max_pretrain_batches", 0), # ensure it does not crash for unit tests
+                time_budget_mins=getattr(args, "time_budget_mins", 0), # ensure it does not crash for unit tests
                 batch_size=args.batch_size,
                 mask_ratio=args.mask_ratio,
                 contiguous=args.contiguous,
@@ -437,6 +437,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
                 wandb_tags=args.wandb_tags,
+                disable_tqdm=True,  # suppress single‑epoch progress bars
             )
             # save after each epoch (or every N epochs)
             if (epoch + 1) % save_every == 0 or (epoch + 1) == args.epochs:
@@ -476,6 +477,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
                 wandb_tags=args.wandb_tags,
+                disable_tqdm=True,  # suppress single‑epoch progress bars
             )
             wb.log({"phase": "pretrain_contrastive", "status": "success"})
         except Exception:
@@ -678,8 +680,8 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     head=head,
                     task_type=args.task_type,
                     epochs=1,
-                    max_batches=args.max_finetune_batches,
-                    time_budget_mins=args.time_budget_mins,
+                    max_batches=getattr(args, "max_pretrain_batches", 0), # ensure it does not crash for unit tests
+                    time_budget_mins=getattr(args, "time_budget_mins", 0), # ensure it does not crash for unit tests
                     lr=args.lr,
                     batch_size=args.batch_size,
                     device=device,
