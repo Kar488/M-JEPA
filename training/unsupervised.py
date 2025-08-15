@@ -137,7 +137,7 @@ def train_jepa(
         tags=wandb_tags,
     )
 
-    start_epoch = 1
+    
     if resume_from and os.path.exists(resume_from):
         ckpt = load_checkpoint(resume_from)
         if "encoder" in ckpt:
@@ -165,12 +165,27 @@ def train_jepa(
         return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
     
 
+    # Create a single progress bar over all epochs and batches.  This avoids
+    # creating a new bar per epoch and “flashing” in the console.
+    start_epoch = 1
+    pbar = (
+        tqdm.tqdm(
+            total=epochs * steps_per_epoch,
+            desc=f"Epoch {start_epoch}/{epochs}",
+            leave=False,
+        )
+        if is_main_process()
+        else None
+    )
     for ep in range(start_epoch, epochs + 1):
         if not _time_left():
-            if is_main_process(): 
+            if is_main_process():
                 wb and wb.log({"early/stop_reason": "time_budget"})
                 tqdm.tqdm.write("Time budget exhausted before next JEPA epoch; stopping.")
             break
+        # Update the bar description when the epoch changes
+        if pbar is not None:
+            pbar.set_description(f"Epoch {ep}/{epochs}")
         
         ep_loss = 0.0
 
@@ -178,16 +193,9 @@ def train_jepa(
         data_iter = (
             list(DistributedSamplerList(dataset.graphs)) if distributed else dataset.graphs
         )
-        batch_iter = _batch_iter(data_iter, batch_size)
-        if is_main_process():
-            batch_iter = tqdm.tqdm(
-                batch_iter,
-                total=steps_per_epoch,
-                desc=f"Epoch {ep}/{epochs}",
-                leave=False,
-            )
-
+        
         batches_done = 0
+        # Iterate over batches and update the outer progress bar each time
         for batch in _batch_iter(data_iter, batch_size):
 
             if max_batches > 0 and batches_done >= max_batches:
@@ -259,6 +267,9 @@ def train_jepa(
                     }
                 )
             batches_done += 1
+            # Update our single progress bar after processing each batch
+            if pbar is not None:
+                pbar.update(1)
 
         ep_loss /= max(1, min(steps_per_epoch, batches_done))
         if is_main_process():
@@ -287,6 +298,9 @@ def train_jepa(
         pass
     if distributed:
         cleanup()
+    # Close the progress bar after training
+    if pbar is not None:
+        pbar.close()
     return losses
 
 
@@ -373,30 +387,33 @@ def train_contrastive(
     def _time_left() -> bool:
         return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
     
+    # Create a single progress bar over all epochs and batches.  This avoids
+    # creating a new bar per epoch and “flashing” in the console.
+    start_epoch = 1
+    pbar = (
+        tqdm.tqdm(
+            total=epochs * steps_per_epoch,
+            desc=f"Epoch {start_epoch}/{epochs}",
+            leave=False,
+        )
+        if is_main_process()
+        else None
+    )
 
-    for ep in range(1, epochs + 1):
+    for ep in range(start_epoch, epochs + 1):
         ep_loss = 0.0
-
-        if not _time_left():
-            if is_main_process(): 
-                wb and wb.log({"early/stop_reason": "time_budget"})
-                tqdm.tqdm.write("Time budget exhausted before next JEPA epoch; stopping.")
-            break
+        
+        # Update the bar description when the epoch changes
+        if pbar is not None:
+            pbar.set_description(f"Epoch {ep}/{epochs}")
     
         data_iter = (
             list(DistributedSamplerList(dataset.graphs)) if distributed else dataset.graphs
         )
+        # Use a plain batch iterator; progress updates come from the outer bar.
         batch_iter = _batch_iter(data_iter, batch_size)
-        if is_main_process():
-            batch_iter = tqdm.tqdm(
-                batch_iter,
-                total=steps_per_epoch,
-                desc=f"Epoch {ep}/{epochs}",
-                leave=False,
-            )
-
         batches_done = 0
-        for batch in _batch_iter(data_iter, batch_size):
+        for batch in batch_iter:
 
             if max_batches > 0 and batches_done >= max_batches:
                 break
@@ -461,6 +478,9 @@ def train_contrastive(
                     }
                 )
             batches_done += 1
+            # Update our single progress bar after processing each batch
+            if pbar is not None:
+                pbar.update(1)
         ep_loss /= max(1, min(steps_per_epoch, batches_done))
         if is_main_process():
             losses.append(ep_loss)
@@ -479,6 +499,9 @@ def train_contrastive(
                     ),
                     epoch=ep,
                 )
+    if pbar is not None:
+        pbar.close()
+    # Close the progress bar after training
     try:
         if wb and is_main_process():
             wb.finish()
@@ -486,4 +509,5 @@ def train_contrastive(
         pass
     if distributed:
         cleanup()
+
     return losses

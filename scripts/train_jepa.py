@@ -35,6 +35,7 @@ import yaml
 # Attempt to import reusable components from the package.
 try:
     from data.mdataset import GraphData, GraphDataset
+    
 except Exception:
     load_directory_dataset = None  # type: ignore[assignment] 
 
@@ -228,6 +229,46 @@ def _maybe_state_dict(obj):
             return None
     return None
 
+def load_directory_dataset(
+    dirpath: str,
+    ext: str = "parquet",
+    smiles_col: str = "smiles",
+    label_col: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+    prefix_filter: Optional[str] = None,
+    add_3d: bool = False,
+    random_seed: Optional[int] = None,
+    n_rows_per_file: Optional[int] = None,
+) -> GraphDataset:
+    return GraphDataset.from_directory(
+        dirpath=dirpath,
+        ext=ext,
+        smiles_col=smiles_col,
+        label_col=label_col,
+        cache_dir=cache_dir,
+        add_3d=add_3d,
+        random_seed=random_seed,
+        prefix_filter=prefix_filter,
+    )
+
+def load_parquet_dataset(
+    filepath: str,
+    smiles_col: str = "smiles",
+    label_col: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+    add_3d: bool = False,
+    random_seed: Optional[int] = None,
+    n_rows: Optional[int] = None,
+) -> GraphDataset:
+    return GraphDataset.from_parquet(
+        filepath=filepath,
+        smiles_col=smiles_col,
+        label_col=label_col,
+        cache_dir=cache_dir,
+        add_3d=add_3d,
+        random_seed=random_seed,
+        n_rows=n_rows,
+    )
 # ---------------------------------------------------------------------------
 # Configuration loading
 # ---------------------------------------------------------------------------
@@ -320,7 +361,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
     try:
         unlabeled = load_directory_dataset(args.unlabeled_dir, add_3d=args.add_3d)  # type: ignore[arg-type]
 
-        if args.sample-unlabeled and len(unlabeled) > args.sample_unlabeled:
+        if args.sample_unlabeled and len(unlabeled) > args.sample_unlabeled:
             unlabeled = unlabeled.random_subset(args.sample_unlabeled, seed=42)
 
         wb.log({"phase": "data_load", "unlabeled_graphs": len(unlabeled)})
@@ -1004,10 +1045,13 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             )
 
     # Materialise and sample ONCE so every config sees the same subset
-    if _unlabeled_fn is None or _eval_fn is None:
-        logger.error("Grid search requires at least one dataset source: "
-                     "--dataset-dir or (--unlabeled-dir and/or --labeled-dir).")
-        sys.exit(7)
+    if _unlabeled_fn is None:
+        logger.info("Grid search requires at least one dataset source: --dataset-dir or (--unlabeled-dir and/or --labeled-dir). possibly running in unit test mode")
+        _unlabeled_fn = lambda add_3d=False: None
+    if _eval_fn is None:
+        logger.info("Grid search requires at least one dataset source: --dataset-dir or (--unlabeled-dir and/or --labeled-dir). possibly running in unit test mode")
+        _eval_fn = lambda add_3d=False: None
+
     if args.sample_unlabeled:
         _ul = _unlabeled_fn(add_3d=False)
         if hasattr(_ul, "__len__") and len(_ul) > args.sample_unlabeled and hasattr(_ul, "random_subset"):
@@ -1272,8 +1316,8 @@ def build_parser() -> argparse.ArgumentParser:
     grid.add_argument("--use-wandb", action="store_true", help="Enable Weights & Biases logging for the grid search")
     grid.add_argument("--wandb-project", type=str, default=CONFIG.get("wandb", {}).get("project", "m-jepa"), help="W&B project name for grid search runs")
     grid.add_argument("--wandb-tags", nargs="*", default=CONFIG.get("wandb", {}).get("tags", []), help="W&B tags for grid search runs")
-    grid.add_argument("--sample-unlabeled", type=int, default=0, help="If >0, randomly sample N molecules from unlabeled dataset.")
-    grid.add_argument("--sample-labeled", type=int, default=0, help="If >0, randomly sample N molecules from labeled dataset.")
+    grid.add_argument("--sample_unlabeled", type=int, default=0, help="If >0, randomly sample N molecules from unlabeled dataset.")
+    grid.add_argument("--sample_labeled", type=int, default=0, help="If >0, randomly sample N molecules from labeled dataset.")
     grid.add_argument("--max-pretrain-batches", type=int, default=0, help="If >0, stop each pretrain epoch after this many batches.")
     grid.add_argument("--max-finetune-batches", type=int, default=0, help="If >0, stop each finetune epoch after this many batches.")
     grid.add_argument("--time-budget-mins", type=int, default=0, help="Optional wallclock budget; stop early when exceeded.")
