@@ -165,68 +165,8 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
         Now Git hub action runner will show this as running and idle
         viiii. mkdir ~/actions-runner && cd ~/actions-runner # Recreate the actions‑runner directory in this user’s home and rerun the steps
 
+  5) After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
 
-
-
-
-
-
-This setup uses a GitHub-hosted runner that SSHes into your Vast instance, uploads the repo, and runs commands there. No self-hosted runner needed.
-**Provision a Vast.ai instance** with a GPU. Note the instance ID and the IP/SSH credentials.
-
-
-### 2) SSH to your Vast box (use the IP/port Vast shows you), then add the public key:
-
-You can do it via Vast Browser UI in keys tab and copy the value from ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIwg66siIs/pTWsS29Gu/R5bf7sSzEgSX5pmRnXF4hhH vast-deploy
-
-OR
-
-ssh -p <VAST_SSH_PORT> root@<VAST_IP> (from from vast UI)
-mkdir -p ~/.ssh
-chmod 700 ~/.ssh
-touch ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
-
-#on computer
-Get-Content $env:USERPROFILE\.ssh\vast_deploy.pub
-
-#back to vast to use the public key
-cat > ~/vast_deploy.pub
-#Now paste that single-line public key into the terminal.
-# Press Enter once if needed so the cursor moves to a new line.
-# Press Ctrl+D to finish the file.
-cat ~/vast_deploy.pub >> ~/.ssh/authorized_keys
-rm -f ~/vast_deploy.pub
-chmod 600 ~/.ssh/authorized_keys
-chmod 700 ~/.ssh
-chown -R "$(whoami)":"$(whoami)" ~/.ssh
-tail -n1 ~/.ssh/authorized_keys
-# You should see the key line you just added (ssh-ed25519 ... vast-deploy)
-sudo grep -E '^(Port|PubkeyAuthentication|PasswordAuthentication)' /etc/ssh/sshd_config
-# Expect at least: PubkeyAuthentication yes
-# Note the Port value — this must match secrets.VAST_PORT (22 if default)
-
-
-
-### Setting keys in vast ai
-
-In powershell
-
-1) New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh" | Out-Null
-2) ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\id_vast_ci" -C "vast-ci"
-set passphrase
-3) Get-ChildItem "$env:USERPROFILE\.ssh\id_vast_ci*"
-4) Get-Content "$env:USERPROFILE\.ssh\id_vast_ci.pub" -Raw |
-ssh -p 17259 root@144.6.107.170 'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys'
-5) ssh -p 17259 root@144.6.107.170 'chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys'
-6) in git secrets add
-
-VAST_SSH_PASSPHRASE = your passphrase
-VAST_HOST=144.6.107.170 (or the Vast hostname)
-VAST_PORT=17259
-VAST_USER=root
-VAST_SSH_KEY = contents of C:\Users\karth\.ssh\id_vast_ci
-
-steps 2 and 4 are required for every new computer we use to SSH to vast
-
-
+    a) From Vast Jupytr notebook terminal run cd ~/srv
+    b) git lfs install # sets up Git LFS hooks if needed 
+    c) git lfs pull # downloads all large files tracked by LFS
