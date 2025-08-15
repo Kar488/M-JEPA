@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import os
 from typing import List, Optional, Tuple
+import time as _time
 
 import numpy as np
 import torch
@@ -22,6 +23,7 @@ from utils.ddp import (
     cleanup,
 )
 from utils.graph_ops import _encode_graph, _pool_graph_emb
+import tqdm
 
 
 def _batch_iter(graphs: List[GraphData], batch_size: int):
@@ -76,7 +78,6 @@ def _mask_subgraph(
 
 
 def train_jepa(
-    *,
     dataset: GraphDataset,
     encoder: nn.Module,
     ema_encoder: nn.Module,
@@ -102,6 +103,9 @@ def train_jepa(
     mask_angle: bool = False,
     perturb_dihedral: bool = False,
     resume_from: Optional[str] = None,
+    *,
+    max_batches: int = 0,
+    time_budget_mins: int = 0,
 ) -> List[float]:
     distributed = init_distributed()
     device_t = torch.device(device)
@@ -155,12 +159,44 @@ def train_jepa(
     if ckpt_path:
         os.makedirs(ckpt_path, exist_ok=True)
 
+    _start_wall = _time.time()
+
+    def _time_left() -> bool:
+        return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
+    
+
     for ep in range(start_epoch, epochs + 1):
+        if not _time_left():
+            if is_main_process(): 
+                wb and wb.log({"early/stop_reason": "time_budget"})
+                tqdm.tqdm.write("Time budget exhausted before next JEPA epoch; stopping.")
+            break
+        
         ep_loss = 0.0
+
+
         data_iter = (
             list(DistributedSamplerList(dataset.graphs)) if distributed else dataset.graphs
         )
+        batch_iter = _batch_iter(data_iter, batch_size)
+        if is_main_process():
+            batch_iter = tqdm.tqdm(
+                batch_iter,
+                total=steps_per_epoch,
+                desc=f"Epoch {ep}/{epochs}",
+                leave=False,
+            )
+
+        batches_done = 0
         for batch in _batch_iter(data_iter, batch_size):
+
+            if max_batches > 0 and batches_done >= max_batches:
+                break
+            if not _time_left():
+                if is_main_process():
+                    tqdm.tqdm.write("Time budget exhausted during JEPA epoch; breaking.")
+                break
+
             ctx_list, tgt_list = [], []
             for g in batch:
                 if random_rotate or mask_angle or perturb_dihedral:
@@ -222,8 +258,9 @@ def train_jepa(
                         "epoch": ep,
                     }
                 )
+            batches_done += 1
 
-        ep_loss /= steps_per_epoch
+        ep_loss /= max(1, min(steps_per_epoch, batches_done))
         if is_main_process():
             losses.append(ep_loss)
             if wb:
@@ -242,6 +279,7 @@ def train_jepa(
                     ),
                     epoch=ep,
                 )
+        
     try:
         if wb and is_main_process():
             wb.finish()
@@ -252,13 +290,12 @@ def train_jepa(
     return losses
 
 
-def train_contrastive(
-    *,
+def train_contrastive( 
     dataset: GraphDataset,
     encoder: nn.Module,
     projection_dim: int = 64,
     epochs: int = 100,
-    batch_size: int = 256,
+    batch_size: int = 64,
     mask_ratio: float = 0.15,
     lr: float = 1e-4,
     device: str = "cuda",
@@ -276,6 +313,9 @@ def train_contrastive(
     mask_angle: bool = False,
     perturb_dihedral: bool = False,
     resume_from: Optional[str] = None,
+    *,
+    max_batches: int = 0,
+    time_budget_mins: int = 0,
 ) -> List[float]:
     distributed = init_distributed()
     device_t = torch.device(device)
@@ -327,14 +367,46 @@ def train_contrastive(
     if ckpt_path:
         os.makedirs(ckpt_path, exist_ok=True)
 
+
+    _start_wall = _time.time()
+
+    def _time_left() -> bool:
+        return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
+    
+
     for ep in range(1, epochs + 1):
         ep_loss = 0.0
+
+        if not _time_left():
+            if is_main_process(): 
+                wb and wb.log({"early/stop_reason": "time_budget"})
+                tqdm.tqdm.write("Time budget exhausted before next JEPA epoch; stopping.")
+            break
+    
         data_iter = (
             list(DistributedSamplerList(dataset.graphs)) if distributed else dataset.graphs
         )
+        batch_iter = _batch_iter(data_iter, batch_size)
+        if is_main_process():
+            batch_iter = tqdm.tqdm(
+                batch_iter,
+                total=steps_per_epoch,
+                desc=f"Epoch {ep}/{epochs}",
+                leave=False,
+            )
+
+        batches_done = 0
         for batch in _batch_iter(data_iter, batch_size):
+
+            if max_batches > 0 and batches_done >= max_batches:
+                break
+            if not _time_left():
+                if is_main_process():
+                    tqdm.tqdm.write("Time budget exhausted during contrastive epoch; breaking.")
+                break
+
             z1_list, z2_list = [], []
-            for g in batch:
+            for g in batch: 
                 if random_rotate or mask_angle or perturb_dihedral:
                     g = apply_graph_augmentations(
                         g,
@@ -388,7 +460,8 @@ def train_contrastive(
                         "epoch": ep,
                     }
                 )
-        ep_loss /= steps_per_epoch
+            batches_done += 1
+        ep_loss /= max(1, min(steps_per_epoch, batches_done))
         if is_main_process():
             losses.append(ep_loss)
             if wb:

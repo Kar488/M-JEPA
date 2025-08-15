@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import random
 from typing import Dict, List, Optional, Tuple
+import time as _time
 
 import logging
 
@@ -93,10 +94,13 @@ def train_linear_head(
     epochs: int = 50,
     lr: float = 1e-3,
     batch_size: int = 32,
-    device: str = "cpu",
+    device: str = "cuda",
     patience: int = 10,
     use_scaffold: bool = False,
-    devices: int = 1
+    devices: int = 1,
+    *,
+    max_batches: int = 0,
+    time_budget_mins: int = 0,
 ) -> Dict[str, float]:
     """Train a linear head on a frozen encoder for classification or regression.
 
@@ -117,7 +121,8 @@ def train_linear_head(
         use_scaffold: Whether to use scaffold split if SMILES are provided.
         devices: Number of GPUs for DDP.
         batch_indices: Optional list of indices for a single batch; if provided, overrides internal splitting.
-
+        max batches: Maximum number of batches to train on; if set, overrides epochs
+        time_budget_mins: Time budget in minutes for the training; if set, overrides epochs.
     Returns:
         A dictionary of metrics on the test set (only populated on rank 0).
     """
@@ -179,11 +184,24 @@ def train_linear_head(
     world = get_world_size() if distributed else 1
     train_idx_rank = train_idx[rank::world]
 
+    _start_wall = _time.time()
+
+    def _time_left() -> bool:
+        return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
+    
     for epoch in range(epochs):
         encoder.eval()
         head.train()
         batch_losses = []
+
+        batches_done = 0
         for start in range(0, len(train_idx_rank), batch_size):
+            if max_batches > 0 and batches_done >= max_batches:
+                break
+            if not _time_left():
+                logger.info("Time budget hit during linear-head train epoch=%d; breaking.", epoch)
+                break
+       
             batch_indices = train_idx_rank[start : start + batch_size]
             batch_x, batch_adj, batch_ptr, batch_labels = dataset.get_batch(batch_indices)
             batch_x = batch_x.to(device_t)
@@ -216,6 +234,7 @@ def train_linear_head(
             optimiser.zero_grad()
             loss.backward()
             optimiser.step()
+            batches_done += 1
 
         logger.debug("Epoch %d training loss %.4f", epoch, float(np.mean(batch_losses)))
         if early_stopper is not None:

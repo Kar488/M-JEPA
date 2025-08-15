@@ -389,7 +389,11 @@ def _run_one_config_method(
     baseline_cfg: str = "adapters/config.yaml",
     use_scaffold: bool = False,
     prebuilt_loaders: Optional[Tuple[Any, Any, Any]] = None,
-    prebuilt_datasets: Optional[Tuple[Any, Any, Any]] = None,  
+    prebuilt_datasets: Optional[Tuple[Any, Any, Any]] = None,
+    # fast-path caps
+    max_pretrain_batches: int = 0,
+    max_finetune_batches: int = 0,
+    time_budget_mins: int = 0,
 ) -> Dict[str, Any]:
     logger.info("Running method %s with config %s", method, asdict(cfg))
 
@@ -436,11 +440,18 @@ def _run_one_config_method(
     ds_pre  = _ensure_graph_dataset(ds_pre)
     ds_eval = _ensure_graph_dataset(ds_eval) or ds_pre
 
+    import time as _time
+    _start_wall = _time.time()
+    def _time_left() -> bool:
+        return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
+
     seed_metrics: List[Dict[str, float]] = []
+
     for seed in seeds:
         logger.debug("Training seed %d", seed)
         np.random.seed(seed)
         if method.lower() == "jepa":
+            row={}
             encoder = build_encoder(
                 gnn_type=cfg.gnn_type,
                 input_dim=input_dim,
@@ -456,100 +467,99 @@ def _run_one_config_method(
                 edge_dim=edge_dim,
             )
 
-        # Some factory variants can return None if dims weren’t resolved earlier.
-        if encoder is None:
-            try:
-                from models.encoder import GNNEncoder as _BasicEnc
-                encoder = _BasicEnc(
-                    input_dim=input_dim,
-                    hidden_dim=cfg.hidden_dim,
-                    num_layers=cfg.num_layers,
-                    gnn_type=cfg.gnn_type,
-                )
-            except Exception:
-                # ultra-minimal fallback
-                class _Id(torch.nn.Module):
-                    def __init__(self, in_d, hid_d):
-                        super().__init__()
-                        self.in_d = in_d
-                        self.hidden_dim = hid_d
-                        self.proj = torch.nn.Linear(in_d, hid_d)
-                    def forward(self, batch):
-                        x = getattr(batch, "x", None)
-                        if x is None:
-                            device = self.proj.weight.device
-                            n = getattr(batch, "num_nodes", 1)  # keep node count if available
-                            x = torch.zeros((n, self.in_d), device=device)
-                        return self.proj(x).mean(dim=0, keepdim=True)
-                encoder = _Id(input_dim, cfg.hidden_dim)
+            # If ema_encoder factory returned None, build a copy now
+            if ema_encoder is None:
+                try:
+                    from models.encoder import GNNEncoder as _BasicEnc
+                    ema_encoder = _BasicEnc(
+                        input_dim=input_dim,
+                        hidden_dim=cfg.hidden_dim,
+                        num_layers=cfg.num_layers,
+                        gnn_type=cfg.gnn_type,
+                    )
+                except Exception:
+                    import copy as _copy
+                    ema_encoder = _copy.deepcopy(encoder)
 
-        if ema_encoder is None:
-            # build a second copy if factory returned None
-            try:
-                from models.encoder import GNNEncoder as _BasicEnc
-                ema_encoder = _BasicEnc(
-                    input_dim=input_dim,
-                    hidden_dim=cfg.hidden_dim,
-                    num_layers=cfg.num_layers,
-                    gnn_type=cfg.gnn_type,
-                )
-            except Exception:
-                # copy the fallback encoder
-                import copy as _copy
-                ema_encoder = _copy.deepcopy(encoder)
-
+            # --- always construct EMA & predictor, then pretrain (BUGFIX) ---
             ema = EMA(encoder, decay=cfg.ema_decay)
-            predictor = MLPPredictor(
-                embed_dim=cfg.hidden_dim, hidden_dim=cfg.hidden_dim * 2
-            )
+            predictor = MLPPredictor(embed_dim=cfg.hidden_dim, hidden_dim=cfg.hidden_dim * 2)
 
-            try:
-                train_jepa(
-                    dataset=ds_pre,
-                    encoder=encoder,
-                    ema_encoder=ema_encoder,
-                    predictor=predictor,
-                    ema=ema,
-                    epochs=cfg.pretrain_epochs,
-                    batch_size=cfg.pretrain_bs,
-                    mask_ratio=cfg.mask_ratio,
-                    contiguous=cfg.contiguous,
-                    lr=cfg.lr,
-                    device=device,
-                    reg_lambda=1e-4,
-                    use_wandb=use_wandb,
-                    ckpt_path=f"{ckpt_dir}/jepa",
-                    ckpt_every=ckpt_every,
-                    use_scheduler=use_scheduler,
-                    warmup_steps=warmup_steps,
-                )
-            except TypeError:
-                train_jepa(
-                    dataset=ds_pre,
-                    encoder=encoder,
-                    ema_encoder=ema_encoder,
-                    predictor=predictor,
-                    ema=ema,
-                    epochs=cfg.pretrain_epochs,
-                    batch_size=cfg.pretrain_bs,
-                    mask_ratio=cfg.mask_ratio,
-                    contiguous=cfg.contiguous,
-                    lr=cfg.lr,
-                    device=device,
-                    reg_lambda=1e-4,
-                )
+            if not _time_left():
+                logger.info("Time budget exhausted before pretrain; skipping to eval.")
+            else:
+                #pretrain
+                try:
+                    # New signature (if supported)
+                    train_jepa(
+                        dataset=ds_pre,
+                        encoder=encoder,
+                        ema_encoder=ema_encoder,
+                        predictor=predictor,
+                        ema=ema,
+                        epochs=cfg.pretrain_epochs,
+                        batch_size=cfg.pretrain_bs,
+                        mask_ratio=cfg.mask_ratio,
+                        contiguous=cfg.contiguous,
+                        lr=cfg.lr,
+                        device=device,
+                        reg_lambda=1e-4,
+                        use_wandb=use_wandb,
+                        ckpt_path=f"{ckpt_dir}/jepa",
+                        ckpt_every=ckpt_every,
+                        use_scheduler=use_scheduler,
+                        warmup_steps=warmup_steps,
+                        max_batches=max_pretrain_batches,
+                        time_budget_mins=max(0, time_budget_mins - int((_time.time() - _start_wall) / 60)),
+                    )
+                except TypeError:
+                    # Backward-compatible call
+                    train_jepa(
+                        dataset=ds_pre,
+                        encoder=encoder,
+                        ema_encoder=ema_encoder,
+                        predictor=predictor,
+                        ema=ema,
+                        epochs=cfg.pretrain_epochs,
+                        batch_size=cfg.pretrain_bs,
+                        mask_ratio=cfg.mask_ratio,
+                        contiguous=cfg.contiguous,
+                        lr=cfg.lr,
+                        device=device,
+                        reg_lambda=1e-4,
+                    )
 
-            m = train_linear_head(
-                dataset=ds_eval,
-                encoder=encoder,
-                task_type=task_type,
-                epochs=cfg.finetune_epochs,
-                lr=5e-3,
-                batch_size=cfg.finetune_bs,
-                device=device,
-                use_scaffold=use_scaffold,
-            )
-            row = {k: float(v) for k, v in m.items() if k != "head"}
+            # Fine-tune / evaluation head (respect caps)
+            if _time_left():
+                try:
+                    m = train_linear_head(
+                        dataset=ds_eval,
+                        encoder=encoder,
+                        task_type=task_type,
+                        epochs=cfg.finetune_epochs,
+                        lr=5e-3,
+                        batch_size=cfg.finetune_bs,
+                        device=device,
+                        use_scaffold=use_scaffold,
+                        max_batches=max_finetune_batches,
+                        time_budget_mins=max(0, time_budget_mins - int((_time.time() - _start_wall) / 60)),
+                    )
+                    row = {k: float(v) for k, v in m.items() if k != "head"}
+                except TypeError:
+                    logger.exception("Fine-tuning failed in contrastive")
+                    m = train_linear_head(
+                            dataset=ds_eval,
+                            encoder=encoder,
+                            task_type=task_type,
+                            epochs=cfg.finetune_epochs,
+                            lr=5e-3,
+                            batch_size=cfg.finetune_bs,
+                            device=device,
+                            use_scaffold=use_scaffold,
+                        )
+                    row = {k: float(v) for k, v in m.items() if k != "head"}
+            else:
+                logger.info("Time budget exhausted before finetune; returning partial metrics.")
 
             if _HAS_PROBE:
                 X = compute_embeddings(
@@ -578,6 +588,7 @@ def _run_one_config_method(
             seed_metrics.append(row)
 
         elif method.lower() == "contrastive":
+            row={}
             encoder = build_encoder(
                 gnn_type=cfg.gnn_type,
                 input_dim=input_dim,
@@ -585,47 +596,71 @@ def _run_one_config_method(
                 num_layers=cfg.num_layers,
                 edge_dim=edge_dim,
             )
-            try:
-                train_contrastive(
-                    dataset=ds_pre,
-                    encoder=encoder,
-                    projection_dim=64,
-                    epochs=cfg.pretrain_epochs,
-                    batch_size=cfg.pretrain_bs,
-                    mask_ratio=cfg.mask_ratio,
-                    lr=cfg.lr,
-                    device=device,
-                    temperature=0.1,
-                    use_wandb=use_wandb,
-                    ckpt_path=f"{ckpt_dir}/contrast",
-                    ckpt_every=ckpt_every,
-                    use_scheduler=use_scheduler,
-                    warmup_steps=warmup_steps,
-                )
-            except TypeError:
-                train_contrastive(
-                    dataset=ds_pre,
-                    encoder=encoder,
-                    projection_dim=64,
-                    epochs=cfg.pretrain_epochs,
-                    batch_size=cfg.pretrain_bs,
-                    mask_ratio=cfg.mask_ratio,
-                    lr=cfg.lr,
-                    device=device,
-                    temperature=0.1,
-                )
-
-            m = train_linear_head(
-                dataset=ds_eval,
-                encoder=encoder,
-                task_type=task_type,
-                epochs=cfg.finetune_epochs,
-                lr=5e-3,
-                batch_size=cfg.finetune_bs,
-                device=device,
-                use_scaffold=use_scaffold,
-            )
-            row = {k: float(v) for k, v in m.items() if k != "head"}
+            if not _time_left():
+                logger.info("Time budget exhausted before pretrain during contrastive approach; skipping to eval.")
+            else:
+                #pre train
+                try:
+                    train_contrastive(
+                        dataset=ds_pre,
+                        encoder=encoder,
+                        projection_dim=64,
+                        epochs=cfg.pretrain_epochs,
+                        batch_size=cfg.pretrain_bs,
+                        mask_ratio=cfg.mask_ratio,
+                        lr=cfg.lr,
+                        device=device,
+                        temperature=0.1,
+                        use_wandb=use_wandb,
+                        ckpt_path=f"{ckpt_dir}/contrast",
+                        ckpt_every=ckpt_every,
+                        use_scheduler=use_scheduler,
+                        warmup_steps=warmup_steps,
+                        max_batches=max_pretrain_batches,
+                        time_budget_mins=max(0, time_budget_mins - int((_time.time() - _start_wall) / 60)),
+                    )
+                except TypeError:
+                    train_contrastive(
+                        dataset=ds_pre,
+                        encoder=encoder,
+                        projection_dim=64,
+                        epochs=cfg.pretrain_epochs,
+                        batch_size=cfg.pretrain_bs,
+                        mask_ratio=cfg.mask_ratio,
+                        lr=cfg.lr,
+                        device=device,
+                        temperature=0.1,
+                    )
+            # Fine-tune / evaluation head (respect caps)
+            if not _time_left():
+                logger.info("Time budget exhausted before finetune; returning partial metrics.")
+            else:
+                try:
+                    m = train_linear_head(
+                        dataset=ds_eval,
+                        encoder=encoder,
+                        task_type=task_type,
+                        epochs=cfg.finetune_epochs,
+                        lr=5e-3,
+                        batch_size=cfg.finetune_bs,
+                        device=device,
+                        use_scaffold=use_scaffold,
+                        max_batches=max_finetune_batches,
+                        time_budget_mins=max(0, time_budget_mins - int((_time.time() - _start_wall) / 60)),
+                    )
+                    row = {k: float(v) for k, v in m.items() if k != "head"}
+                except TypeError:
+                    m = train_linear_head(
+                        dataset=ds_eval,
+                        encoder=encoder,
+                        task_type=task_type,
+                        epochs=cfg.finetune_epochs,
+                        lr=5e-3,
+                        batch_size=cfg.finetune_bs,
+                        device=device,
+                        use_scaffold=use_scaffold,
+                    )
+                    row = {k: float(v) for k, v in m.items() if k != "head"}
 
             if _HAS_PROBE:
                 X = compute_embeddings(
@@ -696,7 +731,9 @@ def _run_one_config_method(
             continue
 
     agg = _aggregate_seed_metrics(seed_metrics)
-    row = {**asdict(cfg), **agg, "method": method, "seeds": len(list(seeds))}
+    # materialize seeds to count reliably (iterables can be one-shot)
+    _seeds = tuple(seeds) if not isinstance(seeds, tuple) else seeds
+    row = {**asdict(cfg), **agg, "method": method, "seeds": len(_seeds)}
     return row
 
 def _cfg_get(cfg: Any, key: str, default=None):
@@ -741,6 +778,10 @@ def run_grid_search(
     baseline_cfg: str = "adapters/config.yaml",
     out_csv: Optional[str] = None,
     use_scaffold: bool = False,
+    # --- fast-path caps for grid-search ---
+    max_pretrain_batches: int = 0,
+    max_finetune_batches: int = 0,
+    time_budget_mins: int = 0,
 ) -> pd.DataFrame:
     cfgs = _build_configs(
         mask_ratios,
@@ -764,6 +805,12 @@ def run_grid_search(
     logger.info("Running grid search over %d configs", len(cfgs))
 
     rows: List[Dict[str, Any]] = []
+    rows: List[Dict[str, Any]] = []
+    if time_budget_mins or max_pretrain_batches or max_finetune_batches:
+        logger.info(
+            "Grid caps: time_budget=%s min, max_pretrain_batches=%s, max_finetune_batches=%s",
+            time_budget_mins, max_pretrain_batches, max_finetune_batches
+        )
     for cfg in cfgs:
         logger.debug("Processing configuration %s", asdict(cfg))
         add_3d = _cfg_get(cfg, "add_3d", False)  # tests sweep over this
@@ -815,6 +862,10 @@ def run_grid_search(
                     use_scaffold=use_scaffold,
                     prebuilt_loaders=prebuilt_loaders,
                     prebuilt_datasets=prebuilt_datasets,
+                    # pass fast-path caps down; helper can ignore if not supported
+                    max_pretrain_batches=max_pretrain_batches,
+                    max_finetune_batches=max_finetune_batches,
+                    time_budget_mins=time_budget_mins,
                 )
             )
 
@@ -862,7 +913,11 @@ def run_grid_search(
         df = pd.concat([df, pd.DataFrame(best_rows)], ignore_index=True)
 
     if out_csv is not None:
-        df.to_csv(out_csv, index=False)
+        df.to_csv(out_csv, index=False) 
+        # annotate resulting table with caps (useful for debugging)
+    df["cap_time_mins"] = time_budget_mins
+    df["cap_pretrain_batches"] = max_pretrain_batches
+    df["cap_finetune_batches"] = max_finetune_batches
 
     all_metrics = list(set(metrics_max + metrics_min))
     for m in all_metrics:
