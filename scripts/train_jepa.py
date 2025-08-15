@@ -361,8 +361,16 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
     try:
         unlabeled = load_directory_dataset(args.unlabeled_dir, add_3d=args.add_3d)  # type: ignore[arg-type]
 
-        if args.sample_unlabeled and len(unlabeled) > args.sample_unlabeled:
-            unlabeled = unlabeled.random_subset(args.sample_unlabeled, seed=42)
+        # Sample a subset of the unlabeled dataset if requested.  Use getattr to
+        # avoid AttributeError when the caller hasn’t set sample_unlabeled.
+        sample_ul = getattr(args, "sample_unlabeled", 0)
+        if (
+            sample_ul
+            and hasattr(unlabeled, "__len__")
+            and len(unlabeled) > sample_ul
+            and hasattr(unlabeled, "random_subset")
+        ):
+            unlabeled = unlabeled.random_subset(sample_ul, seed=42)
 
         wb.log({"phase": "data_load", "unlabeled_graphs": len(unlabeled)})
     except Exception:
@@ -536,10 +544,18 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     # Load labelled dataset
     try:
         labeled = load_directory_dataset(args.labeled_dir, label_col=args.label_col, add_3d=args.add_3d)  # type: ignore[arg-type]
+        
+        # Sample a subset of labeled graphs if requested.  Use getattr to
+        # handle cases where sample_labeled isn’t provided.
+        sample_lb = getattr(args, "sample_labeled", 0)
+        if (
+            sample_lb
+            and hasattr(labeled, "__len__")
+            and len(labeled) > sample_lb
+            and hasattr(labeled, "random_subset")
+        ):
+            labeled = labeled.random_subset(sample_lb, seed=42)
 
-        if args.sample_labeled and len(labeled) > args.sample_labeled:
-            labeled = labeled.random_subset(args.sample_labeled, seed=42)
-            
         wb.log({"phase": "data_load", "labeled_graphs": len(labeled)})
     except Exception:
         logger.exception("Failed to load labelled dataset")
@@ -1052,18 +1068,37 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
         logger.info("Grid search requires at least one dataset source: --dataset-dir or (--unlabeled-dir and/or --labeled-dir). possibly running in unit test mode")
         _eval_fn = lambda add_3d=False: None
 
-    if args.sample_unlabeled:
+    # Safely handle optional sampling of unlabeled and labeled sets.  Use
+    # getattr to avoid AttributeError when these fields aren’t defined.
+    sample_ul = getattr(args, "sample_unlabeled", 0)
+    if sample_ul:
         _ul = _unlabeled_fn(add_3d=False)
-        if hasattr(_ul, "__len__") and len(_ul) > args.sample_unlabeled and hasattr(_ul, "random_subset"):
-            _ul = _ul.random_subset(args.sample_unlabeled, seed=42)
-        logger.info("Unlabeled sample size: %s", len(_ul) if hasattr(_ul, "__len__") else "unknown")
+        if (
+            hasattr(_ul, "__len__")
+            and len(_ul) > sample_ul
+            and hasattr(_ul, "random_subset")
+        ):
+            _ul = _ul.random_subset(sample_ul, seed=42)
+        logger.info(
+            "Unlabeled sample size: %s",
+            len(_ul) if hasattr(_ul, "__len__") else "unknown",
+        )
         _unlabeled_fn = (lambda add_3d=False, _ul=_ul: _ul)
-    if args.sample_labeled:
+    sample_lb = getattr(args, "sample_labeled", 0)
+    if sample_lb:
         _ev = _eval_fn(add_3d=False)
-        if hasattr(_ev, "__len__") and len(_ev) > args.sample_labeled and hasattr(_ev, "random_subset"):
-            _ev = _ev.random_subset(args.sample_labeled, seed=42)
-        logger.info("Labeled sample size: %s", len(_ev) if hasattr(_ev, "__len__") else "unknown")
+        if (
+            hasattr(_ev, "__len__")
+            and len(_ev) > sample_lb
+            and hasattr(_ev, "random_subset")
+        ):
+            _ev = _ev.random_subset(sample_lb, seed=42)
+        logger.info(
+            "Labeled sample size: %s",
+            len(_ev) if hasattr(_ev, "__len__") else "unknown",
+        )
         _eval_fn = (lambda add_3d=False, _ev=_ev: _ev)
+
 
     # Initialise optional W&B run for grid search
     wb = maybe_init_wandb(
