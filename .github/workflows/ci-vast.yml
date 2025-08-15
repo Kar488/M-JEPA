@@ -418,7 +418,7 @@ jobs:
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR
-            timeout: 180
+            timeout: 180m
             script: |
               set -euxo pipefail
 
@@ -488,7 +488,7 @@ jobs:
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR
-            timeout: 720
+            timeout: 720m
             script: |
               set -euxo pipefail
 

@@ -1,0 +1,13 @@
+{
+  "best_method": "contrastive",
+  "results": {
+    "contrastive": {
+      "roc_auc_mean": 0.8,
+      "roc_auc_std": 0.0
+    },
+    "jepa": {
+      "roc_auc_mean": 0.6,
+      "roc_auc_std": 0.0
+    }
+  }
+}

@@ -1,0 +1,5 @@
+method,metric,value
+jepa,roc_auc_mean,0.6
+jepa,roc_auc_std,0.0
+contrastive,roc_auc_mean,0.8
+contrastive,roc_auc_std,0.0

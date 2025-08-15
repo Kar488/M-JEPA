@@ -166,17 +166,19 @@ def train_jepa(
         return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
     
 
-    # Create a single progress bar over all epochs and batches.  This avoids
-    # creating a new bar per epoch and “flashing” in the console.
-    # If disable_tqdm is True, suppress the progress bar; otherwise enable it for the main process.
+    # Determine whether to disable the progress bar.  We disable bars either
+    # explicitly via disable_tqdm or whenever stdout isn’t a TTY (e.g. tests).
     start_epoch = 1
+    import sys
+    disable_bar = disable_tqdm or not sys.stdout.isatty()
     pbar = (
         tqdm.tqdm(
             total=epochs * steps_per_epoch,
             desc=f"Epoch {start_epoch}/{epochs}",
             leave=False,
+            disable=disable_bar,
         )
-        if is_main_process() and not disable_tqdm
+        if is_main_process() and not disable_bar
         else None
     )
     for ep in range(start_epoch, epochs + 1):
@@ -389,18 +391,20 @@ def train_contrastive(
 
     def _time_left() -> bool:
         return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
-    
-    # Create a single progress bar over all epochs and batches.  This avoids
-    # creating a new bar per epoch and “flashing” in the console.
-    # If disable_tqdm is True, suppress the progress bar; otherwise enable it for the main process.
+
+    # Determine whether to disable the progress bar.  Disable when disable_tqdm
+    # is set or stdout isn’t a TTY (tests).
+    import sys
     start_epoch = 1
+    disable_bar = disable_tqdm or not sys.stdout.isatty()
     pbar = (
         tqdm.tqdm(
             total=epochs * steps_per_epoch,
             desc=f"Epoch {start_epoch}/{epochs}",
             leave=False,
+            disable=disable_bar,
         )
-        if is_main_process() and not disable_tqdm
+        if is_main_process() and not disable_bar
         else None
     )
 

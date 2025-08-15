@@ -15,6 +15,24 @@ TMP.parent.mkdir(parents=True, exist_ok=True)
 import sys, types, importlib.util
 from pathlib import Path
 
+# Monkeypatch tqdm to use a dummy class that does nothing
+class DummyTqdm:
+    def __init__(self, iterable=None, *args, **kwargs):
+        self.iterable = iterable or []
+    def __iter__(self):
+        return iter(self.iterable)
+    def update(self, n=1):
+        pass
+    def set_description(self, desc=None):
+        pass
+    def close(self):
+        pass
+
+@pytest.fixture(autouse=True)
+def _silence_tqdm(monkeypatch):
+    """Make tqdm think we're not in a TTY so it doesn't draw a progress bar."""
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+
 def _load_real_graphdataset():
     repo_root = Path(__file__).resolve().parents[1]
     data_dir = repo_root / "data"

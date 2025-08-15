@@ -3,6 +3,7 @@ import sys
 import types
 import pandas as pd
 import pytest
+import logging
 
 # Provide minimal torch stub if not already loaded
 if "torch" not in sys.modules:
@@ -275,7 +276,7 @@ def test_cmd_grid_search_logs_and_csv(tmp_path, monkeypatch):
     assert out_csv.exists()
 
 
-def test_cmd_grid_search_failure(monkeypatch, tmp_path):
+def test_cmd_grid_search_failure(monkeypatch, caplog, tmp_path):
     def failing(**kwargs):
         raise RuntimeError("fail")
 
@@ -321,6 +322,9 @@ def test_cmd_grid_search_failure(monkeypatch, tmp_path):
         out_csv=None,
         best_config_out=None,
     )
+
+    # Suppress error logs from tj during this test
+    caplog.set_level(logging.CRITICAL, logger='scripts.train_jepa')
 
     with pytest.raises(SystemExit) as ex:
         tj.cmd_grid_search(args)

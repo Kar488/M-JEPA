@@ -5,6 +5,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import pytest
 import torch
+import logging
 
 from training import baselines
 
@@ -29,9 +30,16 @@ def test_run_baseline_with_mock(tmp_path, monkeypatch):
     assert str(repo_path) in sys.path
 
 
-def test_run_baseline_unknown():
-    with pytest.raises(ValueError):
-        baselines.run_baseline("unknown", dataset=None)
+def test_run_baseline_unknown(caplog):
+
+    #with pytest.raises(ValueError):
+        #baselines.run_baseline("unknown", dataset=None)
+    # We know training.baselines will throw a ValueError for unknown baselines,
+    # but we don't want to report it here, so we just check the name.
+    with caplog.at_level(logging.CRITICAL, logger='training.baselines'):
+         with pytest.raises(ValueError):
+            baselines.run_baseline("unknown", dataset=None)
+    #assert "Unknown baseline 'unknown'" in caplog.text
 
 
 @pytest.mark.parametrize(

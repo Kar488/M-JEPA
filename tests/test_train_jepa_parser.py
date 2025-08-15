@@ -13,7 +13,7 @@ from scripts.train_jepa import (
 )
 
 import pytest, argparse
-
+# Suppress argparse usage messages in tests
 @pytest.fixture(autouse=True)
 def _silence_argparse_usage(monkeypatch):
     def _quiet_error(self, message):
