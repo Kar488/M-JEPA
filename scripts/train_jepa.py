@@ -363,7 +363,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
         # Sample a subset of the unlabeled dataset if requested.  Use getattr to
         # avoid AttributeError when the caller hasn’t set sample_unlabeled.
-        sample_ul = getattr(args, "sample_unlabeled", 0)
+        sample_ul = getattr(args, "sample-unlabeled", 0)
         if (
             sample_ul
             and hasattr(unlabeled, "__len__")
@@ -549,7 +549,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         
         # Sample a subset of labeled graphs if requested.  Use getattr to
         # handle cases where sample_labeled isn’t provided.
-        sample_lb = getattr(args, "sample_labeled", 0)
+        sample_lb = getattr(args, "sample-labeled", 0)
         if (
             sample_lb
             and hasattr(labeled, "__len__")
@@ -1072,7 +1072,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
 
     # Safely handle optional sampling of unlabeled and labeled sets.  Use
     # getattr to avoid AttributeError when these fields aren’t defined.
-    sample_ul = getattr(args, "sample_unlabeled", 0)
+    sample_ul = getattr(args, "sample-unlabeled", 0)
     if sample_ul:
         _ul = _unlabeled_fn(add_3d=False)
         if (
@@ -1086,7 +1086,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             len(_ul) if hasattr(_ul, "__len__") else "unknown",
         )
         _unlabeled_fn = (lambda add_3d=False, _ul=_ul: _ul)
-    sample_lb = getattr(args, "sample_labeled", 0)
+    sample_lb = getattr(args, "sample-labeled", 0)
     if sample_lb:
         _ev = _eval_fn(add_3d=False)
         if (
@@ -1353,8 +1353,8 @@ def build_parser() -> argparse.ArgumentParser:
     grid.add_argument("--use-wandb", action="store_true", help="Enable Weights & Biases logging for the grid search")
     grid.add_argument("--wandb-project", type=str, default=CONFIG.get("wandb", {}).get("project", "m-jepa"), help="W&B project name for grid search runs")
     grid.add_argument("--wandb-tags", nargs="*", default=CONFIG.get("wandb", {}).get("tags", []), help="W&B tags for grid search runs")
-    grid.add_argument("--sample_unlabeled", type=int, default=0, help="If >0, randomly sample N molecules from unlabeled dataset.")
-    grid.add_argument("--sample_labeled", type=int, default=0, help="If >0, randomly sample N molecules from labeled dataset.")
+    grid.add_argument("--sample-unlabeled", type=int, default=0, help="If >0, randomly sample N molecules from unlabeled dataset.")
+    grid.add_argument("--sample-labeled", type=int, default=0, help="If >0, randomly sample N molecules from labeled dataset.")
     grid.add_argument("--max-pretrain-batches", type=int, default=0, help="If >0, stop each pretrain epoch after this many batches.")
     grid.add_argument("--max-finetune-batches", type=int, default=0, help="If >0, stop each finetune epoch after this many batches.")
     grid.add_argument("--time-budget-mins", type=int, default=0, help="Optional wallclock budget; stop early when exceeded.")
