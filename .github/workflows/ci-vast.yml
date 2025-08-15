@@ -208,7 +208,6 @@ jobs:
     needs: [tests_quick, vast_smoke]
     steps:
       - uses: actions/checkout@v4
-
       - name: Deploy, install deps (CUDA)
         uses: appleboy/ssh-action@v1
         env:
