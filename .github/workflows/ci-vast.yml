@@ -485,8 +485,10 @@ jobs:
                   --finetune-epochs-options 1 \
                   --learning-rates 1e-4 \
                   --seeds 1 \
-                  --sample-unlabeled 50000 \  # <-- use a 1000000 (10,000,000- 10M) when working fully matching word doc spec
-                  --sample-labeled 20000 \    # <-- use a 20000 (20K) when working fully matching word doc spec (≈17K across data classes e.g, ESOL, BACE etc)
+                  # <-- use a 1000000 (10,000,000- 10M) when working fully matching word doc spec
+                  --sample-unlabeled 50000 \  
+                  # <-- use a 20000 (20K) when working fully matching word doc spec (≈17K across data classes e.g, ESOL, BACE etc)
+                  --sample-labeled 20000 \    
                   --max-pretrain-batches 200 \
                   --max-finetune-batches 200 \
                   --time-budget-mins 45 \
@@ -495,6 +497,7 @@ jobs:
                   $FR \
                   --use-wandb \
                   2>&1 | tee -a logs/grid_search_$(date +%F_%H-%M).log
+              fi
 
   vast_pretrain:
     name: Pretain JEPA Model
