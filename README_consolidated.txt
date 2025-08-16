@@ -11,6 +11,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    git clone https://github.com/.../M-JEPA.git
    cd M-JEPA
    pip install -r requirements.txt
+   pre-commit install
    ```
    Optional: install RDKit via conda or `micromamba` for full chemistry
    features.
