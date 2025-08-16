@@ -143,6 +143,19 @@ Third-Party Friends: ``third_party/``
 ----------------------------------------
 Contains external repositories (like MolCLR, HiMol, GeomGCL) used as baselines or references.
 
+Baseline Connectors: ``adapters/``
+----------------------------------------
+This room plugs our lab into baseline models from other projects.
+
+``cli_runner.py``
+  Orchestrates baseline training and embedding through the command line.
+
+``native_adapter.py``
+  Loads baseline repositories directly as Python modules so they fit right in.
+
+``config.yaml``
+  Stores the paths and command templates that tell the adapters what to run.
+
 Conclusion
 ----------
 This repository is a playground for teaching computers how molecules behave. It has tools for data, model building, training, experimenting, and evaluating. Each module is built to be modular and reusable so you can mix and match pieces to fit your research needs.
