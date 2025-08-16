@@ -199,4 +199,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
         git lfs install # sets up Git LFS hooks if needed 
         git lfs pull # downloads all large files tracked by LFS
         top # to see what proces is running
+        kill 3358              # sends SIGTERM — lets the program clean up
+        # if it doesn’t stop within a few seconds, force it:
+        kill -9 3358           # sends SIGKILL — immediate terminatio
         ```

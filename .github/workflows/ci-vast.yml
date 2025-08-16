@@ -21,9 +21,6 @@ env:
   PIP_CACHE_DIR: /srv/mjepa/.cache/pip
   FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}  
   WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-  WANDB_PROJECT: m-jepa             # or whatever project you expect
-  WANDB_ENTITY: karthik‑iyer‑la‑trobe-university  # optional but recommended
-  WANDB_MODE: online                # optional; ensures syncing
 
 jobs:
   tests_quick:
@@ -428,7 +425,7 @@ jobs:
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             # Force refresh will rerun grid search default is false and not run grid search if outputs exist
-            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT,WANDB_ENTITY,WANDB_MODE  
+            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -518,7 +515,7 @@ jobs:
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          envs: APP_DIR,WANDB_API_KEY,WANDB_PROJECT,WANDB_ENTITY,WANDB_MODE  
+          envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY
           command_timeout: 180m         # <-- default is 10m; bump this
           script: |
             set -euxo pipefail
@@ -616,7 +613,7 @@ jobs:
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR,WANDB_API_KEY,WANDB_PROJECT,WANDB_ENTITY,WANDB_MODE  
+            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -683,7 +680,7 @@ jobs:
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR,WANDB_API_KEY,WANDB_PROJECT,WANDB_ENTITY,WANDB_MODE  
+            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -737,7 +734,7 @@ jobs:
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR,WANDB_API_KEY,WANDB_PROJECT,WANDB_ENTITY,WANDB_MODE  
+            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY 
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail

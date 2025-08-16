@@ -1,7 +1,8 @@
 M-JEPA: A Kid-Friendly Guide
 ============================
 
-Welcome to the M-JEPA project! Think of this repository as a giant science lab where computers learn to understand molecules. Each folder is like a different lab room with its own tools. Here's a tour that explains everything in simple, kid-friendly language.
+Welcome to the M-JEPA project! Think of this repository as a giant science lab where computers learn to understand molecules. 
+Each folder is like a different lab room with its own tools. Here's a tour that explains everything in simple, kid-friendly language.
 
 Main Entrance: ``main.py``
 ----------------------------------------
@@ -50,6 +51,12 @@ These are different "brains" that understand molecular graphs.
 
 ``predictor.py``
   A small neural network that tries to guess a target embedding from the context embedding.
+
+``ema.py``
+  Implements Exponential Moving Average (EMA) to keep a smooth version of the model's weights, which helps with stability.
+
+``factory.py``
+  A factory that builds models based on the configuration settings. It can create different types of encoders and predictors.  
 
 Training Room: ``training/``
 ----------------------------------------
@@ -139,6 +146,19 @@ Docs and Configs
 ``requirements.txt`` & ``pyproject.toml``
   Lists of needed Python packages.
 
+Sample Data: ``samples/``
+----------------------------------------
+Contains tiny datasets for quick demos and tests.
+
+Hyperparameter Sweeps: ``sweeps/``
+----------------------------------------
+The YAML files here define Weights & Biases sweep setups to try many parameter combinations automatically.
+
+Quality Check: ``tests/``
+----------------------------------------
+Scripts in this room make sure each lab tool works correctly.
+Running the tests keeps experiments reliable.
+
 Third-Party Friends: ``third_party/``
 ----------------------------------------
 Contains external repositories (like MolCLR, HiMol, GeomGCL) used as baselines or references.
@@ -158,6 +178,7 @@ This room plugs our lab into baseline models from other projects.
 
 Conclusion
 ----------
-This repository is a playground for teaching computers how molecules behave. It has tools for data, model building, training, experimenting, and evaluating. Each module is built to be modular and reusable so you can mix and match pieces to fit your research needs.
+This repository is a playground for teaching computers how molecules behave. It has tools for data, model building, training, experimenting, and evaluating. 
+Each module is built to be modular and reusable so you can mix and match pieces to fit your research needs.
 
 Have fun exploring!
