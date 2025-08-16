@@ -1003,6 +1003,15 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     Biases if enabled and optionally written to a CSV file.  When the grid
     search completes, the best configuration and its metric are reported.
     """
+        # Skip grid search if results already exist
+    if not args.force_refresh and args.out_csv and args.best_config_out:
+        if os.path.exists(args.out_csv) and os.path.exists(args.best_config_out):
+            logger.info(
+                "Skipping grid search because %s and %s already exist.",
+                args.out_csv,
+                args.best_config_out,
+            )
+            return
     # If the experiments module is unavailable, abort with a distinct exit code
     logger.info("Starting grid search with args: %s", args)
     if run_grid_search is None:
@@ -1358,6 +1367,7 @@ def build_parser() -> argparse.ArgumentParser:
     grid.add_argument("--max-pretrain-batches", type=int, default=0, help="If >0, stop each pretrain epoch after this many batches.")
     grid.add_argument("--max-finetune-batches", type=int, default=0, help="If >0, stop each finetune epoch after this many batches.")
     grid.add_argument("--time-budget-mins", type=int, default=0, help="Optional wallclock budget; stop early when exceeded.")
+    grid.add_argument("--force-refresh", action="store_true",help="Ignore cached grid search outputs and recompute")
 
     grid.set_defaults(func=cmd_grid_search)
 

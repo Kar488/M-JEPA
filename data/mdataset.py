@@ -168,7 +168,13 @@ class GraphDataset:
                 return _fallback_graph_from_string(smiles)
 
             # sanitization + explicit H (safer for 3D)
-            Chem.SanitizeMol(mol)
+            try:
+                Chem.SanitizeMol(mol)
+            except Exception as e:
+                # log and re‑raise; caller will decide whether to skip
+                logger.warning("Sanitization failed for %s: %s; skipping molecule", smiles, e)
+                raise
+            
             mol = Chem.AddHs(mol)
 
             # Node features: [Z, degree, aromatic, hybrid]
@@ -265,21 +271,27 @@ class GraphDataset:
             
         graphs: List[GraphData] = []
         smiles_out: List[str] = []
+        valid_indices: List[int] = []
         for sm in smiles_list:
             try:
                 g = cls.smiles_to_graph(
                     sm, add_3d=add_3d, random_seed=random_seed
                 )
             except Exception as e:
-                
-                if _RUNNING_IN_CI:
-                    raise
-                g = _fallback_graph_from_string(sm)
+                #Dont raise exception as it may be a valid SMILES
+                #if _RUNNING_IN_CI:
+                    #raise
+                logger.warning("Skipping invalid SMILES %s: %s", sm, e)
             
             graphs.append(g)
             smiles_out.append(sm)
+            valid_indices.append(i)
 
         y = None if labels is None else np.asarray(labels)
+        # If labels are provided, filter them to match valid SMILES
+        if y is not None:
+            y = y[valid_indices]
+           
         return cls(graphs, y, smiles_out)
 
     @classmethod

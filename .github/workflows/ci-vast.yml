@@ -4,7 +4,12 @@ name: CI → Vast GPU
 on:
   push:
     branches: [ master, main ]
-  workflow_dispatch: {}
+  workflow_dispatch: 
+    inputs:
+      force_refresh:
+        description: "Ignore cached grid search outputs and recompute"
+        required: false
+        default: "false"
 
 concurrency:
   group: vast-${{ github.ref }}
@@ -14,6 +19,7 @@ env:
   APP_DIR: /srv/mjepa
   VENV_DIR: /srv/mjepa/.venv
   PIP_CACHE_DIR: /srv/mjepa/.cache/pip
+  FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}
 
 jobs:
   tests_quick:
@@ -417,7 +423,7 @@ jobs:
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR
+            envs: APP_DIR, FORCE_REFRESH  # <-- pass the APP_DIR and FORCE_REFRESH envs - Force refresh will rerun grid search default is false and not run grid search if outputs exist
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -450,34 +456,40 @@ jobs:
 
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
               # grid search results are in best-config-out so it can used in training
-              "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
-                --unlabeled-dir data/ZINC-canonicalized \
-                --labeled-dir data/katielinkmoleculenet_benchmark/train \
-                --label-col label \
-                --task-type classification \
-                --methods jepa contrastive \
-                --mask-ratios 0.15 \
-                --contiguities 0 \
-                --hidden-dims 256 \
-                --num-layers-list 3 \
-                --gnn-types mpnn \
-                --ema-decays 0.99 \
-                --add-3d-options 0 \
-                --pretrain-batch-sizes 4 \
-                --finetune-batch-sizes 4 \
-                --pretrain-epochs-options 1 \
-                --finetune-epochs-options 1 \
-                --learning-rates 1e-4 \
-                --seeds 1 \
-                --sample-unlabeled 1000000 \
-                --sample-labeled 20000 \
-                --max-pretrain-batches 200 \
-                --max-finetune-batches 200 \
-                --time-budget-mins 20 \
-                --out-csv outputs/grid_results.csv \
-                --best-config-out outputs/best_grid_config.json \
-                --use-wandb \
-                2>&1 | tee -a logs/grid_search_$(date +%F_%H-%M).log
+
+              # Skip grid search if cached outputs exist
+              if [ "${FORCE_REFRESH}" != "true" ] && [ -f outputs/grid_results.csv ] && [ -f outputs/best_grid_config.json ]; then
+                echo "Grid search outputs already exist; skipping grid search."
+              else
+                "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
+                  --unlabeled-dir data/ZINC-canonicalized \
+                  --labeled-dir data/katielinkmoleculenet_benchmark/train \
+                  --label-col label \
+                  --task-type classification \
+                  --methods jepa contrastive \
+                  --mask-ratios 0.15 \
+                  --contiguities 0 \
+                  --hidden-dims 256 \
+                  --num-layers-list 3 \
+                  --gnn-types mpnn \
+                  --ema-decays 0.99 \
+                  --add-3d-options 0 \
+                  --pretrain-batch-sizes 4 \
+                  --finetune-batch-sizes 4 \
+                  --pretrain-epochs-options 1 \
+                  --finetune-epochs-options 1 \
+                  --learning-rates 1e-4 \
+                  --seeds 1 \
+                  --sample-unlabeled 50000 \  # <-- use a 1000000 (10,000,000- 10M) when working fully matching word doc spec
+                  --sample-labeled 20000 \    # <-- use a 20000 (20K) when working fully matching word doc spec (≈17K across data classes e.g, ESOL, BACE etc)
+                  --max-pretrain-batches 200 \
+                  --max-finetune-batches 200 \
+                  --time-budget-mins 20 \
+                  --out-csv outputs/grid_results.csv \
+                  --best-config-out outputs/best_grid_config.json \
+                  $([ "${FORCE_REFRESH}" = "true" ] && echo "--force-refresh") \
+                  --use-wandb \
+                  2>&1 | tee -a logs/grid_search_$(date +%F_%H-%M).log
 
   vast_pretrain:
     name: Pretain JEPA Model

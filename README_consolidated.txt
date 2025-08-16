@@ -71,6 +71,10 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
     - The repository includes sample CSVs (e.g. `samples/tox21_mini.csv`) for quick
       smoke tests.
       - Scripts repo does not have a _init_.py as so its not treated as a package or module. note while deploying
+    - Grid search results are automatically resused for pretraining action, Once pretraining has finished, that encoder is saved to disk 
+      (e.g. outputs/encoder.pt) and is loaded directly in the finetune, benchmark and case‑study commands. 
+      Those later stages don’t rebuild the encoder; they just attach a linear head or evaluate the already‑trained model.
+      Because of that, you don’t need to pass the same flags again to finetune, benchmark or tox21. The current workflow does exactly this:
 
 
 4. **Run tests**
@@ -167,6 +171,9 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
   5) After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
 
-    a) From Vast Jupytr notebook terminal run cd ~/srv
+    a) From Vast Jupytr notebook terminal 
+        run cd ~/srv
     b) git lfs install # sets up Git LFS hooks if needed 
     c) git lfs pull # downloads all large files tracked by LFS
+
+  6) top # to see what proces is running
