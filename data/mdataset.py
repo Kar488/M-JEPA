@@ -282,6 +282,7 @@ class GraphDataset:
                 #if _RUNNING_IN_CI:
                     #raise
                 logger.warning("Skipping invalid SMILES %s: %s", sm, e)
+                continue
             
             graphs.append(g)
             smiles_out.append(sm)

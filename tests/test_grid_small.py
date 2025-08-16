@@ -8,12 +8,8 @@ import pytest
 
 # Configure a source parquet (adjust path to one of your shards)
 SOURCE = Path("data/ZINC-canonicalized/train-00000-of-00003-1dd8e62fc2556455.parquet")  # change if needed
-TMP = Path("data/tmp_small.parquet")
-TMP.parent.mkdir(parents=True, exist_ok=True)
- 
 
-import sys, types, importlib.util
-from pathlib import Path
+import sys, types, importlib.util 
 
 # Monkeypatch tqdm to use a dummy class that does nothing
 class DummyTqdm:
@@ -33,13 +29,11 @@ def _silence_tqdm(monkeypatch):
     """Make tqdm think we're not in a TTY so it doesn't draw a progress bar."""
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
 
-import socket, contextlib, pytest, os
+@pytest.fixture
+def tmp_parquet(tmp_path):
+    path = tmp_path / "tmp_small.parquet"
+    yield path
 
-def _free_port():
-    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
-    
 @pytest.fixture(autouse=True)
 def _ddp_sane_env(monkeypatch):
     # either disable entirely:
@@ -50,6 +44,14 @@ def _ddp_sane_env(monkeypatch):
     monkeypatch.setenv("RANK", "0")
     monkeypatch.setenv("WORLD_SIZE", "1")
 
+
+import socket, contextlib, pytest, os
+
+def _free_port():
+    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+    
 def _load_real_graphdataset():
     repo_root = Path(__file__).resolve().parents[1]
     data_dir = repo_root / "data"
@@ -77,67 +79,72 @@ def _load_real_graphdataset():
 
 GraphDataset = _load_real_graphdataset()
 
+def test_grid_search_small(wb,tmp_parquet):
 
-if SOURCE.exists():
-    try:
-        df = pd.read_parquet(SOURCE).head(20)  # keep small
-    except Exception:
-        df = None
-        # force fallback to toy dataset below
-        SOURCE = Path("__invalid__")
-
-if SOURCE.exists() and df is not None:
-    # ensure smiles col exists
-    use_cols = [c for c in df.columns if c.lower() == "smiles"]
-    if use_cols:
-        smiles_col = use_cols[0]
-    else:
-        raise SystemExit("Could not find a 'smiles' column in the Parquet subset.")
-    
-    df["label"] = np.random.randint(0, 2, size=len(df)) # fake labels since its not in dataset
-    df.to_parquet(TMP, index=False) 
-
-    def small_dataset_fn(add_3d: bool):
-        
-        ds =  GraphDataset.from_parquet(
-            filepath=str(TMP),
-            smiles_col=smiles_col,
-            label_col="label", # label column is somehow ignored by loader
-            cache_dir=None,
-            add_3d=add_3d,
-        )
-        # hard‑set labels from the Parquet file
-        # import numpy as np, pandas as pd
-        # y = pd.read_parquet(TMP, columns=["label"])["label"].to_numpy()
-        # ds.labels = y.astype(int)  # or float for regression
-
-        return ds
-
-else:
-    # Fallback: small toy dataset
-    
-    def small_dataset_fn(add_3d: bool):
-        smiles = [
-            "CCO",
-            "CCN",
-            "CCC",
-            "c1ccccc1",
-            "CC(=O)O",
-            "CCOCC",
-            "CNC",
-            "CCCl",
-            "COC",
-            "CCN(CC)CC",
-        ]
-        labels = np.random.randint(0, 2, size=len(smiles)).tolist() # fake labels since its not in dataset
-        return GraphDataset.from_smiles_list(
-            smiles, labels=labels, add_3d=add_3d
-        )
-
-
-def test_grid_search_small(wb):
     pytest.importorskip("rdkit")
     from experiments.grid_search import run_grid_search
+
+    if SOURCE.exists():
+        try:
+            df = pd.read_parquet(SOURCE).head(20)  # keep small
+            source_valid = True
+        except Exception:
+            df = None
+            # force fallback to toy dataset below
+            source_valid = False
+    else:
+        df = None
+        source_valid = False
+
+    if source_valid and df is not None:
+        # ensure smiles col exists
+        use_cols = [c for c in df.columns if c.lower() == "smiles"]
+        if use_cols:
+            smiles_col = use_cols[0]
+        else:
+            raise SystemExit("Could not find a 'smiles' column in the Parquet subset.")
+        
+        df["label"] = np.random.randint(0, 2, size=len(df)) # fake labels since its not in dataset
+        df.to_parquet(tmp_parquet, index=False) 
+
+        def small_dataset_fn(add_3d: bool):
+            
+            ds =  GraphDataset.from_parquet(
+                filepath=str(tmp_parquet),
+                smiles_col=smiles_col,
+                label_col="label", # label column is somehow ignored by loader
+                cache_dir=None,
+                add_3d=add_3d,
+            )
+            # hard‑set labels from the Parquet file
+            # import numpy as np, pandas as pd
+            # y = pd.read_parquet(TMP, columns=["label"])["label"].to_numpy()
+            # ds.labels = y.astype(int)  # or float for regression
+
+            return ds
+
+    else:
+        # Fallback: small toy dataset
+        
+        def small_dataset_fn(add_3d: bool):
+            smiles = [
+                "CCO",
+                "CCN",
+                "CCC",
+                "c1ccccc1",
+                "CC(=O)O",
+                "CCOCC",
+                "CNC",
+                "CCCl",
+                "COC",
+                "CCN(CC)CC",
+            ]
+            labels = np.random.randint(0, 2, size=len(smiles)).tolist() # fake labels since its not in dataset
+            return GraphDataset.from_smiles_list(
+                smiles, labels=labels, add_3d=add_3d
+            )
+    # Run the grid search with the small dataset function
+    # Note: this will run on CPU only, so adjust params accordingly
     df_res = run_grid_search(
         dataset_fn=small_dataset_fn,
         task_type="classification",

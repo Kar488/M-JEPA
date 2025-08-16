@@ -8,6 +8,7 @@ import os, sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from utils.logging import maybe_init_wandb
+import shutil
 
 # adding this to support MurckoScaffold failures  in moleculenet_dc tests
 def pytest_sessionstart(session):
@@ -71,3 +72,9 @@ def wb():
     yield wandb
     with contextlib.suppress(Exception):
         wandb.finish()
+
+@pytest.fixture(scope="session", autouse=True)
+def clean_artifacts():
+    yield
+    for d in ("outputs", "reports", "ckpts", "analysis", "cache"):
+        shutil.rmtree(Path(d), ignore_errors=True)

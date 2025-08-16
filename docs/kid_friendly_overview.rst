@@ -115,16 +115,6 @@ Extra scripts to run special setups or gather results.
 ``case_study.py``, ``ablation.py``, ``probing.py``
   Additional experiments like removing features to see their impact or probing embeddings for meaning.
 
-Charts and Reports: ``analysis/plot_results.py``
-------------------------------------------------------------
-Reads CSV files with metrics and draws:
-
-- ROC curves (for classification).
-- Loss curves (to see how training improved).
-- Bar charts (for comparing experiments).
-
-Saves these pictures in a folder you pick.
-
 Handy Scripts: ``scripts/``
 ----------------------------------------
 Small programs for everyday tasks.

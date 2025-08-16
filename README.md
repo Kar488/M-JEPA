@@ -14,9 +14,10 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    pip install -r requirements.txt
    pre-commit install
    ```
+   Install torch and deepchem through conda
    Optional: install RDKit via conda or `micromamba` for full chemistry features.
 
-2. **Authenticate with Weights & Biases **
+2. **Authenticate with Weights & Biases**
 
    ```bash
    wandb login
@@ -34,18 +35,18 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    - Large corpora such as **ZINC** and **PubChem** can be downloaded with
      `scripts/download_unlabeled.py`. The resulting Parquet shards are stored
      under `data/unlabeled/`.
-  - Labeled benchmarks from **MoleculeNet** (ESOL, FreeSolv, Lipophilicity,
-    BACE, BBBP, Tox21, ClinTox, SIDER) should be placed under `data/` as
-    scaffold‑split CSV/Parquet files. The repository previously downloaded
-    copies of ZINC, PubChem, Tox21 and MoleculeNet; if these folders are
-    absent, the code will attempt to fetch them on the fly.
-  - The test suite uses small synthetic or bundled samples and does **not**
-    require any of the large datasets.
+  -  Labeled benchmarks from **MoleculeNet** (ESOL, FreeSolv, Lipophilicity,
+     BACE, BBBP, Tox21, ClinTox, SIDER) should be placed under `data/` as
+     scaffold‑split CSV/Parquet files. The repository previously downloaded
+     copies of ZINC, PubChem, Tox21 and MoleculeNet; if these folders are
+     absent, the code will attempt to fetch them on the fly.
+  -  The test suite uses small synthetic or bundled samples and does **not**
+     require any of the large datasets.
 
-  - Pipeline usage
-    Individual stages of the JEPA workflow can be invoked via subcommands in
-    ``scripts/train_jepa.py``. This allows external deployment pipelines to run
-    only the required phase:
+  -  Pipeline usage
+     Individual stages of the JEPA workflow can be invoked via subcommands in
+     ``scripts/train_jepa.py``. This allows external deployment pipelines to run
+     only the required phase:
     
     ```bash
     # Self-supervised pretraining
@@ -56,14 +57,15 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
     
     # Evaluate a pretrained encoder with a fresh probe
     python scripts/train_jepa.py evaluate --labeled-dir data/labeled --encoder encoder.pt
+    ```
 
-    ## Links for parquet files downloaded that are manual and placed in data folder than running the scripts
+    Links for parquet files downloaded that are manual and placed in data folder than running the scripts
     
     https://huggingface.co/datasets/BASF-AI/PubChem-Raw - 2.09M
     https://huggingface.co/datasets/sagawa/ZINC-canonicalized - 20.7M
     https://huggingface.co/datasets/HUBioDataLab/tox21/resolve/main/data.csv - 7.83K
 
-    ## Notes
+    Notes
 
     - Example grid searches and plotting utilities are provided under `experiments/`
       and `analysis/`.
@@ -95,11 +97,11 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
   2) Set these up in GIT Hub rep - secrets, copy the values available from Vast UI - In Repository → Settings → Secrets and variables → Actions → New repository secret add:
 
-  VAST_HOST = your Vast IP 
+      VAST_HOST = your Vast IP 
 
-  VAST_PORT = your Vast SSH port
+      VAST_PORT = your Vast SSH port
 
-  VAST_USER = root (or the user Vast provided)
+      VAST_USER = root (or the user Vast provided)
 
   3) Create Keys to connect to Vash on SSH
 
@@ -108,10 +110,9 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
       ```bash
       ssh-keygen -t ed25519 -C "vast-deploy" -f $env:USERPROFILE\.ssh\vast_deploy
       ```
-
-      # creates: id_vast_ci (private) and id_vast_ci.pub (public)
-      # Private key: ~/.ssh/vast_deploy (keep secret)
-      # Public key: ~/.ssh/vast_deploy.pub (safe to share)
+      creates: a public and private key
+      Private key: ~/.ssh/vast_deploy (keep secret)
+      Public key: ~/.ssh/vast_deploy.pub (safe to share)
 
       b) on computer in powershell type this to ket the key
 
@@ -158,7 +159,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
       Copy that GH_PAT_RO key value into Git GIT server repository secrets
 
-  4) **Configure git hub runner on vast so it can see if Vast instance is running**
+  4) Configure git hub runner on vast so it can see if Vast instance is running
 
     a) Open your repository on GitHub (for example: https://github.com/Kar488/M‑JEPA).
     b) Click Settings at the top of the repo page.
@@ -190,9 +191,9 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
         ```
         
 
-  5) **After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.**
+  5) After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
 
-    # From Vast Jupytr notebook terminal 
+    From Vast Jupytr notebook terminal 
 
         ```bash
         run cd ~/srv

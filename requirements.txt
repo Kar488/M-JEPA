@@ -3,12 +3,12 @@ numpy<2
 pandas
 pyarrow                 # parquet I/O
 scikit-learn
-#torch==2.2.1         # done through git workflow
-#torch-scatter==2.1.2 # done through git workflow
-#torch-geometric==2.5.3 # done through git workflow
+#torch==2.2.1         # done through git workflow but if we want clean local test environments (perhaps move later to environment.yml)
+#torch-scatter==2.1.2 # done through git workflow but if we want clean local test environments (perhaps move later to environment.yml)
+#torch-geometric==2.5.3 # done through git workflow but if we want clean local test environments (perhaps move later to environment.yml)
 tensorflow
        
-#rdkit-pypi              # # done through git workflow or install via conda:  conda install -c conda-forge rdkit
+#rdkit-pypi              # # done through git workflow or install via conda:  conda install -c conda-forge rdkit (consider environment.yml)
 pyyaml
 joblib
 fastparquet
@@ -26,5 +26,3 @@ psutil
 # Testing
 pytest
 pytest-cov
-
-

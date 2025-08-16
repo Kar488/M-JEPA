@@ -1,5 +1,8 @@
 # Byte‑compiled / optimized / DLL files
 __pycache__/
+data/__pycache__/
+training/__pycache__/
+experiments/__pycache__/
 *.py[cod]
 *.pyd
 *.pyo
@@ -15,6 +18,9 @@ dist/
 *.egg-info/
 docs/_build/
 reports/ 
+ckpts/
+ouputs/
+analysis/
 
 #logs
 wandb/
@@ -29,6 +35,7 @@ wandb/
 .DS_Store
 Thumbs.db
 
+# forced exclusions 
 experiments/__pycache__/grid_search.cpython-312.pyc
 data/__pycache__/__init__.cpython-312.pyc
 outputs/grid_ckpts/jepa/jepa_ep0002.pt
@@ -39,6 +46,8 @@ experiments/__pycache__/grid_search.cpython-312.pyc
 training/__pycache__/supervised.cpython-312.pyc
 training/__pycache__/unsupervised.cpython-312.pyc
 
-!.github/actions/**
+
 experiments/__pycache__/grid_search.cpython-312.pyc
 outputs/grid_ckpts/jepa/jepa_ep0002.pt
+outputs/small_grid_results.csv
+data/tmp_small.parquet
