@@ -19,7 +19,11 @@ env:
   APP_DIR: /srv/mjepa
   VENV_DIR: /srv/mjepa/.venv
   PIP_CACHE_DIR: /srv/mjepa/.cache/pip
-  FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}
+  FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}  
+  WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+  WANDB_PROJECT: m-jepa             # or whatever project you expect
+  WANDB_ENTITY: karthik‑iyer‑la‑trobe-university  # optional but recommended
+  WANDB_MODE: online                # optional; ensures syncing
 
 jobs:
   tests_quick:
@@ -423,7 +427,8 @@ jobs:
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR,FORCE_REFRESH  # <-- pass the APP_DIR and FORCE_REFRESH envs - Force refresh will rerun grid search default is false and not run grid search if outputs exist
+            # Force refresh will rerun grid search default is false and not run grid search if outputs exist
+            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT,WANDB_ENTITY,WANDB_MODE  
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -446,7 +451,6 @@ jobs:
               : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
               mkdir -p logs outputs
-              export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
 
               # Perform a hyper‑parameter grid search with a restricted search space
               # using separate unlabeled and labelled datasets.  Both JEPA and
@@ -462,6 +466,9 @@ jobs:
               if [ "${FORCE_REFRESH}" = "true" ]; then 
                 FR="--force-refresh"
               fi
+              
+              # sample-unlabeled -- < use a 1000000 (10,000,000- 10M) when working fully matching word doc spec
+              # sample-labeled <-- use a 20000 (20K) when working fully matching word doc spec (≈17K across data classes e.g, ESOL, BACE etc)
 
               if [ "${FORCE_REFRESH}" != "true" ] && [ -f outputs/grid_results.csv ] && [ -f outputs/best_grid_config.json ]; then
                 echo "Grid search outputs already exist; skipping grid search."
@@ -484,10 +491,8 @@ jobs:
                   --pretrain-epochs-options 1 \
                   --finetune-epochs-options 1 \
                   --learning-rates 1e-4 \
-                  --seeds 1 \
-                  # <-- use a 1000000 (10,000,000- 10M) when working fully matching word doc spec
-                  --sample-unlabeled 50000 \  
-                  # <-- use a 20000 (20K) when working fully matching word doc spec (≈17K across data classes e.g, ESOL, BACE etc)
+                  --seeds 1 \ 
+                  --sample-unlabeled 50000 \   
                   --sample-labeled 20000 \    
                   --max-pretrain-batches 200 \
                   --max-finetune-batches 200 \
@@ -513,7 +518,7 @@ jobs:
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          envs: APP_DIR
+          envs: APP_DIR,WANDB_API_KEY,WANDB_PROJECT,WANDB_ENTITY,WANDB_MODE  
           command_timeout: 180m         # <-- default is 10m; bump this
           script: |
             set -euxo pipefail
@@ -535,8 +540,7 @@ jobs:
 
             : "${APP_DIR:?APP_DIR not set}"
             cd "$APP_DIR"
-            mkdir -p logs outputs
-            export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
+            mkdir -p logs outputs 
 
             # Determine hyper‑parameters from the grid search.  If the JSON
             # file exists, parse it and construct CLI flags for the pretrain
@@ -612,7 +616,7 @@ jobs:
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR
+            envs: APP_DIR,WANDB_API_KEY,WANDB_PROJECT,WANDB_ENTITY,WANDB_MODE  
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -635,7 +639,6 @@ jobs:
               : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
               mkdir -p logs outputs
-              export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
 
               CKPT_DIR="outputs/ckpts/finetune"
               mkdir -p "$CKPT_DIR"
@@ -680,7 +683,7 @@ jobs:
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR
+            envs: APP_DIR,WANDB_API_KEY,WANDB_PROJECT,WANDB_ENTITY,WANDB_MODE  
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -702,7 +705,6 @@ jobs:
 
               cd "$APP_DIR"
               mkdir -p logs outputs
-              export WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}'
 
               # Benchmark stage
               export PYTHONPATH="$APP_DIR:$PYTHONPATH"
@@ -735,13 +737,13 @@ jobs:
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR
+            envs: APP_DIR,WANDB_API_KEY,WANDB_PROJECT,WANDB_ENTITY,WANDB_MODE  
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
               MMBIN="$HOME/micromamba/bin/micromamba"
               cd "$APP_DIR"
-              mkdir -p logs
+              mkdir -p logs outputs
               # Case study stage
               "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
                 --csv data/tox21/data.csv \

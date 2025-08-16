@@ -7,15 +7,17 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 ## Local development
 
 1. **Install dependencies**
+
    ```bash
    git clone https://github.com/.../M-JEPA.git
    cd M-JEPA
    pip install -r requirements.txt
+   pre-commit install
    ```
-   Optional: install RDKit via conda or `micromamba` for full chemistry
-   features.
+   Optional: install RDKit via conda or `micromamba` for full chemistry features.
 
 2. **Authenticate with Weights & Biases **
+
    ```bash
    wandb login
    ```
@@ -79,6 +81,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
 
 4. **Run tests**
+
    ```bash
    pytest --cache-clear tests -v -q -s -o log_cli=true -W ignore
    # or single one
@@ -86,7 +89,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    ```
 
 
-5. ** Running on a server (GitHub Actions ➜ Vast.ai via SSH) **
+5. **Running on a server (GitHub Actions ➜ Vast.ai via SSH)**
 
   1) Provision a vast instance (pick right container and volume sizes)
 
@@ -102,37 +105,48 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
       a) On local windows powershell do this - 
       
+      ```bash
       ssh-keygen -t ed25519 -C "vast-deploy" -f $env:USERPROFILE\.ssh\vast_deploy
+      ```
 
       # creates: id_vast_ci (private) and id_vast_ci.pub (public)
-      #Private key: ~/.ssh/vast_deploy (keep secret)
-      #Public key: ~/.ssh/vast_deploy.pub (safe to share)
+      # Private key: ~/.ssh/vast_deploy (keep secret)
+      # Public key: ~/.ssh/vast_deploy.pub (safe to share)
 
       b) on computer in powershell type this to ket the key
+
+      ```bash
       Get-Content $env:USERPROFILE\.ssh\vast_deploy.pub
+      ```
 
       c) Copy this public key to Vast browser UI - Keys tab
 
       d) Load the private key into your SSH agent In an elevated PowerShell session
 
-        i. Set-Service -Name ssh-agent -StartupType Automatic
-        ii. Start-Service ssh-agent
-        iii. ssh-add $env:USERPROFILE\.ssh\vast_deploy
-        iv. Get-Content $env:USERPROFILE\.ssh\vast_deploy.pub
+        ```bash
+        Set-Service -Name ssh-agent -StartupType Automatic
+        Start-Service ssh-agent
+        ssh-add $env:USERPROFILE\.ssh\vast_deploy
+        Get-Content $env:USERPROFILE\.ssh\vast_deploy.pub
+        ```
 
       e) Launch Jupytr VM from Vast UI and Authorise the key on the running VM
 
-        i. sudo mkdir -p /root/.ssh
-        ii. sudo bash -c 'echo "ssh-ed25519 AAAA... your_comment" >> /root/.ssh/authorized_keys'
-        iii. sudo chmod 600 /root/.ssh/authorized_keys 
-        iv - sudo cat /root/.ssh/authorized_keys #verify the key added is there
+        ```bash
+        sudo mkdir -p /root/.ssh
+        sudo bash -c 'echo "ssh-ed25519 AAAA... your_comment" >> /root/.ssh/authorized_keys'
+        sudo chmod 600 /root/.ssh/authorized_keys 
+        sudo cat /root/.ssh/authorized_keys #verify the key added is there
+        ```
 
       f) once done you SSH from local machine to login to Vast instance
 
+      ```bash
       ssh -o IdentitiesOnly=yes `
         -i $env:USERPROFILE\.ssh\vast_deploy `
         -p 17259 `
         root@144.6.107.170 -vv
+      ```
 
       g) set up private key on GIT server repository secrets so it can connect to Vast
 
@@ -144,7 +158,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
       Copy that GH_PAT_RO key value into Git GIT server repository secrets
 
-  4) Configure git hub runner on vast so it can see if Vast instance is running
+  4) **Configure git hub runner on vast so it can see if Vast instance is running**
 
     a) Open your repository on GitHub (for example: https://github.com/Kar488/M‑JEPA).
     b) Click Settings at the top of the repo page.
@@ -154,27 +168,35 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
     f) GitHub will display a set of commands under download (e.g., below)
 
         # Make a directory and download the runner package
-        i. adduser --disabled-password --gecos "" github # overcome MUST not run on sudo for step XX
-        ii. su - github # Switch to that user
-        iii. mkdir ~/actions-runner && cd ~/actions-runner # # Create a folder
-        iv. curl -o actions-runner-linux-x64-2.327.1.tar.gz -L https://github.com/actions/runner/releases/download/v2.327.1/actions-runner-linux-x64-2.327.1.tar.gz # Download the latest runner package
-        v. echo "d68ac1f500b747d1271d9e52661c408d56cffd226974f68b7dc813e30b9e0575  actions-runner-linux-x64-2.327.1.tar.gz" | shasum -a 256 -c # Optional: Validate the hash
-        vi. tar xzf ./actions-runner-linux-x64-2.327.1.tar.gz # Extract the installer
-        vii. ./config.sh --url https://github.com/Kar488/M-JEPA --token BJEZIAQHZ4ZBGFLV6RE5TG3IT4H3W --name vast-runner --labels vast
-        viii. ./run.sh # Start the runner
 
-        (Optional) pkill -f "Runner.Listener" || true   # clears any stuck runner process
-        (Optional) tmux ls || true # check if its running already
-        (Optional) tmux attach || true # attach to one running already
+        ```bash
+        adduser --disabled-password --gecos "" github # overcome MUST not run on sudo for step XX
+        su - github # Switch to that user
+        mkdir ~/actions-runner && cd ~/actions-runner # # Create a folder
+        curl -o actions-runner-linux-x64-2.327.1.tar.gz -L https://github.com/actions/runner/releases/download/v2.327.1/actions-runner-linux-x64-2.327.1.tar.gz # Download the latest runner package
+        echo "d68ac1f500b747d1271d9e52661c408d56cffd226974f68b7dc813e30b9e0575  actions-runner-linux-x64-2.327.1.tar.gz" | shasum -a 256 -c # Optional: Validate the hash
+        tar xzf ./actions-runner-linux-x64-2.327.1.tar.gz # Extract the installer
+        ./config.sh --url https://github.com/Kar488/M-JEPA --token BJEZIAQHZ4ZBGFLV6RE5TG3IT4H3W --name vast-runner --labels vast
+        ./run.sh # Start the runner
+        ```
+        # Optional
+
+        ```bash
+        pkill -f "Runner.Listener" || true   # clears any stuck runner process
+        tmux ls || true # check if its running already
+        tmux attach || true # attach to one running already
+        #Now Git hub action runner will show this as running and idle
+        mkdir ~/actions-runner && cd ~/actions-runner # Recreate the actions‑runner directory in this user’s home and rerun the steps
+        ```
         
-        Now Git hub action runner will show this as running and idle
-        viiii. mkdir ~/actions-runner && cd ~/actions-runner # Recreate the actions‑runner directory in this user’s home and rerun the steps
 
-  5) After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
+  5) **After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.**
 
-    a) From Vast Jupytr notebook terminal 
+    # From Vast Jupytr notebook terminal 
+
+        ```bash
         run cd ~/srv
-    b) git lfs install # sets up Git LFS hooks if needed 
-    c) git lfs pull # downloads all large files tracked by LFS
-
-  6) top # to see what proces is running
+        git lfs install # sets up Git LFS hooks if needed 
+        git lfs pull # downloads all large files tracked by LFS
+        top # to see what proces is running
+        ```

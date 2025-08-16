@@ -3,8 +3,8 @@ addopts = "-m 'not gpu and not slow'"
 
 [tool.coverage.run]
 branch = true
-source = ["data", "models", "training"]
+source = ["data", "models", "training", "experiments","adapters","utils"]
 
 [tool.coverage.report]
-fail_under = 25
+fail_under = 70
 show_missing = true
