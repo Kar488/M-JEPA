@@ -458,8 +458,10 @@ jobs:
               # grid search results are in best-config-out so it can used in training
 
               # Skip grid search if cached outputs exist
-                FR=""
-              if [ "${FORCE_REFRESH}" = "true" ]; then FR="--force-refresh"; fi
+              FR=""
+              if [ "${FORCE_REFRESH}" = "true" ]; then 
+                FR="--force-refresh"
+              fi
 
               if [ "${FORCE_REFRESH}" != "true" ] && [ -f outputs/grid_results.csv ] && [ -f outputs/best_grid_config.json ]; then
                 echo "Grid search outputs already exist; skipping grid search."
