@@ -423,7 +423,7 @@ jobs:
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR, FORCE_REFRESH  # <-- pass the APP_DIR and FORCE_REFRESH envs - Force refresh will rerun grid search default is false and not run grid search if outputs exist
+            envs: APP_DIR,FORCE_REFRESH  # <-- pass the APP_DIR and FORCE_REFRESH envs - Force refresh will rerun grid search default is false and not run grid search if outputs exist
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -458,6 +458,9 @@ jobs:
               # grid search results are in best-config-out so it can used in training
 
               # Skip grid search if cached outputs exist
+                FR=""
+              if [ "${FORCE_REFRESH}" = "true" ]; then FR="--force-refresh"; fi
+
               if [ "${FORCE_REFRESH}" != "true" ] && [ -f outputs/grid_results.csv ] && [ -f outputs/best_grid_config.json ]; then
                 echo "Grid search outputs already exist; skipping grid search."
               else
@@ -484,10 +487,10 @@ jobs:
                   --sample-labeled 20000 \    # <-- use a 20000 (20K) when working fully matching word doc spec (≈17K across data classes e.g, ESOL, BACE etc)
                   --max-pretrain-batches 200 \
                   --max-finetune-batches 200 \
-                  --time-budget-mins 20 \
+                  --time-budget-mins 45 \
                   --out-csv outputs/grid_results.csv \
                   --best-config-out outputs/best_grid_config.json \
-                  $([ "${FORCE_REFRESH}" = "true" ] && echo "--force-refresh") \
+                  $FR \
                   --use-wandb \
                   2>&1 | tee -a logs/grid_search_$(date +%F_%H-%M).log
 

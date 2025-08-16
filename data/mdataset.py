@@ -272,7 +272,7 @@ class GraphDataset:
         graphs: List[GraphData] = []
         smiles_out: List[str] = []
         valid_indices: List[int] = []
-        for sm in smiles_list:
+        for i, sm in enumerate(smiles_list):
             try:
                 g = cls.smiles_to_graph(
                     sm, add_3d=add_3d, random_seed=random_seed

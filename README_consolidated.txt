@@ -75,6 +75,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
       (e.g. outputs/encoder.pt) and is loaded directly in the finetune, benchmark and case‑study commands. 
       Those later stages don’t rebuild the encoder; they just attach a linear head or evaluate the already‑trained model.
       Because of that, you don’t need to pass the same flags again to finetune, benchmark or tox21. The current workflow does exactly this:
+    - Optionally cache refresh for Grid search can be controlled through Git actions drop down for rerun flow
 
 
 4. **Run tests**

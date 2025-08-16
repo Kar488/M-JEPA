@@ -33,6 +33,23 @@ def _silence_tqdm(monkeypatch):
     """Make tqdm think we're not in a TTY so it doesn't draw a progress bar."""
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
 
+import socket, contextlib, pytest, os
+
+def _free_port():
+    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+    
+@pytest.fixture(autouse=True)
+def _ddp_sane_env(monkeypatch):
+    # either disable entirely:
+    monkeypatch.setenv("DISABLE_DDP", "1")
+    # or, if you prefer to allow single-process DDP, use loopback:
+    monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
+    monkeypatch.setenv("MASTER_PORT", str(_free_port()))
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("WORLD_SIZE", "1")
+
 def _load_real_graphdataset():
     repo_root = Path(__file__).resolve().parents[1]
     data_dir = repo_root / "data"

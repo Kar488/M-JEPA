@@ -265,6 +265,7 @@ def test_cmd_grid_search_logs_and_csv(tmp_path, monkeypatch):
         warmup_steps=0,
         out_csv=str(out_csv),
         best_config_out=None,
+        force_refresh=False,  
     )
 
     tj.cmd_grid_search(args)
@@ -321,6 +322,7 @@ def test_cmd_grid_search_failure(monkeypatch, caplog, tmp_path):
         warmup_steps=0,
         out_csv=None,
         best_config_out=None,
+        force_refresh=False,  
     )
 
     # Suppress error logs from tj during this test

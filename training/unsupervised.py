@@ -108,7 +108,8 @@ def train_jepa(
     time_budget_mins: int = 0,
     disable_tqdm: bool = False,
 ) -> List[float]:
-    distributed = init_distributed()
+    ddp_backend = os.getenv("DDP_BACKEND")  # optional override
+    distributed = (devices > 1) and init_distributed(ddp_backend)
     device_t = torch.device(device)
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
@@ -336,7 +337,8 @@ def train_contrastive(
     time_budget_mins: int = 0,
     disable_tqdm: bool = False,
 ) -> List[float]:
-    distributed = init_distributed()
+    ddp_backend = os.getenv("DDP_BACKEND")  # optional override
+    distributed = (devices > 1) and init_distributed(ddp_backend)
     device_t = torch.device(device)
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(

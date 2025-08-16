@@ -147,6 +147,7 @@ def test_grid_search_best_config(tmp_path, monkeypatch):
         wandb_project='test',
         wandb_tags=[],
         best_config_out=str(tmp_path / 'best_config.json'),
+        force_refresh=True, 
     )
     # Invoke grid search
     train_jepa.cmd_grid_search(args)
