@@ -88,8 +88,32 @@ def maybe_init_wandb(
         import wandb
 
         if api_key:
-            wandb.login(key=api_key)
-        wandb.init(project=project, config=config or {}, tags=list(tags) if tags else None)
+            # If login fails, we still fall through to init and handle errors uniformly
+            try:
+                wandb.login(key=api_key)
+            except Exception as e:
+                logging.warning("Failed to login to wandb: %s", e)
+
+        run = getattr(wandb, "run", None)  # <- handle fakes without a .run attribute
+        
+        if run is None:
+            # Single consolidated run: init once
+            wandb.init(
+                project=project,
+                config=config or {},
+                tags=list(tags) if tags else None,
+                reinit=False,
+                resume="never",
+            )
+        else:
+            # Optional: merge later config safely if .config exists
+            if config and getattr(wandb, "config", None) is not None:
+                try:
+                    wandb.config.update(config, allow_val_change=True)
+                except Exception:
+                    # Be tolerant; config merging is best-effort
+                    pass
+        
         return wandb
     except Exception as exc:
         logging.warning("Failed to initialise wandb: %s", exc)
