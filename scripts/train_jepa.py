@@ -1290,6 +1290,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             max_pretrain_batches=getattr(args, "max_pretrain_batches", 0),
             max_finetune_batches=getattr(args, "max_finetune_batches", 0),
             time_budget_mins=getattr(args, "time_budget_mins", 0),
+            disable_tqdm=not sys.stdout.isatty(),
         )
         # Log each row to W&B for comprehensive visualisation.  We assign a
         # unique identifier to each configuration using its index.  This
