@@ -262,6 +262,7 @@ def load_directory_dataset(
     random_seed: Optional[int] = None,
     n_rows_per_file: Optional[int] = None,
     max_graphs: Optional[int] = None,
+    num_workers: int = 0,
 ) -> GraphDataset:
     return GraphDataset.from_directory(
         dirpath=dirpath,
@@ -274,6 +275,7 @@ def load_directory_dataset(
         prefix_filter=prefix_filter,
         n_rows_per_file=n_rows_per_file,
         max_graphs=max_graphs,
+        num_workers=num_workers,
     )
 
 
@@ -389,7 +391,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
     # Load unlabeled dataset
     try:
-        unlabeled = load_directory_dataset(args.unlabeled_dir, add_3d=args.add_3d)  # type: ignore[arg-type]
+        unlabeled = load_directory_dataset(
+            args.unlabeled_dir, add_3d=args.add_3d, num_workers=args.num_workers
+        )  # type: ignore[arg-type]
 
         # Sample a subset of the unlabeled dataset if requested.  Use getattr to
         # avoid AttributeError when the caller hasn’t set sample_unlabeled.
@@ -592,7 +596,12 @@ def cmd_finetune(args: argparse.Namespace) -> None:
 
     # Load labelled dataset
     try:
-        labeled = load_directory_dataset(args.labeled_dir, label_col=args.label_col, add_3d=args.add_3d)  # type: ignore[arg-type]
+        labeled = load_directory_dataset(
+            args.labeled_dir,
+            label_col=args.label_col,
+            add_3d=args.add_3d,
+            num_workers=args.num_workers,
+        )  # type: ignore[arg-type]
 
         # Sample a subset of labeled graphs if requested.  Use getattr to
         # handle cases where sample_labeled isn’t provided.
@@ -870,7 +879,12 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     report_csv = os.path.join(args.report_dir, report_stem + ".csv")
 
     try:
-        labeled = load_directory_dataset(args.labeled_dir, label_col=args.label_col, add_3d=args.add_3d)  # type: ignore[arg-type]
+        labeled = load_directory_dataset(
+            args.labeled_dir,
+            label_col=args.label_col,
+            add_3d=args.add_3d,
+            num_workers=args.num_workers,
+        )  # type: ignore[arg-type]
         wb.log({"phase": "data_load", "labeled_graphs": len(labeled)})
     except Exception:
         logger.exception("Failed to load labelled dataset for benchmarking")
@@ -1167,6 +1181,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
                 smiles_col=getattr(args, "smiles_col", "smiles"),
                 n_rows_per_file=n_rows_per_file,
                 max_graphs=max(sample_ul or 0, sample_lb or 0) or None,
+                num_workers=args.num_workers,
             )
             dt = time.time() - t0
             logger.info(
@@ -1191,6 +1206,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
                 smiles_col=getattr(args, "smiles_col", "smiles"),
                 n_rows_per_file=n_rows_per_file,
                 max_graphs=sample_ul,
+                num_workers=args.num_workers,
             )
             dt = time.time() - t0
             logger.info(
@@ -1211,6 +1227,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
                 smiles_col=getattr(args, "smiles_col", "smiles"),
                 n_rows_per_file=n_rows_per_file,
                 max_graphs=sample_lb,
+                num_workers=args.num_workers,
             )
             dt = time.time() - t0
             logger.info(
@@ -1368,6 +1385,12 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     # Data augmentations and options
     p.add_argument(
         "--add-3d", action="store_true", help="Augment with 3D coordinate featurisation"
+    )
+    p.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="Process pool workers for SMILES conversion (0=serial)",
     )
     p.add_argument(
         "--contiguous",
