@@ -338,6 +338,12 @@ class GraphDataset:
         n_rows: Optional[int] = None,  # subset helper
         num_workers: int = 0,
     ) -> "GraphDataset":
+        """Load a dataset from a Parquet file of SMILES.
+
+        The file is read with pandas and each SMILES string is converted
+        to GraphData via ``smiles_to_graph``. Optionally the featurisation
+        runs in a process pool when ``num_workers > 0``.
+        """
         cache_path = None
         if cache_dir and n_rows is None:
             os.makedirs(cache_dir, exist_ok=True)
@@ -387,6 +393,12 @@ class GraphDataset:
                     f"Mismatch: {len(graphs)} graphs vs {len(labels)} labels"
                 )
 
+        if add_3d:
+            min_dim = 7  # base atom features (4) plus xyz
+            for g in graphs:
+                if g.x.shape[1] < min_dim:
+                    pad = np.zeros((g.x.shape[0], min_dim - g.x.shape[1]), dtype=g.x.dtype)
+                    g.x = np.concatenate([g.x, pad], axis=1)
         if cache_path:
             with open(cache_path, "wb") as f:
                 pickle.dump((graphs, labels), f)
