@@ -4,7 +4,12 @@ import sys
 import types
 
 import numpy as np
-import torch
+try:
+    import torch
+except Exception:  # pragma: no cover - torch not available
+    torch = types.SimpleNamespace()
+import pytest
+import logging
 # Check if RDKit is available
 try:
     from rdkit import Chem
@@ -132,4 +137,30 @@ def test_stratified_split_balanced():
     assert set(train + val + test) == set(indices)
     for subset in [train, val, test]:
         assert set(ds.labels[subset]) == {0, 1}
+
+
+@pytest.mark.skipif(not RDKit_AVAILABLE, reason="RDKit not installed")
+def test_smiles_to_graph_kekulize_warning(caplog):
+    bad_smiles = "c1cccc1"
+    with caplog.at_level(logging.WARNING, logger="data.mdataset"):
+        g = GraphDataset.smiles_to_graph(bad_smiles)
+
+    assert any("Kekulization failed" in rec.message for rec in caplog.records)
+
+    n = len(bad_smiles)
+    expected_x = np.stack(
+        [np.arange(n, dtype=np.float32), (np.arange(n) % 3).astype(np.float32)],
+        axis=1,
+    )
+    expected_e = np.stack(
+        [
+            np.concatenate([np.arange(n - 1), np.arange(1, n)]).astype(np.int64),
+            np.concatenate([np.arange(1, n), np.arange(n - 1)]).astype(np.int64),
+        ],
+        axis=0,
+    )
+
+    assert np.array_equal(g.x, expected_x)
+    assert np.array_equal(g.edge_index, expected_e)
+    assert g.edge_attr is None
 
