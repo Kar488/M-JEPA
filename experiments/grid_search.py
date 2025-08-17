@@ -1,23 +1,39 @@
 from __future__ import annotations
 
+import logging
+import warnings
 from dataclasses import asdict, dataclass
 from itertools import product
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Sequence
+from typing import (  # noqa: E501
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+)
+
+import numpy as np
+import pandas as pd
+import torch
+import tqdm
+from torch_geometric.data import Data as PyGData
+from torch_geometric.loader import DataLoader as GeoLoader
+
+from experiments.baseline_integration import baseline_pretrain_and_embed
+from models.ema import EMA
+from models.predictor import MLPPredictor
+from training.supervised import train_linear_head
+from training.train_on_embeddings import (
+    train_linear_on_embeddings_classification,
+    train_linear_on_embeddings_regression,
+)
+from training.unsupervised import train_contrastive, train_jepa
 
 ds_pre: Optional[Any] = None
 ds_eval: Optional[Any] = None
-
-import logging
-import numpy as np
-import pandas as pd
-
-import torch
-from torch_geometric.loader import DataLoader as GeoLoader
-from torch_geometric.data import Data as PyGData
-import warnings
-import tqdm
-
-logger = logging.getLogger(__name__)
 
 # Encoder factory
 try:
@@ -40,17 +56,6 @@ except Exception:
         )
 
 
-# Baselines (CLI or native adapters)
-from experiments.baseline_integration import baseline_pretrain_and_embed
-from models.ema import EMA
-from models.predictor import MLPPredictor
-from training.supervised import train_linear_head
-from training.train_on_embeddings import (
-    train_linear_on_embeddings_classification,
-    train_linear_on_embeddings_regression,
-)
-from training.unsupervised import train_contrastive, train_jepa
-
 # Optional probing & clustering
 try:
     from experiments.probing import (
@@ -64,7 +69,10 @@ try:
 except Exception:
     _HAS_PROBE = False
 
+logger = logging.getLogger(__name__)
+
 BASELINE_METHODS = {"molclr", "geomgcl", "himol", "baseline"}
+
 
 @dataclass(frozen=True)
 class Config:
@@ -81,11 +89,13 @@ class Config:
     finetune_epochs: int
     lr: float
 
+
 @dataclass
 class _GraphDatasetShim:
     graphs: Sequence[Any]
     labels: Optional[np.ndarray] = None
     smiles: Optional[Sequence[str]] = None
+
 
 def _extract_attr(seq: Sequence[Any], name: str):
     out: List[Any] = []
@@ -103,6 +113,7 @@ def _extract_attr(seq: Sequence[Any], name: str):
     # labels as np.array when name == 'y'
     return np.asarray(out) if name == "y" else out
 
+
 def _ensure_graph_dataset(obj: Any) -> Any:
     """Return object with `.graphs` and `.labels` if possible."""
     if obj is None:
@@ -117,25 +128,37 @@ def _ensure_graph_dataset(obj: Any) -> Any:
     if hasattr(obj, "__len__") and hasattr(obj, "__getitem__"):
         graphs = list(obj)
         labels = getattr(obj, "labels", None) or _extract_attr(graphs, "y")
-        smiles = getattr(obj, "smiles", None) or _extract_attr(graphs, "smiles")
+        smiles_attr = getattr(obj, "smiles", None)
+        smiles = smiles_attr or _extract_attr(graphs, "smiles")
         logger.debug("Built GraphDataset shim with %d graphs", len(graphs))
         return _GraphDatasetShim(graphs=graphs, labels=labels, smiles=smiles)
-    if isinstance(obj, PyGData) or hasattr(obj, "x") or hasattr(obj, "edge_index") or hasattr(obj, "adj"):
+    if (
+        isinstance(obj, PyGData)
+        or hasattr(obj, "x")
+        or hasattr(obj, "edge_index")
+        or hasattr(obj, "adj")
+    ):
         label = getattr(obj, "y", None)
         if isinstance(label, torch.Tensor) and label.numel() == 1:
             label = np.asarray([label.item()])
         return _GraphDatasetShim(graphs=[obj], labels=label)
-    logger.debug("_ensure_graph_dataset returning original object of type %s", type(obj))
+    logger.debug(
+        "_ensure_graph_dataset returning original object of type %s", type(obj)
+    )
     return obj
 
+
 def _dataset_from_loader(loader: Any) -> Any:
-    """Get a dataset from a loader. If `.dataset` missing, materialize from the loader."""
+    """Get a dataset from a loader.
+
+    If `.dataset` missing, materialize from the loader.
+    """
     if loader is None:
         logger.debug("_dataset_from_loader received None")
         return None
-    
+
     ds = getattr(loader, "dataset", None)
-   
+
     if ds is not None:
         logger.debug("Loader already has dataset: %s", type(ds))
         return _ensure_graph_dataset(ds)
@@ -156,8 +179,12 @@ def _dataset_from_loader(loader: Any) -> Any:
         elif y is not None:
             labels.append(y)
     labs = np.asarray(labels) if len(labels) else None
-    logger.debug("Materialized dataset from loader with %d graphs", len(graphs))
+    logger.debug(
+        "Materialized dataset from loader with %d graphs",
+        len(graphs),
+    )
     return _GraphDatasetShim(graphs=graphs, labels=labs)
+
 
 def _build_configs(
     mask_ratios: Iterable[float],
@@ -192,17 +219,17 @@ def _build_configs(
     return configs
 
 
-def _edge_dim_or_none(ds) -> Optional[int]:
-    g0 = ds.graphs[0]
-    return None if g0.edge_attr is None else int(g0.edge_attr.shape[1])
-
-
-def _aggregate_seed_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, float]:
+def _aggregate_seed_metrics(
+    metrics_list: List[Dict[str, float]],
+) -> Dict[str, float]:
     # union of keys (probing/cluster may be absent for some seeds)
     keys = sorted({k for m in metrics_list for k in m.keys()})
     out: Dict[str, float] = {}
     for k in keys:
-        vals = np.array([m[k] for m in metrics_list if k in m], dtype=np.float64)
+        vals = np.array(
+            [m[k] for m in metrics_list if k in m],
+            dtype=np.float64,
+        )
         if len(vals) == 0:
             continue
         out[f"{k}_mean"] = float(vals.mean())
@@ -214,8 +241,10 @@ def _aggregate_seed_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, f
         )
     return out
 
+
 def _is_indexable(obj) -> bool:
     return hasattr(obj, "__getitem__") and hasattr(obj, "__len__")
+
 
 def _to_pyg(g: Any) -> PyGData:
     # If your class already provides a converter, use it
@@ -227,8 +256,10 @@ def _to_pyg(g: Any) -> PyGData:
         if hasattr(g, name):
             fields[name] = getattr(g, name)
     if not fields:
-        raise TypeError(f"Cannot convert {type(g)} to PyG Data (missing fields)")
+        msg = f"Cannot convert {type(g)} to PyG Data (missing fields)"
+        raise TypeError(msg)
     return PyGData(**fields)
+
 
 def _as_data_sequence(obj: Any):
     """
@@ -254,11 +285,17 @@ def _as_data_sequence(obj: Any):
         seq = [_to_pyg(g) for g in seq]
     return seq
 
+
 def _ensure_loader(obj: Any, batch_size: int, shuffle: bool):
     if obj is None:
         return None
-    # If it's already a loader-like iterable and not a dataset container, use as-is
-    if hasattr(obj, "__iter__") and not _is_indexable(obj) and not hasattr(obj, "graphs"):
+    # If it's already a loader-like iterable and not a dataset
+    # container, use as-is
+    if (
+        hasattr(obj, "__iter__")
+        and not _is_indexable(obj)
+        and not hasattr(obj, "graphs")
+    ):
         return obj
     # Convert to a sequence of PyG Data, then wrap
     data_seq = _as_data_sequence(obj)
@@ -267,23 +304,31 @@ def _ensure_loader(obj: Any, batch_size: int, shuffle: bool):
     # Fallback: last resort
     return obj
 
+
 def _normalize_ds(ds: Any) -> Tuple[Any, Any, Any]:
     if isinstance(ds, dict):
-        return (ds.get("train") or ds.get("train_loader"),
-                ds.get("val") or ds.get("valid") or ds.get("val_loader"),
-                ds.get("test") or ds.get("test_loader"))
+        return (
+            ds.get("train") or ds.get("train_loader"),
+            ds.get("val") or ds.get("valid") or ds.get("val_loader"),
+            ds.get("test") or ds.get("test_loader"),
+        )
     if isinstance(ds, (list, tuple)):
-        if len(ds) == 3: return ds[0], ds[1], ds[2]
-        if len(ds) == 2: return ds[0], ds[1], None
-        if len(ds) == 1: return ds[0], None, None
+        if len(ds) == 3:
+            return ds[0], ds[1], ds[2]
+        if len(ds) == 2:
+            return ds[0], ds[1], None
+        if len(ds) == 1:
+            return ds[0], None, None
     return ds, None, None
+
 
 def _normalize_ds_to_loaders(ds, pre_bs: int, ft_bs: int):
     tr, va, te = _normalize_ds(ds)
-    tr = _ensure_loader(tr, pre_bs, shuffle=True)  
-    va = _ensure_loader(va, ft_bs, shuffle=False)  
-    te = _ensure_loader(te, ft_bs, shuffle=False)  
+    tr = _ensure_loader(tr, pre_bs, shuffle=True)
+    va = _ensure_loader(va, ft_bs, shuffle=False)
+    te = _ensure_loader(te, ft_bs, shuffle=False)
     return tr, va, te
+
 
 def _feat_dim(x):
     if x is None:
@@ -292,6 +337,7 @@ def _feat_dim(x):
     # Torch tensor
     try:
         import torch
+
         if isinstance(x, torch.Tensor):
             return int(x.shape[-1])
     except Exception:
@@ -300,6 +346,7 @@ def _feat_dim(x):
     # NumPy array
     try:
         import numpy as np
+
         if isinstance(x, np.ndarray):
             return int(x.shape[-1]) if x.ndim > 0 else 1
     except Exception:
@@ -329,6 +376,7 @@ def _feat_dim(x):
             return None
 
     return None
+
 
 def _infer_dims_from_loader(obj):
     # accept loader, dataset (GraphDataset), list of Data, or single Data
@@ -362,13 +410,16 @@ def _infer_dims_from_loader(obj):
     edge_dim = _feat_dim(ea)
     return in_dim, edge_dim
 
+
 def _edge_dim_or_none(ds_pre: Any) -> Optional[int]:
-    """Your existing util—kept for the non-prebuilt path. Implement as before."""
+    """Your existing util—kept for the non-prebuilt path.
+    Implement as before."""
     try:
         ea = ds_pre.graphs[0].edge_attr
         return int(ea.shape[1]) if ea is not None else None
     except Exception:
         return None
+
 
 def _run_one_config_method(
     cfg: Config,
@@ -400,26 +451,27 @@ def _run_one_config_method(
 
     if prebuilt_datasets is not None:
         tr_ds, va_ds, te_ds = prebuilt_datasets
-        ds_pre  = _ensure_graph_dataset(tr_ds)
+        ds_pre = _ensure_graph_dataset(tr_ds)
         ds_eval = _ensure_graph_dataset(va_ds) or ds_pre
         # infer dims from the train dataset
         input_dim = _feat_dim(getattr(ds_pre.graphs[0], "x", None))
-        edge_dim  = _feat_dim(getattr(ds_pre.graphs[0], "edge_attr", None))
+        edge_dim = _feat_dim(getattr(ds_pre.graphs[0], "edge_attr", None))
 
         # --- Fallbacks when dataset graphs don't expose x/edge_attr yet ---
         if input_dim is None:
-             # 1) Try the loader (it collates PyG Data with concrete tensors)
-              if prebuilt_loaders is not None:
-                  tr_loader = prebuilt_loaders[0]
-                  in2, ed2 = _infer_dims_from_loader(tr_loader)
-                  input_dim = in2
-                  edge_dim  = edge_dim  or ed2
+            # 1) Try the loader (it collates PyG Data with concrete tensors)
+            if prebuilt_loaders is not None:
+                tr_loader = prebuilt_loaders[0]
+                in2, ed2 = _infer_dims_from_loader(tr_loader)
+                input_dim = in2
+                edge_dim = edge_dim or ed2
         if input_dim is None and hasattr(ds_pre, "graphs") and ds_pre.graphs:
             # 2) Convert first sample to PyG and read dims
             try:
                 _pyg = _to_pyg(ds_pre.graphs[0])
                 input_dim = _feat_dim(getattr(_pyg, "x", None)) or input_dim
-                edge_dim  = _feat_dim(getattr(_pyg, "edge_attr", None)) or edge_dim
+                edge_attr_dim = _feat_dim(getattr(_pyg, "edge_attr", None))
+                edge_dim = edge_attr_dim or edge_dim
             except Exception:
                 pass
             # (Optional) As last resort, avoid None to keep smoke tests alive
@@ -429,7 +481,7 @@ def _run_one_config_method(
     elif prebuilt_loaders is not None:
         train_loader, val_loader, test_loader = prebuilt_loaders
         input_dim, edge_dim = _infer_dims_from_loader(train_loader)
-        ds_pre  = _dataset_from_loader(train_loader)
+        ds_pre = _dataset_from_loader(train_loader)
         ds_eval = _dataset_from_loader(val_loader) or ds_pre
     else:
         ds_pre = unlabeled_dataset_fn(cfg.add_3d)
@@ -438,13 +490,8 @@ def _run_one_config_method(
         edge_dim = _edge_dim_or_none(ds_pre)
 
     # Safety: ensure both expose `.graphs` and (if possible) `.labels`
-    ds_pre  = _ensure_graph_dataset(ds_pre)
+    ds_pre = _ensure_graph_dataset(ds_pre)
     ds_eval = _ensure_graph_dataset(ds_eval) or ds_pre
-
-    import time as _time
-    _start_wall = _time.time()
-    def _time_left() -> bool:
-        return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
 
     seed_metrics: List[Dict[str, float]] = []
 
@@ -452,7 +499,7 @@ def _run_one_config_method(
         logger.debug("Training seed %d", seed)
         np.random.seed(seed)
         if method.lower() == "jepa":
-            row={}
+            row = {}
             encoder = build_encoder(
                 gnn_type=cfg.gnn_type,
                 input_dim=input_dim,
@@ -472,6 +519,7 @@ def _run_one_config_method(
             if ema_encoder is None:
                 try:
                     from models.encoder import GNNEncoder as _BasicEnc
+
                     ema_encoder = _BasicEnc(
                         input_dim=input_dim,
                         hidden_dim=cfg.hidden_dim,
@@ -480,87 +528,81 @@ def _run_one_config_method(
                     )
                 except Exception:
                     import copy as _copy
+
                     ema_encoder = _copy.deepcopy(encoder)
 
             # --- always construct EMA & predictor, then pretrain (BUGFIX) ---
             ema = EMA(encoder, decay=cfg.ema_decay)
-            predictor = MLPPredictor(embed_dim=cfg.hidden_dim, hidden_dim=cfg.hidden_dim * 2)
+            predictor = MLPPredictor(
+                embed_dim=cfg.hidden_dim, hidden_dim=cfg.hidden_dim * 2
+            )
 
-            if not _time_left():
-                logger.info("Time budget exhausted before pretrain; skipping to eval.")
-            else:
-                #pretrain
-                try:
-                    # New signature (if supported)
-                    train_jepa(
-                        dataset=ds_pre,
-                        encoder=encoder,
-                        ema_encoder=ema_encoder,
-                        predictor=predictor,
-                        ema=ema,
-                        epochs=cfg.pretrain_epochs,
-                        batch_size=cfg.pretrain_bs,
-                        mask_ratio=cfg.mask_ratio,
-                        contiguous=cfg.contiguous,
-                        lr=cfg.lr,
-                        device=device,
-                        reg_lambda=1e-4,
-                        use_wandb=use_wandb,
-                        ckpt_path=f"{ckpt_dir}/jepa",
-                        ckpt_every=ckpt_every,
-                        use_scheduler=use_scheduler,
-                        warmup_steps=warmup_steps,
-                        max_batches=max_pretrain_batches,
-                        time_budget_mins=max(0, time_budget_mins - int((_time.time() - _start_wall) / 60)),
-                    )
-                except TypeError:
-                    # Backward-compatible call
-                    train_jepa(
-                        dataset=ds_pre,
-                        encoder=encoder,
-                        ema_encoder=ema_encoder,
-                        predictor=predictor,
-                        ema=ema,
-                        epochs=cfg.pretrain_epochs,
-                        batch_size=cfg.pretrain_bs,
-                        mask_ratio=cfg.mask_ratio,
-                        contiguous=cfg.contiguous,
-                        lr=cfg.lr,
-                        device=device,
-                        reg_lambda=1e-4,
-                    )
+            try:
+                train_jepa(
+                    dataset=ds_pre,
+                    encoder=encoder,
+                    ema_encoder=ema_encoder,
+                    predictor=predictor,
+                    ema=ema,
+                    epochs=cfg.pretrain_epochs,
+                    batch_size=cfg.pretrain_bs,
+                    mask_ratio=cfg.mask_ratio,
+                    contiguous=cfg.contiguous,
+                    lr=cfg.lr,
+                    device=device,
+                    reg_lambda=1e-4,
+                    use_wandb=use_wandb,
+                    ckpt_path=f"{ckpt_dir}/jepa",
+                    ckpt_every=ckpt_every,
+                    use_scheduler=use_scheduler,
+                    warmup_steps=warmup_steps,
+                    max_batches=max_pretrain_batches,
+                    time_budget_mins=time_budget_mins,
+                )
+            except TypeError:
+                # Backward-compatible call
+                train_jepa(
+                    dataset=ds_pre,
+                    encoder=encoder,
+                    ema_encoder=ema_encoder,
+                    predictor=predictor,
+                    ema=ema,
+                    epochs=cfg.pretrain_epochs,
+                    batch_size=cfg.pretrain_bs,
+                    mask_ratio=cfg.mask_ratio,
+                    contiguous=cfg.contiguous,
+                    lr=cfg.lr,
+                    device=device,
+                    reg_lambda=1e-4,
+                )
 
-            # Fine-tune / evaluation head (respect caps)
-            if _time_left():
-                try:
-                    m = train_linear_head(
-                        dataset=ds_eval,
-                        encoder=encoder,
-                        task_type=task_type,
-                        epochs=cfg.finetune_epochs,
-                        lr=5e-3,
-                        batch_size=cfg.finetune_bs,
-                        device=device,
-                        use_scaffold=use_scaffold,
-                        max_batches=max_finetune_batches,
-                        time_budget_mins=max(0, time_budget_mins - int((_time.time() - _start_wall) / 60)),
-                    )
-                    row = {k: float(v) for k, v in m.items() if k != "head"}
-                except TypeError:
-                    logger.exception("Fine-tuning failed in contrastive")
-                    m = train_linear_head(
-                            dataset=ds_eval,
-                            encoder=encoder,
-                            task_type=task_type,
-                            epochs=cfg.finetune_epochs,
-                            lr=5e-3,
-                            batch_size=cfg.finetune_bs,
-                            device=device,
-                            use_scaffold=use_scaffold,
-                        )
-                    row = {k: float(v) for k, v in m.items() if k != "head"}
-            else:
-                logger.info("Time budget exhausted before finetune; returning partial metrics.")
+            try:
+                m = train_linear_head(
+                    dataset=ds_eval,
+                    encoder=encoder,
+                    task_type=task_type,
+                    epochs=cfg.finetune_epochs,
+                    lr=5e-3,
+                    batch_size=cfg.finetune_bs,
+                    device=device,
+                    use_scaffold=use_scaffold,
+                    max_batches=max_finetune_batches,
+                    time_budget_mins=time_budget_mins,
+                )
+                row = {k: float(v) for k, v in m.items() if k != "head"}
+            except TypeError:
+                logger.exception("Fine-tuning failed in contrastive")
+                m = train_linear_head(
+                    dataset=ds_eval,
+                    encoder=encoder,
+                    task_type=task_type,
+                    epochs=cfg.finetune_epochs,
+                    lr=5e-3,
+                    batch_size=cfg.finetune_bs,
+                    device=device,
+                    use_scaffold=use_scaffold,
+                )
+                row = {k: float(v) for k, v in m.items() if k != "head"}
 
             if _HAS_PROBE:
                 X = compute_embeddings(
@@ -589,7 +631,7 @@ def _run_one_config_method(
             seed_metrics.append(row)
 
         elif method.lower() == "contrastive":
-            row={}
+            row = {}
             encoder = build_encoder(
                 gnn_type=cfg.gnn_type,
                 input_dim=input_dim,
@@ -597,71 +639,63 @@ def _run_one_config_method(
                 num_layers=cfg.num_layers,
                 edge_dim=edge_dim,
             )
-            if not _time_left():
-                logger.info("Time budget exhausted before pretrain during contrastive approach; skipping to eval.")
-            else:
-                #pre train
-                try:
-                    train_contrastive(
-                        dataset=ds_pre,
-                        encoder=encoder,
-                        projection_dim=64,
-                        epochs=cfg.pretrain_epochs,
-                        batch_size=cfg.pretrain_bs,
-                        mask_ratio=cfg.mask_ratio,
-                        lr=cfg.lr,
-                        device=device,
-                        temperature=0.1,
-                        use_wandb=use_wandb,
-                        ckpt_path=f"{ckpt_dir}/contrast",
-                        ckpt_every=ckpt_every,
-                        use_scheduler=use_scheduler,
-                        warmup_steps=warmup_steps,
-                        max_batches=max_pretrain_batches,
-                        time_budget_mins=max(0, time_budget_mins - int((_time.time() - _start_wall) / 60)),
-                    )
-                except TypeError:
-                    train_contrastive(
-                        dataset=ds_pre,
-                        encoder=encoder,
-                        projection_dim=64,
-                        epochs=cfg.pretrain_epochs,
-                        batch_size=cfg.pretrain_bs,
-                        mask_ratio=cfg.mask_ratio,
-                        lr=cfg.lr,
-                        device=device,
-                        temperature=0.1,
-                    )
-            # Fine-tune / evaluation head (respect caps)
-            if not _time_left():
-                logger.info("Time budget exhausted before finetune; returning partial metrics.")
-            else:
-                try:
-                    m = train_linear_head(
-                        dataset=ds_eval,
-                        encoder=encoder,
-                        task_type=task_type,
-                        epochs=cfg.finetune_epochs,
-                        lr=5e-3,
-                        batch_size=cfg.finetune_bs,
-                        device=device,
-                        use_scaffold=use_scaffold,
-                        max_batches=max_finetune_batches,
-                        time_budget_mins=max(0, time_budget_mins - int((_time.time() - _start_wall) / 60)),
-                    )
-                    row = {k: float(v) for k, v in m.items() if k != "head"}
-                except TypeError:
-                    m = train_linear_head(
-                        dataset=ds_eval,
-                        encoder=encoder,
-                        task_type=task_type,
-                        epochs=cfg.finetune_epochs,
-                        lr=5e-3,
-                        batch_size=cfg.finetune_bs,
-                        device=device,
-                        use_scaffold=use_scaffold,
-                    )
-                    row = {k: float(v) for k, v in m.items() if k != "head"}
+            try:
+                train_contrastive(
+                    dataset=ds_pre,
+                    encoder=encoder,
+                    projection_dim=64,
+                    epochs=cfg.pretrain_epochs,
+                    batch_size=cfg.pretrain_bs,
+                    mask_ratio=cfg.mask_ratio,
+                    lr=cfg.lr,
+                    device=device,
+                    temperature=0.1,
+                    use_wandb=use_wandb,
+                    ckpt_path=f"{ckpt_dir}/contrast",
+                    ckpt_every=ckpt_every,
+                    use_scheduler=use_scheduler,
+                    warmup_steps=warmup_steps,
+                    max_batches=max_pretrain_batches,
+                    time_budget_mins=time_budget_mins,
+                )
+            except TypeError:
+                train_contrastive(
+                    dataset=ds_pre,
+                    encoder=encoder,
+                    projection_dim=64,
+                    epochs=cfg.pretrain_epochs,
+                    batch_size=cfg.pretrain_bs,
+                    mask_ratio=cfg.mask_ratio,
+                    lr=cfg.lr,
+                    device=device,
+                    temperature=0.1,
+                )
+            try:
+                m = train_linear_head(
+                    dataset=ds_eval,
+                    encoder=encoder,
+                    task_type=task_type,
+                    epochs=cfg.finetune_epochs,
+                    lr=5e-3,
+                    batch_size=cfg.finetune_bs,
+                    device=device,
+                    use_scaffold=use_scaffold,
+                    max_batches=max_finetune_batches,
+                    time_budget_mins=time_budget_mins,
+                )
+                row = {k: float(v) for k, v in m.items() if k != "head"}
+            except TypeError:
+                m = train_linear_head(
+                    dataset=ds_eval,
+                    encoder=encoder,
+                    task_type=task_type,
+                    epochs=cfg.finetune_epochs,
+                    lr=5e-3,
+                    batch_size=cfg.finetune_bs,
+                    device=device,
+                    use_scaffold=use_scaffold,
+                )
+                row = {k: float(v) for k, v in m.items() if k != "head"}
 
             if _HAS_PROBE:
                 X = compute_embeddings(
@@ -689,7 +723,9 @@ def _run_one_config_method(
 
             seed_metrics.append(row)
 
-        elif method.lower() in BASELINE_METHODS:  # MolCLR / GeomGCL / HiMol via adapters
+        elif (
+            method.lower() in BASELINE_METHODS
+        ):  # MolCLR / GeomGCL / HiMol via adapters
             if (
                 baseline_unlabeled_file is None
                 or baseline_eval_file is None
@@ -697,10 +733,16 @@ def _run_one_config_method(
             ):
                 # In tests that aren't exercising baselines, skip cleanly
                 warnings.warn(
-                    f"Skipping baseline '{method}' — missing baseline_unlabeled_file / "
-                    f"baseline_eval_file / baseline_label_col."
+                    (
+                        "Skipping baseline '%s' — missing "
+                        "baseline_unlabeled_file / "
+                        "baseline_eval_file / "
+                        "baseline_label_col."
+                    )
+                    % method
                 )
-                # no rows appended for this method/seed; will aggregate to empty
+                # no rows appended for this method/seed;
+                # will aggregate to empty
                 continue
 
             _, emb_file = baseline_pretrain_and_embed(
@@ -710,9 +752,10 @@ def _run_one_config_method(
                 cfg_path=baseline_cfg,
             )
             if baseline_eval_file.endswith(".csv"):
-                y = pd.read_csv(baseline_eval_file)[baseline_label_col].to_numpy()
+                df_eval = pd.read_csv(baseline_eval_file)
             else:
-                y = pd.read_parquet(baseline_eval_file)[baseline_label_col].to_numpy()
+                df_eval = pd.read_parquet(baseline_eval_file)
+            y = df_eval[baseline_label_col].to_numpy()
             X = (
                 np.load(emb_file)
                 if emb_file.endswith(".npy")
@@ -737,6 +780,7 @@ def _run_one_config_method(
     row = {**asdict(cfg), **agg, "method": method, "seeds": len(_seeds)}
     return row
 
+
 def _cfg_get(cfg: Any, key: str, default=None):
     # supports both dict-like and attr-like configs
     if isinstance(cfg, dict):
@@ -749,7 +793,6 @@ def run_grid_search(
     dataset_fn: Optional[Callable[..., Any]] = None,
     unlabeled_dataset_fn: Optional[Callable[[bool], Any]] = None,
     eval_dataset_fn: Optional[Callable[[bool], Any]] = None,
-
     methods: Tuple[str, ...] = ("jepa",),
     task_type: str = "classification",
     seeds: Tuple[int, ...] = (42, 123, 456),
@@ -803,18 +846,22 @@ def run_grid_search(
     # ---------------- dataset wiring ----------------
     # We ONLY decide which path to use here; we DO NOT build datasets yet.
     use_single_builder = dataset_fn is not None
-        
+
     logger.info("Running grid search over %d configs", len(cfgs))
 
     rows: List[Dict[str, Any]] = []
     rows: List[Dict[str, Any]] = []
     if time_budget_mins or max_pretrain_batches or max_finetune_batches:
         logger.info(
-            "Grid caps: time_budget=%s min, max_pretrain_batches=%s, max_finetune_batches=%s",
-            time_budget_mins, max_pretrain_batches, max_finetune_batches
+            "Grid caps: time_budget=%s min, max_pretrain_batches=%s, "
+            "max_finetune_batches=%s",
+            time_budget_mins,
+            max_pretrain_batches,
+            max_finetune_batches,
         )
 
     import sys
+
     total_pairs = len(cfgs) * len(methods)
     disable_bar = disable_tqdm or not sys.stdout.isatty()
     pbar = None if disable_bar else tqdm.tqdm(total=total_pairs, leave=False)
@@ -827,10 +874,10 @@ def run_grid_search(
         prebuilt_loaders = None
         if use_single_builder:
             pre_bs = getattr(cfg, "pretrain_batch_size", 32)
-            ft_bs  = getattr(cfg, "finetune_batch_size", 32)
+            ft_bs = getattr(cfg, "finetune_batch_size", 32)
 
             # get datasets straight from dataset_fn
-            try: 
+            try:
                 ds = dataset_fn(add_3d=add_3d)
             except TypeError:
                 ds = dataset_fn(add_3d)
@@ -839,12 +886,14 @@ def run_grid_search(
             tr_ds, va_ds, te_ds = _normalize_ds(ds)
 
             # loaders built from ds (as we already had)
-            train_loader, val_loader, test_loader = _normalize_ds_to_loaders(ds, pre_bs, ft_bs)
+            train_loader, val_loader, test_loader = _normalize_ds_to_loaders(
+                ds, pre_bs, ft_bs
+            )
 
-            prebuilt_loaders  = (train_loader, val_loader, test_loader)
+            prebuilt_loaders = (train_loader, val_loader, test_loader)
             prebuilt_datasets = (tr_ds, va_ds, te_ds)
         else:
-            prebuilt_loaders  = None
+            prebuilt_loaders = None
             prebuilt_datasets = None
 
         for method in methods:
@@ -870,7 +919,8 @@ def run_grid_search(
                     use_scaffold=use_scaffold,
                     prebuilt_loaders=prebuilt_loaders,
                     prebuilt_datasets=prebuilt_datasets,
-                    # pass fast-path caps down; helper can ignore if not supported
+                    # pass fast-path caps down; helper can ignore
+                    # if not supported
                     max_pretrain_batches=max_pretrain_batches,
                     max_finetune_batches=max_finetune_batches,
                     time_budget_mins=time_budget_mins,
@@ -907,8 +957,8 @@ def run_grid_search(
         if m in df.columns:
             col = pd.to_numeric(df[m], errors="coerce")
             if col.notna().any():  # skip if all NaN
-                pos = int(col.idxmax())           # position of best row
-                row = df.iloc[pos].to_dict()      # use iloc, not loc
+                pos = int(col.idxmax())  # position of best row
+                row = df.iloc[pos].to_dict()  # use iloc, not loc
                 row["best_metric"] = m
                 best_rows.append(row)
 
@@ -926,7 +976,7 @@ def run_grid_search(
         df = pd.concat([df, pd.DataFrame(best_rows)], ignore_index=True)
 
     if out_csv is not None:
-        df.to_csv(out_csv, index=False) 
+        df.to_csv(out_csv, index=False)
         # annotate resulting table with caps (useful for debugging)
     df["cap_time_mins"] = time_budget_mins
     df["cap_pretrain_batches"] = max_pretrain_batches
@@ -937,7 +987,11 @@ def run_grid_search(
         if m in df.columns:
             # flatten list/tuple/ndarray scalars like [0.85]
             df[m] = df[m].apply(
-                lambda v: float(v[0]) if isinstance(v, (list, tuple, np.ndarray)) and len(v) == 1 else v
+                lambda v: (
+                    float(v[0])
+                    if isinstance(v, (list, tuple, np.ndarray)) and len(v) == 1
+                    else v
+                )
             )
             # coerce to numeric
             df[m] = pd.to_numeric(df[m], errors="coerce")
