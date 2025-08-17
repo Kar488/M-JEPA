@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import logging
 import os
 import pickle
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
-import logging
 import numpy as np
 import torch
 
-_RUNNING_IN_CI = os.getenv("CI") == "true" # run local vs remote
+_RUNNING_IN_CI = os.getenv("CI") == "true"  # run local vs remote
 
 # RDKit imports
 try:
@@ -22,8 +22,8 @@ except Exception as e:
 
 import pandas as pd
 
-
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class GraphData:
@@ -88,7 +88,7 @@ class GraphDataset:
             batch_ptr: Tensor marking graph boundaries within the batch.
             batch_labels: Labels tensor if dataset is labelled, else ``None``.
         """
-        
+
         if not indices:
             logger.error("get_batch called with empty indices")
             raise ValueError("Empty batch indices")
@@ -113,8 +113,8 @@ class GraphDataset:
                 raise ValueError(f"Graph at idx {idx} has 0 nodes")
             node_features.append(x_i)
             adj_blocks.append(adj_i)
-            sizes.append(n_i) 
- 
+            sizes.append(n_i)
+
         batch_x = (
             torch.cat(node_features, dim=0)
             if node_features
@@ -127,27 +127,27 @@ class GraphDataset:
         )
         ptr = np.cumsum([0] + sizes, dtype=np.int64)
         if np.any(np.diff(ptr) <= 0) or (len(ptr) != len(indices) + 1):
-            raise AssertionError(f"Bad batch_ptr: {ptr.tolist()} for {len(indices)} graphs")
-        batch_ptr = torch.tensor(ptr, dtype=torch.long) 
+            raise AssertionError(
+                f"Bad batch_ptr: {ptr.tolist()} for {len(indices)} graphs"
+            )
+        batch_ptr = torch.tensor(ptr, dtype=torch.long)
 
         batch_labels = (
             torch.tensor(self.labels[indices], dtype=torch.float32)
             if self.labels is not None
             else None
         )
-        if batch_labels is not None: 
-            assert batch_labels.shape[0] == len(indices), (
-                f"Labels length {batch_labels.shape[0]} != indices length {len(indices)}"
-            )
+        if batch_labels is not None:
+            assert batch_labels.shape[0] == len(
+                indices
+            ), f"Labels length {batch_labels.shape[0]} != indices length {len(indices)}"
 
         return batch_x, batch_adj, batch_ptr, batch_labels
-
-
 
     # ---------- Core featurisation ---------- #
     @staticmethod
     def smiles_to_graph(
-    smiles: str, add_3d: bool = False, random_seed: Optional[int] = None
+        smiles: str, add_3d: bool = False, random_seed: Optional[int] = None
     ) -> GraphData:
         """
         Convert SMILES -> GraphData using RDKit when available.
@@ -172,9 +172,11 @@ class GraphDataset:
                 Chem.SanitizeMol(mol)
             except Exception as e:
                 # log and re‑raise; caller will decide whether to skip
-                logger.warning("Sanitization failed for %s: %s; skipping molecule", smiles, e)
+                logger.warning(
+                    "Sanitization failed for %s: %s; skipping molecule", smiles, e
+                )
                 raise
-            
+
             mol = Chem.AddHs(mol)
 
             # Node features: [Z, degree, aromatic, hybrid]
@@ -187,7 +189,11 @@ class GraphDataset:
                 hybrid = int(atom.GetHybridization())
                 feats.append([z, deg, aromatic, hybrid])
 
-            X = np.asarray(feats, dtype=np.float32) if feats else np.zeros((0, 4), dtype=np.float32)
+            X = (
+                np.asarray(feats, dtype=np.float32)
+                if feats
+                else np.zeros((0, 4), dtype=np.float32)
+            )
 
             coords = None
             if add_3d and mol.GetNumAtoms() > 0:
@@ -205,7 +211,10 @@ class GraphDataset:
                             pass
                         conf = mol.GetConformer()
                         coords = np.array(
-                            [list(conf.GetAtomPosition(i)) for i in range(mol.GetNumAtoms())],
+                            [
+                                list(conf.GetAtomPosition(i))
+                                for i in range(mol.GetNumAtoms())
+                            ],
                             dtype=np.float32,
                         )
                         # append (x,y,z)
@@ -236,10 +245,16 @@ class GraphDataset:
 
                 feat = onehot + [conj, ring, length]
                 # undirected → add both directions
-                edges.append((i, j)); eattr.append(feat)
-                edges.append((j, i)); eattr.append(feat)
+                edges.append((i, j))
+                eattr.append(feat)
+                edges.append((j, i))
+                eattr.append(feat)
 
-            E = np.array(edges, dtype=np.int64).T if edges else np.zeros((2, 0), dtype=np.int64)
+            E = (
+                np.array(edges, dtype=np.int64).T
+                if edges
+                else np.zeros((2, 0), dtype=np.int64)
+            )
             EA = np.asarray(eattr, dtype=np.float32) if eattr else None
 
             # optional geometric edge features
@@ -256,9 +271,6 @@ class GraphDataset:
             # any unexpected RDKit error → robust fallback
             return _fallback_graph_from_string(smiles)
 
-
-
-
     # ---------- Builders ---------- #
     @classmethod
     def from_smiles_list(
@@ -268,22 +280,19 @@ class GraphDataset:
         add_3d: bool = False,
         random_seed: Optional[int] = None,
     ) -> "GraphDataset":
-            
         graphs: List[GraphData] = []
         smiles_out: List[str] = []
         valid_indices: List[int] = []
         for i, sm in enumerate(smiles_list):
             try:
-                g = cls.smiles_to_graph(
-                    sm, add_3d=add_3d, random_seed=random_seed
-                )
+                g = cls.smiles_to_graph(sm, add_3d=add_3d, random_seed=random_seed)
             except Exception as e:
-                #Dont raise exception as it may be a valid SMILES
-                #if _RUNNING_IN_CI:
-                    #raise
+                # Dont raise exception as it may be a valid SMILES
+                # if _RUNNING_IN_CI:
+                # raise
                 logger.warning("Skipping invalid SMILES %s: %s", sm, e)
                 continue
-            
+
             graphs.append(g)
             smiles_out.append(sm)
             valid_indices.append(i)
@@ -292,7 +301,7 @@ class GraphDataset:
         # If labels are provided, filter them to match valid SMILES
         if y is not None:
             y = y[valid_indices]
-           
+
         return cls(graphs, y, smiles_out)
 
     @classmethod
@@ -306,7 +315,6 @@ class GraphDataset:
         random_seed: Optional[int] = None,
         n_rows: Optional[int] = None,  # subset helper
     ) -> "GraphDataset":
-        
         cache_path = None
         if cache_dir and n_rows is None:
             os.makedirs(cache_dir, exist_ok=True)
@@ -330,11 +338,9 @@ class GraphDataset:
         graphs: List[GraphData] = []
         smiles_out: List[str] = []
         valid_indices = []
-        for i,sm in enumerate(smiles):
+        for i, sm in enumerate(smiles):
             try:
-                g = cls.smiles_to_graph(
-                    sm, add_3d=add_3d, random_seed=random_seed
-                )
+                g = cls.smiles_to_graph(sm, add_3d=add_3d, random_seed=random_seed)
                 graphs.append(g)
                 smiles_out.append(sm)
                 valid_indices.append(i)
@@ -344,8 +350,10 @@ class GraphDataset:
         if labels is not None:
             labels = labels[valid_indices]
             if len(labels) != len(graphs):
-                raise ValueError(f"Mismatch: {len(graphs)} graphs vs {len(labels)} labels")
-        
+                raise ValueError(
+                    f"Mismatch: {len(graphs)} graphs vs {len(labels)} labels"
+                )
+
         if cache_path:
             with open(cache_path, "wb") as f:
                 pickle.dump((graphs, labels), f)
@@ -388,9 +396,7 @@ class GraphDataset:
         smiles_out: List[str] = []
         for sm in smiles:
             try:
-                g = cls.smiles_to_graph(
-                    sm, add_3d=add_3d, random_seed=random_seed
-                )
+                g = cls.smiles_to_graph(sm, add_3d=add_3d, random_seed=random_seed)
                 graphs.append(g)
                 smiles_out.append(sm)
             except Exception:
@@ -414,6 +420,7 @@ class GraphDataset:
         random_seed: Optional[int] = None,
         prefix_filter: Optional[str] = None,
         n_rows_per_file: Optional[int] = None,  # subset helper
+        max_graphs: Optional[int] = None,
     ) -> "GraphDataset":
         graphs_all: List[GraphData] = []
         labels_all: List[Any] = []
@@ -428,7 +435,13 @@ class GraphDataset:
             files = [f for f in files if os.path.basename(f).startswith(prefix_filter)]
 
         for fname in files:
+            if max_graphs is not None and len(graphs_all) >= max_graphs:
+                break
             path = os.path.join(dirpath, fname)
+            remaining = None if max_graphs is None else max_graphs - len(graphs_all)
+            n_rows = n_rows_per_file
+            if remaining is not None:
+                n_rows = remaining if n_rows is None else min(n_rows, remaining)
             if ext.lower() == "parquet":
                 ds = cls.from_parquet(
                     filepath=path,
@@ -445,7 +458,7 @@ class GraphDataset:
                     ),
                     add_3d=add_3d,
                     random_seed=random_seed,
-                    n_rows=n_rows_per_file,
+                    n_rows=n_rows,
                 )
             elif ext.lower() == "csv":
                 ds = cls.from_csv(
@@ -463,7 +476,7 @@ class GraphDataset:
                     ),
                     add_3d=add_3d,
                     random_seed=random_seed,
-                    n_rows=n_rows_per_file,
+                    n_rows=n_rows,
                 )
             else:
                 raise ValueError(f"Unsupported ext: {ext}")
@@ -473,6 +486,11 @@ class GraphDataset:
             if ds.labels is not None:
                 labels_present = True
                 labels_all.extend(ds.labels.tolist())
+
+        if max_graphs is not None:
+            graphs_all = graphs_all[:max_graphs]
+            smiles_all = smiles_all[:max_graphs]
+            labels_all = labels_all[:max_graphs]
 
         labels = np.asarray(labels_all) if labels_present else None
         smiles = smiles_all if smiles_all else None
@@ -559,6 +577,7 @@ def _append_geom_edge_attr(
     geom = np.stack(feats, axis=0) if feats else np.zeros((0, 10), dtype=np.float32)
     return geom if edge_attr is None else np.concatenate([edge_attr, geom], axis=1)
 
+
 def _fallback_graph_from_string(s: str) -> "GraphData":
     """
     Deterministic tiny chain-graph from a string when RDKit isn't available.
@@ -570,12 +589,11 @@ def _fallback_graph_from_string(s: str) -> "GraphData":
 
     n = max(2, min(10, len(s)))
     x = _np.stack(
-        [_np.arange(n, dtype=_np.float32),
-         (_np.arange(n) % 3).astype(_np.float32)],
-        axis=1
+        [_np.arange(n, dtype=_np.float32), (_np.arange(n) % 3).astype(_np.float32)],
+        axis=1,
     )  # [N,2]
-    rows = _np.concatenate([_np.arange(n-1), _np.arange(1, n)], axis=0)
-    cols = _np.concatenate([_np.arange(1, n), _np.arange(n-1)], axis=0)
+    rows = _np.concatenate([_np.arange(n - 1), _np.arange(1, n)], axis=0)
+    cols = _np.concatenate([_np.arange(1, n), _np.arange(n - 1)], axis=0)
     edge_index = _np.stack([rows.astype(_np.int64), cols.astype(_np.int64)], axis=0)
-    
+
     return GraphData(x=x, edge_index=edge_index, edge_attr=None)
