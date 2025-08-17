@@ -261,25 +261,27 @@ jobs:
             fi
 
             # 2) Locate / install micromamba
-            if ! command -v micromamba >/dev/null 2>&1; then
-              curl -Ls https://micro.mamba.pm/install.sh | bash -s -- -b
+            set -Eeuo pipefail
+
+            MM_PREFIX="$HOME/micromamba"
+            MM_BIN="$MM_PREFIX/bin/micromamba"
+
+            if ! [ -x "$MM_BIN" ]; then
+              INSTALL_SH="/tmp/micromamba_install.sh"
+              rm -f "$INSTALL_SH"
+              curl -fsSL --retry 3 https://micro.mamba.pm/install.sh -o "$INSTALL_SH"
+              bash "$INSTALL_SH" -b -p "$MM_PREFIX"
             fi
-            if command -v micromamba >/dev/null 2>&1; then
-              MMBIN="$(command -v micromamba)"
-            elif [ -x "$HOME/.local/bin/micromamba" ]; then
-              MMBIN="$HOME/.local/bin/micromamba"
-            elif [ -x "$HOME/micromamba/bin/micromamba" ]; then
-              MMBIN="$HOME/micromamba/bin/micromamba"
-            else
-              echo "micromamba not found after install"; exit 1
-            fi
-            export MAMBA_ROOT_PREFIX="${HOME}/micromamba"
-            eval "$("$MMBIN" shell hook -s bash)"   # make micromamba functions available
+
+            # Shell hook via absolute path (works even if not yet on PATH)
+            eval "$("$MM_BIN" shell hook -s bash)"
+            export MAMBA_ROOT_PREFIX="$MM_PREFIX"
 
             # 3) Create env if missing
             ENV_NAME="mjepa"
-            if ! "$MMBIN" env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
-              "$MMBIN" create -y -n "$ENV_NAME" -c conda-forge python=3.10 rdkit=2023.09.5 scipy=1.10.1 pip
+            ENV_DIR="$MAMBA_ROOT_PREFIX/envs/$ENV_NAME"
+            if ! [ -d "$ENV_DIR" ]; then
+              "$MM_BIN" create -y -n "$ENV_NAME" -c conda-forge python=3.10 rdkit=2023.09.5 scipy=1.10.1 pip
             fi
 
             # 4) put pip temp/cache on your big volume + pre-clean ---
