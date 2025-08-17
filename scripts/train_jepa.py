@@ -1185,16 +1185,16 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
 
         def _dataset_fn(add_3d: bool = False):  # type: ignore[override]
             t0 = time.time()
-            ds = load_directory_dataset(
-                args.dataset_dir,
-                label_col=args.label_col,
-                add_3d=add_3d,
-                smiles_col=getattr(args, "smiles_col", "smiles"),
-                n_rows_per_file=n_rows_per_file,
-                max_graphs=max(sample_ul or 0, sample_lb or 0) or None,
-                num_workers=getattr(args, "num_workers", 0),
-                cache_dir=cache_dir,
-            )
+                ds = load_directory_dataset(
+                    args.dataset_dir,
+                    label_col=args.label_col,
+                    add_3d=add_3d,
+                    smiles_col=getattr(args, "smiles_col", "smiles"),
+                    n_rows_per_file=n_rows_per_file,
+                    max_graphs=max(sample_ul or 0, sample_lb or 0) or None,
+                    num_workers=args.num_workers,
+                    cache_dir=cache_dir,
+                )
             dt = time.time() - t0
             logger.info(
                 "Loaded dataset in %.2fs (%s graphs)",
@@ -1212,15 +1212,15 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
 
         def _unlabeled_fn(add_3d: bool = False):
             t0 = time.time()
-            ds = load_directory_dataset(
-                args.unlabeled_dir,
-                add_3d=add_3d,
-                smiles_col=getattr(args, "smiles_col", "smiles"),
-                n_rows_per_file=n_rows_per_file,
-                max_graphs=sample_ul,
-                num_workers=getattr(args, "num_workers", 0),
-                cache_dir=cache_dir,
-            )
+                ds = load_directory_dataset(
+                    args.unlabeled_dir,
+                    add_3d=add_3d,
+                    smiles_col=getattr(args, "smiles_col", "smiles"),
+                    n_rows_per_file=n_rows_per_file,
+                    max_graphs=sample_ul,
+                    num_workers=args.num_workers,
+                    cache_dir=cache_dir,
+                )
             dt = time.time() - t0
             logger.info(
                 "Loaded unlabeled dataset in %.2fs (%s graphs)",
@@ -1233,16 +1233,16 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
 
         def _eval_fn(add_3d: bool = False):
             t0 = time.time()
-            ds = load_directory_dataset(
-                args.labeled_dir,
-                label_col=args.label_col,
-                add_3d=add_3d,
-                smiles_col=getattr(args, "smiles_col", "smiles"),
-                n_rows_per_file=n_rows_per_file,
-                max_graphs=sample_lb,
-                num_workers=getattr(args, "num_workers", 0),
-                cache_dir=cache_dir,
-            )
+                ds = load_directory_dataset(
+                    args.labeled_dir,
+                    label_col=args.label_col,
+                    add_3d=add_3d,
+                    smiles_col=getattr(args, "smiles_col", "smiles"),
+                    n_rows_per_file=n_rows_per_file,
+                    max_graphs=sample_lb,
+                    num_workers=args.num_workers,
+                    cache_dir=cache_dir,
+                )
             dt = time.time() - t0
             logger.info(
                 "Loaded labeled dataset in %.2fs (%s graphs)",
@@ -1740,6 +1740,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-cache",
         action="store_true",
         help="Disable graph caching during grid search",
+    )
+    grid.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="Number of worker processes for SMILES featurization",
     )
     grid.add_argument(
         "--task-type",
