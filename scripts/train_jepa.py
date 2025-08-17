@@ -394,7 +394,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         unlabeled = load_directory_dataset(
             args.unlabeled_dir,
             add_3d=args.add_3d,
-            num_workers=args.num_workers,
+            num_workers=getattr(args, "num_workers", 0),
             cache_dir=getattr(args, "cache_dir", None),
         )  # type: ignore[arg-type]
 
@@ -603,7 +603,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             args.labeled_dir,
             label_col=args.label_col,
             add_3d=args.add_3d,
-            num_workers=args.num_workers,
+            num_workers=getattr(args, "num_workers", 0),
             cache_dir=getattr(args, "cache_dir", None),
         )  # type: ignore[arg-type]
 
@@ -887,7 +887,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             args.labeled_dir,
             label_col=args.label_col,
             add_3d=args.add_3d,
-            num_workers=args.num_workers,
+            num_workers=getattr(args, "num_workers", 0),
             cache_dir=getattr(args, "cache_dir", None),
         )  # type: ignore[arg-type]
         wb.log({"phase": "data_load", "labeled_graphs": len(labeled)})
@@ -1192,7 +1192,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
                 smiles_col=getattr(args, "smiles_col", "smiles"),
                 n_rows_per_file=n_rows_per_file,
                 max_graphs=max(sample_ul or 0, sample_lb or 0) or None,
-                num_workers=args.num_workers,
+                num_workers=getattr(args, "num_workers", 0),
                 cache_dir=cache_dir,
             )
             dt = time.time() - t0
@@ -1218,7 +1218,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
                 smiles_col=getattr(args, "smiles_col", "smiles"),
                 n_rows_per_file=n_rows_per_file,
                 max_graphs=sample_ul,
-                num_workers=args.num_workers,
+                num_workers=getattr(args, "num_workers", 0),
                 cache_dir=cache_dir,
             )
             dt = time.time() - t0
@@ -1240,7 +1240,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
                 smiles_col=getattr(args, "smiles_col", "smiles"),
                 n_rows_per_file=n_rows_per_file,
                 max_graphs=sample_lb,
-                num_workers=args.num_workers,
+                num_workers=getattr(args, "num_workers", 0),
                 cache_dir=cache_dir,
             )
             dt = time.time() - t0
