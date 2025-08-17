@@ -344,6 +344,7 @@ class GraphDataset:
             cache_name = os.path.basename(filepath).replace(".parquet", ".pkl")
             cache_path = os.path.join(cache_dir, cache_name)
             if os.path.exists(cache_path):
+                logger.info("Loading graphs from cache %s", cache_path)
                 with open(cache_path, "rb") as f:
                     graphs, labels = pickle.load(f)
                 return cls(graphs, labels)
@@ -389,6 +390,7 @@ class GraphDataset:
         if cache_path:
             with open(cache_path, "wb") as f:
                 pickle.dump((graphs, labels), f)
+            logger.info("Wrote graph cache to %s", cache_path)
 
         return cls(graphs, labels, smiles_out)
 
@@ -410,6 +412,7 @@ class GraphDataset:
             cache_name = os.path.basename(filepath).replace(".csv", ".pkl")
             cache_path = os.path.join(cache_dir, cache_name)
             if os.path.exists(cache_path):
+                logger.info("Loading graphs from cache %s", cache_path)
                 with open(cache_path, "rb") as f:
                     graphs, labels = pickle.load(f)
                 return cls(graphs, labels)
@@ -437,6 +440,7 @@ class GraphDataset:
         if cache_path:
             with open(cache_path, "wb") as f:
                 pickle.dump((graphs, labels), f)
+            logger.info("Wrote graph cache to %s", cache_path)
 
         return cls(graphs, labels, smiles_out)
 
