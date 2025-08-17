@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import warnings
+import time
+import math
 from dataclasses import asdict, dataclass
 from itertools import product
 from typing import (  # noqa: E501
@@ -445,7 +447,7 @@ def _run_one_config_method(
     # fast-path caps
     max_pretrain_batches: int = 0,
     max_finetune_batches: int = 0,
-    time_budget_mins: int = 0,
+    time_left: Optional[Callable[[], float]] = None,
 ) -> Dict[str, Any]:
     logger.info("Running method %s with config %s", method, asdict(cfg))
 
@@ -537,6 +539,11 @@ def _run_one_config_method(
                 embed_dim=cfg.hidden_dim, hidden_dim=cfg.hidden_dim * 2
             )
 
+            remaining = time_left() if time_left is not None else float("inf")
+            if remaining <= 0:
+                logger.info("Time budget exhausted before JEPA pretraining; stopping.")
+                break
+            _tb = 0 if math.isinf(remaining) else remaining
             try:
                 train_jepa(
                     dataset=ds_pre,
@@ -557,7 +564,7 @@ def _run_one_config_method(
                     use_scheduler=use_scheduler,
                     warmup_steps=warmup_steps,
                     max_batches=max_pretrain_batches,
-                    time_budget_mins=time_budget_mins,
+                    time_budget_mins=_tb,
                 )
             except TypeError:
                 # Backward-compatible call
@@ -576,6 +583,11 @@ def _run_one_config_method(
                     reg_lambda=1e-4,
                 )
 
+            remaining = time_left() if time_left is not None else float("inf")
+            if remaining <= 0:
+                logger.info("Time budget exhausted before fine-tuning; stopping.")
+                break
+            _tb = 0 if math.isinf(remaining) else remaining
             try:
                 m = train_linear_head(
                     dataset=ds_eval,
@@ -587,7 +599,7 @@ def _run_one_config_method(
                     device=device,
                     use_scaffold=use_scaffold,
                     max_batches=max_finetune_batches,
-                    time_budget_mins=time_budget_mins,
+                    time_budget_mins=_tb,
                 )
                 row = {k: float(v) for k, v in m.items() if k != "head"}
             except TypeError:
@@ -639,6 +651,11 @@ def _run_one_config_method(
                 num_layers=cfg.num_layers,
                 edge_dim=edge_dim,
             )
+            remaining = time_left() if time_left is not None else float("inf")
+            if remaining <= 0:
+                logger.info("Time budget exhausted before contrastive pretraining; stopping.")
+                break
+            _tb = 0 if math.isinf(remaining) else remaining
             try:
                 train_contrastive(
                     dataset=ds_pre,
@@ -656,7 +673,7 @@ def _run_one_config_method(
                     use_scheduler=use_scheduler,
                     warmup_steps=warmup_steps,
                     max_batches=max_pretrain_batches,
-                    time_budget_mins=time_budget_mins,
+                    time_budget_mins=_tb,
                 )
             except TypeError:
                 train_contrastive(
@@ -670,6 +687,11 @@ def _run_one_config_method(
                     device=device,
                     temperature=0.1,
                 )
+            remaining = time_left() if time_left is not None else float("inf")
+            if remaining <= 0:
+                logger.info("Time budget exhausted before fine-tuning; stopping.")
+                break
+            _tb = 0 if math.isinf(remaining) else remaining
             try:
                 m = train_linear_head(
                     dataset=ds_eval,
@@ -681,7 +703,7 @@ def _run_one_config_method(
                     device=device,
                     use_scaffold=use_scaffold,
                     max_batches=max_finetune_batches,
-                    time_budget_mins=time_budget_mins,
+                    time_budget_mins=_tb,
                 )
                 row = {k: float(v) for k, v in m.items() if k != "head"}
             except TypeError:
@@ -828,6 +850,13 @@ def run_grid_search(
     time_budget_mins: int = 0,
     disable_tqdm: bool = False,
 ) -> pd.DataFrame:
+    start = time.monotonic()
+
+    def time_left() -> float:
+        if time_budget_mins <= 0:
+            return float("inf")
+        return max(0.0, time_budget_mins - (time.monotonic() - start) / 60.0)
+
     cfgs = _build_configs(
         mask_ratios,
         contiguities,
@@ -849,7 +878,6 @@ def run_grid_search(
 
     logger.info("Running grid search over %d configs", len(cfgs))
 
-    rows: List[Dict[str, Any]] = []
     rows: List[Dict[str, Any]] = []
     if time_budget_mins or max_pretrain_batches or max_finetune_batches:
         logger.info(
@@ -923,11 +951,17 @@ def run_grid_search(
                     # if not supported
                     max_pretrain_batches=max_pretrain_batches,
                     max_finetune_batches=max_finetune_batches,
-                    time_budget_mins=time_budget_mins,
+                    time_left=time_left,
                 )
             )
             if pbar is not None:
                 pbar.update(1)
+            if time_left() <= 0:
+                logger.info("Time budget exhausted; ending grid search.")
+                break
+
+        if time_left() <= 0:
+            break
 
     if pbar is not None:
         pbar.close()
