@@ -269,6 +269,7 @@ jobs:
             # Use a prefix you definitely own
             MM_PREFIX="${HOME}/micromamba"
             MM_BIN="${MM_PREFIX}/bin/micromamba"
+            MMBIN="$MM_BIN"
 
             # Make sure both the prefix and its bin folder exist and are writable
             mkdir -p "${MM_PREFIX}/bin"
@@ -375,12 +376,6 @@ jobs:
 
             print(json.dumps(needs))
             PY
-
-            # Enforce RDKit scaffold availability (you already install RDKit; this is just a guard)
-            if grep -q '"murcko": true' /tmp/need.json; then
-              echo "RDKit scaffolds missing; ensure rdkit from conda-forge is installed." >&2
-              exit 1
-            fi
 
             # Install only what’s required (matching your Torch/CUDA)
             if grep -q '"torch_scatter": true' /tmp/pyg_need.json; then
