@@ -109,6 +109,7 @@ def load_directory_dataset(
     add_3d: bool = False,
     random_seed: Optional[int] = None,
     n_rows_per_file: Optional[int] = None,
+    num_workers: int = 0,
 ) -> GraphDataset:
     return GraphDataset.from_directory(
         dirpath=dirpath,
@@ -120,6 +121,7 @@ def load_directory_dataset(
         random_seed=random_seed,
         prefix_filter=prefix_filter,
         n_rows_per_file=n_rows_per_file,
+        num_workers=num_workers,
     )
 
 

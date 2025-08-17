@@ -494,6 +494,7 @@ jobs:
                   --sample-labeled 500 \
                   --max-pretrain-batches 200 \
                   --max-finetune-batches 200 \
+                  --num-workers 8 \
                   --time-budget-mins 45 \
                   --out-csv outputs/grid_results.csv \
                   --best-config-out outputs/best_grid_config.json \
@@ -591,6 +592,7 @@ jobs:
               --unlabeled-dir data/BASF_AIPubChem_v4 \
               $PRETRAIN_ARGS \
               --contrastive \
+              --num-workers 8 \
               --ckpt-dir outputs/ckpts/pretrain \
               --save-every 1 \
               --output outputs/encoder.pt \
@@ -657,6 +659,7 @@ jobs:
                 --task-type classification \
                 --epochs 1 \
                 --batch-size 4 \
+                --num-workers 8 \
                 --patience 10 \
                 --ckpt-dir outputs/ckpts/finetune \
                 --save-every 1 \
@@ -715,6 +718,7 @@ jobs:
                 --task-type classification \
                 --epochs 1 \
                 --batch-size 4 \
+                --num-workers 8 \
                 --patience 10 \
                 --use-wandb \
                 --seeds 42 \
@@ -748,6 +752,7 @@ jobs:
                 --task NR-AR \
                 --pretrain-epochs 1 \
                 --finetune-epochs 1 \
+                --num-workers 8 \
                 --num-top-exclude 5 \
                 --use-wandb \
                 --config default.yaml \
