@@ -25,6 +25,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -35,13 +36,14 @@ import yaml
 # Attempt to import reusable components from the package.
 try:
     from data.mdataset import GraphData, GraphDataset
-    
+
 except Exception:
-    load_directory_dataset = None  # type: ignore[assignment] 
+    load_directory_dataset = None  # type: ignore[assignment]
 
 # Models
 try:
-    from models.factory import build_encoder  # provides 'edge_mpnn' + fallbacks
+    from models.factory import \
+        build_encoder  # provides 'edge_mpnn' + fallbacks
 except Exception:
     # fallback to basic encoder if factory not present
     from models.encoder import GNNEncoder as _BasicEnc
@@ -81,10 +83,13 @@ except Exception:
         def __init__(self, in_dim: int, out_dim: int):
             super().__init__()
             self.fc = nn.Linear(in_dim, out_dim)
+
         def forward(self, x):
             return self.fc(x)
 
-    def build_linear_head(in_dim: int, num_classes: int, task_type: str = "classification"):
+    def build_linear_head(
+        in_dim: int, num_classes: int, task_type: str = "classification"
+    ):
         """
         Returns a simple linear probe:
         - classification: out_dim = num_classes
@@ -92,25 +97,30 @@ except Exception:
         """
         out_dim = num_classes if task_type == "classification" else 1
         return _LinearHead(in_dim, out_dim)
-        
+
+
 try:
-    from training.unsupervised import train_jepa, train_contrastive  # type: ignore[assignment]
+    from training.unsupervised import (  # type: ignore[assignment]
+        train_contrastive, train_jepa)
 except Exception:
     train_jepa = None  # type: ignore[assignment]
     train_contrastive = None  # type: ignore[assignment]
 
 try:
-    from training.supervised import train_linear_head  # type: ignore[assignment]
+    from training.supervised import \
+        train_linear_head  # type: ignore[assignment]
 except Exception:
     train_linear_head = None  # type: ignore[assignment]
 
 try:
-    from experiments.case_study import run_tox21_case_study  # type: ignore[assignment]
+    from experiments.case_study import \
+        run_tox21_case_study  # type: ignore[assignment]
 except Exception:
     run_tox21_case_study = None  # type: ignore[assignment]
 
 try:
-    from experiments.grid_search import run_grid_search  # type: ignore[assignment]
+    from experiments.grid_search import \
+        run_grid_search  # type: ignore[assignment]
 except Exception:
     run_grid_search = None  # type: ignore[assignment]
 
@@ -128,13 +138,15 @@ except Exception:
 
         return DummyWB()
 
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
- 
+
 # ---------------------------------------------------------------------------
 # Mock test support utils
 # ---------------------------------------------------------------------------
+
 
 def _maybe_to(module, device):
     """Call .to(device) if present (tests use dummy encoders without .to)."""
@@ -142,10 +154,12 @@ def _maybe_to(module, device):
         module.to(device)
     return module
 
+
 def _maybe_labels(ds):
     """Best-effort extraction of labels from various dataset shapes.
     Returns a NumPy array or None if not available."""
     import numpy as _np
+
     for attr in ("y", "labels", "targets"):
         if hasattr(ds, attr):
             try:
@@ -154,12 +168,14 @@ def _maybe_labels(ds):
                 return None
     return None
 
+
 def _load_state_dict_forgiving(module, state):
     """Call load_state_dict with strict=False when supported; fall back otherwise."""
     try:
         module.load_state_dict(state, strict=False)
     except TypeError:
         module.load_state_dict(state)
+
 
 def _safe_load_checkpoint(path: str, device: str):
     """
@@ -173,10 +189,12 @@ def _safe_load_checkpoint(path: str, device: str):
     except Exception as e:
         logger.warning(
             "Could not load checkpoint %r (%s). Proceeding with random init (test/smoke mode).",
-            path, e
+            path,
+            e,
         )
         # Return empty dict so load_state_dict is a no-op if needed
         return {"encoder": {}}
+
 
 def _infer_num_classes(labeled) -> int:
     """Best-effort class count. Falls back to 2 if we can't see labels."""
@@ -191,6 +209,7 @@ def _infer_num_classes(labeled) -> int:
                 pass
     # 2) try labels array
     import numpy as np
+
     y = _maybe_labels(labeled)  # your helper from the previous step
     if y is None:
         return 2
@@ -208,6 +227,7 @@ def _infer_num_classes(labeled) -> int:
     except Exception:
         return 2
 
+
 def _iter_params(m):
     ps = getattr(m, "parameters", None)
     if callable(ps):
@@ -216,6 +236,7 @@ def _iter_params(m):
         except Exception:
             return []
     return []
+
 
 def _maybe_state_dict(obj):
     if obj is None:
@@ -229,6 +250,7 @@ def _maybe_state_dict(obj):
             return None
     return None
 
+
 def load_directory_dataset(
     dirpath: str,
     ext: str = "parquet",
@@ -239,6 +261,7 @@ def load_directory_dataset(
     add_3d: bool = False,
     random_seed: Optional[int] = None,
     n_rows_per_file: Optional[int] = None,
+    max_graphs: Optional[int] = None,
 ) -> GraphDataset:
     return GraphDataset.from_directory(
         dirpath=dirpath,
@@ -249,7 +272,10 @@ def load_directory_dataset(
         add_3d=add_3d,
         random_seed=random_seed,
         prefix_filter=prefix_filter,
+        n_rows_per_file=n_rows_per_file,
+        max_graphs=max_graphs,
     )
+
 
 def load_parquet_dataset(
     filepath: str,
@@ -269,9 +295,12 @@ def load_parquet_dataset(
         random_seed=random_seed,
         n_rows=n_rows,
     )
+
+
 # ---------------------------------------------------------------------------
 # Configuration loading
 # ---------------------------------------------------------------------------
+
 
 def load_config(config_path: str) -> dict:
     """Load configuration from a YAML file."""
@@ -289,6 +318,7 @@ CONFIG = load_config(Path(__file__).with_name("default.yaml"))
 # ---------------------------------------------------------------------------
 # Utility functions
 # ---------------------------------------------------------------------------
+
 
 def aggregate_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, float]:
     """Compute mean and std for each metric across runs.
@@ -313,10 +343,10 @@ def resolve_device(preferred: str) -> str:
     return "cpu"
 
 
-
 # ---------------------------------------------------------------------------
 # Command implementations
 # ---------------------------------------------------------------------------
+
 
 def cmd_pretrain(args: argparse.Namespace) -> None:
     """Self‑supervised pretraining of a JEPA encoder and optional contrastive baseline."""
@@ -344,7 +374,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         },
     )
 
-    from utils.checkpoint import save_checkpoint, load_checkpoint
+    from utils.checkpoint import load_checkpoint, save_checkpoint
+
     # Resume state
     args.ckpt_dir = getattr(args, "ckpt_dir", "ckpts/pretrain")
     os.makedirs(args.ckpt_dir, exist_ok=True)
@@ -352,10 +383,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
     start_epoch = 0
     if getattr(args, "resume_ckpt", None):
         wb.log({"phase": "pretrain", "status": "resume", "ckpt": args.resume_ckpt})
-        ckpt_state = load_checkpoint(args.resume_ckpt)  
-    else: 
-        ckpt_state = {} 
-    
+        ckpt_state = load_checkpoint(args.resume_ckpt)
+    else:
+        ckpt_state = {}
 
     # Load unlabeled dataset
     try:
@@ -379,7 +409,11 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     input_dim = unlabeled.graphs[0].x.shape[1]
-    edge_dim = None if unlabeled.graphs[0].edge_attr is None else unlabeled.graphs[0].edge_attr.shape[1]
+    edge_dim = (
+        None
+        if unlabeled.graphs[0].edge_attr is None
+        else unlabeled.graphs[0].edge_attr.shape[1]
+    )
     device = resolve_device(args.device)
 
     # Build encoder and EMA copy
@@ -423,8 +457,12 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 predictor=predictor,
                 ema=ema_helper,
                 epochs=1,  # one epoch per loop so we can checkpoint each epoch
-                max_batches=getattr(args, "max_pretrain_batches", 0), # ensure it does not crash for unit tests
-                time_budget_mins=getattr(args, "time_budget_mins", 0), # ensure it does not crash for unit tests
+                max_batches=getattr(
+                    args, "max_pretrain_batches", 0
+                ),  # ensure it does not crash for unit tests
+                time_budget_mins=getattr(
+                    args, "time_budget_mins", 0
+                ),  # ensure it does not crash for unit tests
                 batch_size=args.batch_size,
                 mask_ratio=args.mask_ratio,
                 contiguous=args.contiguous,
@@ -446,8 +484,14 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     epoch=epoch,
                     encoder=encoder.state_dict(),
                     ema_encoder=ema_encoder.state_dict(),
-                    predictor=(predictor.state_dict() if hasattr(predictor, "state_dict") else None),
-                    ema=ema_helper.state_dict() if hasattr(ema_helper, "state_dict") else None,
+                    predictor=(
+                        predictor.state_dict()
+                        if hasattr(predictor, "state_dict")
+                        else None
+                    ),
+                    ema=ema_helper.state_dict()
+                    if hasattr(ema_helper, "state_dict")
+                    else None,
                 )
         wb.log({"phase": "pretrain", "status": "success"})
     except Exception:
@@ -500,8 +544,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 def cmd_finetune(args: argparse.Namespace) -> None:
     """Fine‑tune a linear head on labelled data across multiple seeds resume & checkpoints."""
     logger.info("Starting finetune with args: %s", args)
-    
-    from utils.checkpoint import save_checkpoint, load_checkpoint
+
+    from utils.checkpoint import load_checkpoint, save_checkpoint
 
     # Directories / resume
     args.ckpt_dir = getattr(args, "ckpt_dir", "ckpts/finetune")
@@ -513,8 +557,11 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         logger.info("[finetune] resuming from %s", args.resume_ckpt)
         resume_state = load_checkpoint(args.resume_ckpt)
 
-
-    if load_directory_dataset is None or build_encoder is None or train_linear_head is None:
+    if (
+        load_directory_dataset is None
+        or build_encoder is None
+        or train_linear_head is None
+    ):
         wb.error("Fine‑tuning modules are unavailable.")
         sys.exit(3)
 
@@ -546,7 +593,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     # Load labelled dataset
     try:
         labeled = load_directory_dataset(args.labeled_dir, label_col=args.label_col, add_3d=args.add_3d)  # type: ignore[arg-type]
-        
+
         # Sample a subset of labeled graphs if requested.  Use getattr to
         # handle cases where sample_labeled isn’t provided.
         sample_lb = getattr(args, "sample-labeled", 0)
@@ -565,7 +612,11 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     input_dim = labeled.graphs[0].x.shape[1]
-    edge_dim = None if labeled.graphs[0].edge_attr is None else labeled.graphs[0].edge_attr.shape[1]
+    edge_dim = (
+        None
+        if labeled.graphs[0].edge_attr is None
+        else labeled.graphs[0].edge_attr.shape[1]
+    )
     device = resolve_device(args.device)
 
     # Aggregate metrics across seeds
@@ -574,6 +625,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     # choose metric & direction
     metric_name = getattr(args, "metric", "val_loss")
     higher_is_better = metric_name.lower() in {"acc", "accuracy", "auc", "auroc", "f1"}
+
     def _is_better(curr, best):
         return (curr > best) if higher_is_better else (curr < best)
 
@@ -603,7 +655,10 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             enc_state = _safe_load_checkpoint(args.encoder, device)
             if enc_state is not None:
                 logger.info("[finetune] loaded encoder from %s", args.encoder)
-                _load_state_dict_forgiving(encoder, enc_state if "encoder" not in enc_state else enc_state["encoder"])
+                _load_state_dict_forgiving(
+                    encoder,
+                    enc_state if "encoder" not in enc_state else enc_state["encoder"],
+                )
             else:
                 logger.warning("Encoder not loaded; proceeding with random init")
 
@@ -612,14 +667,16 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             logger.info("Overriding encoder from resume checkpoint")
             _load_state_dict_forgiving(encoder, resume_state["encoder"])
         if "head" in resume_state and hasattr(head, "load_state_dict"):
-            _load_state_dict_forgiving(head, resume_state["head"]) 
+            _load_state_dict_forgiving(head, resume_state["head"])
 
-       # Build linear head for fine-tuning
-       # compute num_classes robustly for classification; for regression we won’t use it
+        # Build linear head for fine-tuning
+        # compute num_classes robustly for classification; for regression we won’t use it
         _in_dim = getattr(encoder, "hidden_dim", getattr(args, "hidden_dim", None))
-        assert _in_dim is not None, "hidden dim unknown (encoder.hidden_dim or args.hidden_dim required)"
+        assert (
+            _in_dim is not None
+        ), "hidden dim unknown (encoder.hidden_dim or args.hidden_dim required)"
         if args.task_type == "classification":
-             # robust class count
+            # robust class count
             num_classes = _infer_num_classes(labeled)
 
             # optional label stats (never break if missing)
@@ -628,6 +685,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                 try:
                     # simple example: fraction of positives if binary labels
                     import numpy as _np
+
                     arr = _np.asarray(y_arr)
                     if arr.ndim > 1:
                         arr = arr[:, 0]
@@ -638,18 +696,26 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     # Never let metrics logging break training
                     pass
 
-            head = build_linear_head(in_dim=_in_dim, num_classes=num_classes, task_type="classification")
+            head = build_linear_head(
+                in_dim=_in_dim, num_classes=num_classes, task_type="classification"
+            )
         else:
             # regression
-            head = build_linear_head(in_dim=_in_dim, num_classes=1, task_type="regression")
+            head = build_linear_head(
+                in_dim=_in_dim, num_classes=1, task_type="regression"
+            )
 
         _maybe_to(head, device)
 
         # Optimizer & scheduler
         params = _iter_params(encoder) + _iter_params(head)
-        optimizer = torch.optim.AdamW(params, lr=args.lr, weight_decay=1e-4) if params else None
+        optimizer = (
+            torch.optim.AdamW(params, lr=args.lr, weight_decay=1e-4) if params else None
+        )
 
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.epochs
+        )
 
         # If resuming, load head/optim/scheduler from checkpoint
         if "head" in resume_state:
@@ -680,8 +746,12 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     head=head,
                     task_type=args.task_type,
                     epochs=1,
-                    max_batches=getattr(args, "max_pretrain_batches", 0), # ensure it does not crash for unit tests
-                    time_budget_mins=getattr(args, "time_budget_mins", 0), # ensure it does not crash for unit tests
+                    max_batches=getattr(
+                        args, "max_pretrain_batches", 0
+                    ),  # ensure it does not crash for unit tests
+                    time_budget_mins=getattr(
+                        args, "time_budget_mins", 0
+                    ),  # ensure it does not crash for unit tests
                     lr=args.lr,
                     batch_size=args.batch_size,
                     device=device,
@@ -715,10 +785,10 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                         sd = _maybe_state_dict(obj)
                         if sd is not None:
                             save_payload[name] = sd
-                    if len(save_payload) > 1: 
+                    if len(save_payload) > 1:
                         save_checkpoint(
                             os.path.join(seed_dir, f"ft_epoch_{epoch+1}.pt"),
-                            **save_payload
+                            **save_payload,
                         )
                 # advance LR schedule after the epoch
                 try:
@@ -753,7 +823,11 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     """
 
     logger.info("Starting benchmark with args: %s", args)
-    if load_directory_dataset is None or build_encoder is None or train_linear_head is None:
+    if (
+        load_directory_dataset is None
+        or build_encoder is None
+        or train_linear_head is None
+    ):
         logger.warning("Benchmark modules are unavailable.")
         sys.exit(6)
 
@@ -777,16 +851,24 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         },
     )
 
-    import time, json, os, numpy as np, torch
-    from utils.checkpoint import load_checkpoint  # for fine-tuned ckpt (encoder+head)
+    import json
+    import os
+    import time
+
+    import numpy as np
+    import torch
+
+    from utils.checkpoint import \
+        load_checkpoint  # for fine-tuned ckpt (encoder+head)
+
     # --- paths / report ---
     args.report_dir = getattr(args, "report_dir", "reports")
     os.makedirs(args.report_dir, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     report_stem = getattr(args, "report_stem", f"benchmark_{timestamp}")
-    report_json = os.path.join(args.report_dir, report_stem + ".json") 
+    report_json = os.path.join(args.report_dir, report_stem + ".json")
     report_csv = os.path.join(args.report_dir, report_stem + ".csv")
-    
+
     try:
         labeled = load_directory_dataset(args.labeled_dir, label_col=args.label_col, add_3d=args.add_3d)  # type: ignore[arg-type]
         wb.log({"phase": "data_load", "labeled_graphs": len(labeled)})
@@ -796,15 +878,20 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     input_dim = labeled.graphs[0].x.shape[1]
-    edge_dim = None if labeled.graphs[0].edge_attr is None else labeled.graphs[0].edge_attr.shape[1]
+    edge_dim = (
+        None
+        if labeled.graphs[0].edge_attr is None
+        else labeled.graphs[0].edge_attr.shape[1]
+    )
     device = resolve_device(args.device)
 
-    
     # Prepare results dict
     all_results: Dict[str, Dict[str, float]] = {}
     from typing import Any, Dict
 
-    def evaluate_state(state_obj: Dict[str, Any] | Any, method_name: str) -> Dict[str, float]:
+    def evaluate_state(
+        state_obj: Dict[str, Any] | Any, method_name: str
+    ) -> Dict[str, float]:
         """
         Evaluate an already-loaded state object (either a raw encoder state_dict or a
         dict with key 'encoder'). Always trains a fresh linear head for fairness.
@@ -834,7 +921,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             if isinstance(state_obj, dict) and "encoder" in state_obj:
                 _load_state_dict_forgiving(enc, state_obj["encoder"])
             else:
-                 _load_state_dict_forgiving(enc, state_obj)
+                _load_state_dict_forgiving(enc, state_obj)
             _maybe_to(enc, device)
 
             # Train fresh head and log metrics
@@ -886,7 +973,6 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         agg_ft = evaluate_finetuned(args.ft_ckpt)
         if agg_ft:
             all_results["finetuned"] = agg_ft
- 
 
     # Decide which is better
     verdict = "jepa"
@@ -894,24 +980,48 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         # Choose metric based on task
         if args.task_type == "classification":
             # Higher AUC/ACC is better
-            key = "roc_auc_mean" if "roc_auc_mean" in agg_jepa else ("acc_mean" if "acc_mean" in agg_jepa else None)
-            if key and agg_cont.get(key, float('-inf')) > agg_jepa.get(key, float('-inf')):
+            key = (
+                "roc_auc_mean"
+                if "roc_auc_mean" in agg_jepa
+                else ("acc_mean" if "acc_mean" in agg_jepa else None)
+            )
+            if key and agg_cont.get(key, float("-inf")) > agg_jepa.get(
+                key, float("-inf")
+            ):
                 verdict = "contrastive"
         else:
             # Lower RMSE/MAE is better
-            key = "rmse_mean" if "rmse_mean" in agg_jepa else ("mae_mean" if "mae_mean" in agg_jepa else None)
-            if key and agg_cont.get(key, float('inf')) < agg_jepa.get(key, float('inf')):
+            key = (
+                "rmse_mean"
+                if "rmse_mean" in agg_jepa
+                else ("mae_mean" if "mae_mean" in agg_jepa else None)
+            )
+            if key and agg_cont.get(key, float("inf")) < agg_jepa.get(
+                key, float("inf")
+            ):
                 verdict = "contrastive"
-    
+
     # If finetuned was evaluated, compare it too
     if "finetuned" in all_results:
         if args.task_type == "classification":
-            key = "roc_auc_mean" if "roc_auc_mean" in agg_jepa else ("acc_mean" if "acc_mean" in agg_jepa else None)
-            if key and all_results["finetuned"].get(key, float('-inf')) > all_results.get(verdict, {}).get(key, float('-inf')):
+            key = (
+                "roc_auc_mean"
+                if "roc_auc_mean" in agg_jepa
+                else ("acc_mean" if "acc_mean" in agg_jepa else None)
+            )
+            if key and all_results["finetuned"].get(
+                key, float("-inf")
+            ) > all_results.get(verdict, {}).get(key, float("-inf")):
                 verdict = "finetuned"
         else:
-            key = "rmse_mean" if "rmse_mean" in agg_jepa else ("mae_mean" if "mae_mean" in agg_jepa else None)
-            if key and all_results["finetuned"].get(key, float('inf')) < all_results.get(verdict, {}).get(key, float('inf')):
+            key = (
+                "rmse_mean"
+                if "rmse_mean" in agg_jepa
+                else ("mae_mean" if "mae_mean" in agg_jepa else None)
+            )
+            if key and all_results["finetuned"].get(
+                key, float("inf")
+            ) < all_results.get(verdict, {}).get(key, float("inf")):
                 verdict = "finetuned"
 
     wb.log({"phase": "benchmark", "status": "success", "best_method": verdict})
@@ -924,6 +1034,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             json.dump(payload, f, indent=2, sort_keys=True)
         # CSV: method,metric,value
         import csv
+
         with open(report_csv, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["method", "metric", "value"])
@@ -995,16 +1106,20 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
         #   1) --dataset-dir: same dataset used for both pretraining & eval
         #   2) --unlabeled-dir / --labeled-dir: separate datasets
         # Each closure must accept add_3d and return GraphDataset.
-    
+
     The search
-    space is configurable via CLI flags.  
-    
+    space is configurable via CLI flags.
+
     Results are logged to Weights &
     Biases if enabled and optionally written to a CSV file.  When the grid
     search completes, the best configuration and its metric are reported.
     """
-        # Skip grid search if results already exist
-    if not getattr(args, "force_refresh", False) and args.out_csv and args.best_config_out:
+    # Skip grid search if results already exist
+    if (
+        not getattr(args, "force_refresh", False)
+        and args.out_csv
+        and args.best_config_out
+    ):
         if os.path.exists(args.out_csv) and os.path.exists(args.best_config_out):
             logger.info(
                 "Skipping grid search because %s and %s already exist.",
@@ -1015,7 +1130,9 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     # If the experiments module is unavailable, abort with a distinct exit code
     logger.info("Starting grid search with args: %s", args)
     if run_grid_search is None:
-        logger.error("Grid search functionality is unavailable. Install the experiments package or check the import.")
+        logger.error(
+            "Grid search functionality is unavailable. Install the experiments package or check the import."
+        )
         sys.exit(7)
 
     # Convert numerical lists to tuples and boolean flags
@@ -1028,89 +1145,91 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     else:
         seeds = tuple(CONFIG.get("finetune", {}).get("seeds", [42, 123, 456]))
 
-    # Create dataset loader closures for run_grid_search.  We support three
-    # scenarios:
-    #   1. A unified dataset (--dataset-dir) used for both pretraining and evaluation.
-    #   2. Separate unlabeled and labeled datasets (--unlabeled-dir and/or --labeled-dir).
-    # A function must accept ``add_3d`` and return a GraphDataset.  If only
-    # unlabeled or labeled is provided, the missing one falls back to the
-    # unified dataset if available.
+    # Create dataset loader closures for run_grid_search without post-hoc
+    # sampling. ``sample-unlabeled`` and ``sample-labeled`` act as ``max_graphs``
+    # limits and ``n_rows_per_file`` bounds rows per file.
+    n_rows_per_file = getattr(args, "n_rows_per_file", None)
+    sample_ul = getattr(args, "sample-unlabeled", 0) or None
+    sample_lb = getattr(args, "sample-labeled", 0) or None
+
     _dataset_fn = None
     _unlabeled_fn = None
     _eval_fn = None
-    
-    # Unified dataset mode
+
     if args.dataset_dir:
+
         def _dataset_fn(add_3d: bool = False):  # type: ignore[override]
-            return load_directory_dataset(
+            t0 = time.time()
+            ds = load_directory_dataset(
                 args.dataset_dir,
                 label_col=args.label_col,
                 add_3d=add_3d,
                 smiles_col=getattr(args, "smiles_col", "smiles"),
+                n_rows_per_file=n_rows_per_file,
+                max_graphs=max(sample_ul or 0, sample_lb or 0) or None,
             )
-        # If specific dirs not provided, fall back to the unified dataset
+            dt = time.time() - t0
+            logger.info(
+                "Loaded dataset in %.2fs (%s graphs)",
+                dt,
+                len(ds) if hasattr(ds, "__len__") else "unknown",
+            )
+            return ds
+
         if not args.unlabeled_dir:
             _unlabeled_fn = lambda add_3d=False: _dataset_fn(add_3d=add_3d)
         if not args.labeled_dir:
             _eval_fn = lambda add_3d=False: _dataset_fn(add_3d=add_3d)
 
-    # Separate dirs (override the defaults if provided)
     if args.unlabeled_dir:
+
         def _unlabeled_fn(add_3d: bool = False):
-            return load_directory_dataset(
+            t0 = time.time()
+            ds = load_directory_dataset(
                 args.unlabeled_dir,
                 add_3d=add_3d,
                 smiles_col=getattr(args, "smiles_col", "smiles"),
+                n_rows_per_file=n_rows_per_file,
+                max_graphs=sample_ul,
             )
+            dt = time.time() - t0
+            logger.info(
+                "Loaded unlabeled dataset in %.2fs (%s graphs)",
+                dt,
+                len(ds) if hasattr(ds, "__len__") else "unknown",
+            )
+            return ds
+
     if args.labeled_dir:
+
         def _eval_fn(add_3d: bool = False):
-            return load_directory_dataset(
+            t0 = time.time()
+            ds = load_directory_dataset(
                 args.labeled_dir,
                 label_col=args.label_col,
                 add_3d=add_3d,
                 smiles_col=getattr(args, "smiles_col", "smiles"),
+                n_rows_per_file=n_rows_per_file,
+                max_graphs=sample_lb,
             )
+            dt = time.time() - t0
+            logger.info(
+                "Loaded labeled dataset in %.2fs (%s graphs)",
+                dt,
+                len(ds) if hasattr(ds, "__len__") else "unknown",
+            )
+            return ds
 
-    # Materialise and sample ONCE so every config sees the same subset
     if _unlabeled_fn is None:
-        logger.info("Grid search requires at least one dataset source: --dataset-dir or (--unlabeled-dir and/or --labeled-dir). possibly running in unit test mode")
+        logger.info(
+            "Grid search requires at least one dataset source: --dataset-dir or (--unlabeled-dir and/or --labeled-dir). possibly running in unit test mode"
+        )
         _unlabeled_fn = lambda add_3d=False: None
     if _eval_fn is None:
-        logger.info("Grid search requires at least one dataset source: --dataset-dir or (--unlabeled-dir and/or --labeled-dir). possibly running in unit test mode")
+        logger.info(
+            "Grid search requires at least one dataset source: --dataset-dir or (--unlabeled-dir and/or --labeled-dir). possibly running in unit test mode"
+        )
         _eval_fn = lambda add_3d=False: None
-
-    # Safely handle optional sampling of unlabeled and labeled sets.  Use
-    # getattr to avoid AttributeError when these fields aren’t defined.
-    sample_ul = getattr(args, "sample-unlabeled", 0)
-    if sample_ul:
-        _ul = _unlabeled_fn(add_3d=False)
-        if (
-            hasattr(_ul, "__len__")
-            and len(_ul) > sample_ul
-            and hasattr(_ul, "random_subset")
-        ):
-            _ul = _ul.random_subset(sample_ul, seed=42)
-        logger.info(
-            "Unlabeled sample size: %s",
-            len(_ul) if hasattr(_ul, "__len__") else "unknown",
-        )
-        _unlabeled_fn = (lambda add_3d=False, _ul=_ul: _ul)
-    sample_lb = getattr(args, "sample-labeled", 0)
-    if sample_lb:
-        _ev = _eval_fn(add_3d=False)
-        if (
-            hasattr(_ev, "__len__")
-            and len(_ev) > sample_lb
-            and hasattr(_ev, "random_subset")
-        ):
-            _ev = _ev.random_subset(sample_lb, seed=42)
-        logger.info(
-            "Labeled sample size: %s",
-            len(_ev) if hasattr(_ev, "__len__") else "unknown",
-        )
-        _eval_fn = (lambda add_3d=False, _ev=_ev: _ev)
-
-
     # Initialise optional W&B run for grid search
     wb = maybe_init_wandb(
         args.use_wandb,
@@ -1140,7 +1259,6 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     wb.log({"phase": "grid_search", "status": "start"})
 
     try:
-
         df = run_grid_search(
             dataset_fn=_dataset_fn,
             unlabeled_dataset_fn=_unlabeled_fn,
@@ -1195,6 +1313,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             if args.best_config_out:
                 try:
                     import json
+
                     with open(args.best_config_out, "w", encoding="utf-8") as f:
                         json.dump(best_conf, f, indent=2)
                     logger.info("Saved best configuration to %s", args.best_config_out)
@@ -1216,104 +1335,309 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
 # CLI parsing
 # ---------------------------------------------------------------------------
 
+
 def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     """Add arguments common to multiple commands using defaults from the given config section."""
     # Model hyperparameters
     model_cfg = CONFIG.get("model", {})
-    p.add_argument("--gnn-type", type=str, default=model_cfg.get("gnn_type", "mpnn"), help="GNN encoder type")
-    p.add_argument("--hidden-dim", type=int, default=model_cfg.get("hidden_dim", 64), help="Hidden dimension size")
-    p.add_argument("--num-layers", type=int, default=model_cfg.get("num_layers", 2), help="Number of GNN layers")
-    p.add_argument("--ema-decay", type=float, default=model_cfg.get("ema_decay", 0.99), help="EMA decay rate")
+    p.add_argument(
+        "--gnn-type",
+        type=str,
+        default=model_cfg.get("gnn_type", "mpnn"),
+        help="GNN encoder type",
+    )
+    p.add_argument(
+        "--hidden-dim",
+        type=int,
+        default=model_cfg.get("hidden_dim", 64),
+        help="Hidden dimension size",
+    )
+    p.add_argument(
+        "--num-layers",
+        type=int,
+        default=model_cfg.get("num_layers", 2),
+        help="Number of GNN layers",
+    )
+    p.add_argument(
+        "--ema-decay",
+        type=float,
+        default=model_cfg.get("ema_decay", 0.99),
+        help="EMA decay rate",
+    )
     # Data augmentations and options
-    p.add_argument("--add-3d", action="store_true", help="Augment with 3D coordinate featurisation")
-    p.add_argument("--contiguous", action="store_true", help="Use contiguous subgraph masking (JEPA)")
-    p.add_argument("--aug-rotate", action="store_true", help="Randomly rotate coordinates during pretraining")
-    p.add_argument("--aug-mask-angle", action="store_true", help="Mask bond angles during pretraining")
-    p.add_argument("--aug-dihedral", action="store_true", help="Perturb dihedral angles during pretraining")
+    p.add_argument(
+        "--add-3d", action="store_true", help="Augment with 3D coordinate featurisation"
+    )
+    p.add_argument(
+        "--contiguous",
+        action="store_true",
+        help="Use contiguous subgraph masking (JEPA)",
+    )
+    p.add_argument(
+        "--aug-rotate",
+        action="store_true",
+        help="Randomly rotate coordinates during pretraining",
+    )
+    p.add_argument(
+        "--aug-mask-angle",
+        action="store_true",
+        help="Mask bond angles during pretraining",
+    )
+    p.add_argument(
+        "--aug-dihedral",
+        action="store_true",
+        help="Perturb dihedral angles during pretraining",
+    )
     # Optimisation
     sec_cfg = CONFIG.get(section, {})
-    p.add_argument("--epochs", type=int, default=sec_cfg.get("epochs", 1), help="Number of training epochs")
-    p.add_argument("--batch-size", type=int, default=sec_cfg.get("batch_size", 32), help="Batch size")
-    p.add_argument("--lr", type=float, default=sec_cfg.get("lr", 1e-3), help="Learning rate")
+    p.add_argument(
+        "--epochs",
+        type=int,
+        default=sec_cfg.get("epochs", 1),
+        help="Number of training epochs",
+    )
+    p.add_argument(
+        "--batch-size",
+        type=int,
+        default=sec_cfg.get("batch_size", 32),
+        help="Batch size",
+    )
+    p.add_argument(
+        "--lr", type=float, default=sec_cfg.get("lr", 1e-3), help="Learning rate"
+    )
     # Seeds for downstream evaluation
-    p.add_argument("--seeds", type=int, nargs="*", default=None, help="Random seeds for averaging results")
+    p.add_argument(
+        "--seeds",
+        type=int,
+        nargs="*",
+        default=None,
+        help="Random seeds for averaging results",
+    )
     # Device & DDP
-    p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device")
+    p.add_argument(
+        "--device",
+        type=str,
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        help="Device",
+    )
     p.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP")
     # W&B
     wandb_cfg = CONFIG.get("wandb", {})
-    p.add_argument("--use-wandb", action="store_true", help="Enable Weights & Biases logging")
-    p.add_argument("--wandb-project", type=str, default=wandb_cfg.get("project", "m-jepa"), help="W&B project name")
-    p.add_argument("--wandb-tags", nargs="*", default=wandb_cfg.get("tags", []), help="Tags for W&B run")
+    p.add_argument(
+        "--use-wandb", action="store_true", help="Enable Weights & Biases logging"
+    )
+    p.add_argument(
+        "--wandb-project",
+        type=str,
+        default=wandb_cfg.get("project", "m-jepa"),
+        help="W&B project name",
+    )
+    p.add_argument(
+        "--wandb-tags",
+        nargs="*",
+        default=wandb_cfg.get("tags", []),
+        help="Tags for W&B run",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Construct the argument parser with subcommands."""
-    parser = argparse.ArgumentParser(description="JEPA training and evaluation pipeline")
+    parser = argparse.ArgumentParser(
+        description="JEPA training and evaluation pipeline"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # Pretrain subcommand
     pre = sub.add_parser("pretrain", help="Self‑supervised pretraining")
-    pre.add_argument("--unlabeled-dir", required=True, help="Directory of unlabeled graphs (.parquet or .csv)")
-    pre.add_argument("--output", type=str, default="encoder.pt", help="Where to save the JEPA encoder checkpoint")
-    pre.add_argument("--contrastive", action="store_true", help="Also run a contrastive baseline")
-    pre.add_argument("--ckpt-dir", type=str, default="ckpts/pretrain", help="Directory to save pretrain checkpoints")
-    pre.add_argument("--resume-ckpt", type=str, default="", help="Resume pretraining from a checkpoint")
-    pre.add_argument("--save-every", type=int, default=1, help="Save a pretrain checkpoint every N epochs")
+    pre.add_argument(
+        "--unlabeled-dir",
+        required=True,
+        help="Directory of unlabeled graphs (.parquet or .csv)",
+    )
+    pre.add_argument(
+        "--output",
+        type=str,
+        default="encoder.pt",
+        help="Where to save the JEPA encoder checkpoint",
+    )
+    pre.add_argument(
+        "--contrastive", action="store_true", help="Also run a contrastive baseline"
+    )
+    pre.add_argument(
+        "--ckpt-dir",
+        type=str,
+        default="ckpts/pretrain",
+        help="Directory to save pretrain checkpoints",
+    )
+    pre.add_argument(
+        "--resume-ckpt",
+        type=str,
+        default="",
+        help="Resume pretraining from a checkpoint",
+    )
+    pre.add_argument(
+        "--save-every",
+        type=int,
+        default=1,
+        help="Save a pretrain checkpoint every N epochs",
+    )
     _add_common_args(pre, "pretrain")
     pre.set_defaults(func=cmd_pretrain)
 
     # Fine‑tune subcommand
     ft = sub.add_parser("finetune", help="Fine‑tune a linear head on labelled data")
-    ft.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs (.parquet or .csv)")
-    ft.add_argument("--label-col", type=str, default="label", help="Label column name in input files")
-    ft.add_argument("--encoder", required=True, help="Path to a pretrained encoder checkpoint (.pt)")
+    ft.add_argument(
+        "--labeled-dir",
+        required=True,
+        help="Directory of labelled graphs (.parquet or .csv)",
+    )
+    ft.add_argument(
+        "--label-col",
+        type=str,
+        default="label",
+        help="Label column name in input files",
+    )
+    ft.add_argument(
+        "--encoder", required=True, help="Path to a pretrained encoder checkpoint (.pt)"
+    )
 
-    ft.add_argument("--ckpt-dir", type=str, default="ckpts/finetune", help="dir to write fine-tune checkpoints")
-    ft.add_argument("--resume-ckpt", type=str, default="", help="resume fine-tune from this checkpoint")
-    ft.add_argument("--save-every", type=int, default=1, help="save checkpoint every N epochs")
-    ft.add_argument("--save-final", action="store_true", help="also save ft_last.pt at the end")
-    ft.add_argument("--metric", type=str, default="val_loss", choices=["val_loss","acc","auroc"])
+    ft.add_argument(
+        "--ckpt-dir",
+        type=str,
+        default="ckpts/finetune",
+        help="dir to write fine-tune checkpoints",
+    )
+    ft.add_argument(
+        "--resume-ckpt",
+        type=str,
+        default="",
+        help="resume fine-tune from this checkpoint",
+    )
+    ft.add_argument(
+        "--save-every", type=int, default=1, help="save checkpoint every N epochs"
+    )
+    ft.add_argument(
+        "--save-final", action="store_true", help="also save ft_last.pt at the end"
+    )
+    ft.add_argument(
+        "--metric", type=str, default="val_loss", choices=["val_loss", "acc", "auroc"]
+    )
 
-    ft.add_argument("--task-type", choices=["classification", "regression"], default="classification")
-    ft.add_argument("--patience", type=int, default=CONFIG.get("finetune", {}).get("patience", 10), help="Early stopping patience")
+    ft.add_argument(
+        "--task-type",
+        choices=["classification", "regression"],
+        default="classification",
+    )
+    ft.add_argument(
+        "--patience",
+        type=int,
+        default=CONFIG.get("finetune", {}).get("patience", 10),
+        help="Early stopping patience",
+    )
     _add_common_args(ft, "finetune")
     ft.set_defaults(func=cmd_finetune)
 
     # Evaluate subcommand (alias for finetune)
-    ev = sub.add_parser("evaluate", help="Evaluate a pretrained encoder via a linear probe")
+    ev = sub.add_parser(
+        "evaluate", help="Evaluate a pretrained encoder via a linear probe"
+    )
     ev.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs")
     ev.add_argument("--label-col", type=str, default="label", help="Label column name")
-    ev.add_argument("--encoder", required=True, help="Path to a pretrained encoder checkpoint (.pt)")
-    ev.add_argument("--task-type", choices=["classification", "regression"], default="classification")
-    ev.add_argument("--patience", type=int, default=CONFIG.get("evaluate", {}).get("patience", 10), help="Early stopping patience")
+    ev.add_argument(
+        "--encoder", required=True, help="Path to a pretrained encoder checkpoint (.pt)"
+    )
+    ev.add_argument(
+        "--task-type",
+        choices=["classification", "regression"],
+        default="classification",
+    )
+    ev.add_argument(
+        "--patience",
+        type=int,
+        default=CONFIG.get("evaluate", {}).get("patience", 10),
+        help="Early stopping patience",
+    )
     _add_common_args(ev, "evaluate")
     ev.set_defaults(func=cmd_evaluate)
 
     # Benchmark subcommand
-    bench = sub.add_parser("benchmark", help="Compare JEPA and contrastive encoders on labelled data")
-    bench.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs")
-    bench.add_argument("--label-col", type=str, default="label", help="Label column name")
-    bench.add_argument("--jepa-encoder", required=True, help="Path to a JEPA encoder checkpoint (.pt)")
-    bench.add_argument("--contrastive-encoder", required=False, help="Path to a contrastive encoder checkpoint (.pt)")
-    bench.add_argument("--task-type", choices=["classification", "regression"], default="classification")
-    bench.add_argument("--patience", type=int, default=CONFIG.get("benchmark", {}).get("patience", 10), help="Early stopping patience")
+    bench = sub.add_parser(
+        "benchmark", help="Compare JEPA and contrastive encoders on labelled data"
+    )
+    bench.add_argument(
+        "--labeled-dir", required=True, help="Directory of labelled graphs"
+    )
+    bench.add_argument(
+        "--label-col", type=str, default="label", help="Label column name"
+    )
+    bench.add_argument(
+        "--jepa-encoder", required=True, help="Path to a JEPA encoder checkpoint (.pt)"
+    )
+    bench.add_argument(
+        "--contrastive-encoder",
+        required=False,
+        help="Path to a contrastive encoder checkpoint (.pt)",
+    )
+    bench.add_argument(
+        "--task-type",
+        choices=["classification", "regression"],
+        default="classification",
+    )
+    bench.add_argument(
+        "--patience",
+        type=int,
+        default=CONFIG.get("benchmark", {}).get("patience", 10),
+        help="Early stopping patience",
+    )
 
-    bench.add_argument("--ft-ckpt", type=str, default="", help="fine-tuned checkpoint (expects encoder and optionally head)") #?
-    bench.add_argument("--report-dir", type=str, default="reports", help="where to write JSON/CSV")
-    bench.add_argument("--report-stem", type=str, default="", help="filename stem; defaults to timestamped benchmark_*")
+    bench.add_argument(
+        "--ft-ckpt",
+        type=str,
+        default="",
+        help="fine-tuned checkpoint (expects encoder and optionally head)",
+    )  # ?
+    bench.add_argument(
+        "--report-dir", type=str, default="reports", help="where to write JSON/CSV"
+    )
+    bench.add_argument(
+        "--report-stem",
+        type=str,
+        default="",
+        help="filename stem; defaults to timestamped benchmark_*",
+    )
 
     _add_common_args(bench, "benchmark")
     bench.set_defaults(func=cmd_benchmark)
 
     # Tox21 case study
     tox = sub.add_parser("tox21", help="Run the Tox21 case study experiment")
-    tox.add_argument("--csv", required=True, help="Path to the Tox21 CSV containing SMILES and labels")
-    tox.add_argument("--task", required=True, help="Name of the toxicity column to predict")
+    tox.add_argument(
+        "--csv",
+        required=True,
+        help="Path to the Tox21 CSV containing SMILES and labels",
+    )
+    tox.add_argument(
+        "--task", required=True, help="Name of the toxicity column to predict"
+    )
     case_cfg = CONFIG.get("case_study", {})
-    tox.add_argument("--pretrain-epochs", type=int, default=case_cfg.get("pretrain_epochs", 5), help="JEPA pretrain epochs for case study")
-    tox.add_argument("--finetune-epochs", type=int, default=case_cfg.get("finetune_epochs", 20), help="Epochs to train regression head in case study")
-    tox.add_argument("--num-top-exclude", type=int, default=case_cfg.get("num_top_exclude", 10), help="Top‑k toxic compounds to exclude when ranking")
+    tox.add_argument(
+        "--pretrain-epochs",
+        type=int,
+        default=case_cfg.get("pretrain_epochs", 5),
+        help="JEPA pretrain epochs for case study",
+    )
+    tox.add_argument(
+        "--finetune-epochs",
+        type=int,
+        default=case_cfg.get("finetune_epochs", 20),
+        help="Epochs to train regression head in case study",
+    )
+    tox.add_argument(
+        "--num-top-exclude",
+        type=int,
+        default=case_cfg.get("num_top_exclude", 10),
+        help="Top‑k toxic compounds to exclude when ranking",
+    )
     _add_common_args(tox, "case_study")
     tox.set_defaults(func=cmd_tox21)
 
@@ -1327,47 +1651,244 @@ def build_parser() -> argparse.ArgumentParser:
     # can be overridden on the CLI.  The dataset is specified via
     # ``--dataset-dir`` and will be loaded with the same loader used in
     # other stages.  Seeds and search ranges can also be customised.
-    grid = sub.add_parser("grid-search", help="Perform hyper‑parameter grid search for JEPA using run_grid_search")
-    grid.add_argument("--smiles-col", type=str, default="smiles", help="Column name that contains molecule SMILES.")
-    grid.add_argument("--dataset-dir", required=False, default=None, 
-                      help="Path to a graph dataset used for both pretraining and evaluation. " \
-                      "If omitted, you must specify --unlabeled-dir and/or --labeled-dir.")
-    grid.add_argument("--unlabeled-dir", type=str, default=None, help="Directory of an unlabeled graph dataset for JEPA pretraining (e.g. ZINC/PubChem).")
-    grid.add_argument("--labeled-dir", type=str, default=None, help="Directory of a labeled graph dataset for downstream evaluation (e.g. MoleculeNet).")
-    grid.add_argument("--label-col", type=str, default="label", help="Name of the label column in the dataset (ignored for unlabeled data)")
-    grid.add_argument("--task-type", choices=["classification", "regression"], default="classification", help="Task type for downstream evaluation")
-    grid.add_argument("--methods", nargs="+", default=["jepa"], help="Names of methods to include in the sweep (e.g. jepa contrastive)")
-    grid.add_argument("--mask-ratios", type=float, nargs="+", default=[0.10, 0.15, 0.25], help="List of mask ratios to sweep over")
-    grid.add_argument("--contiguities", type=int, nargs="+", default=[0, 1], help="Contiguity flags (0 for False, 1 for True) to sweep over")
-    grid.add_argument("--hidden-dims", type=int, nargs="+", default=[128, 256], help="Hidden dimensions to sweep over")
-    grid.add_argument("--num-layers-list", type=int, nargs="+", default=[2, 3], help="Number of GNN layers to sweep over")
-    grid.add_argument("--gnn-types", nargs="+", default=["mpnn", "gcn", "gat", "edge_mpnn"], help="GNN architectures to sweep over")
-    grid.add_argument("--ema-decays", type=float, nargs="+", default=[0.95, 0.99], help="EMA decay rates to sweep over")
-    grid.add_argument("--add-3d-options", type=int, nargs="+", default=[0, 1], help="Whether to include 3D features (0 for False, 1 for True)")
-    grid.add_argument("--pretrain-batch-sizes", type=int, nargs="+", default=[256], help="Batch sizes for JEPA pretraining")
-    grid.add_argument("--finetune-batch-sizes", type=int, nargs="+", default=[64], help="Batch sizes for downstream fine‑tuning")
-    grid.add_argument("--pretrain-epochs-options", type=int, nargs="+", default=[50], help="Number of epochs for JEPA pretraining")
-    grid.add_argument("--finetune-epochs-options", type=int, nargs="+", default=[30], help="Number of epochs for downstream training")
-    grid.add_argument("--learning-rates", type=float, nargs="+", default=[1e-4], help="Learning rates to sweep over")
-    grid.add_argument("--seeds", type=int, nargs="*", default=None, help="Random seeds for averaging results (overrides config)")
-    grid.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device for training (cuda or cpu)")
-    grid.add_argument("--out-csv", type=str, default=None, help="Path to output CSV file for grid search results")
-    grid.add_argument("--ckpt-dir", type=str, default="outputs/grid_ckpts", help="Directory in which to save intermediate checkpoints during the sweep")
-    grid.add_argument("--ckpt-every", type=int, default=25, help="Checkpoint every N epochs during pretraining in the sweep")
-    grid.add_argument("--use-scheduler", action="store_true", help="Enable learning‑rate warmup and cosine scheduler during grid search")
-    grid.add_argument("--warmup-steps", type=int, default=1000, help="Number of warmup steps for the scheduler during grid search")
-    grid.add_argument("--best-config-out", type=str, default=None, 
-                      help="Optional path to write the best hyper‑parameter " \
-                      "configuration as a JSON file. This file can be parsed later to drive a production pretraining run.")
-    grid.add_argument("--use-wandb", action="store_true", help="Enable Weights & Biases logging for the grid search")
-    grid.add_argument("--wandb-project", type=str, default=CONFIG.get("wandb", {}).get("project", "m-jepa"), help="W&B project name for grid search runs")
-    grid.add_argument("--wandb-tags", nargs="*", default=CONFIG.get("wandb", {}).get("tags", []), help="W&B tags for grid search runs")
-    grid.add_argument("--sample-unlabeled", type=int, default=0, help="If >0, randomly sample N molecules from unlabeled dataset.")
-    grid.add_argument("--sample-labeled", type=int, default=0, help="If >0, randomly sample N molecules from labeled dataset.")
-    grid.add_argument("--max-pretrain-batches", type=int, default=0, help="If >0, stop each pretrain epoch after this many batches.")
-    grid.add_argument("--max-finetune-batches", type=int, default=0, help="If >0, stop each finetune epoch after this many batches.")
-    grid.add_argument("--time-budget-mins", type=int, default=0, help="Optional wallclock budget; stop early when exceeded.")
-    grid.add_argument("--force-refresh", action="store_true",default=False,help="Ignore cached grid search outputs and recompute")
+    grid = sub.add_parser(
+        "grid-search",
+        help="Perform hyper‑parameter grid search for JEPA using run_grid_search",
+    )
+    grid.add_argument(
+        "--smiles-col",
+        type=str,
+        default="smiles",
+        help="Column name that contains molecule SMILES.",
+    )
+    grid.add_argument(
+        "--dataset-dir",
+        required=False,
+        default=None,
+        help="Path to a graph dataset used for both pretraining and evaluation. "
+        "If omitted, you must specify --unlabeled-dir and/or --labeled-dir.",
+    )
+    grid.add_argument(
+        "--unlabeled-dir",
+        type=str,
+        default=None,
+        help="Directory of an unlabeled graph dataset for JEPA pretraining (e.g. ZINC/PubChem).",
+    )
+    grid.add_argument(
+        "--labeled-dir",
+        type=str,
+        default=None,
+        help="Directory of a labeled graph dataset for downstream evaluation (e.g. MoleculeNet).",
+    )
+    grid.add_argument(
+        "--label-col",
+        type=str,
+        default="label",
+        help="Name of the label column in the dataset (ignored for unlabeled data)",
+    )
+    grid.add_argument(
+        "--task-type",
+        choices=["classification", "regression"],
+        default="classification",
+        help="Task type for downstream evaluation",
+    )
+    grid.add_argument(
+        "--methods",
+        nargs="+",
+        default=["jepa"],
+        help="Names of methods to include in the sweep (e.g. jepa contrastive)",
+    )
+    grid.add_argument(
+        "--mask-ratios",
+        type=float,
+        nargs="+",
+        default=[0.10, 0.15, 0.25],
+        help="List of mask ratios to sweep over",
+    )
+    grid.add_argument(
+        "--contiguities",
+        type=int,
+        nargs="+",
+        default=[0, 1],
+        help="Contiguity flags (0 for False, 1 for True) to sweep over",
+    )
+    grid.add_argument(
+        "--hidden-dims",
+        type=int,
+        nargs="+",
+        default=[128, 256],
+        help="Hidden dimensions to sweep over",
+    )
+    grid.add_argument(
+        "--num-layers-list",
+        type=int,
+        nargs="+",
+        default=[2, 3],
+        help="Number of GNN layers to sweep over",
+    )
+    grid.add_argument(
+        "--gnn-types",
+        nargs="+",
+        default=["mpnn", "gcn", "gat", "edge_mpnn"],
+        help="GNN architectures to sweep over",
+    )
+    grid.add_argument(
+        "--ema-decays",
+        type=float,
+        nargs="+",
+        default=[0.95, 0.99],
+        help="EMA decay rates to sweep over",
+    )
+    grid.add_argument(
+        "--add-3d-options",
+        type=int,
+        nargs="+",
+        default=[0, 1],
+        help="Whether to include 3D features (0 for False, 1 for True)",
+    )
+    grid.add_argument(
+        "--pretrain-batch-sizes",
+        type=int,
+        nargs="+",
+        default=[256],
+        help="Batch sizes for JEPA pretraining",
+    )
+    grid.add_argument(
+        "--finetune-batch-sizes",
+        type=int,
+        nargs="+",
+        default=[64],
+        help="Batch sizes for downstream fine‑tuning",
+    )
+    grid.add_argument(
+        "--pretrain-epochs-options",
+        type=int,
+        nargs="+",
+        default=[50],
+        help="Number of epochs for JEPA pretraining",
+    )
+    grid.add_argument(
+        "--finetune-epochs-options",
+        type=int,
+        nargs="+",
+        default=[30],
+        help="Number of epochs for downstream training",
+    )
+    grid.add_argument(
+        "--learning-rates",
+        type=float,
+        nargs="+",
+        default=[1e-4],
+        help="Learning rates to sweep over",
+    )
+    grid.add_argument(
+        "--seeds",
+        type=int,
+        nargs="*",
+        default=None,
+        help="Random seeds for averaging results (overrides config)",
+    )
+    grid.add_argument(
+        "--device",
+        type=str,
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        help="Device for training (cuda or cpu)",
+    )
+    grid.add_argument(
+        "--out-csv",
+        type=str,
+        default=None,
+        help="Path to output CSV file for grid search results",
+    )
+    grid.add_argument(
+        "--ckpt-dir",
+        type=str,
+        default="outputs/grid_ckpts",
+        help="Directory in which to save intermediate checkpoints during the sweep",
+    )
+    grid.add_argument(
+        "--ckpt-every",
+        type=int,
+        default=25,
+        help="Checkpoint every N epochs during pretraining in the sweep",
+    )
+    grid.add_argument(
+        "--use-scheduler",
+        action="store_true",
+        help="Enable learning‑rate warmup and cosine scheduler during grid search",
+    )
+    grid.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=1000,
+        help="Number of warmup steps for the scheduler during grid search",
+    )
+    grid.add_argument(
+        "--best-config-out",
+        type=str,
+        default=None,
+        help="Optional path to write the best hyper‑parameter "
+        "configuration as a JSON file. This file can be parsed later to drive a production pretraining run.",
+    )
+    grid.add_argument(
+        "--use-wandb",
+        action="store_true",
+        help="Enable Weights & Biases logging for the grid search",
+    )
+    grid.add_argument(
+        "--wandb-project",
+        type=str,
+        default=CONFIG.get("wandb", {}).get("project", "m-jepa"),
+        help="W&B project name for grid search runs",
+    )
+    grid.add_argument(
+        "--wandb-tags",
+        nargs="*",
+        default=CONFIG.get("wandb", {}).get("tags", []),
+        help="W&B tags for grid search runs",
+    )
+    grid.add_argument(
+        "--sample-unlabeled",
+        type=int,
+        default=0,
+        help="If >0, load at most N graphs from the unlabeled dataset.",
+    )
+    grid.add_argument(
+        "--sample-labeled",
+        type=int,
+        default=0,
+        help="If >0, load at most N graphs from the labeled dataset.",
+    )
+    grid.add_argument(
+        "--n-rows-per-file",
+        type=int,
+        default=None,
+        help="If set, limit rows read per file when loading datasets.",
+    )
+    grid.add_argument(
+        "--max-pretrain-batches",
+        type=int,
+        default=0,
+        help="If >0, stop each pretrain epoch after this many batches.",
+    )
+    grid.add_argument(
+        "--max-finetune-batches",
+        type=int,
+        default=0,
+        help="If >0, stop each finetune epoch after this many batches.",
+    )
+    grid.add_argument(
+        "--time-budget-mins",
+        type=int,
+        default=0,
+        help="Optional wallclock budget; stop early when exceeded.",
+    )
+    grid.add_argument(
+        "--force-refresh",
+        action="store_true",
+        default=False,
+        help="Ignore cached grid search outputs and recompute",
+    )
 
     grid.set_defaults(func=cmd_grid_search)
 
@@ -1379,7 +1900,7 @@ def main() -> None:
     args = parser.parse_args()
     if not hasattr(args, "func"):
         parser.error("No subcommand provided")
-    logger.info("Invoking subcommand %s", getattr(args, 'func', None))
+    logger.info("Invoking subcommand %s", getattr(args, "func", None))
     args.func(args)
 
 
@@ -1388,4 +1909,3 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         logger.exception("Unhandled exception: %s", e)
-
