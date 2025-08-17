@@ -162,19 +162,28 @@ class GraphDataset:
             return _fallback_graph_from_string(smiles)
 
         try:
-            mol = Chem.MolFromSmiles(smiles)
+            mol = Chem.MolFromSmiles(smiles, sanitize=False)
             if mol is None:
                 logger.debug("Invalid SMILES %s; using fallback graph", smiles)
                 return _fallback_graph_from_string(smiles)
 
             # sanitization + explicit H (safer for 3D)
             try:
-                Chem.SanitizeMol(mol)
+                Chem.SanitizeMol(
+                    mol,
+                    sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL
+                    ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE,
+                )
+                Chem.Kekulize(mol, clearAromaticFlags=True)
             except Exception as e:
-                # log and re‑raise; caller will decide whether to skip
-                logger.warning("Sanitization failed for %s: %s; skipping molecule", smiles, e)
-                raise
-            
+                logger.warning(
+                    "Sanitization/Kekulization failed for %s: %s; "
+                    "using fallback graph",
+                    smiles,
+                    e,
+                )
+                return _fallback_graph_from_string(smiles)
+
             mol = Chem.AddHs(mol)
 
             # Node features: [Z, degree, aromatic, hybrid]
