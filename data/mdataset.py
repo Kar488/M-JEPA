@@ -164,8 +164,8 @@ class GraphDataset:
         try:
             mol = Chem.MolFromSmiles(smiles, sanitize=False)
             if mol is None:
-                logger.debug("Invalid SMILES %s; using fallback graph", smiles)
-                return _fallback_graph_from_string(smiles)
+                logger.warning("Invalid SMILES %s", smiles)
+                raise ValueError("Invalid SMILES string")
 
             # sanitization + explicit H (safer for 3D)
             try:
@@ -177,12 +177,11 @@ class GraphDataset:
                 Chem.Kekulize(mol, clearAromaticFlags=True)
             except Exception as e:
                 logger.warning(
-                    "Sanitization/Kekulization failed for %s: %s; "
-                    "using fallback graph",
+                    "Sanitization/Kekulization failed for %s: %s",
                     smiles,
                     e,
                 )
-                return _fallback_graph_from_string(smiles)
+                raise ValueError("Sanitization/Kekulization failed")
 
             mol = Chem.AddHs(mol)
 
