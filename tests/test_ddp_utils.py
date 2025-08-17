@@ -1,0 +1,71 @@
+import sys
+import types
+import pytest
+
+# create lightweight torch and torch.distributed stubs
+torch_stub = types.SimpleNamespace()
+torch_stub.cuda = types.SimpleNamespace(is_available=lambda: False)
+
+dist_stub = types.SimpleNamespace(
+    is_available=lambda: True,
+    is_initialized=lambda: False,
+    init_process_group=lambda **kwargs: None,
+    get_rank=lambda: 0,
+    get_world_size=lambda: 1,
+    destroy_process_group=lambda: None,
+)
+
+torch_stub.distributed = dist_stub
+sys.modules.setdefault("torch", torch_stub)
+sys.modules.setdefault("torch.distributed", dist_stub)
+
+import utils.ddp as ddp
+
+
+def test_init_distributed_disabled(monkeypatch):
+    monkeypatch.setenv("DISABLE_DDP", "1")
+    assert ddp.init_distributed() is False
+
+
+def test_init_distributed_worldsize_one(monkeypatch):
+    monkeypatch.delenv("DISABLE_DDP", raising=False)
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    assert ddp.init_distributed() is False
+
+
+def test_init_distributed_initializes(monkeypatch):
+    monkeypatch.delenv("DISABLE_DDP", raising=False)
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("RANK", "0")
+
+    state = {"init": False}
+
+    dist_stub.is_initialized = lambda: state["init"]
+
+    def fake_init_process_group(backend, init_method, rank, world_size):
+        state["init"] = True
+        fake_init_process_group.called = True
+        fake_init_process_group.backend = backend
+        fake_init_process_group.world_size = world_size
+
+    dist_stub.init_process_group = fake_init_process_group
+
+    assert ddp.init_distributed() is True
+    assert fake_init_process_group.called
+    assert fake_init_process_group.backend in {"gloo", "nccl"}
+    assert fake_init_process_group.world_size == 2
+
+
+def test_get_rank_world_size_default(monkeypatch):
+    dist_stub.is_initialized = lambda: False
+    assert ddp.get_rank() == 0
+    assert ddp.get_world_size() == 1
+
+
+def test_distributed_sampler_list(monkeypatch):
+    monkeypatch.setattr(ddp, "get_rank", lambda: 1)
+    monkeypatch.setattr(ddp, "get_world_size", lambda: 3)
+    data = list(range(10))
+    sampler = ddp.DistributedSamplerList(data, shuffle=False)
+    assert list(sampler) == data[1::3]
+    assert len(sampler) == (len(data) + 3 - 1 - 1) // 3
