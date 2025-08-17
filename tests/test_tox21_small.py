@@ -8,9 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import importlib
-dataset_module = importlib.import_module(f'data.mdataset')
-GraphDataset = getattr(dataset_module, 'GraphDataset')
+from data import GraphDataset
 
 from utils.logging import maybe_init_wandb
 

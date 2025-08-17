@@ -27,10 +27,7 @@ sys.modules.setdefault("data.scaffold_split", dummy_scaffold)
 from training.supervised import stratified_split
 
 # import GraphDataset and GraphData
-mdataset = importlib.import_module('data.mdataset')
-GraphDataset = getattr(mdataset, 'GraphDataset')
-GraphData = getattr(mdataset, 'GraphData')
-
+from data import GraphDataset
 
 def _make_synthetic_dataset():
     smiles = [

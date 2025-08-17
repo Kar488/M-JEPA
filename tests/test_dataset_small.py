@@ -7,8 +7,7 @@ import pandas as pd
 
 import sys
 import importlib
-dataset_module = importlib.import_module(f'data.mdataset')
-GraphDataset = getattr(dataset_module, 'GraphDataset')
+from data import GraphDataset
 
 def test_dataset_from_smiles_list(toy_smiles):
     ds = GraphDataset.from_smiles_list(toy_smiles, add_3d=False)

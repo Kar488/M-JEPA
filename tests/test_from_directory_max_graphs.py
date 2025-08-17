@@ -11,34 +11,7 @@ except Exception:  # pragma: no cover
     torch = types.SimpleNamespace()
     sys.modules.setdefault("torch", torch)
 
-from pathlib import Path
-import importlib.util
-def _load_real_graphdataset():
-    repo_root = Path(__file__).resolve().parents[1]
-    data_dir = repo_root / "data"
-    mod_name = "data.mdataset"              # the real module name
-    file_path = data_dir / "mdataset.py"
-
-    # 1) Ensure 'data' package exists and points at your repo's data/ dir
-    if "data" not in sys.modules:
-        pkg = types.ModuleType("data")
-        pkg.__path__ = [str(data_dir)]
-        sys.modules["data"] = pkg
-    else:
-        # make sure its __path__ points to your repo
-        sys.modules["data"].__path__ = [str(data_dir)]
-
-    # 2) Build spec for the correct qualified name, create module, and
-    #    register it in sys.modules BEFORE exec_module (needed for dataclasses)
-    spec = importlib.util.spec_from_file_location(mod_name, str(file_path))
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[mod_name] = module
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-
-    return module.GraphDataset
-
-GraphDataset = _load_real_graphdataset()
+from data import GraphDataset
 
 
 def test_from_directory_respects_max_graphs(tmp_path):
