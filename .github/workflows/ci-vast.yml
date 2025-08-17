@@ -491,7 +491,7 @@ jobs:
                 "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
                   --unlabeled-dir data/ZINC-canonicalized \
                   --labeled-dir data/katielinkmoleculenet_benchmark/train \
-                  --label-col label \
+                  --label-col "measured log solubility in mols per litre" \
                   --task-type classification \
                   --methods jepa contrastive \
                   --mask-ratios 0.15 \
