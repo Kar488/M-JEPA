@@ -291,8 +291,11 @@ jobs:
             fi
 
             # Shell hook via absolute path; no dependence on PATH
-            eval "$("$MM_BIN" shell hook -s bash)"
             export MAMBA_ROOT_PREFIX="$MM_PREFIX"
+            export MAMBA_EXE="$MM_BIN"
+            set +u
+            eval "$("$MM_BIN" shell hook -s bash)"
+            set -u
 
             # 3) Create env if missing
             ENV_NAME="mjepa"
