@@ -263,17 +263,34 @@ jobs:
             # 2) Locate / install micromamba
             set -Eeuo pipefail
 
-            MM_PREFIX="$HOME/micromamba"
-            MM_BIN="$MM_PREFIX/bin/micromamba"
+            APP_TMP="${APP_DIR:-/srv/mjepa}/.tmp"
+            mkdir -p "$APP_TMP"
+
+            # Use a prefix you definitely own
+            MM_PREFIX="${HOME}/micromamba"
+            MM_BIN="${MM_PREFIX}/bin/micromamba"
+
+            # Make sure both the prefix and its bin folder exist and are writable
+            mkdir -p "${MM_PREFIX}/bin"
+
+            # Pick the correct artifact once
+            UNAME_M="$(uname -m)"
+            case "$UNAME_M" in
+              x86_64|amd64)  MARCH="linux-64" ;;
+              aarch64|arm64) MARCH="linux-aarch64" ;;
+              *) echo "Unsupported arch: $UNAME_M" >&2; exit 1 ;;
+            esac
 
             if ! [ -x "$MM_BIN" ]; then
-              INSTALL_SH="/tmp/micromamba_install.sh"
-              rm -f "$INSTALL_SH"
-              curl -fsSL --retry 3 https://micro.mamba.pm/install.sh -o "$INSTALL_SH"
-              bash "$INSTALL_SH" -b -p "$MM_PREFIX"
+              TARB="$APP_TMP/micromamba.tar.bz2"
+              rm -f "$TARB"
+              curl -fL --retry 3 -o "$TARB" "https://micro.mamba.pm/api/micromamba/${MARCH}/latest"
+              # Extract only the micromamba binary
+              tar -xjf "$TARB" -C "$APP_TMP" bin/micromamba
+              install -m 0755 "$APP_TMP/bin/micromamba" "$MM_BIN"
             fi
 
-            # Shell hook via absolute path (works even if not yet on PATH)
+            # Shell hook via absolute path; no dependence on PATH
             eval "$("$MM_BIN" shell hook -s bash)"
             export MAMBA_ROOT_PREFIX="$MM_PREFIX"
 
