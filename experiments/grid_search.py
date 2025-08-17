@@ -15,6 +15,7 @@ import torch
 from torch_geometric.loader import DataLoader as GeoLoader
 from torch_geometric.data import Data as PyGData
 import warnings
+import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -782,6 +783,7 @@ def run_grid_search(
     max_pretrain_batches: int = 0,
     max_finetune_batches: int = 0,
     time_budget_mins: int = 0,
+    disable_tqdm: bool = False,
 ) -> pd.DataFrame:
     cfgs = _build_configs(
         mask_ratios,
@@ -811,6 +813,12 @@ def run_grid_search(
             "Grid caps: time_budget=%s min, max_pretrain_batches=%s, max_finetune_batches=%s",
             time_budget_mins, max_pretrain_batches, max_finetune_batches
         )
+
+    import sys
+    total_pairs = len(cfgs) * len(methods)
+    disable_bar = disable_tqdm or not sys.stdout.isatty()
+    pbar = None if disable_bar else tqdm.tqdm(total=total_pairs, leave=False)
+
     for cfg in cfgs:
         logger.debug("Processing configuration %s", asdict(cfg))
         add_3d = _cfg_get(cfg, "add_3d", False)  # tests sweep over this
@@ -868,6 +876,11 @@ def run_grid_search(
                     time_budget_mins=time_budget_mins,
                 )
             )
+            if pbar is not None:
+                pbar.update(1)
+
+    if pbar is not None:
+        pbar.close()
 
     df = pd.DataFrame(rows)
     df["best_metric"] = ""
