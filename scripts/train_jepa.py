@@ -392,7 +392,10 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
     # Load unlabeled dataset
     try:
         unlabeled = load_directory_dataset(
-            args.unlabeled_dir, add_3d=args.add_3d, num_workers=args.num_workers
+            args.unlabeled_dir,
+            add_3d=args.add_3d,
+            num_workers=args.num_workers,
+            cache_dir=getattr(args, "cache_dir", None),
         )  # type: ignore[arg-type]
 
         # Sample a subset of the unlabeled dataset if requested.  Use getattr to
@@ -601,6 +604,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             label_col=args.label_col,
             add_3d=args.add_3d,
             num_workers=args.num_workers,
+            cache_dir=getattr(args, "cache_dir", None),
         )  # type: ignore[arg-type]
 
         # Sample a subset of labeled graphs if requested.  Use getattr to
@@ -884,6 +888,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             label_col=args.label_col,
             add_3d=args.add_3d,
             num_workers=args.num_workers,
+            cache_dir=getattr(args, "cache_dir", None),
         )  # type: ignore[arg-type]
         wb.log({"phase": "data_load", "labeled_graphs": len(labeled)})
     except Exception:
@@ -1159,6 +1164,12 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     else:
         seeds = tuple(CONFIG.get("finetune", {}).get("seeds", [42, 123, 456]))
 
+    cache_dir = None if getattr(args, "no_cache", False) else (getattr(args, "cache_dir", None) or "cache/graphs")
+    if cache_dir:
+        logger.info("Using cache directory %s", cache_dir)
+    else:
+        logger.info("Graph caching disabled")
+
     # Create dataset loader closures for run_grid_search without post-hoc
     # sampling. ``sample-unlabeled`` and ``sample-labeled`` act as ``max_graphs``
     # limits and ``n_rows_per_file`` bounds rows per file.
@@ -1182,6 +1193,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
                 n_rows_per_file=n_rows_per_file,
                 max_graphs=max(sample_ul or 0, sample_lb or 0) or None,
                 num_workers=args.num_workers,
+                cache_dir=cache_dir,
             )
             dt = time.time() - t0
             logger.info(
@@ -1207,6 +1219,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
                 n_rows_per_file=n_rows_per_file,
                 max_graphs=sample_ul,
                 num_workers=args.num_workers,
+                cache_dir=cache_dir,
             )
             dt = time.time() - t0
             logger.info(
@@ -1228,6 +1241,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
                 n_rows_per_file=n_rows_per_file,
                 max_graphs=sample_lb,
                 num_workers=args.num_workers,
+                cache_dir=cache_dir,
             )
             dt = time.time() - t0
             logger.info(
@@ -1391,6 +1405,12 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
         type=int,
         default=0,
         help="Process pool workers for SMILES conversion (0=serial)",
+    )
+    p.add_argument(
+        "--cache-dir",
+        type=str,
+        default=None,
+        help="Directory to cache processed graphs",
     )
     p.add_argument(
         "--contiguous",
@@ -1709,6 +1729,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default="label",
         help="Name of the label column in the dataset (ignored for unlabeled data)",
+    )
+    grid.add_argument(
+        "--cache-dir",
+        type=str,
+        default=None,
+        help="Directory for cached graph data (defaults to cache/graphs)",
+    )
+    grid.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable graph caching during grid search",
     )
     grid.add_argument(
         "--task-type",

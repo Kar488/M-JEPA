@@ -42,6 +42,10 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
      absent, the code will attempt to fetch them on the fly.
   -  The test suite uses small synthetic or bundled samples and does **not**
      require any of the large datasets.
+  -  Pass `--cache-dir` to `scripts/train_jepa.py` to store featurised graphs on disk.
+     Grid search enables caching by default under `cache/graphs` unless `--no-cache`
+     is given. Clear the cache when switching featurisation options such as
+     `--add-3d` to avoid stale representations.
 
   -  Pipeline usage
      Individual stages of the JEPA workflow can be invoked via subcommands in
