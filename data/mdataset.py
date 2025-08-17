@@ -355,7 +355,8 @@ class GraphDataset:
                     graphs, labels = pickle.load(f)
                 return cls(graphs, labels)
 
-        df = pd.read_parquet(filepath)
+        cols = [smiles_col] + ([label_col] if label_col else [])
+        df = pd.read_parquet(filepath, columns=cols) 
         if n_rows is not None:
             df = df.head(int(n_rows))
         smiles = df[smiles_col].astype(str).tolist()

@@ -20,7 +20,14 @@ class BaselineCLI:
         self.cmds: Dict[str, Dict[str, str]] = y["commands"]
 
     def _format(self, method: str, template: str, **kwargs) -> str:
-        return template.format(repo=self.paths[method], **kwargs)
+        # Ensure all path-like values are strings before formatting
+        fmt = {k: (str(v) if isinstance(v, (Path,)) else v) for k, v in kwargs.items()}
+        return template.format(repo=self.paths[method], **fmt)
+
+    @staticmethod
+    def _split_cmd(cmd: str) -> list[str]:
+        # Preserve Windows backslashes when splitting
+        return shlex.split(cmd, posix=(os.name != "nt"))
 
     def train(self, method: str, unlabeled: str, out_dir: str) -> None:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -28,7 +35,7 @@ class BaselineCLI:
             method, self.cmds[method]["train"], unlabeled=unlabeled, out=out_dir
         )
         logger.info("[%s] TRAIN:\n  %s", method, cmd)
-        subprocess.run(shlex.split(cmd), check=True)
+        subprocess.run(self._split_cmd(cmd), check=True)
 
     def embed(
         self, method: str, ckpt_path: str, smiles_file: str, emb_out: str
@@ -42,7 +49,7 @@ class BaselineCLI:
             emb=emb_out,
         )
         logger.info("[%s] EMBED:\n  %s", method, cmd)
-        subprocess.run(shlex.split(cmd), check=True)
-
+        subprocess.run(self._split_cmd(cmd), check=True)
+        
     def outputs_dir(self, method: str) -> str:
         return str(Path(self.outputs_root) / method)

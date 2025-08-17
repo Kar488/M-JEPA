@@ -35,55 +35,56 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    - Large corpora such as **ZINC** and **PubChem** can be downloaded with
      `scripts/download_unlabeled.py`. The resulting Parquet shards are stored
      under `data/unlabeled/`.
-  -  Labeled benchmarks from **MoleculeNet** (ESOL, FreeSolv, Lipophilicity,
-     BACE, BBBP, Tox21, ClinTox, SIDER) should be placed under `data/` as
-     scaffold‑split CSV/Parquet files. The repository previously downloaded
-     copies of ZINC, PubChem, Tox21 and MoleculeNet; if these folders are
-     absent, the code will attempt to fetch them on the fly.
-  -  The test suite uses small synthetic or bundled samples and does **not**
-     require any of the large datasets.
-  -  Pass `--cache-dir` to `scripts/train_jepa.py` to store featurised graphs on disk.
-     Grid search enables caching by default under `cache/graphs` unless `--no-cache`
-     is given. Clear the cache when switching featurisation options such as
-     `--add-3d` to avoid stale representations.
+   -  Labeled benchmarks from **MoleculeNet** (ESOL, FreeSolv, Lipophilicity,
+      BACE, BBBP, Tox21, ClinTox, SIDER) should be placed under `data/` as
+      scaffold‑split CSV/Parquet files. The repository previously downloaded
+      copies of ZINC, PubChem, Tox21 and MoleculeNet; if these folders are
+      absent, the code will attempt to fetch them on the fly.
 
-  -  Pipeline usage
-     Individual stages of the JEPA workflow can be invoked via subcommands in
-     ``scripts/train_jepa.py``. This allows external deployment pipelines to run
-     only the required phase:
+      Links for parquet files downloaded that are manual and placed in data folder than running the scripts
     
-    ```bash
-    # Self-supervised pretraining
-    python scripts/train_jepa.py pretrain --unlabeled-dir data/unlabeled
-    
-    # Fine‑tune a linear head on labelled data
-    python scripts/train_jepa.py finetune --labeled-dir data/labeled --encoder encoder.pt
-    
-    # Evaluate a pretrained encoder with a fresh probe
-    python scripts/train_jepa.py evaluate --labeled-dir data/labeled --encoder encoder.pt
-    ```
+      https://huggingface.co/datasets/BASF-AI/PubChem-Raw - 2.09M
+      https://huggingface.co/datasets/sagawa/ZINC-canonicalized - 20.7M
+      https://huggingface.co/datasets/HUBioDataLab/tox21/resolve/main/data.csv - 7.83K
 
-    Links for parquet files downloaded that are manual and placed in data folder than running the scripts
-    
-    https://huggingface.co/datasets/BASF-AI/PubChem-Raw - 2.09M
-    https://huggingface.co/datasets/sagawa/ZINC-canonicalized - 20.7M
-    https://huggingface.co/datasets/HUBioDataLab/tox21/resolve/main/data.csv - 7.83K
+   -  The test suite uses small synthetic or bundled samples and does **not**
+      require any of the large datasets.
+   -  Pass `--cache-dir` to `scripts/train_jepa.py` to store featurised graphs on disk.
+      Grid search enables caching by default under `cache/graphs` unless `--no-cache`
+      is given. Clear the cache when switching featurisation options such as
+      `--add-3d` to avoid stale representations.
 
-    Notes
+   -  Pipeline usage
+      Individual stages of the JEPA workflow can be invoked via subcommands in
+      ``scripts/train_jepa.py``. This allows external deployment pipelines to run
+      only the required phase:
 
-    - Example grid searches and plotting utilities are provided under `experiments/`
-      and `analysis/`.
-    - Baseline self‑supervised methods are included as git submodules inside
-      `third_party/`; run `git submodule update --init --recursive` after cloning if
-      you need them.
-    - The repository includes sample CSVs (e.g. `samples/tox21_mini.csv`) for quick
-      smoke tests.
-      - Scripts repo does not have a _init_.py as so its not treated as a package or module. note while deploying
-    - Grid search results are automatically resused for pretraining action, Once pretraining has finished, that encoder is saved to disk 
-      (e.g. outputs/encoder.pt) and is loaded directly in the finetune, benchmark and case‑study commands. 
-      Those later stages don’t rebuild the encoder; they just attach a linear head or evaluate the already‑trained model.
-      Because of that, you don’t need to pass the same flags again to finetune, benchmark or tox21. The current workflow does exactly this:
-    - Optionally cache refresh for Grid search can be controlled through Git actions drop down for rerun flow
+      ```bash
+      # Self-supervised pretraining
+      python scripts/train_jepa.py pretrain --unlabeled-dir data/unlabeled
+      
+      # Fine‑tune a linear head on labelled data
+      python scripts/train_jepa.py finetune --labeled-dir data/labeled --encoder encoder.pt
+      
+      # Evaluate a pretrained encoder with a fresh probe
+      python scripts/train_jepa.py evaluate --labeled-dir data/labeled --encoder encoder.pt
+      ```
+
+  -  Notes
+
+      - Example grid searches and plotting utilities are provided under `experiments/`
+        and `analysis/`.
+      - Baseline self‑supervised methods are included as git submodules inside
+        `third_party/`; run `git submodule update --init --recursive` after cloning if
+        you need them.
+      - The repository includes sample CSVs (e.g. `samples/tox21_mini.csv`) for quick
+        smoke tests.
+        - Scripts repo does not have a _init_.py as so its not treated as a package or module. note while deploying
+      - Grid search results are automatically resused for pretraining action, Once pretraining has finished, that encoder is saved to disk 
+        (e.g. outputs/encoder.pt) and is loaded directly in the finetune, benchmark and case‑study commands. 
+        Those later stages don’t rebuild the encoder; they just attach a linear head or evaluate the already‑trained model.
+        Because of that, you don’t need to pass the same flags again to finetune, benchmark or tox21. The current workflow does exactly this:
+      - Optionally cache refresh for Grid search can be controlled through Git actions drop down for rerun flow
 
 
 4. **Run tests**

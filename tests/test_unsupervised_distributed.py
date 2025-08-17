@@ -35,20 +35,10 @@ def _make_graph(n_nodes: int) -> GraphData:
     edge_index = np.zeros((2, 0), dtype=np.int64)
     return GraphData(x=x, edge_index=edge_index)
 
-def _find_free_port() -> int:
-    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
 
-@pytest.fixture(autouse=True)
-def _disable_ddp(monkeypatch):
-    # Tell your DDP helper to bail out early; prevents c10d socket spam and NCCL errors
-    monkeypatch.setenv("DISABLE_DDP", "1")
-    # Also neutralize CUDA device selection on CPU runners
-    monkeypatch.setattr(torch.cuda, "set_device", lambda *a, **k: None)
+def test_train_jepa_distributed(monkeypatch):
 
-@pytest.mark.notgpu
-def test_train_jepa_distributed():
+    monkeypatch.delenv("DISABLE_DDP", raising=False)
     graphs = [_make_graph(3), _make_graph(4)]
     dataset = type("DS", (), {"graphs": graphs})()
 

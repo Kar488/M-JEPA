@@ -1174,8 +1174,8 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     # sampling. ``sample-unlabeled`` and ``sample-labeled`` act as ``max_graphs``
     # limits and ``n_rows_per_file`` bounds rows per file.
     n_rows_per_file = getattr(args, "n_rows_per_file", None)
-    sample_ul = getattr(args, "sample-unlabeled", 0) or None
-    sample_lb = getattr(args, "sample-labeled", 0) or None
+    sample_ul = getattr(args, "sample_unlabeled", 0) or None
+    sample_lb = getattr(args, "sample_labeled", 0) or None
 
     _dataset_fn = None
     _unlabeled_fn = None
@@ -1211,6 +1211,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     if args.unlabeled_dir:
 
         def _unlabeled_fn(add_3d: bool = False):
+            logger.info("Loading unlabeled (cap=%s, workers=%s)…", sample_ul, args.num_workers)
             t0 = time.time()
             ds = load_directory_dataset(
                 args.unlabeled_dir,
@@ -1232,6 +1233,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     if args.labeled_dir:
 
         def _eval_fn(add_3d: bool = False):
+            logger.info("Loading labeled (cap=%s, workers=%s)…", sample_lb, args.num_workers)
             t0 = time.time()
             ds = load_directory_dataset(
                 args.labeled_dir,
@@ -1321,7 +1323,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             max_pretrain_batches=getattr(args, "max_pretrain_batches", 0),
             max_finetune_batches=getattr(args, "max_finetune_batches", 0),
             time_budget_mins=getattr(args, "time_budget_mins", 0),
-            disable_tqdm=not sys.stdout.isatty(),
+            disable_tqdm=not getattr(args, "force_tqdm", False) and not sys.stdout.isatty(),
         )
         # Log each row to W&B for comprehensive visualisation.  We assign a
         # unique identifier to each configuration using its index.  This
@@ -1907,6 +1909,11 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="*",
         default=CONFIG.get("wandb", {}).get("tags", []),
         help="W&B tags for grid search runs",
+    )
+    grid.add_argument(
+        "--force-tqdm",
+        action="store_true",
+        help="Force-enable tqdm progress bars even when not attached to a TTY",
     )
     grid.add_argument(
         "--sample-unlabeled",

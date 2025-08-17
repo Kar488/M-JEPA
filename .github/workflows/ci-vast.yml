@@ -496,6 +496,7 @@ jobs:
                   --max-finetune-batches 200 \
                   --num-workers 8 \
                   --time-budget-mins 45 \
+                  --force-tqdm \
                   --out-csv outputs/grid_results.csv \
                   --best-config-out outputs/best_grid_config.json \
                   --use-wandb \

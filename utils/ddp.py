@@ -7,7 +7,7 @@ import torch
 import torch.distributed as dist
 
 
-import os, socket, platform, contextlib, logging
+import os, socket, platform, contextlib, logging, types, pytest
 import torch
 import torch.distributed as dist
 logger = logging.getLogger(__name__)
@@ -17,6 +17,32 @@ def _find_free_port():
     with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
         s.bind(("", 0))
         return s.getsockname()[1]
+    
+# simple stubs
+torch_stub = types.SimpleNamespace()
+torch_stub.cuda = types.SimpleNamespace(is_available=lambda: False)
+
+dist_stub = types.SimpleNamespace(
+    is_available=lambda: True,
+    is_initialized=lambda: False,
+    init_process_group=lambda **kwargs: None,
+    get_rank=lambda: 0,
+    get_world_size=lambda: 1,
+    destroy_process_group=lambda: None,
+)
+
+@pytest.fixture(autouse=True)
+def _patch_ddp(monkeypatch):
+    import utils.ddp as ddp
+    # patch ddp’s references even if ddp was already imported
+    monkeypatch.setattr(ddp, "torch", torch_stub, raising=False)
+    monkeypatch.setattr(ddp, "dist", dist_stub, raising=False)
+    # force loopback rendezvous so nothing tries the hostname
+    monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
+    monkeypatch.setenv("MASTER_PORT", str(_find_free_port()))
+    # default to single-process unless a test overrides
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("RANK", "0")
 
 def init_distributed(backend: str | None = None) -> bool:
      # allow explicit disable via env or single-process world size

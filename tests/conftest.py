@@ -76,5 +76,9 @@ def wb():
 @pytest.fixture(scope="session", autouse=True)
 def clean_artifacts():
     yield
-    for d in ("outputs", "reports", "ckpts", "analysis", "cache"):
+    for d in ("outputs", "reports", "ckpts", "analysis", "cache", "wandb"):
         shutil.rmtree(Path(d), ignore_errors=True)
+
+@pytest.fixture(autouse=True)
+def _suite_default_ddp_off(monkeypatch):
+    monkeypatch.setenv("DISABLE_DDP", "1")
