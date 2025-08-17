@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import pickle
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
@@ -23,6 +25,18 @@ except Exception as e:
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_smiles_to_graph(smiles: str, func):
+    """Helper for multiprocessing to convert a SMILES string into a graph.
+
+    Any exception raised by ``func`` results in ``None`` so that callers can
+    skip failed conversions while preserving input order.
+    """
+    try:
+        return func(smiles)
+    except Exception:
+        return None
 
 
 @dataclass
@@ -322,6 +336,7 @@ class GraphDataset:
         add_3d: bool = False,
         random_seed: Optional[int] = None,
         n_rows: Optional[int] = None,  # subset helper
+        num_workers: int = 0,
     ) -> "GraphDataset":
         cache_path = None
         if cache_dir and n_rows is None:
@@ -346,14 +361,23 @@ class GraphDataset:
         graphs: List[GraphData] = []
         smiles_out: List[str] = []
         valid_indices = []
-        for i, sm in enumerate(smiles):
-            try:
-                g = cls.smiles_to_graph(sm, add_3d=add_3d, random_seed=random_seed)
-                graphs.append(g)
-                smiles_out.append(sm)
-                valid_indices.append(i)
-            except Exception:
-                continue
+
+        func = partial(cls.smiles_to_graph, add_3d=add_3d, random_seed=random_seed)
+
+        if num_workers > 0:
+            with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
+                for i, g in enumerate(ex.map(partial(_safe_smiles_to_graph, func=func), smiles)):
+                    if g is not None:
+                        graphs.append(g)
+                        smiles_out.append(smiles[i])
+                        valid_indices.append(i)
+        else:
+            for i, sm in enumerate(smiles):
+                g = _safe_smiles_to_graph(sm, func)
+                if g is not None:
+                    graphs.append(g)
+                    smiles_out.append(sm)
+                    valid_indices.append(i)
         # Filter labels to match valid graphs
         if labels is not None:
             labels = labels[valid_indices]
@@ -429,6 +453,7 @@ class GraphDataset:
         prefix_filter: Optional[str] = None,
         n_rows_per_file: Optional[int] = None,  # subset helper
         max_graphs: Optional[int] = None,
+        num_workers: int = 0,
     ) -> "GraphDataset":
         graphs_all: List[GraphData] = []
         labels_all: List[Any] = []
@@ -467,6 +492,7 @@ class GraphDataset:
                     add_3d=add_3d,
                     random_seed=random_seed,
                     n_rows=n_rows,
+                    num_workers=num_workers,
                 )
             elif ext.lower() == "csv":
                 ds = cls.from_csv(

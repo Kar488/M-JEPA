@@ -47,7 +47,7 @@ class DummyDataset:
 def test_cmd_benchmark_selects_best_method(tmp_path, monkeypatch):
     dataset = DummyDataset()
 
-    def load_dataset_stub(path, label_col=None, add_3d=False):
+    def load_dataset_stub(path, label_col=None, add_3d=False, **kwargs):
         assert path == str(tmp_path)
         return dataset
 

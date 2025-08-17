@@ -75,7 +75,7 @@ def test_cmd_finetune_aggregates_metrics(tmp_path, monkeypatch):
 
     dataset = DummyDataset()
 
-    def load_dataset_stub(path, label_col=None, add_3d=False):
+    def load_dataset_stub(path, label_col=None, add_3d=False, **kwargs):
         calls["load_directory_dataset"] += 1
         return dataset
 
