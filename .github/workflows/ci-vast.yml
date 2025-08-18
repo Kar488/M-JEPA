@@ -568,15 +568,15 @@ jobs:
             # batch size 4, default config values).  This allows the
             # workflow to remain functional even if the grid search skipped.
 
-            PRETRAIN_ARGS=""
+            PRETRAIN_ARR=()
             CKPT_DIR="outputs/ckpts/pretrain"
             mkdir -p "$CKPT_DIR"
 
-            RESUME_FLAG=()
+            RESUME_ARGS=()
             LATEST=$(ls -1t "$CKPT_DIR"/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
             if [ -n "$LATEST" ]; then
               echo "Resuming from $LATEST"
-              RESUME_FLAG="--resume-ckpt \"$LATEST\""
+              RESUME_ARGS=(--resume-ckpt "$LATEST")
             fi
 
             if [ -f outputs/best_grid_config.json ]; then
@@ -602,7 +602,7 @@ jobs:
                   args += ['--batch-size', str(int(conf.get('pretrain_batch_size', conf.get('batch_size', 4))))] 
               print("\n".join(args))
               PY
-                            mapfile -t PRETRAIN_ARR < /tmp/pretrain_args.txt
+                mapfile -t PRETRAIN_ARR < /tmp/pretrain_args.txt
             fi
 
             # Pretraining stage with selected hyper‑parameters.  Contrastive
