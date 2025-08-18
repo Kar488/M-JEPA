@@ -31,6 +31,26 @@ def _batch_iter(graphs: List[GraphData], batch_size: int):
         yield graphs[i : i + batch_size]
 
 
+def _graph_to_tensors(g: GraphData, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Convert a single-graph GraphData into (x, adj) tensors on the given device.
+    - x:  [N, F] float32
+    - adj:[N, N] float32 (dense), symmetric 0/1
+    """
+    x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
+    n = int(x.size(0))
+    # Build a dense adjacency; fall back to zeros if no edges
+    adj = torch.zeros((n, n), dtype=torch.float32, device=device)
+    if g.edge_index is not None:
+        ei = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)
+        # Normalize shape to [2, E]
+        if ei.dim() == 2 and ei.size(0) != 2 and ei.size(1) == 2:
+            ei = ei.t()
+        if ei.numel() > 0:
+            adj[ei[0], ei[1]] = 1.0
+            adj[ei[1], ei[0]] = 1.0  # assume undirected
+    return x, adj
+
 def _ensure_2d(x: torch.Tensor) -> torch.Tensor:
     return x if x.dim() == 2 else x.unsqueeze(0)
 
@@ -446,8 +466,10 @@ def train_contrastive(
                 with torch.cuda.amp.autocast(
                     enabled=use_amp and device_t.type == "cuda"
                 ):
-                    h1 = _ensure_2d(encoder(v1))
-                    h2 = _ensure_2d(encoder(v2))
+                    x1, adj1 = _graph_to_tensors(v1, device_t)
+                    x2, adj2 = _graph_to_tensors(v2, device_t)
+                    h1 = _ensure_2d(encoder(x1, adj1))
+                    h2 = _ensure_2d(encoder(x2, adj2))
                     if isinstance(proj[0], nn.Linear) and proj[
                         0
                     ].in_features != h1.size(1):
