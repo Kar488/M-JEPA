@@ -1294,8 +1294,9 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             return hasattr(w, "run") and getattr(w, "run", None) is not None
         except Exception:
             return False
+    # --- safe wandb logger: try if .log exists; swallow real-W&B preinit errors ---
     def _wb_log(w, payload):
-        if _wb_active(w) and hasattr(w, "log"):
+        if hasattr(w, "log"):
             try:
                 w.log(payload)
             except Exception as e:
@@ -1342,19 +1343,16 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
         # tables in the W&B UI.
         best_conf = None
         if df is not None and not df.empty:
-            if not _wb_active(wb):
-                logger.info("W&B run is not active; skipping per-config logging.")
-            else:
-                for idx, row in df.iterrows():
-                    # Prepare a metrics dict excluding non‑numeric entries and
-                    # include the index as "config_id".  Flatten any lists or
-                    # arrays to scalars when possible.
-                    metrics_dict = {"config_id": int(idx)}
-                    for col, val in row.items():
-                        if isinstance(val, (list, tuple)) and len(val) == 1:
-                            val = val[0]
-                        metrics_dict[col] = val
-                    wb.log(metrics_dict)
+            for idx, row in df.iterrows():
+                # Prepare a metrics dict excluding non-numeric entries and
+                # include the index as "config_id".  Flatten any lists or
+                # arrays to scalars when possible.
+                metrics_dict = {"config_id": int(idx)}
+                for col, val in row.items():
+                    if isinstance(val, (list, tuple)) and len(val) == 1:
+                        val = val[0]
+                    metrics_dict[col] = val
+                _wb_log(wb, metrics_dict)
             best_conf = df.iloc[-1].to_dict()
             logger.info("Grid search completed. Best configuration: %s", best_conf)
             # Optionally write the best configuration to a JSON file for later use.
@@ -1385,7 +1383,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
         sys.exit(7)
     finally:
         try:
-            if _wb_active(wb) and hasattr(wb, "finish"):
+            if hasattr(wb, "finish"):
                 wb.finish()
         except Exception as e:
             logger.warning("Skipping wandb.finish(): %s", e)
