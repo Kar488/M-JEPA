@@ -497,21 +497,21 @@ jobs:
                   --label-col "measured log solubility in mols per litre" \
                   --task-type regression \
                   --methods jepa contrastive \
-                  --mask-ratios 0.15 \
-                  --contiguities 0 \
+                  --mask-ratios 0.15 0.3 0.5 \
+                  --contiguities 0 1 \
                   --hidden-dims 256 \
                   --num-layers-list 3 \
                   --gnn-types mpnn \
-                  --ema-decays 0.99 \
-                  --add-3d-options 0 1 \
+                  --ema-decays 0.996 0.998 0.999 \
+                  --add-3d-options 1 \
                   --pretrain-batch-sizes 4 \
                   --finetune-batch-sizes 4 \
-                  --pretrain-epochs-options 1 \
+                  --pretrain-epochs-options 20 30 \
                   --finetune-epochs-options 1 \
                   --learning-rates 1e-4 \
-                  --seeds 1 \
-                  --sample-unlabeled 5000 \
-                  --sample-labeled 500 \
+                  --seeds 1 2 3 \
+                  --sample-unlabeled 0 \
+                  --sample-labeled 0 \
                   --max-pretrain-batches 0 \
                   --max-finetune-batches 0 \
                   --num-workers 8 \
@@ -529,7 +529,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: vast_learn_hyperparameters
     steps:
-    - name: Finetune on Vast
+    - name: Pretrain JEPA on Vast
       uses: appleboy/ssh-action@v1
       timeout-minutes: 180            # GitHub step timeout
       with:
@@ -560,7 +560,9 @@ jobs:
 
             : "${APP_DIR:?APP_DIR not set}"
             cd "$APP_DIR"
-            mkdir -p logs outputs 
+            mkdir -p logs outputs cache/graphs
+            +  # stream Python logs immediately (and keep wandb chatty-free)
+            export PYTHONUNBUFFERED=1 WANDB_CONSOLE=off WANDB__SERVICE_WAIT=0
 
             # Determine hyper‑parameters from the grid search.  If the JSON
             # file exists, parse it and construct CLI flags for the pretrain
@@ -582,57 +584,46 @@ jobs:
             if [ -f outputs/best_grid_config.json ] || [ -f default.yaml ]; then
               PRETRAIN_JSON="outputs/best_grid_config.json"
               PRETRAIN_YAML="default.yaml"
+              
               mapfile -t PRETRAIN_ARR < <("$MMBIN" run -n mjepa python -c '
-
-              import json, sys
-
-              + # Try YAML; tolerate absence of PyYAML
+              import json, sys, os
+              # Try YAML; tolerate absence of PyYAML
               try:
                   import yaml
               except Exception:
                   yaml = None
-
               cfg = {}
-              
-              # 1) load YAML defaults if file exists
+              # 1) YAML defaults (top-level or under "pretrain")
               ypath = sys.argv[2]
               if ypath and os.path.isfile(ypath) and yaml is not None:
                   y = yaml.safe_load(open(ypath)) or {}
-                  # allow either top-level or nested under "pretrain"
                   y = y.get("pretrain", y)
                   if isinstance(y, dict):
                       cfg.update(y)
-
-              # 2) overlay best_grid_config.json if present
+              # 2) Grid JSON overlays
               jpath = sys.argv[1]
               if jpath and os.path.isfile(jpath):
                   j = json.load(open(jpath)) or {}
                   if isinstance(j, dict):
                       cfg.update(j)
-
-              # 3) build CLI args from merged cfg
+              # 3) Build CLI args
               args = []
-
-
               def add(flag, val):
                   if val is None: return
                   args.extend([flag, str(val)])
-
               add("--gnn-type",    cfg.get("gnn_type"))
               add("--hidden-dim",  cfg.get("hidden_dim"))
               add("--num-layers",  cfg.get("num_layers"))
-              add("--mask-ratio",  cfg.get("mask_ratio"),0.15)
-              flag = cfg.get("contiguous", cfg.get("contiguity"))
-
+              add("--mask-ratio",  cfg.get("mask_ratio", 0.15))
               if bool(cfg.get("add_3d")): args.append("--add-3d")
               if bool(cfg.get("contiguous", cfg.get("contiguity"))): args.append("--contiguous")
-
               add("--ema-decay",   cfg.get("ema_decay"))
               add("--lr",          cfg.get("lr"))
-              add("--epochs",      cfg.get("pretrain_epochs", cfg.get("epochs",20)))
+              add("--epochs",      cfg.get("pretrain_epochs", cfg.get("epochs", 20)))
               add("--batch-size",  cfg.get("pretrain_batch_size", cfg.get("batch_size", 4)))
-              if (cfg.get("method","").lower() == "contrastive"): args.append("--contrastive")
-
+              method = (cfg.get("method") or "").lower()
+              if method == "contrastive":
+                  args.append("--contrastive")
               print("\\n".join(args))
               ' "$PRETRAIN_JSON" "$PRETRAIN_YAML")
             fi
@@ -641,11 +632,13 @@ jobs:
             # baseline is enabled by default to match earlier behaviour.
 
             export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
-            "$MMBIN" run -n mjepa python scripts/train_jepa.py pretrain \
+            # change timeout if needed, e.g. 120m for 2 hours
+            # bump workers to 2 once stabble
+            "$MMBIN" run -n mjepa stdbuf -oL -eL timeout -s SIGINT 120m python -u scripts/train_jepa.py pretrain \
               --unlabeled-dir data/ZINC-canonicalized \
               "${PRETRAIN_ARR[@]}" \
-              --contrastive \
-              --num-workers 8 \
+              --cache-dir cache/graphs \ 
+              --num-workers 0 \
               --ckpt-dir "$CKPT_DIR" \
               --save-every 1 \
               --output outputs/encoder.pt \
@@ -692,7 +685,7 @@ jobs:
               cd "$APP_DIR"
               mkdir -p logs outputs
 
-              CKPT_DIR="outputs/ckpt﻿s/finetune"
+              CKPT_DIR="outputs/ckpts/finetune"
               mkdir -p "$CKPT_DIR"
               RESUME_ARGS=()
               LATEST=$(ls -1t "$CKPT_DIR"/seed_*/ft_epoch_*.pt 2>/dev/null | head -n 1 || true)

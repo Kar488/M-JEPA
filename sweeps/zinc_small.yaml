@@ -15,6 +15,10 @@ num_layers_list: [2, 3]
 gnn_types: ["mpnn", "gcn", "edge_mpnn"]
 ema_decays: [0.95, 0.99]
 add_3d_options: [false, true]
+aug_rotate_options: [false, true]
+aug_mask_angle_options: [false]
+aug_dihedral_options: [false]
+
 
 pretrain_batch_sizes: [256]
 finetune_batch_sizes: [64]

@@ -5,9 +5,9 @@ graph representations, sample subgraphs for pretraining, and create
 batches of graphs for both unsupervised and supervised learning.
 """
 
-try:
-    from .mdataset import GraphDataset, GraphData  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
-    GraphDataset = GraphData = None  # type: ignore
+# Import GraphDataset and GraphData. ``mdataset`` gracefully handles the
+# optional RDKit dependency internally so ``GraphDataset`` works whether or not
+# RDKit is installed.
+from .mdataset import GraphData, GraphDataset  # type: ignore
 
 __all__ = ["GraphDataset", "GraphData"]

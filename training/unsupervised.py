@@ -157,6 +157,20 @@ def train_jepa(
         encoder.to(device_t).train()
         ema_encoder.to(device_t).eval()
         predictor.to(device_t).train()
+
+    # --- Torch compatibility shim: some Torch builds (e.g., 1.13) don't expose torch._dynamo
+    import torch as _torch
+    if not hasattr(_torch, "_dynamo"):
+        class _DummyDynamo:
+            def disable(self, fn=None, recursive=False):
+                # Behave like a no-op decorator or direct passthrough
+                if fn is None:
+                    def _decorator(f):
+                        return f
+                    return _decorator
+                return fn
+        _torch._dynamo = _DummyDynamo()
+
     opt = optim.Adam(list(encoder.parameters()) + list(predictor.parameters()), lr=lr)
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp and device_t.type == "cuda")
     steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))

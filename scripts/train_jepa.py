@@ -475,9 +475,6 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 lr=args.lr,
                 device=device,
                 reg_lambda=1e-4,
-                random_rotate=args.aug_rotate,
-                mask_angle=args.aug_mask_angle,
-                perturb_dihedral=args.aug_dihedral,
                 use_wandb=args.use_wandb,
                 wandb_project=args.wandb_project,
                 wandb_tags=args.wandb_tags,
@@ -525,6 +522,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 lr=args.lr,
                 device=device,
                 use_wandb=args.use_wandb,
+                random_rotate=args.aug_rotate,
+                mask_angle=args.aug_mask_angle,
+                perturb_dihedral=args.aug_dihedral,
                 wandb_project=args.wandb_project,
                 wandb_tags=args.wandb_tags,
                 disable_tqdm=True,  # suppress single‑epoch progress bars
@@ -1156,6 +1156,14 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     # Convert numerical lists to tuples and boolean flags
     contiguities = tuple(bool(c) for c in args.contiguities)
     add_3d_opts = tuple(bool(a) for a in args.add_3d_options)
+    aug_rotate_opts = tuple(bool(a) for a in getattr(args, "aug_rotate_options", [0]))
+    aug_mask_angle_opts = tuple(bool(a) for a in getattr(args, "aug_mask_angle_options", [0]))
+    aug_dihedral_opts = tuple(bool(a) for a in getattr(args, "aug_dihedral_options", [0]))
+
+    if "contrastive" not in {m.lower() for m in args.methods}:
+        aug_rotate_opts = (False,)
+        aug_mask_angle_opts = (False,)
+        aug_dihedral_opts = (False,)
     seeds: tuple
     # Determine seeds: use CLI if provided, otherwise fall back to configuration defaults
     if args.seeds is not None and len(args.seeds) > 0:
@@ -1318,6 +1326,9 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             gnn_types=tuple(args.gnn_types),
             ema_decays=tuple(args.ema_decays),
             add_3d_options=add_3d_opts,
+            aug_rotate_options=aug_rotate_opts,
+            aug_mask_angle_options=aug_mask_angle_opts,
+            aug_dihedral_options=aug_dihedral_opts,
             pretrain_batch_sizes=tuple(args.pretrain_batch_sizes),
             finetune_batch_sizes=tuple(args.finetune_batch_sizes),
             pretrain_epochs_options=tuple(args.pretrain_epochs_options),
@@ -1552,8 +1563,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Save a pretrain checkpoint every N epochs",
     )
     pre.add_argument(
-        "--mask-ratio", 
-        type=float, 
+        "--mask-ratio",
+        type=float,
         default=0.15,
         help="Fraction of nodes to mask in each view (JEPA/contrastive)."
     )
@@ -1839,6 +1850,27 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=[0, 1],
         help="Whether to include 3D features (0 for False, 1 for True)",
+    )
+    grid.add_argument(
+        "--aug-rotate-options",
+        type=int,
+        nargs="+",
+        default=[0],
+        help="Apply random rotation augmentation (0 for False, 1 for True)",
+    )
+    grid.add_argument(
+        "--aug-mask-angle-options",
+        type=int,
+        nargs="+",
+        default=[0],
+        help="Apply angle masking augmentation (0 for False, 1 for True)",
+    )
+    grid.add_argument(
+        "--aug-dihedral-options",
+        type=int,
+        nargs="+",
+        default=[0],
+        help="Apply dihedral perturbation augmentation (0 for False, 1 for True)",
     )
     grid.add_argument(
         "--pretrain-batch-sizes",

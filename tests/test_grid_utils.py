@@ -3,7 +3,8 @@ import sys
 import types
 
 import pytest
-import torch
+torch = pytest.importorskip("torch")
+pytest.importorskip("torch_geometric")
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 
@@ -75,6 +76,9 @@ def test_build_configs_and_normalize(gs_module):
         gnn_types=("gcn",),
         ema_decays=(0.9,),
         add_3d_options=(False,),
+        aug_rotate_options=(False,),
+        aug_mask_angle_options=(False,),
+        aug_dihedral_options=(False,),
         pretrain_batch_sizes=(8,),
         finetune_batch_sizes=(4,),
         pretrain_epochs_options=(1,),

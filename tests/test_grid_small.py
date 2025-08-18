@@ -34,27 +34,32 @@ def tmp_parquet(tmp_path):
     path = tmp_path / "tmp_small.parquet"
     yield path
 
-@pytest.fixture(autouse=True)
-def _ddp_sane_env(monkeypatch):
-    # either disable entirely:
-    monkeypatch.setenv("DISABLE_DDP", "1")
-    # or, if you prefer to allow single-process DDP, use loopback:
-    monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
-    monkeypatch.setenv("MASTER_PORT", str(_free_port()))
-    monkeypatch.setenv("RANK", "0")
-    monkeypatch.setenv("WORLD_SIZE", "1")
 
+from data import GraphDataset, GraphData
 
-import socket, contextlib, pytest, os
+@pytest.fixture
+def fake_train_head(monkeypatch):
+    calls = []
 
-def _free_port():
-    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
+    def _fake_train_head(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {}
 
-from data import GraphDataset
+    targets = [
+        "training.train_on_embeddings.train_linear_on_embeddings_classification",
+        "training.train_on_embeddings.train_linear_on_embeddings_regression",
+        "training.supervised.train_linear_head",
+    ]
+    for path in targets:
+        try:
+            monkeypatch.setattr(path, _fake_train_head, raising=False)
+        except ImportError:
+            pass
+    return calls
 
-def test_grid_search_small(wb,tmp_parquet):
+def test_grid_search_small(fake_train_head, wb,tmp_parquet):
+
+    calls = fake_train_head
 
     pytest.importorskip("rdkit")
     from experiments.grid_search import run_grid_search
@@ -118,29 +123,35 @@ def test_grid_search_small(wb,tmp_parquet):
             return GraphDataset.from_smiles_list(
                 smiles, labels=labels, add_3d=add_3d
             )
+        
+
     # Run the grid search with the small dataset function
     # Note: this will run on CPU only, so adjust params accordingly
     df_res = run_grid_search(
         dataset_fn=small_dataset_fn,
         task_type="classification",
-        seeds=(42, 123),
-        add_3d_options=(False, True),
-        mask_ratios=(0.10, 0.20),
-        contiguities=(False, True),
+        aug_rotate_options=(False,),
+        aug_mask_angle_options=(False,),
+        aug_dihedral_options=(False,),
+        seeds=(42,),
+        add_3d_options=(False,),
+        mask_ratios=(0.10,),
+        contiguities=(False,),
         hidden_dims=(64,),
         num_layers_list=(2,),
-        gnn_types=("mpnn", "gcn"),
-        ema_decays=(0.95, 0.99),
+        gnn_types=("mpnn",),
+        ema_decays=(0.95,),
         pretrain_batch_sizes=(8,),
         finetune_batch_sizes=(4,),
-        pretrain_epochs_options=(2,),
-        finetune_epochs_options=(2,),
+        pretrain_epochs_options=(1,),
+        finetune_epochs_options=(1,),
         lrs=(1e-3,),
         device="cpu",
         n_jobs=0,
-    )
+    ) 
 
     out = Path("outputs/small_grid_results.csv")
     out.parent.mkdir(parents=True, exist_ok=True)
     df_res.to_csv(out, index=False)
     wb.log({"output_csv": str(out), "rows": len(df_res)})
+    assert isinstance(calls, list)

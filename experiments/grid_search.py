@@ -85,6 +85,9 @@ class Config:
     gnn_type: str
     ema_decay: float
     add_3d: bool
+    aug_rotate: bool
+    aug_mask_angle: bool
+    aug_dihedral: bool
     pretrain_bs: int
     finetune_bs: int
     pretrain_epochs: int
@@ -196,6 +199,9 @@ def _build_configs(
     gnn_types: Iterable[str],
     ema_decays: Iterable[float],
     add_3d_options: Iterable[bool],
+    aug_rotate_options: Iterable[bool],
+    aug_mask_angle_options: Iterable[bool],
+    aug_dihedral_options: Iterable[bool],
     pretrain_batch_sizes: Iterable[int],
     finetune_batch_sizes: Iterable[int],
     pretrain_epochs_options: Iterable[int],
@@ -210,6 +216,9 @@ def _build_configs(
         gnn_types,
         ema_decays,
         add_3d_options,
+        aug_rotate_options,
+        aug_mask_angle_options,
+        aug_dihedral_options,
         pretrain_batch_sizes,
         finetune_batch_sizes,
         pretrain_epochs_options,
@@ -676,6 +685,9 @@ def _run_one_config_method(
                     ckpt_every=ckpt_every,
                     use_scheduler=use_scheduler,
                     warmup_steps=warmup_steps,
+                    random_rotate=cfg.aug_rotate,
+                    mask_angle=cfg.aug_mask_angle,
+                    perturb_dihedral=cfg.aug_dihedral,
                     max_batches=max_pretrain_batches,
                     time_budget_mins=_tb,
                 )
@@ -690,6 +702,9 @@ def _run_one_config_method(
                     lr=cfg.lr,
                     device=device,
                     temperature=0.1,
+                    random_rotate=cfg.aug_rotate,
+                    mask_angle=cfg.aug_mask_angle,
+                    perturb_dihedral=cfg.aug_dihedral
                 )
             remaining = time_left() if time_left is not None else float("inf")
             if remaining <= 0:
@@ -829,6 +844,9 @@ def run_grid_search(
     gnn_types: Tuple[str, ...] = ("mpnn", "gcn", "gat", "edge_mpnn"),
     ema_decays: Tuple[float, ...] = (0.95, 0.99),
     add_3d_options: Tuple[bool, ...] = (False, True),
+    aug_rotate_options: Tuple[bool, ...] = (False,),
+    aug_mask_angle_options: Tuple[bool, ...] = (False,),
+    aug_dihedral_options: Tuple[bool, ...] = (False,),
     pretrain_batch_sizes: Tuple[int, ...] = (256,),
     finetune_batch_sizes: Tuple[int, ...] = (64,),
     pretrain_epochs_options: Tuple[int, ...] = (50,),
@@ -860,6 +878,11 @@ def run_grid_search(
         if time_budget_mins <= 0:
             return float("inf")
         return max(0.0, time_budget_mins - (time.monotonic() - start) / 60.0)
+    
+    if "contrastive" not in {m.lower() for m in methods}:
+        aug_rotate_options = (False,)
+        aug_mask_angle_options = (False,)
+        aug_dihedral_options = (False,)
 
     cfgs = _build_configs(
         mask_ratios,
@@ -869,6 +892,9 @@ def run_grid_search(
         gnn_types,
         ema_decays,
         add_3d_options,
+        aug_rotate_options,
+        aug_mask_angle_options,
+        aug_dihedral_options,
         pretrain_batch_sizes,
         finetune_batch_sizes,
         pretrain_epochs_options,

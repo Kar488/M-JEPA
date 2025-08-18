@@ -12,6 +12,7 @@ if "torch" not in sys.modules:
         cuda=types.SimpleNamespace(is_available=lambda: False),
     )
     sys.modules["torch"] = torch_stub
+    sys.modules["torch.nn"] = types.SimpleNamespace(Module=object)
 
 sys.modules.setdefault("models.factory", types.SimpleNamespace(build_encoder=lambda *a, **k: None))
 sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
@@ -99,11 +100,13 @@ def setup_stubs(monkeypatch, calls):
 
     def train_jepa_stub(**kwargs):
         calls["train_jepa"] += 1
+        calls["train_jepa_kwargs"] = kwargs
 
     monkeypatch.setattr(tj, "train_jepa", train_jepa_stub)
 
     def train_contrastive_stub(**kwargs):
         calls["train_contrastive"] += 1
+        calls["train_contrastive_kwargs"] = kwargs
 
     monkeypatch.setattr(tj, "train_contrastive", train_contrastive_stub)
 
@@ -130,6 +133,8 @@ def test_cmd_pretrain_creates_checkpoint_and_calls_training(tmp_path, monkeypatc
         "train_jepa": 0,
         "train_contrastive": 0,
         "maybe_init_wandb": 0,
+        "train_jepa_kwargs": {},
+        "train_contrastive_kwargs": {},
     }
     setup_stubs(monkeypatch, calls)
 
@@ -139,6 +144,9 @@ def test_cmd_pretrain_creates_checkpoint_and_calls_training(tmp_path, monkeypatc
     assert calls["load_directory_dataset"] == 1
     assert calls["train_jepa"] == 1
     assert os.path.exists(args.output)
+    assert "random_rotate" not in calls["train_jepa_kwargs"]
+    assert "mask_angle" not in calls["train_jepa_kwargs"]
+    assert "perturb_dihedral" not in calls["train_jepa_kwargs"]
 
 
 def test_cmd_pretrain_with_contrastive_branch(tmp_path, monkeypatch):
@@ -150,6 +158,8 @@ def test_cmd_pretrain_with_contrastive_branch(tmp_path, monkeypatch):
         "train_jepa": 0,
         "train_contrastive": 0,
         "maybe_init_wandb": 0,
+        "train_jepa_kwargs": {},
+        "train_contrastive_kwargs": {},
     }
     setup_stubs(monkeypatch, calls)
 
@@ -162,3 +172,9 @@ def test_cmd_pretrain_with_contrastive_branch(tmp_path, monkeypatch):
     assert os.path.exists(args.output)
     contrastive_path = tmp_path / "encoder_contrastive.pt"
     assert contrastive_path.exists()
+    # JEPA should not receive augmentation flags
+    assert "random_rotate" not in calls["train_jepa_kwargs"]
+    # Contrastive branch should receive them
+    assert calls["train_contrastive_kwargs"].get("random_rotate") is args.aug_rotate
+    assert calls["train_contrastive_kwargs"].get("mask_angle") is args.aug_mask_angle
+    assert calls["train_contrastive_kwargs"].get("perturb_dihedral") is args.aug_dihedral

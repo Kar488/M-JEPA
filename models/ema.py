@@ -22,7 +22,16 @@ class EMA:
     """
 
     def __init__(self, model: nn.Module, decay: float = 0.99, use_fp32: bool = True) -> None:
-        self.decay = decay
+        # Coerce decay to a plain float (handle accidental list/tuple/np types)
+        try:
+            if isinstance(decay, (list, tuple)):
+                decay = decay[0]
+            import numpy as _np
+            if isinstance(decay, _np.ndarray):
+                decay = decay.flatten()[0]
+        except Exception:
+            pass
+        self.decay = float(decay)
         self.use_fp32 = use_fp32
         # Clone on the model's current device; optionally store in fp32 for stability
         self.params = []
@@ -50,7 +59,7 @@ class EMA:
             else:
                 src = src.to(ema_p.dtype)
             # ema = decay*ema + (1-decay)*param  (stable in-place)
-            ema_p.lerp_(src, 1.0 - self.decay)
+            ema_p.lerp_(src, float(1.0 - float(self.decay)))
  
 
     @torch.no_grad()
