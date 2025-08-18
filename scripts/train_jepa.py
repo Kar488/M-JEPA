@@ -1358,7 +1358,15 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
         wb.log({"phase": "grid_search", "status": "success", "best": best_conf})
     except Exception:
         logger.exception("Grid search failed")
-        wb.log({"phase": "grid_search", "status": "error"})
+        try:
+            active = hasattr(wb, "run") and getattr(wb, "run", None) is not None 
+        except Exception:
+            active = False
+        if active and hasattr(wb, "log"):
+            try:
+                wb.log({"phase": "grid_search", "status": "error"})
+            except Exception:
+                logger.warning("Skipping wandb.log in error path: %s", e)
         # exit with distinct code for grid search failures
         sys.exit(7)
     finally:

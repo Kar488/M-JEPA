@@ -533,11 +533,15 @@ def _run_one_config_method(
 
                     ema_encoder = _copy.deepcopy(encoder)
 
-            # --- always construct EMA & predictor, then pretrain (BUGFIX) ---
-            ema = EMA(encoder, decay=cfg.ema_decay)
+            # --- ensure models are on device BEFORE creating EMA ---
+            _dev = torch.device(device)
+            encoder = encoder.to(_dev)
+            ema_encoder = ema_encoder.to(_dev)
             predictor = MLPPredictor(
                 embed_dim=cfg.hidden_dim, hidden_dim=cfg.hidden_dim * 2
-            )
+            ).to(_dev)
+            # EMA clones from encoder; now buffers land on the right device
+            ema = EMA(encoder, decay=cfg.ema_decay)
 
             remaining = time_left() if time_left is not None else float("inf")
             if remaining <= 0:

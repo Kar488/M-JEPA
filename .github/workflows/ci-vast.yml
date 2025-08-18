@@ -484,6 +484,9 @@ jobs:
               
               # sample-unlabeled -- < use a 1000000 (10,000,000- 10M) when working fully matching word doc spec
               # sample-labeled <-- use a 20000 (20K) when working fully matching word doc spec (≈17K across data classes e.g, ESOL, BACE etc)
+              # zero values for max-pretrain-batches and max-finetune-batches mean no limit
+              # time-budget-mins 0 means no time limit
+              # moleculenet dataset, column "measured log solubility in mols per litre" is used for regression task
 
               if [ "${FORCE_REFRESH}" != "true" ] && [ -f outputs/grid_results.csv ] && [ -f outputs/best_grid_config.json ]; then
                 echo "Grid search outputs already exist; skipping grid search."
@@ -492,7 +495,7 @@ jobs:
                   --unlabeled-dir data/ZINC-canonicalized \
                   --labeled-dir data/katielinkmoleculenet_benchmark/train \
                   --label-col "measured log solubility in mols per litre" \
-                  --task-type classification \
+                  --task-type regression \
                   --methods jepa contrastive \
                   --mask-ratios 0.15 \
                   --contiguities 0 \
@@ -509,10 +512,10 @@ jobs:
                   --seeds 1 \
                   --sample-unlabeled 5000 \
                   --sample-labeled 500 \
-                  --max-pretrain-batches 200 \
-                  --max-finetune-batches 200 \
+                  --max-pretrain-batches 0 \
+                  --max-finetune-batches 0 \
                   --num-workers 8 \
-                  --time-budget-mins 45 \
+                  --time-budget-mins 0 \
                   --force-tqdm \
                   --out-csv outputs/grid_results.csv \
                   --best-config-out outputs/best_grid_config.json \
@@ -566,11 +569,11 @@ jobs:
             # workflow to remain functional even if the grid search skipped.
 
             PRETRAIN_ARGS=""
-            CKPT_DIR="outputs/ckpts/finetune"
+            CKPT_DIR="outputs/ckpts/pretrain"
             mkdir -p "$CKPT_DIR"
 
-            RESUME_FLAG=""
-            LATEST=$(ls -1t "$CKPT_DIR"/seed_*/ft_epoch_*.pt 2>/dev/null | head -n 1 || true)
+            RESUME_FLAG=()
+            LATEST=$(ls -1t "$CKPT_DIR"/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
             if [ -n "$LATEST" ]; then
               echo "Resuming from $LATEST"
               RESUME_FLAG="--resume-ckpt \"$LATEST\""
@@ -578,7 +581,7 @@ jobs:
 
             if [ -f outputs/best_grid_config.json ]; then
               "$MMBIN" run -n mjepa python - <<'PY' > /tmp/pretrain_args.txt
-              import json, os, sys
+              import json
               # loads the output of grid search results so it can be used for hyper parameter selection
               conf = json.load(open('outputs/best_grid_config.json'))
               args = []
@@ -594,12 +597,12 @@ jobs:
               if 'ema_decay' in conf: args += ['--ema-decay', str(conf['ema_decay'])]
               if 'lr' in conf: args += ['--lr', str(conf['lr'])]
               if 'pretrain_epochs' in conf or 'epochs' in conf:
-                  args += ['--epochs', str(int(conf.get('pretrain_epochs', conf.get('epochs', 1))))]
+                  args += ['--epochs', str(int(conf.get('pretrain_epochs', conf.get('epochs', 1))))] 
               if 'pretrain_batch_size' in conf or 'batch_size' in conf:
-                  args += ['--batch-size', str(int(conf.get('pretrain_batch_size', conf.get('batch_size', 4))))]
-              print(' '.join(args))
+                  args += ['--batch-size', str(int(conf.get('pretrain_batch_size', conf.get('batch_size', 4))))] 
+              print("\n".join(args))
               PY
-              PRETRAIN_ARGS=$(cat /tmp/pretrain_args.txt)
+              mapfile -t PRETRAIN_ARR < /tmp/pretrain_args.txt
             fi
 
             # Pretraining stage with selected hyper‑parameters.  Contrastive
@@ -611,10 +614,10 @@ jobs:
               $PRETRAIN_ARGS \
               --contrastive \
               --num-workers 8 \
-              --ckpt-dir outputs/ckpts/pretrain \
+              --ckpt-dir "$CKPT_DIR" \
               --save-every 1 \
               --output outputs/encoder.pt \
-              $RESUME_FLAG \
+              "${RESUME_ARGS[@]}" \
               --use-wandb \
               --seeds 42 \
               --config default.yaml \

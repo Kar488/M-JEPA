@@ -15,6 +15,7 @@ from torch_geometric.loader import DataLoader as GeoLoader
 from torch_geometric.data import Data as PyGData
 
 from utils.graph_ops import _encode_graph, _pool_graph_emb
+from sklearn.metrics import accuracy_score, average_precision_score, roc_auc_score
 
 def _adj_to_edge_index(adj):
     import torch
@@ -47,6 +48,19 @@ def _to_pyg(g) -> PyGData:
         edge_attr=torch.as_tensor(ea, dtype=torch.float32) if ea is not None else None,
         y=(torch.as_tensor(y) if y is not None else None),
     )
+
+# Safe AUC for binary or multi-class; returns NaN if undefined
+def _safe_auc(y_true, y_proba):
+    y_true = np.asarray(y_true)
+    if np.unique(y_true).size < 2:
+        return float("nan")
+    try:
+        if y_proba.ndim == 1 or (y_proba.ndim == 2 and y_proba.shape[1] == 2):
+            p1 = y_proba if y_proba.ndim == 1 else y_proba[:, -1]
+            return float(roc_auc_score(y_true, p1))
+        return float(roc_auc_score(y_true, y_proba, multi_class="ovr", average="macro"))
+    except Exception:
+        return float("nan")
 
 def compute_embeddings(dataset, encoder, batch_size=32, device="cpu"):
     encoder = encoder.to(device).eval()
@@ -93,13 +107,13 @@ def linear_probe_classification(
         val_end = int(0.9 * n)
         tr, te = idx[:train_end], idx[val_end:]
 
-    clf = LogisticRegression(max_iter=500, n_jobs=1)
+    clf = LogisticRegression(max_iter=2000, class_weight="balanced", n_jobs=1)
     clf.fit(X[tr], y[tr])
     proba = clf.predict_proba(X[te])[:, 1]
     pred = clf.predict(X[te])
     yt = y[te]
     return {
-        "probe_roc_auc": float(roc_auc_score(yt, proba)),
+        "probe_roc_auc": _safe_auc(yt, proba),
         "probe_pr_auc": float(average_precision_score(yt, proba)),
         "probe_acc": float(accuracy_score(yt, pred)),
     }
