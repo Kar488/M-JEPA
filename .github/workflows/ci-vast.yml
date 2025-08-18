@@ -579,27 +579,59 @@ jobs:
               RESUME_ARGS=(--resume-ckpt "$LATEST")
             fi
 
-            if [ -f outputs/best_grid_config.json ]; then
+            if [ -f outputs/best_grid_config.json ] || [ -f default.yaml ]; then
               PRETRAIN_JSON="outputs/best_grid_config.json"
+              PRETRAIN_YAML="default.yaml"
               mapfile -t PRETRAIN_ARR < <("$MMBIN" run -n mjepa python -c '
+
               import json, sys
-              conf = json.load(open(sys.argv[1]))
+
+              + # Try YAML; tolerate absence of PyYAML
+              try:
+                  import yaml  # type: ignore
+              except Exception:
+                  yaml = None
+
+              cfg = {}
+              # 1) load YAML defaults if file exists
+              ypath = sys.argv[2]
+              if ypath and os.path.isfile(ypath) and yaml is not None:
+                  y = yaml.safe_load(open(ypath)) or {}
+                  # allow either top-level or nested under "pretrain"
+                  y = y.get("pretrain", y)
+                  if isinstance(y, dict):
+                      cfg.update(y)
+
+              # 2) overlay best_grid_config.json if present
+              jpath = sys.argv[1]
+              if jpath and os.path.isfile(jpath):
+                  j = json.load(open(jpath)) or {}
+                  if isinstance(j, dict):
+                      cfg.update(j)
+
+              # 3) build CLI args from merged cfg
               args = []
+
+
               def add(flag, val):
                   if val is None: return
                   args.extend([flag, str(val)])
-              add("--gnn-type",    conf.get("gnn_type"))
-              add("--hidden-dim",  conf.get("hidden_dim"))
-              add("--num-layers",  conf.get("num_layers"))
-              add("--mask-ratio",  conf.get("mask_ratio"))
-              flag = conf.get("contiguous", conf.get("contiguity"))
+
+              add("--gnn-type",    cfg.get("gnn_type"))
+              add("--hidden-dim",  cfg.get("hidden_dim"))
+              add("--num-layers",  cfg.get("num_layers"))
+              add("--mask-ratio",  cfg.get("mask_ratio"))
+              flag = cfg.get("contiguous", cfg.get("contiguity"))
+
               if bool(flag): args.append("--contiguous")
-              add("--ema-decay",   conf.get("ema_decay"))
-              add("--lr",          conf.get("lr"))
-              add("--epochs",      conf.get("pretrain_epochs", conf.get("epochs")))
-              add("--batch-size",  conf.get("pretrain_batch_size", conf.get("batch_size", 4)))
+
+              add("--ema-decay",   cfg.get("ema_decay"))
+              add("--lr",          cfg.get("lr"))
+              add("--epochs",      cfg.get("pretrain_epochs", cfg.get("epochs")))
+              add("--batch-size",  cfg.get("pretrain_batch_size", cfg.get("batch_size", 4)))
+
               print("\\n".join(args))
-              ' "$PRETRAIN_JSON")
+              ' "$PRETRAIN_JSON" "$PRETRAIN_YAML")
             fi
 
             # Pretraining stage with selected hyper‑parameters.  Contrastive
@@ -617,7 +649,6 @@ jobs:
               "${RESUME_ARGS[@]}" \
               --use-wandb \
               --seeds 42 \
-              --config default.yaml \
               2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
 
   vast_finetune:
