@@ -344,7 +344,6 @@ def resolve_device(preferred: str) -> str:
         return preferred
     return "cpu"
 
-
 # ---------------------------------------------------------------------------
 # Command implementations
 # ---------------------------------------------------------------------------
@@ -1289,7 +1288,19 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             "seeds": seeds,
         },
     )
-    wb.log({"phase": "grid_search", "status": "start"})
+    # --- safe wandb helpers (avoid crashes if inner code closed the run) ---
+    def _wb_active(w):
+        try:
+            return hasattr(w, "run") and getattr(w, "run", None) is not None
+        except Exception:
+            return False
+    def _wb_log(w, payload):
+        if _wb_active(w) and hasattr(w, "log"):
+            try:
+                w.log(payload)
+            except Exception as e:
+                logger.warning("Skipping wandb.log: %s", e)
+    _wb_log(wb, {"phase": "grid_search", "status": "start"})
 
     try:
         df = run_grid_search(
@@ -1331,16 +1342,19 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
         # tables in the W&B UI.
         best_conf = None
         if df is not None and not df.empty:
-            for idx, row in df.iterrows():
-                # Prepare a metrics dict excluding non‑numeric entries and
-                # include the index as "config_id".  Flatten any lists or
-                # arrays to scalars when possible.
-                metrics_dict = {"config_id": int(idx)}
-                for col, val in row.items():
-                    if isinstance(val, (list, tuple)) and len(val) == 1:
-                        val = val[0]
-                    metrics_dict[col] = val
-                wb.log(metrics_dict)
+            if not _wb_active(wb):
+                logger.info("W&B run is not active; skipping per-config logging.")
+            else:
+                for idx, row in df.iterrows():
+                    # Prepare a metrics dict excluding non‑numeric entries and
+                    # include the index as "config_id".  Flatten any lists or
+                    # arrays to scalars when possible.
+                    metrics_dict = {"config_id": int(idx)}
+                    for col, val in row.items():
+                        if isinstance(val, (list, tuple)) and len(val) == 1:
+                            val = val[0]
+                        metrics_dict[col] = val
+                    wb.log(metrics_dict)
             best_conf = df.iloc[-1].to_dict()
             logger.info("Grid search completed. Best configuration: %s", best_conf)
             # Optionally write the best configuration to a JSON file for later use.
@@ -1355,7 +1369,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
                     logger.exception("Failed to write best configuration to JSON")
         else:
             logger.info("Grid search returned no results.")
-        wb.log({"phase": "grid_search", "status": "success", "best": best_conf})
+        _wb_log(wb, {"phase": "grid_search", "status": "success", "best": best_conf})
     except Exception:
         logger.exception("Grid search failed")
         try:
@@ -1364,13 +1378,17 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             active = False
         if active and hasattr(wb, "log"):
             try:
-                wb.log({"phase": "grid_search", "status": "error"})
+                _wb_log(wb, {"phase": "grid_search", "status": "error"})
             except Exception:
                 logger.warning("Skipping wandb.log in error path: %s", e)
         # exit with distinct code for grid search failures
         sys.exit(7)
     finally:
-        wb.finish()
+        try:
+            if _wb_active(wb) and hasattr(wb, "finish"):
+                wb.finish()
+        except Exception as e:
+            logger.warning("Skipping wandb.finish(): %s", e)
 
 
 # ---------------------------------------------------------------------------
