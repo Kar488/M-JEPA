@@ -7,6 +7,9 @@ from data.augment import (
     random_rotation,
     mask_random_angle,
     perturb_dihedral,
+    delete_random_bond,
+    mask_random_atom,
+    remove_random_subgraph,
     apply_graph_augmentations,
 )
 from data.mdataset import GraphDataset
@@ -138,3 +141,34 @@ def test_apply_graph_augmentations_rotate():
     assert np.allclose(_pairwise_dists(coords0), _pairwise_dists(coords1), atol=1e-5)
     assert np.allclose(np.sort(ang0), np.sort(ang1), atol=1e-5)
     assert np.allclose(np.sort(dih0), np.sort(dih1), atol=1e-5)
+
+
+def test_delete_random_bond_removes_edges():
+    g = GraphDataset.smiles_to_graph("CCO", random_seed=0)
+    e0 = g.edge_index.shape[1]
+    np.random.seed(0)
+    delete_random_bond(g)
+    assert g.edge_index.shape[1] == e0 - 2
+    if g.edge_attr is not None:
+        assert g.edge_attr.shape[0] == e0 - 2
+
+
+def test_mask_random_atom_zeroes_features():
+    g = GraphDataset.smiles_to_graph("CCO", random_seed=0)
+    np.random.seed(0)
+    mask_random_atom(g)
+    assert np.any(np.all(g.x == 0, axis=1))
+    idx = int(np.where(np.all(g.x == 0, axis=1))[0][0])
+    if g.edge_attr is not None:
+        mask = (g.edge_index[0] == idx) | (g.edge_index[1] == idx)
+        assert np.all(g.edge_attr[mask] == 0)
+
+
+def test_remove_random_subgraph_drops_nodes():
+    g = GraphDataset.smiles_to_graph("CCCC", random_seed=0)
+    n0 = g.num_nodes()
+    np.random.seed(0)
+    remove_random_subgraph(g)
+    assert g.num_nodes() < n0
+    if g.edge_index.size > 0:
+        assert g.edge_index.max() < g.num_nodes()
