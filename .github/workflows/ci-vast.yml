@@ -580,29 +580,26 @@ jobs:
             fi
 
             if [ -f outputs/best_grid_config.json ]; then
-              "$MMBIN" run -n mjepa python - <<'PY' > /tmp/pretrain_args.txt
-              import json
-              # loads the output of grid search results so it can be used for hyper parameter selection
-              conf = json.load(open('outputs/best_grid_config.json'))
+              PRETRAIN_JSON="outputs/best_grid_config.json"
+              mapfile -t PRETRAIN_ARR < <("$MMBIN" run -n mjepa python -c '
+              import json, sys
+              conf = json.load(open(sys.argv[1]))
               args = []
-              # Map keys from the grid search result to pretrain CLI args
-              if 'gnn_type' in conf: args += ['--gnn-type', str(conf['gnn_type'])]
-              if 'hidden_dim' in conf: args += ['--hidden-dim', str(int(conf['hidden_dim']))]
-              if 'num_layers' in conf: args += ['--num-layers', str(int(conf['num_layers']))]
-              if 'mask_ratio' in conf: args += ['--mask-ratio', str(conf['mask_ratio'])]
-              if 'contiguous' in conf or 'contiguity' in conf:
-                  # Convert boolean or int to flag name
-                  flag = conf.get('contiguous') if 'contiguous' in conf else conf.get('contiguity')
-                  args += ['--contiguous'] if flag else []
-              if 'ema_decay' in conf: args += ['--ema-decay', str(conf['ema_decay'])]
-              if 'lr' in conf: args += ['--lr', str(conf['lr'])]
-              if 'pretrain_epochs' in conf or 'epochs' in conf:
-                  args += ['--epochs', str(int(conf.get('pretrain_epochs', conf.get('epochs', 1))))] 
-              if 'pretrain_batch_size' in conf or 'batch_size' in conf:
-                  args += ['--batch-size', str(int(conf.get('pretrain_batch_size', conf.get('batch_size', 4))))] 
-              print("\n".join(args))
-              PY
-                mapfile -t PRETRAIN_ARR < /tmp/pretrain_args.txt
+              def add(flag, val):
+                  if val is None: return
+                  args.extend([flag, str(val)])
+              add("--gnn-type",    conf.get("gnn_type"))
+              add("--hidden-dim",  conf.get("hidden_dim"))
+              add("--num-layers",  conf.get("num_layers"))
+              add("--mask-ratio",  conf.get("mask_ratio"))
+              flag = conf.get("contiguous", conf.get("contiguity"))
+              if bool(flag): args.append("--contiguous")
+              add("--ema-decay",   conf.get("ema_decay"))
+              add("--lr",          conf.get("lr"))
+              add("--epochs",      conf.get("pretrain_epochs", conf.get("epochs")))
+              add("--batch-size",  conf.get("pretrain_batch_size", conf.get("batch_size", 4)))
+              print("\\n".join(args))
+              ' "$PRETRAIN_JSON")
             fi
 
             # Pretraining stage with selected hyper‑parameters.  Contrastive
