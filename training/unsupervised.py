@@ -33,23 +33,33 @@ def _batch_iter(graphs: List[GraphData], batch_size: int):
 
 def _graph_to_tensors(g: GraphData, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Convert a single-graph GraphData into (x, adj) tensors on the given device.
-    - x:  [N, F] float32
-    - adj:[N, N] float32 (dense), symmetric 0/1
+    Convert GraphData -> (x, adj) tensors on `device`.
+    x: [N, F] float32; adj: [N, N] float32, symmetric 0/1.
     """
     x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
     n = int(x.size(0))
-    # Build a dense adjacency; fall back to zeros if no edges
     adj = torch.zeros((n, n), dtype=torch.float32, device=device)
     if g.edge_index is not None:
         ei = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)
-        # Normalize shape to [2, E]
+        # normalize to [2, E]
         if ei.dim() == 2 and ei.size(0) != 2 and ei.size(1) == 2:
             ei = ei.t()
         if ei.numel() > 0:
             adj[ei[0], ei[1]] = 1.0
-            adj[ei[1], ei[0]] = 1.0  # assume undirected
+            adj[ei[1], ei[0]] = 1.0
     return x, adj
+
+def _encode(encoder: nn.Module, g: GraphData, device: torch.device) -> torch.Tensor:
+    """
+    Call `encoder` in a signature-agnostic way:
+      1) try encoder(g)
+      2) fallback to encoder(x, adj) if required
+    """
+    try:
+        return encoder(g)
+    except TypeError:
+        x, adj = _graph_to_tensors(g, device)
+        return encoder(x, adj)
 
 def _ensure_2d(x: torch.Tensor) -> torch.Tensor:
     return x if x.dim() == 2 else x.unsqueeze(0)
@@ -465,11 +475,9 @@ def train_contrastive(
                 v2, _ = _mask_subgraph(g, mask_ratio, contiguous=False)
                 with torch.cuda.amp.autocast(
                     enabled=use_amp and device_t.type == "cuda"
-                ):
-                    x1, adj1 = _graph_to_tensors(v1, device_t)
-                    x2, adj2 = _graph_to_tensors(v2, device_t)
-                    h1 = _ensure_2d(encoder(x1, adj1))
-                    h2 = _ensure_2d(encoder(x2, adj2))
+                ): 
+                    h1 = _ensure_2d(_encode(encoder, v1, device_t))
+                    h2 = _ensure_2d(_encode(encoder, v2, device_t))
                     if isinstance(proj[0], nn.Linear) and proj[
                         0
                     ].in_features != h1.size(1):
