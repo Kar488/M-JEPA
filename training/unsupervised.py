@@ -18,6 +18,8 @@ try:
         delete_random_bond,
         mask_random_atom,
         remove_random_subgraph,
+        mask_subgraph,
+        generate_views,
     )
 except ImportError:  # pragma: no cover - used in minimal test stubs
     from data.augment import apply_graph_augmentations
@@ -30,6 +32,12 @@ except ImportError:  # pragma: no cover - used in minimal test stubs
 
     def remove_random_subgraph(g):
         return g
+
+    def mask_subgraph(g, mask_ratio, contiguous):
+        return g, g
+
+    def generate_views(graph, structural_ops=None, geometric_ops=None):
+        return [graph]
 
 
 from data.mdataset import GraphData, GraphDataset
@@ -83,45 +91,6 @@ def _ensure_2d(x: torch.Tensor) -> torch.Tensor:
     return x if x.dim() == 2 else x.unsqueeze(0)
 
 
-def _subgraph(g: GraphData, idx: List[int]) -> GraphData:
-    if len(idx) == 0 or g.x.shape[0] == 0:
-        import numpy as np
-
-        x = np.zeros((0, g.x.shape[1]), dtype=np.float32)
-        e = np.zeros((2, 0), dtype=np.int64)
-        ea = (
-            None
-            if g.edge_attr is None
-            else np.zeros((0, g.edge_attr.shape[1]), dtype=np.float32)
-        )
-        return GraphData(x=x, edge_index=e, edge_attr=ea)
-    remap = {old: new for new, old in enumerate(idx)}
-    import numpy as np
-
-    mask = np.isin(g.edge_index[0], idx) & np.isin(g.edge_index[1], idx)
-    e = g.edge_index[:, mask].copy()
-    for t in range(e.shape[1]):
-        e[0, t] = remap[int(e[0, t])]
-        e[1, t] = remap[int(e[1, t])]
-    x = g.x[idx]
-    ea = g.edge_attr[mask] if g.edge_attr is not None else None
-    return GraphData(x=x, edge_index=e, edge_attr=ea)
-
-
-def _mask_subgraph(
-    g: GraphData, mask_ratio: float, contiguous: bool
-) -> Tuple[GraphData, GraphData]:
-    n = int(g.x.shape[0])
-    if n == 0:
-        return g, g
-    k = max(1, int(math.ceil(mask_ratio * n)))
-    if contiguous:
-        start = np.random.randint(0, n)
-        tgt = [(start + j) % n for j in range(k)]
-    else:
-        tgt = np.random.choice(n, size=k, replace=False).tolist()
-    ctx = [i for i in range(n) if i not in set(tgt)]
-    return _subgraph(g, ctx), _subgraph(g, tgt)
 
 
 def train_jepa(
@@ -288,9 +257,13 @@ def train_jepa(
 
             ctx_list, tgt_list = [], []
             for g in batch:
-                # Geometric augmentations are applied in contrastive training
-                # but skipped here to keep JEPA focused on masked prediction.
-                g_ctx, g_tgt = _mask_subgraph(g, mask_ratio, contiguous)
+                views = generate_views(
+                    g,
+                    structural_ops=[
+                        lambda x, mr=mask_ratio, c=contiguous: mask_subgraph(x, mr, c)
+                    ],
+                )
+                g_ctx, g_tgt = views
                 with torch.cuda.amp.autocast(
                     enabled=use_amp and device_t.type == "cuda"
                 ):
@@ -513,19 +486,24 @@ def train_contrastive(
 
             z1_list, z2_list = [], []
             for g in batch:
+                struct_ops = [
+                    delete_random_bond,
+                    mask_random_atom,
+                    remove_random_subgraph,
+                    lambda x, mr=mask_ratio: mask_subgraph(x, mr, contiguous=False)[0],
+                ]
+                geom_ops = []
                 if random_rotate or mask_angle or perturb_dihedral:
-                    g = apply_graph_augmentations(
-                        g,
-                        rotate=random_rotate,
-                        mask_angle=mask_angle,
-                        perturb_dihedral=perturb_dihedral,
+                    geom_ops.append(
+                        lambda x: apply_graph_augmentations(
+                            x,
+                            rotate=random_rotate,
+                            mask_angle=mask_angle,
+                            perturb_dihedral=perturb_dihedral,
+                        )
                     )
-                # Apply structural augmentations before creating multiple views
-                g = delete_random_bond(g)
-                g = mask_random_atom(g)
-                g = remove_random_subgraph(g)
-                v1, _ = _mask_subgraph(g, mask_ratio, contiguous=False)
-                v2, _ = _mask_subgraph(g, mask_ratio, contiguous=False)
+                v1 = generate_views(g, structural_ops=struct_ops, geometric_ops=geom_ops)[0]
+                v2 = generate_views(g, structural_ops=struct_ops, geometric_ops=geom_ops)[0]
                 with torch.cuda.amp.autocast(
                     enabled=use_amp and device_t.type == "cuda"
                 ):

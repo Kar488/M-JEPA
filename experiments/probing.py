@@ -7,8 +7,9 @@ from sklearn.cluster import KMeans
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import silhouette_score
 
-from data.mdataset import GraphDataset
+from data.mdataset import GraphDataset, GraphData
 from data.scaffold_split import scaffold_split_indices
+from data.augment import generate_views
 
 import torch
 from torch_geometric.loader import DataLoader as GeoLoader
@@ -62,7 +63,14 @@ def _safe_auc(y_true, y_proba):
     except Exception:
         return float("nan")
 
-def compute_embeddings(dataset, encoder, batch_size=32, device="cpu"):
+def compute_embeddings(
+    dataset,
+    encoder,
+    batch_size=32,
+    device="cpu",
+    structural_ops=None,
+    geometric_ops=None,
+):
     encoder = encoder.to(device).eval()
 
     # Get a sequence of graphs the DataLoader can handle
@@ -73,7 +81,11 @@ def compute_embeddings(dataset, encoder, batch_size=32, device="cpu"):
     else:
         graphs_raw = [dataset]
 
-    graphs = [_to_pyg(g) for g in graphs_raw]   # <-- convert to PyG Data here
+    graphs = []
+    for g in graphs_raw:
+        if isinstance(g, GraphData):
+            g = generate_views(g, structural_ops or [], geometric_ops or [])[0]
+        graphs.append(_to_pyg(g))
     loader = GeoLoader(graphs, batch_size=batch_size, shuffle=False)
 
     outs = []
