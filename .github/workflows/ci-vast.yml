@@ -588,11 +588,12 @@ jobs:
 
               + # Try YAML; tolerate absence of PyYAML
               try:
-                  import yaml  # type: ignore
+                  import yaml
               except Exception:
                   yaml = None
 
               cfg = {}
+              
               # 1) load YAML defaults if file exists
               ypath = sys.argv[2]
               if ypath and os.path.isfile(ypath) and yaml is not None:
@@ -620,15 +621,17 @@ jobs:
               add("--gnn-type",    cfg.get("gnn_type"))
               add("--hidden-dim",  cfg.get("hidden_dim"))
               add("--num-layers",  cfg.get("num_layers"))
-              add("--mask-ratio",  cfg.get("mask_ratio"))
+              add("--mask-ratio",  cfg.get("mask_ratio"),0.15)
               flag = cfg.get("contiguous", cfg.get("contiguity"))
 
-              if bool(flag): args.append("--contiguous")
+              if bool(cfg.get("add_3d")): args.append("--add-3d")
+              if bool(cfg.get("contiguous", cfg.get("contiguity"))): args.append("--contiguous")
 
               add("--ema-decay",   cfg.get("ema_decay"))
               add("--lr",          cfg.get("lr"))
-              add("--epochs",      cfg.get("pretrain_epochs", cfg.get("epochs")))
+              add("--epochs",      cfg.get("pretrain_epochs", cfg.get("epochs",20)))
               add("--batch-size",  cfg.get("pretrain_batch_size", cfg.get("batch_size", 4)))
+              if (cfg.get("method","").lower() == "contrastive"): args.append("--contrastive")
 
               print("\\n".join(args))
               ' "$PRETRAIN_JSON" "$PRETRAIN_YAML")
@@ -689,15 +692,44 @@ jobs:
               cd "$APP_DIR"
               mkdir -p logs outputs
 
-              CKPT_DIR="outputs/ckpts/finetune"
+              CKPT_DIR="outputs/ckpt﻿s/finetune"
               mkdir -p "$CKPT_DIR"
-              RESUME_FLAG=""
-
-               # our finetune checkpoints live under seed_<n>/ft_epoch_*.pt
+              RESUME_ARGS=()
               LATEST=$(ls -1t "$CKPT_DIR"/seed_*/ft_epoch_*.pt 2>/dev/null | head -n 1 || true)
               if [ -n "$LATEST" ]; then
                 echo "Resuming from $LATEST"
-                RESUME_FLAG="--resume-ckpt \"$LATEST\""
+                RESUME_ARGS=(--resume-ckpt "$LATEST")
+              fi
+
+              # Build FINETUNE args from best_grid_config.json and default.yaml (if present)
+              FINETUNE_ARR=()
+              if [ -f outputs/best_grid_config.json ] || [ -f default.yaml ]; then
+                FINETUNE_JSON="outputs/best_grid_config.json"
+                FINETUNE_YAML="default.yaml"
+                mapfile -t FINETUNE_ARR < <("$MMBIN" run -n mjepa python -c 'import sys, json, os
+                try:
+                    import yaml
+                except Exception:
+                    yaml=None
+                cfg={}
+                # YAML defaults (top-level or under "finetune")
+                yp=sys.argv[2]
+                if yp and os.path.isfile(yp) and yaml is not None:
+                    y=yaml.safe_load(open(yp)) or {}
+                    y=y.get("finetune", y)
+                    if isinstance(y, dict): cfg.update(y)
+                # Grid JSON overrides
+                jp=sys.argv[1]
+                if jp and os.path.isfile(jp):
+                    j=json.load(open(jp)) or {}
+                    if isinstance(j, dict): cfg.update(j)
+                args=[]
+                def add(flag,val):
+                    if val is None: return
+                    args.extend([flag,str(val)])
+                add("--batch-size", cfg.get("finetune_bs", cfg.get("batch_size", 4)))
+                add("--epochs",     cfg.get("finetune_epochs", cfg.get("epochs", 1)))
+                print("\n".join(args))' "$FINETUNE_JSON" "$FINETUNE_YAML")
               fi
 
               # Finetune stage
@@ -705,19 +737,18 @@ jobs:
               "$MMBIN" run -n mjepa python scripts/train_jepa.py finetune \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --encoder outputs/encoder.pt \
-                --task-type classification \
-                --epochs 1 \
-                --batch-size 4 \
+                --task-type regression \
+                --label-col "measured log solubility in mols per litre" \
+                "${FINETUNE_ARR[@]}" \
                 --num-workers 8 \
                 --patience 10 \
-                --ckpt-dir outputs/ckpts/finetune \
+                --ckpt-dir "$CKPT_DIR" \
                 --save-every 1 \
                 --metric val_loss \
-                $RESUME_FLAG \
+                "${RESUME_ARGS[@]}" \
                 --use-wandb \
                 --seeds 42 \
-                --config default.yaml \
-                2>&1 | tee -a logs/finetune_$(date +%F_%H-%M).log
+                2>&1 | tee -a "logs/finetune_$(date +%F_%H-%M).log"
 
   vast_benchmark:
     name: Conduct Benchmarks
@@ -750,29 +781,71 @@ jobs:
                 exit 1
               fi
               export MAMBA_ROOT_PREFIX="$HOME/micromamba"
-              # ensure micromamba’s shell functions are available in this non-login shell
-              eval "$("$MMBIN" shell hook -s bash)"
-
+              eval "$("$MMBIN" shell hook -s bash)" || true
               cd "$APP_DIR"
               mkdir -p logs outputs
 
-              # Benchmark stage
-              export PYTHONPATH="$APP_DIR:$PYTHONPATH"
-              "$MMBIN" run -n mjepa python scripts/train_jepa.py benchmark \
-                --labeled-dir data/katielinkmoleculenet_benchmark/train \
-                --jepa-encoder outputs/encoder.pt \
-                --contrastive-encoder outputs/encoder_contrastive.pt \
-                --ft-ckpt outputs/ckpts/finetune/seed_0/ft_best.pt \
-                --report-dir outputs/reports \
-                --task-type classification \
-                --epochs 1 \
-                --batch-size 4 \
-                --num-workers 8 \
-                --patience 10 \
-                --use-wandb \
-                --seeds 42 \
-                --config default.yaml \
-                2>&1 | tee -a logs/benchmark_$(date +%F_%H-%M).log
+              export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
+
+              # Build encoder/ckpt args dynamically
+              BENCH_MODEL_ARR=()
+              [ -f outputs/encoder.pt ]             && BENCH_MODEL_ARR+=(--jepa-encoder outputs/encoder.pt)
+              [ -f outputs/encoder_jepa.pt ]        && BENCH_MODEL_ARR+=(--jepa-encoder outputs/encoder_jepa.pt)
+              [ -f outputs/encoder_contrastive.pt ] && BENCH_MODEL_ARR+=(--contrastive-encoder outputs/encoder_contrastive.pt)
+              FT_CKPT=""
+              if compgen -G "outputs/ckpts/finetune/seed_*/ft_best*.pt" > /dev/null; then
+                FT_CKPT="$(ls -1t outputs/ckpts/finetune/seed_*/ft_best*.pt | head -n1)"
+              elif compgen -G "outputs/ckpts/finetune/seed_*/ft_epoch_*.pt" > /dev/null; then
+                FT_CKPT="$(ls -1t outputs/ckpts/finetune/seed_*/ft_epoch_*.pt | head -n1)"
+              fi
+              [ -n "${FT_CKPT:-}" ] && BENCH_MODEL_ARR+=(--ft-ckpt "$FT_CKPT")
+
+              # Merge default.yaml (benchmark:) + best_grid_config.json into CLI flags
+              BENCH_JSON="outputs/best_grid_config.json"
+              BENCH_YAML="default.yaml"
+              BENCH_HPARAM_ARR=()
+              mapfile -t BENCH_HPARAM_ARR < <("$MMBIN" run -n mjepa python -c '
+              import sys, json, os
+              try:
+                  import yaml
+              except Exception:
+                  yaml=None
+              cfg={}
+              # YAML defaults (prefer section "benchmark")
+              yp=sys.argv[2]
+              if yp and os.path.isfile(yp) and yaml is not None:
+                  y=yaml.safe_load(open(yp)) or {}
+                  y=y.get("benchmark", y)
+                  if isinstance(y, dict): cfg.update(y)
+              # Grid JSON (may provide batch_size/epochs via {finetune_bs, epochs})
+              jp=sys.argv[1]
+              if jp and os.path.isfile(jp):
+                  j=json.load(open(jp)) or {}
+                  if isinstance(j, dict): cfg.update(j)
+              args=[]
+              def add(flag,val):
+                  if val is None: return
+                  args.extend([flag,str(val)])
+              # sensible defaults, overrideable by YAML/JSON
+              add("--batch-size", cfg.get("batch_size", cfg.get("finetune_bs", 4)))
+              add("--epochs",     cfg.get("epochs", 1))
+              add("--num-workers",cfg.get("num_workers", 8))
+              add("--patience",   cfg.get("patience", 10))
+              # optional: task/label (default ESOL regression; override in YAML if different)
+              task = cfg.get("task_type") or cfg.get("task") or "regression"
+              label= cfg.get("label_col") or "measured log solubility in mols per litre"
+              args += ["--task-type", str(task), "--label-col", str(label)]
+              seed = cfg.get("seeds") or cfg.get("seed")
+              if seed: args += ["--seeds", str(seed)]
+              print("\n".join(args))' "$BENCH_JSON" "$BENCH_YAML")
+
+                            "$MMBIN" run -n mjepa python scripts/train_jepa.py benchmark \
+                              --labeled-dir data/katielinkmoleculenet_benchmark/train \
+                              --report-dir outputs/reports \
+                              "${BENCH_HPARAM_ARR[@]}" \
+                              "${BENCH_MODEL_ARR[@]}" \
+                              --use-wandb \
+                              2>&1 | tee -a "logs/benchmark_$(date +%F_%H-%M).log"
 
   vast_tox21:
     name: Execute Tox21 Study
@@ -792,18 +865,57 @@ jobs:
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
-              MMBIN="$HOME/micromamba/bin/micromamba"
+
+
+              # --- locate micromamba robustly ---
+              if command -v micromamba >/dev/null 2>&1; then
+                MMBIN="$(command -v micromamba)"
+              elif [ -x "$HOME/.local/bin/micromamba" ]; then
+                MMBIN="$HOME/.local/bin/micromamba"
+              elif [ -x "$HOME/micromamba/bin/micromamba" ]; then
+                MMBIN="$HOME/micromamba/bin/micromamba"
+              else
+                echo "micromamba not found; run the prepare step first." >&2
+                exit 1
+              fi
+              export MAMBA_ROOT_PREFIX="$HOME/micromamba"
+              eval "$("$MMBIN" shell hook -s bash)" || true
+
               cd "$APP_DIR"
               mkdir -p logs outputs
-              # Case study stage
-              "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
-                --csv data/tox21/data.csv \
-                --task NR-AR \
-                --pretrain-epochs 1 \
-                --finetune-epochs 1 \
-                --num-workers 8 \
-                --num-top-exclude 5 \
-                --use-wandb \
-                --config default.yaml \
-                2>&1 | tee -a logs/tox21_$(date +%F_%H-%M).log
+
+              export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
+
+              # Case study stage (remove --config; keep args explicit)
+              TOX_ARR=()
+              mapfile -t TOX_ARR < <("$MMBIN" run -n mjepa python -c '
+              import os, sys
+              try:
+                  import yaml
+              except Exception:
+                  yaml=None
+              args=[]
+              def add(flag,val):
+                  if val is None: return
+                  args.extend([flag,str(val)])
+              cfg={}
+              yp="default.yaml"
+              if os.path.isfile(yp) and yaml is not None:
+                  y=yaml.safe_load(open(yp)) or {}
+                  y=y.get("tox21", y)
+                  if isinstance(y, dict): cfg.update(y)
+              add("--pretrain-epochs", cfg.get("pretrain_epochs", 1))
+              add("--finetune-epochs", cfg.get("finetune_epochs", 1))
+              add("--num-workers",     cfg.get("num_workers", 8))
+              add("--num-top-exclude", cfg.get("num_top_exclude", 5))
+              seed = cfg.get("seeds") or cfg.get("seed")
+              if seed: args += ["--seeds", str(seed)]
+              print("\n".join(args))')
+                            # Case study stage (keep CSV/task explicit, merge the rest)
+                            "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
+                              --csv data/tox21/data.csv \
+                              --task NR-AR \
+                              "${TOX_ARR[@]}" \
+                              --use-wandb \
+                              2>&1 | tee -a "logs/tox21_$(date +%F_%H-%M).log"
 

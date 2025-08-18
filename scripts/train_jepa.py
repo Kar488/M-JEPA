@@ -1551,6 +1551,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Save a pretrain checkpoint every N epochs",
     )
+    pre.add_argument(
+        "--mask-ratio", 
+        type=float, 
+        default=0.15,
+        help="Fraction of nodes to mask in each view (JEPA/contrastive)."
+    )
+
     _add_common_args(pre, "pretrain")
     pre.set_defaults(func=cmd_pretrain)
 
