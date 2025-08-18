@@ -220,9 +220,22 @@ def train_linear_head(
             if not torch.isfinite(preds).all():
                 preds = torch.nan_to_num(preds)
 
-            targets = batch_labels if batch_labels is not None else torch.tensor(
-                dataset.labels[batch_indices], dtype=torch.float32, device=device_t
-            )
+            # Ensure targets are a Tensor on the same device/dtype as preds
+            if batch_labels is not None:
+                targets = batch_labels
+                if not isinstance(targets, torch.Tensor):
+                    targets = torch.tensor(
+                        targets = torch.as_tensor(targets)
+                    )
+                targets = targets.to(device=device_t, dtype=preds.dtype, non_blocking=True)
+            else:
+                targets = torch.tensor(
+                    dataset.labels[batch_indices],
+                    dtype=preds.dtype,
+                    device=device_t,
+                )
+
+            
             # Guard: ensure preds and targets match in length
             assert preds.shape[0] == targets.shape[0], (
                 f"Preds length {preds.shape[0]} != targets length {targets.shape[0]}; "
@@ -256,9 +269,12 @@ def train_linear_head(
                 preds = head(graph_emb).squeeze(1)
                 # Guard against any numerical issues in the head
                 preds = torch.nan_to_num(preds)
+                # Match target dtype/device to preds for MSE
                 targets = torch.tensor(
-                    dataset.labels[batch_indices], dtype=torch.float32, device=device_t
-                )
+                    dataset.labels[batch_indices],
+                    dtype=preds.dtype,
+                    device=device_t,
+                )   
                 vloss = loss_fn(preds, targets).item()
                 val_losses.append(vloss)
             avg_val_loss = float(np.mean(val_losses)) if val_losses else 0.0
