@@ -8,6 +8,16 @@ from rdkit.Chem import rdMolTransforms as MT
 
 from data.mdataset import GraphData
 
+__all__ = [
+    "random_rotation",
+    "mask_random_angle",
+    "perturb_dihedral",
+    "delete_random_bond",
+    "mask_random_atom",
+    "remove_random_subgraph",
+    "apply_graph_augmentations",
+]
+
 
 def random_rotation(mol: Chem.Mol, conf_id: int = 0) -> Chem.Mol:
     """Spin the molecule around like a toy top.
@@ -137,6 +147,88 @@ def _geom_features_for_bond(
         except Exception:
             pass
     return d
+
+
+def delete_random_bond(g: GraphData) -> GraphData:
+    """Remove a random bond (and its reverse) from the graph."""
+    if g.edge_index.shape[1] == 0:
+        return g
+    edges = g.edge_index.T
+    pairs: dict[tuple[int, int], list[int]] = {}
+    for idx, (u, v) in enumerate(edges):
+        key = (int(min(u, v)), int(max(u, v)))
+        pairs.setdefault(key, []).append(idx)
+    key = list(pairs.keys())[np.random.randint(len(pairs))]
+    mask = np.ones(edges.shape[0], dtype=bool)
+    mask[pairs[key]] = False
+    g.edge_index = edges[mask].T
+    if g.edge_attr is not None:
+        g.edge_attr = g.edge_attr[mask]
+    return g
+
+
+def mask_random_atom(g: GraphData) -> GraphData:
+    """Zero out features of a random atom and its incident edges."""
+    n = g.num_nodes()
+    if n == 0:
+        return g
+    idx = int(np.random.randint(n))
+    g.x[idx] = 0
+    if g.edge_attr is not None and g.edge_attr.shape[0] == g.edge_index.shape[1]:
+        mask = (g.edge_index[0] == idx) | (g.edge_index[1] == idx)
+        g.edge_attr[mask] = 0
+    return g
+
+
+def remove_random_subgraph(g: GraphData) -> GraphData:
+    """Remove a small connected subgraph starting from a random atom."""
+    n = g.num_nodes()
+    if n <= 1:
+        return g
+    adj = [[] for _ in range(n)]
+    for u, v in g.edge_index.T:
+        adj[int(u)].append(int(v))
+    start = int(np.random.randint(n))
+    max_size = int(np.random.randint(1, min(4, n)))
+    to_remove = {start}
+    frontier = [start]
+    while frontier and len(to_remove) < max_size:
+        cur = frontier.pop()
+        nbrs = adj[cur]
+        if not nbrs:
+            continue
+        np.random.shuffle(nbrs)
+        for nb in nbrs:
+            if len(to_remove) >= max_size:
+                break
+            if nb not in to_remove:
+                to_remove.add(nb)
+                frontier.append(nb)
+    keep = [i for i in range(n) if i not in to_remove]
+    if len(keep) == n or not keep:
+        return g
+    mapping = {old: new for new, old in enumerate(keep)}
+    g.x = g.x[keep]
+    if g.edge_index.shape[1] > 0:
+        edges = g.edge_index.T
+        edge_mask = np.array(
+            [(u not in to_remove) and (v not in to_remove) for u, v in edges],
+            dtype=bool,
+        )
+        edges = edges[edge_mask]
+        if edges.size == 0:
+            g.edge_index = np.zeros((2, 0), dtype=np.int64)
+            if g.edge_attr is not None:
+                g.edge_attr = g.edge_attr[0:0]
+        else:
+            remapped = np.array(
+                [[mapping[int(u)], mapping[int(v)]] for u, v in edges],
+                dtype=np.int64,
+            )
+            g.edge_index = remapped.T
+            if g.edge_attr is not None:
+                g.edge_attr = g.edge_attr[edge_mask]
+    return g
 
 
 def apply_graph_augmentations(
