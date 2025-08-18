@@ -17,6 +17,9 @@ sys.modules.setdefault("rdkit", rdkit)
 sys.modules.setdefault("rdkit.Chem", Chem)
 sys.modules.setdefault("rdkit.Chem.Scaffolds", Scaffolds)
 sys.modules.setdefault("rdkit.Chem.Scaffolds.MurckoScaffold", MurckoScaffold)
+rdMolTransforms = types.ModuleType("rdMolTransforms")
+Chem.rdMolTransforms = rdMolTransforms
+sys.modules.setdefault("rdkit.Chem.rdMolTransforms", rdMolTransforms)
 
 from experiments.probing import (
     _adj_to_edge_index,

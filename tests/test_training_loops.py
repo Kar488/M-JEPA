@@ -1,7 +1,8 @@
 import numpy as np
 
 from data.mdataset import GraphData
-from training.unsupervised import _batch_iter, _mask_subgraph
+from training.unsupervised import _batch_iter
+from data.augment import mask_subgraph, generate_views
 
 
 def _make_graph(n_nodes: int) -> GraphData:
@@ -21,7 +22,10 @@ def test_batch_iter_and_mask_subgraph():
     assert len(batches) == 2
     assert sum(len(b) for b in batches) == len(graphs)
 
-    ctx, tgt = _mask_subgraph(graphs[0], mask_ratio=0.5, contiguous=False)
+    ctx, tgt = generate_views(
+        graphs[0],
+        structural_ops=[lambda g: mask_subgraph(g, mask_ratio=0.5, contiguous=False)],
+    )
     assert ctx.x.shape[0] + tgt.x.shape[0] == graphs[0].x.shape[0]
     if ctx.edge_index.size > 0:
         assert ctx.edge_index.max() < ctx.x.shape[0]

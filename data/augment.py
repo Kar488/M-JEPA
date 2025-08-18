@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
-from typing import Optional
+from typing import Callable, Iterable, List, Optional, Sequence
 
 from rdkit import Chem
 from rdkit.Chem import rdMolTransforms as MT
@@ -15,6 +15,8 @@ __all__ = [
     "delete_random_bond",
     "mask_random_atom",
     "remove_random_subgraph",
+    "mask_subgraph",
+    "generate_views",
     "apply_graph_augmentations",
 ]
 
@@ -231,6 +233,45 @@ def remove_random_subgraph(g: GraphData) -> GraphData:
     return g
 
 
+def _subgraph(g: GraphData, idx: List[int]) -> GraphData:
+    """Return the induced subgraph on the given node indices."""
+    if len(idx) == 0 or g.x.shape[0] == 0:
+        x = np.zeros((0, g.x.shape[1]), dtype=np.float32)
+        e = np.zeros((2, 0), dtype=np.int64)
+        ea = (
+            None
+            if g.edge_attr is None
+            else np.zeros((0, g.edge_attr.shape[1]), dtype=np.float32)
+        )
+        return GraphData(x=x, edge_index=e, edge_attr=ea)
+    remap = {old: new for new, old in enumerate(idx)}
+    mask = np.isin(g.edge_index[0], idx) & np.isin(g.edge_index[1], idx)
+    e = g.edge_index[:, mask].copy()
+    for t in range(e.shape[1]):
+        e[0, t] = remap[int(e[0, t])]
+        e[1, t] = remap[int(e[1, t])]
+    x = g.x[idx]
+    ea = g.edge_attr[mask] if g.edge_attr is not None else None
+    return GraphData(x=x, edge_index=e, edge_attr=ea)
+
+
+def mask_subgraph(
+    g: GraphData, mask_ratio: float, contiguous: bool
+) -> tuple[GraphData, GraphData]:
+    """Split ``g`` into context and target subgraphs."""
+    n = int(g.x.shape[0])
+    if n == 0:
+        return g, g
+    k = max(1, int(np.ceil(mask_ratio * n)))
+    if contiguous:
+        start = np.random.randint(0, n)
+        tgt = [(start + j) % n for j in range(k)]
+    else:
+        tgt = np.random.choice(n, size=k, replace=False).tolist()
+    ctx = [i for i in range(n) if i not in set(tgt)]
+    return _subgraph(g, ctx), _subgraph(g, tgt)
+
+
 def apply_graph_augmentations(
     g: GraphData,
     *,
@@ -278,3 +319,38 @@ def apply_graph_augmentations(
         geom = np.stack(geom, axis=0)
         g.edge_attr[:, -10:] = geom
     return g
+
+
+def _clone_graph(g: GraphData) -> GraphData:
+    return GraphData(
+        x=g.x.copy(),
+        edge_index=g.edge_index.copy(),
+        edge_attr=None if g.edge_attr is None else g.edge_attr.copy(),
+    )
+
+
+def generate_views(
+    graph: GraphData,
+    structural_ops: Sequence[Callable[[GraphData], GraphData | tuple[GraphData, ...]]] = (),
+    geometric_ops: Sequence[Callable[[GraphData], GraphData]] = (),
+) -> List[GraphData]:
+    """Apply structural and geometric operations to produce graph views."""
+
+    views: List[GraphData] = [_clone_graph(graph)]
+    for op in structural_ops:
+        new_views: List[GraphData] = []
+        for v in views:
+            out = op(_clone_graph(v))
+            if isinstance(out, (list, tuple)):
+                new_views.extend(out)
+            else:
+                new_views.append(out)
+        views = new_views
+
+    final: List[GraphData] = []
+    for v in views:
+        v = _clone_graph(v)
+        for op in geometric_ops:
+            v = op(v)
+        final.append(v)
+    return final

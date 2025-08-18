@@ -48,7 +48,20 @@ data_augment = types.ModuleType("data.augment")
 def apply_graph_augmentations(g, **kwargs):
     return g
 
+def mask_subgraph(g, mask_ratio, contiguous):
+    return g, g
+
+def generate_views(graph, structural_ops=None, geometric_ops=None):
+    if structural_ops:
+        out = structural_ops[0](graph)
+        if isinstance(out, tuple):
+            return list(out)
+        return [out]
+    return [graph]
+
 data_augment.apply_graph_augmentations = apply_graph_augmentations
+data_augment.mask_subgraph = mask_subgraph
+data_augment.generate_views = generate_views
 sys.modules["data.augment"] = data_augment
 
 from training.unsupervised import train_jepa
