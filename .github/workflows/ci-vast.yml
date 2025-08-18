@@ -503,7 +503,7 @@ jobs:
                   --num-layers-list 3 \
                   --gnn-types mpnn \
                   --ema-decays 0.99 \
-                  --add-3d-options 0 \
+                  --add-3d-options 0 1 \
                   --pretrain-batch-sizes 4 \
                   --finetune-batch-sizes 4 \
                   --pretrain-epochs-options 1 \
@@ -602,7 +602,7 @@ jobs:
                   args += ['--batch-size', str(int(conf.get('pretrain_batch_size', conf.get('batch_size', 4))))] 
               print("\n".join(args))
               PY
-              mapfile -t PRETRAIN_ARR < /tmp/pretrain_args.txt
+                            mapfile -t PRETRAIN_ARR < /tmp/pretrain_args.txt
             fi
 
             # Pretraining stage with selected hyper‑parameters.  Contrastive
@@ -611,7 +611,7 @@ jobs:
             export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
             "$MMBIN" run -n mjepa python scripts/train_jepa.py pretrain \
               --unlabeled-dir data/BASF_AIPubChem_v4 \
-              $PRETRAIN_ARGS \
+              "${PRETRAIN_ARR[@]}" \
               --contrastive \
               --num-workers 8 \
               --ckpt-dir "$CKPT_DIR" \
