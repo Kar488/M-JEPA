@@ -642,7 +642,7 @@ jobs:
 
             export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
             "$MMBIN" run -n mjepa python scripts/train_jepa.py pretrain \
-              --unlabeled-dir data/BASF_AIPubChem_v4 \
+              --unlabeled-dir data/ZINC-canonicalized \
               "${PRETRAIN_ARR[@]}" \
               --contrastive \
               --num-workers 8 \
