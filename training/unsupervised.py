@@ -2,28 +2,42 @@ from __future__ import annotations
 
 import math
 import os
-from typing import List, Optional, Tuple
 import time as _time
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import tqdm
+
+try:
+    from data.augment import (
+        apply_graph_augmentations,
+        delete_random_bond,
+        mask_random_atom,
+        remove_random_subgraph,
+    )
+except ImportError:  # pragma: no cover - used in minimal test stubs
+    from data.augment import apply_graph_augmentations
+
+    def delete_random_bond(g):
+        return g
+
+    def mask_random_atom(g):
+        return g
+
+    def remove_random_subgraph(g):
+        return g
+
 
 from data.mdataset import GraphData, GraphDataset
-from data.augment import apply_graph_augmentations
 from utils.checkpoint import load_checkpoint, save_checkpoint
+from utils.ddp import DistributedSamplerList, cleanup, init_distributed, is_main_process
+from utils.graph_ops import _encode_graph, _pool_graph_emb
 from utils.logging import maybe_init_wandb
 from utils.schedule import cosine_with_warmup
-from utils.ddp import (
-    DistributedSamplerList,
-    init_distributed,
-    is_main_process,
-    cleanup,
-)
-from utils.graph_ops import _encode_graph, _pool_graph_emb
-import tqdm
 
 
 def _batch_iter(graphs: List[GraphData], batch_size: int):
@@ -31,7 +45,9 @@ def _batch_iter(graphs: List[GraphData], batch_size: int):
         yield graphs[i : i + batch_size]
 
 
-def _graph_to_tensors(g: GraphData, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+def _graph_to_tensors(
+    g: GraphData, device: torch.device
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Convert GraphData -> (x, adj) tensors on `device`.
     x: [N, F] float32; adj: [N, N] float32, symmetric 0/1.
@@ -49,6 +65,7 @@ def _graph_to_tensors(g: GraphData, device: torch.device) -> Tuple[torch.Tensor,
             adj[ei[1], ei[0]] = 1.0
     return x, adj
 
+
 def _encode(encoder: nn.Module, g: GraphData, device: torch.device) -> torch.Tensor:
     """
     Call `encoder` in a signature-agnostic way:
@@ -60,6 +77,7 @@ def _encode(encoder: nn.Module, g: GraphData, device: torch.device) -> torch.Ten
     except TypeError:
         x, adj = _graph_to_tensors(g, device)
         return encoder(x, adj)
+
 
 def _ensure_2d(x: torch.Tensor) -> torch.Tensor:
     return x if x.dim() == 2 else x.unsqueeze(0)
@@ -106,7 +124,6 @@ def _mask_subgraph(
     return _subgraph(g, ctx), _subgraph(g, tgt)
 
 
-
 def train_jepa(
     dataset: GraphDataset,
     encoder: nn.Module,
@@ -144,11 +161,15 @@ def train_jepa(
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
             encoder.to(device_t),
-            device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None,
+            device_ids=[torch.cuda.current_device()]
+            if device_t.type == "cuda"
+            else None,
         )
         predictor = nn.parallel.DistributedDataParallel(
             predictor.to(device_t),
-            device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None,
+            device_ids=[torch.cuda.current_device()]
+            if device_t.type == "cuda"
+            else None,
         )
         ema_encoder = ema_encoder.to(device_t).eval()
         encoder.train()
@@ -158,17 +179,23 @@ def train_jepa(
         ema_encoder.to(device_t).eval()
         predictor.to(device_t).train()
 
-    # --- Torch compatibility shim: some Torch builds (e.g., 1.13) don't expose torch._dynamo
+    # --- Torch compatibility shim: some Torch builds (e.g., 1.13)
+    # don't expose ``torch._dynamo``
     import torch as _torch
+
     if not hasattr(_torch, "_dynamo"):
+
         class _DummyDynamo:
             def disable(self, fn=None, recursive=False):
                 # Behave like a no-op decorator or direct passthrough
                 if fn is None:
+
                     def _decorator(f):
                         return f
+
                     return _decorator
                 return fn
+
         _torch._dynamo = _DummyDynamo()
 
     opt = optim.Adam(list(encoder.parameters()) + list(predictor.parameters()), lr=lr)
@@ -183,7 +210,6 @@ def train_jepa(
         tags=wandb_tags,
     )
 
-    
     if resume_from and os.path.exists(resume_from):
         ckpt = load_checkpoint(resume_from)
         if "encoder" in ckpt:
@@ -208,13 +234,15 @@ def train_jepa(
     _start_wall = _time.time()
 
     def _time_left() -> bool:
-        return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
-    
+        return (time_budget_mins <= 0) or (
+            (_time.time() - _start_wall) < time_budget_mins * 60
+        )
 
     # Determine whether to disable the progress bar.  We disable bars either
     # explicitly via disable_tqdm or whenever stdout isn’t a TTY (e.g. tests).
     start_epoch = 1
     import sys
+
     disable_bar = disable_tqdm or not sys.stdout.isatty()
     pbar = (
         tqdm.tqdm(
@@ -230,39 +258,38 @@ def train_jepa(
         if not _time_left():
             if is_main_process():
                 wb and wb.log({"early/stop_reason": "time_budget"})
-                tqdm.tqdm.write("Time budget exhausted before next JEPA epoch; stopping.")
+                tqdm.tqdm.write(
+                    "Time budget exhausted before next JEPA epoch; stopping."
+                )
             break
         # Update the bar description when the epoch changes
         if pbar is not None:
             pbar.set_description(f"Epoch {ep}/{epochs}")
-        
+
         ep_loss = 0.0
 
-
         data_iter = (
-            list(DistributedSamplerList(dataset.graphs)) if distributed else dataset.graphs
+            list(DistributedSamplerList(dataset.graphs))
+            if distributed
+            else dataset.graphs
         )
-        
+
         batches_done = 0
         # Iterate over batches and update the outer progress bar each time
         for batch in _batch_iter(data_iter, batch_size):
-
             if max_batches > 0 and batches_done >= max_batches:
                 break
             if not _time_left():
                 if is_main_process():
-                    tqdm.tqdm.write("Time budget exhausted during JEPA epoch; breaking.")
+                    tqdm.tqdm.write(
+                        "Time budget exhausted during JEPA epoch; breaking."
+                    )
                 break
 
             ctx_list, tgt_list = [], []
             for g in batch:
-                if random_rotate or mask_angle or perturb_dihedral:
-                    g = apply_graph_augmentations(
-                        g,
-                        rotate=random_rotate,
-                        mask_angle=mask_angle,
-                        perturb_dihedral=perturb_dihedral,
-                    )
+                # Geometric augmentations are applied in contrastive training
+                # but skipped here to keep JEPA focused on masked prediction.
                 g_ctx, g_tgt = _mask_subgraph(g, mask_ratio, contiguous)
                 with torch.cuda.amp.autocast(
                     enabled=use_amp and device_t.type == "cuda"
@@ -273,8 +300,9 @@ def train_jepa(
                 ctx_list.append(_ensure_2d(h_c))
                 tgt_list.append(_ensure_2d(h_t))
 
-            h_c_nodes = torch.cat(ctx_list, dim=0).to(device_t)  # node embeddings
-            h_t_nodes = torch.cat(tgt_list, dim=0).to(device_t)  # node embeddings
+            # node embeddings
+            h_c_nodes = torch.cat(ctx_list, dim=0).to(device_t)
+            h_t_nodes = torch.cat(tgt_list, dim=0).to(device_t)
             # pool to graph-level
             h_c_g = _pool_graph_emb(h_c_nodes, g_ctx)  # [D] or [B, D]
             h_t_g = _pool_graph_emb(h_t_nodes, g_tgt)  # [D] or [B, D]
@@ -286,7 +314,7 @@ def train_jepa(
                     pred = pred.unsqueeze(0)
                 if h_t_g.dim() == 1 and pred.dim() == 2 and pred.size(0) == 1:
                     h_t_g = h_t_g.unsqueeze(0)
-                    
+
                 l2_reg = sum((p**2).sum() for p in predictor.parameters())
                 loss = mse(pred, h_t_g) + reg_lambda * l2_reg
 
@@ -339,7 +367,7 @@ def train_jepa(
                     ),
                     epoch=ep,
                 )
-        
+
     try:
         if wb and is_main_process():
             wb.finish()
@@ -353,7 +381,7 @@ def train_jepa(
     return losses
 
 
-def train_contrastive( 
+def train_contrastive(
     dataset: GraphDataset,
     encoder: nn.Module,
     projection_dim: int = 64,
@@ -371,7 +399,7 @@ def train_contrastive(
     ckpt_every: int = 10,
     use_scheduler: bool = True,
     warmup_steps: int = 1000,
-    use_amp: bool = True,    
+    use_amp: bool = True,
     random_rotate: bool = False,
     mask_angle: bool = False,
     perturb_dihedral: bool = False,
@@ -387,7 +415,9 @@ def train_contrastive(
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
             encoder.to(device_t),
-            device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None,
+            device_ids=[torch.cuda.current_device()]
+            if device_t.type == "cuda"
+            else None,
         )
         proj = nn.Sequential(
             nn.Linear(256, projection_dim),
@@ -432,15 +462,17 @@ def train_contrastive(
     if ckpt_path:
         os.makedirs(ckpt_path, exist_ok=True)
 
-
     _start_wall = _time.time()
 
     def _time_left() -> bool:
-        return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
+        return (time_budget_mins <= 0) or (
+            (_time.time() - _start_wall) < time_budget_mins * 60
+        )
 
     # Determine whether to disable the progress bar.  Disable when disable_tqdm
     # is set or stdout isn’t a TTY (tests).
     import sys
+
     start_epoch = 1
     disable_bar = disable_tqdm or not sys.stdout.isatty()
     pbar = (
@@ -456,28 +488,31 @@ def train_contrastive(
 
     for ep in range(start_epoch, epochs + 1):
         ep_loss = 0.0
-        
+
         # Update the bar description when the epoch changes
         if pbar is not None:
             pbar.set_description(f"Epoch {ep}/{epochs}")
-    
+
         data_iter = (
-            list(DistributedSamplerList(dataset.graphs)) if distributed else dataset.graphs
+            list(DistributedSamplerList(dataset.graphs))
+            if distributed
+            else dataset.graphs
         )
         # Use a plain batch iterator; progress updates come from the outer bar.
         batch_iter = _batch_iter(data_iter, batch_size)
         batches_done = 0
         for batch in batch_iter:
-
             if max_batches > 0 and batches_done >= max_batches:
                 break
             if not _time_left():
                 if is_main_process():
-                    tqdm.tqdm.write("Time budget exhausted during contrastive epoch; breaking.")
+                    tqdm.tqdm.write(
+                        "Time budget exhausted during contrastive epoch; breaking."
+                    )
                 break
 
             z1_list, z2_list = [], []
-            for g in batch: 
+            for g in batch:
                 if random_rotate or mask_angle or perturb_dihedral:
                     g = apply_graph_augmentations(
                         g,
@@ -485,11 +520,15 @@ def train_contrastive(
                         mask_angle=mask_angle,
                         perturb_dihedral=perturb_dihedral,
                     )
+                # Apply structural augmentations before creating multiple views
+                g = delete_random_bond(g)
+                g = mask_random_atom(g)
+                g = remove_random_subgraph(g)
                 v1, _ = _mask_subgraph(g, mask_ratio, contiguous=False)
                 v2, _ = _mask_subgraph(g, mask_ratio, contiguous=False)
                 with torch.cuda.amp.autocast(
                     enabled=use_amp and device_t.type == "cuda"
-                ): 
+                ):
                     h1 = _ensure_2d(_encode(encoder, v1, device_t))
                     h2 = _ensure_2d(_encode(encoder, v2, device_t))
                     if isinstance(proj[0], nn.Linear) and proj[
