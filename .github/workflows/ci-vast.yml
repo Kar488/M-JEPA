@@ -510,12 +510,13 @@ jobs:
                   --finetune-epochs-options 1 \
                   --learning-rates 1e-4 \
                   --seeds 1 2 3 \
-                  --sample-unlabeled 0 \
-                  --sample-labeled 0 \
+                  --sample-unlabeled 50000 \
+                  --sample-labeled 5000 \
+                  --n-rows-per-file 50 \
                   --max-pretrain-batches 0 \
                   --max-finetune-batches 0 \
                   --num-workers 8 \
-                  --time-budget-mins 0 \
+                  --time-budget-mins 60 \
                   --force-tqdm \
                   --out-csv outputs/grid_results.csv \
                   --best-config-out outputs/best_grid_config.json \
