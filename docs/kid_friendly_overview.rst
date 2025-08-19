@@ -1,7 +1,7 @@
 M-JEPA: A Kid-Friendly Guide
 ============================
 
-Welcome to the M-JEPA project! Think of this repository as a giant science lab where computers learn to understand molecules. 
+Welcome to the M-JEPA project! Think of this repository as a giant science lab where computers learn to understand molecules.
 Each folder is like a different lab room with its own tools. Here's a tour that explains everything in simple, kid-friendly language.
 
 Main Entrance: ``main.py``
@@ -56,7 +56,7 @@ These are different "brains" that understand molecular graphs.
   Implements Exponential Moving Average (EMA) to keep a smooth version of the model's weights, which helps with stability.
 
 ``factory.py``
-  A factory that builds models based on the configuration settings. It can create different types of encoders and predictors.  
+  A factory that builds models based on the configuration settings. It can create different types of encoders and predictors.
 
 Training Room: ``training/``
 ----------------------------------------
@@ -127,7 +127,7 @@ Small programs for everyday tasks.
 
 Docs and Configs
 ----------------------------------------
-``configs/default.yaml``
+``scripts/default.yaml``
   Example configuration settings.
 
 ``docs/``
@@ -168,7 +168,7 @@ This room plugs our lab into baseline models from other projects.
 
 Conclusion
 ----------
-This repository is a playground for teaching computers how molecules behave. It has tools for data, model building, training, experimenting, and evaluating. 
+This repository is a playground for teaching computers how molecules behave. It has tools for data, model building, training, experimenting, and evaluating.
 Each module is built to be modular and reusable so you can mix and match pieces to fit your research needs.
 
 Have fun exploring!
