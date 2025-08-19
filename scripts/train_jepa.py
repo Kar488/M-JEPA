@@ -28,9 +28,9 @@ import logging
 import os
 import sys
 import time
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, TYPE_CHECKING
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
 
 import numpy as np
 import torch
@@ -39,15 +39,19 @@ import yaml
 try:
     from data.augment import iter_augmentation_options  # type: ignore
 except Exception:
+
     def iter_augmentation_options(rot_flags, ang_flags, dih_flags):
         """Fallback generator producing AugmentationConfig objects from 0/1 flags."""
         rot_flags = tuple(bool(int(x)) for x in rot_flags)
         ang_flags = tuple(bool(int(x)) for x in ang_flags)
         dih_flags = tuple(bool(int(x)) for x in dih_flags)
         import inspect
+
         params = set()
         try:
-            params = set(inspect.signature(AugmentationConfig).parameters.keys()) - {"self"}
+            params = set(inspect.signature(AugmentationConfig).parameters.keys()) - {
+                "self"
+            }
         except Exception:
             pass
         for r in rot_flags:
@@ -69,21 +73,32 @@ except Exception:
                     except Exception:
                         # fallback duck type
                         from types import SimpleNamespace
+
                         yield SimpleNamespace(
-                            random_rotate=r, rotate=r,
+                            random_rotate=r,
+                            rotate=r,
                             mask_angle=a,
-                            perturb_dihedral=d, dihedral=d,
+                            perturb_dihedral=d,
+                            dihedral=d,
                         )
 
-if TYPE_CHECKING:
+
+# Attempt to import the dataset class at runtime while still allowing the
+# module to be imported when the dependency is missing.  When unavailable,
+# `GraphDataset` is set to ``None`` and the original exception is stored so
+# that callers can receive a clear error message when trying to load data.
+try:  # pragma: no cover - exercised via runtime import
     from data.mdataset import GraphDataset
-else:
-    GraphDataset = Any  # runtime placeholder
+
+    _GRAPH_DATASET_IMPORT_ERROR: Optional[Exception] = None
+except Exception as e:  # pragma: no cover - import-time failure path
+    GraphDataset = None  # type: ignore[assignment]
+    _GRAPH_DATASET_IMPORT_ERROR = e
 
 # Attempt to import reusable components from the package.
 try:
-    from data.mdataset import GraphData
     from data.augment import AugmentationConfig
+    from data.mdataset import GraphData
 
 except Exception:
     GraphData = None  # type: ignore[assignment]
@@ -327,6 +342,11 @@ def load_directory_dataset(
     max_graphs: Optional[int] = None,
     num_workers: int = 0,
 ) -> "GraphDataset":
+    if GraphDataset is None:
+        raise ImportError(
+            "GraphDataset is unavailable. Ensure `data.mdataset.GraphDataset`"
+            " can be imported."
+        ) from _GRAPH_DATASET_IMPORT_ERROR
     return GraphDataset.from_directory(
         dirpath=dirpath,
         ext=ext,
@@ -351,6 +371,11 @@ def load_parquet_dataset(
     random_seed: Optional[int] = None,
     n_rows: Optional[int] = None,
 ) -> "GraphDataset":
+    if GraphDataset is None:
+        raise ImportError(
+            "GraphDataset is unavailable. Ensure `data.mdataset.GraphDataset`"
+            " can be imported."
+        ) from _GRAPH_DATASET_IMPORT_ERROR
     return GraphDataset.from_parquet(
         filepath=filepath,
         smiles_col=smiles_col,
@@ -381,14 +406,15 @@ CONFIG = load_config(Path(__file__).with_name("default.yaml"))
 _aug_raw = CONFIG.get("pretrain", {}).get("augmentations", {}) or {}
 _aug_raw = {
     # accept either style from YAML
-    "rotate":          bool(_aug_raw.get("rotate",          _aug_raw.get("random_rotate", False))),
-    "mask_angle":      bool(_aug_raw.get("mask_angle",      False)),
-    "dihedral":        bool(_aug_raw.get("dihedral",        _aug_raw.get("perturb_dihedral", False))),
+    "rotate": bool(_aug_raw.get("rotate", _aug_raw.get("random_rotate", False))),
+    "mask_angle": bool(_aug_raw.get("mask_angle", False)),
+    "dihedral": bool(_aug_raw.get("dihedral", _aug_raw.get("perturb_dihedral", False))),
 }
 
 # Build DEFAULT_AUG robustly against differing constructor names
 try:
     import inspect
+
     params = set(inspect.signature(AugmentationConfig).parameters.keys()) - {"self"}
 except Exception:
     params = set()
@@ -413,6 +439,7 @@ try:
 except Exception:
     # Last resort — provide a duck-typed object with expected attrs
     from types import SimpleNamespace
+
     DEFAULT_AUG = SimpleNamespace(
         rotate=_aug_raw["rotate"],
         mask_angle=_aug_raw["mask_angle"],
@@ -617,7 +644,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         logger.exception("JEPA pretraining failed")
         wb.log({"phase": "pretrain", "status": "error"})
         sys.exit(2)
-    
+
     aug_cfg = AugmentationConfig(
         rotate=args.aug_rotate,
         mask_angle=args.aug_mask_angle,
