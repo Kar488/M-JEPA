@@ -36,7 +36,44 @@ import numpy as np
 import torch
 import yaml
 
-from data.augment import iter_augmentation_options
+try:
+    from data.augment import iter_augmentation_options  # type: ignore
+except Exception:
+    def iter_augmentation_options(rot_flags, ang_flags, dih_flags):
+        """Fallback generator producing AugmentationConfig objects from 0/1 flags."""
+        rot_flags = tuple(bool(int(x)) for x in rot_flags)
+        ang_flags = tuple(bool(int(x)) for x in ang_flags)
+        dih_flags = tuple(bool(int(x)) for x in dih_flags)
+        import inspect
+        params = set()
+        try:
+            params = set(inspect.signature(AugmentationConfig).parameters.keys()) - {"self"}
+        except Exception:
+            pass
+        for r in rot_flags:
+            for a in ang_flags:
+                for d in dih_flags:
+                    kwargs = {}
+                    if "random_rotate" in params:
+                        kwargs["random_rotate"] = r
+                    elif "rotate" in params:
+                        kwargs["rotate"] = r
+                    if "mask_angle" in params:
+                        kwargs["mask_angle"] = a
+                    if "perturb_dihedral" in params:
+                        kwargs["perturb_dihedral"] = d
+                    elif "dihedral" in params:
+                        kwargs["dihedral"] = d
+                    try:
+                        yield AugmentationConfig(**kwargs)  # type: ignore
+                    except Exception:
+                        # fallback duck type
+                        from types import SimpleNamespace
+                        yield SimpleNamespace(
+                            random_rotate=r, rotate=r,
+                            mask_angle=a,
+                            perturb_dihedral=d, dihedral=d,
+                        )
 
 if TYPE_CHECKING:
     from data.mdataset import GraphDataset
@@ -341,9 +378,48 @@ def load_config(config_path: str) -> dict:
 
 # Load defaults eagerly.  These are used as defaults for CLI arguments.
 CONFIG = load_config(Path(__file__).with_name("default.yaml"))
-DEFAULT_AUG = AugmentationConfig.from_dict(
-    CONFIG.get("pretrain", {}).get("augmentations", {})
-)
+_aug_raw = CONFIG.get("pretrain", {}).get("augmentations", {}) or {}
+_aug_raw = {
+    # accept either style from YAML
+    "rotate":          bool(_aug_raw.get("rotate",          _aug_raw.get("random_rotate", False))),
+    "mask_angle":      bool(_aug_raw.get("mask_angle",      False)),
+    "dihedral":        bool(_aug_raw.get("dihedral",        _aug_raw.get("perturb_dihedral", False))),
+}
+
+# Build DEFAULT_AUG robustly against differing constructor names
+try:
+    import inspect
+    params = set(inspect.signature(AugmentationConfig).parameters.keys()) - {"self"}
+except Exception:
+    params = set()
+
+_mapped = {}
+if "random_rotate" in params:
+    _mapped["random_rotate"] = _aug_raw["rotate"]
+elif "rotate" in params:
+    _mapped["rotate"] = _aug_raw["rotate"]
+
+if "mask_angle" in params:
+    _mapped["mask_angle"] = _aug_raw["mask_angle"]
+
+if "perturb_dihedral" in params:
+    _mapped["perturb_dihedral"] = _aug_raw["dihedral"]
+elif "dihedral" in params:
+    _mapped["dihedral"] = _aug_raw["dihedral"]
+
+try:
+    # Prefer keyword construction with mapped names
+    DEFAULT_AUG = AugmentationConfig(**_mapped)  # type: ignore[arg-type]
+except Exception:
+    # Last resort — provide a duck-typed object with expected attrs
+    from types import SimpleNamespace
+    DEFAULT_AUG = SimpleNamespace(
+        rotate=_aug_raw["rotate"],
+        mask_angle=_aug_raw["mask_angle"],
+        dihedral=_aug_raw["dihedral"],
+        random_rotate=_aug_raw["rotate"],
+        perturb_dihedral=_aug_raw["dihedral"],
+    )
 
 
 # ---------------------------------------------------------------------------

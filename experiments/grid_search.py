@@ -223,21 +223,19 @@ def _build_configs(
     )
     configs = [
         Config(
-            mask_ratio,
-            contiguous,
-            hidden_dim,
-            num_layers,
-            gnn_type,
-            ema_decay,
-            add_3d,
-            aug.random_rotate,
-            aug.mask_angle,
-            aug.perturb_dihedral,
-            pre_bs,
-            finetune_bs,
-            pre_epochs,
-            finetune_epochs,
-            lr,
+            mask_ratio=mask_ratio,
+            contiguous=contiguous,
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            gnn_type=gnn_type,
+            ema_decay=ema_decay,
+            add_3d=add_3d,
+            augmentations=aug,            # <-- pass the whole AugmentationConfig
+            pretrain_bs=pre_bs,
+            finetune_bs=finetune_bs,
+            pretrain_epochs=pre_epochs,
+            finetune_epochs=finetune_epochs,
+            lr=lr,
         )
         for (
             mask_ratio,
@@ -700,6 +698,10 @@ def _run_one_config_method(
                 )
                 break
             _tb = 0 if math.isinf(remaining) else remaining
+            # normalize aug names (supports rotate/dihedral or random_rotate/perturb_dihedral)
+            _rot = getattr(cfg.augmentations, "random_rotate", getattr(cfg.augmentations, "rotate", False))
+            _dih = getattr(cfg.augmentations, "perturb_dihedral", getattr(cfg.augmentations, "dihedral", False))
+            _ang = getattr(cfg.augmentations, "mask_angle", False)
             try:
                 train_contrastive(
                     dataset=ds_pre,
@@ -716,13 +718,14 @@ def _run_one_config_method(
                     ckpt_every=ckpt_every,
                     use_scheduler=use_scheduler,
                     warmup_steps=warmup_steps,
-                    random_rotate=cfg.augmentations.rotate,
-                    mask_angle=cfg.augmentations.mask_angle,
-                    perturb_dihedral=cfg.augmentations.dihedral,
+                    random_rotate=_rot,
+                    mask_angle=_ang,
+                    perturb_dihedral=_dih,
                     max_batches=max_pretrain_batches,
                     time_budget_mins=_tb,
                 )
             except TypeError:
+                # older signature without extra knobs
                 train_contrastive(
                     dataset=ds_pre,
                     encoder=encoder,
@@ -733,9 +736,9 @@ def _run_one_config_method(
                     lr=cfg.lr,
                     device=device,
                     temperature=0.1,
-                    random_rotate=cfg.aug_rotate,
-                    mask_angle=cfg.aug_mask_angle,
-                    perturb_dihedral=cfg.aug_dihedral,
+                    random_rotate=_rot,
+                    mask_angle=_ang,
+                    perturb_dihedral=_dih,
                 )
             remaining = time_left() if time_left is not None else float("inf")
             if remaining <= 0:
