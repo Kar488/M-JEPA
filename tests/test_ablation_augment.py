@@ -11,6 +11,7 @@ def test_run_ablation_forwards_augment(monkeypatch):
     pytest.importorskip("torch")
     pytest.importorskip("rdkit")
     from experiments import ablation
+    from data.augment import AugmentationConfig
 
     calls = []
 
@@ -24,7 +25,9 @@ def test_run_ablation_forwards_augment(monkeypatch):
     monkeypatch.setattr(ablation, "train_jepa", fake_train_jepa)
     monkeypatch.setattr(ablation, "train_linear_head", fake_train_head)
 
-    df = ablation.run_ablation(aug_rotate=True, aug_mask_angle=True, aug_dihedral=True)
+    df = ablation.run_ablation(
+        augmentations=AugmentationConfig(rotate=True, mask_angle=True, dihedral=True)
+    )
     assert isinstance(df, pd.DataFrame)
     assert not df.empty
     assert calls and all(rr and ma and pd for rr, ma, pd in calls)

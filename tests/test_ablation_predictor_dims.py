@@ -2,6 +2,7 @@ import sys
 import types
 import pandas as pd
 import pytest
+from dataclasses import dataclass
 
 @pytest.fixture(autouse=True)
 def _silence_tqdm(monkeypatch):
@@ -61,6 +62,26 @@ def test_run_ablation_uses_int_dims(monkeypatch):
     unsup_mod = types.ModuleType("training.unsupervised")
     unsup_mod.train_jepa = lambda *a, **k: None
     monkeypatch.setitem(sys.modules, "training.unsupervised", unsup_mod)
+
+    aug_mod = types.ModuleType("data.augment")
+
+    @dataclass(frozen=True)
+    class AugmentationConfig:
+        rotate: bool = False
+        mask_angle: bool = False
+        dihedral: bool = False
+
+        @classmethod
+        def from_dict(cls, cfg=None):
+            cfg = cfg or {}
+            return cls(
+                rotate=bool(cfg.get("rotate", False)),
+                mask_angle=bool(cfg.get("mask_angle", False)),
+                dihedral=bool(cfg.get("dihedral", False)),
+            )
+
+    aug_mod.AugmentationConfig = AugmentationConfig
+    monkeypatch.setitem(sys.modules, "data.augment", aug_mod)
 
     import experiments.ablation as ablation
 

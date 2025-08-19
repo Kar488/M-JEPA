@@ -45,6 +45,21 @@ sys.modules["utils.pooling"] = utils_pooling
 # data.augment stub
 data_augment = types.ModuleType("data.augment")
 
+@dataclass(frozen=True)
+class AugmentationConfig:
+    rotate: bool = False
+    mask_angle: bool = False
+    dihedral: bool = False
+
+    @classmethod
+    def from_dict(cls, cfg=None):
+        cfg = cfg or {}
+        return cls(
+            rotate=bool(cfg.get("rotate", False)),
+            mask_angle=bool(cfg.get("mask_angle", False)),
+            dihedral=bool(cfg.get("dihedral", False)),
+        )
+
 def apply_graph_augmentations(g, **kwargs):
     return g
 
@@ -62,6 +77,7 @@ def generate_views(graph, structural_ops=None, geometric_ops=None):
 data_augment.apply_graph_augmentations = apply_graph_augmentations
 data_augment.mask_subgraph = mask_subgraph
 data_augment.generate_views = generate_views
+data_augment.AugmentationConfig = AugmentationConfig
 sys.modules["data.augment"] = data_augment
 
 from training.unsupervised import train_jepa

@@ -63,6 +63,7 @@ def test_grid_search_small(fake_train_head, wb,tmp_parquet):
 
     pytest.importorskip("rdkit")
     from experiments.grid_search import run_grid_search
+    from data.augment import AugmentationConfig
 
     if SOURCE.exists():
         try:
@@ -130,9 +131,7 @@ def test_grid_search_small(fake_train_head, wb,tmp_parquet):
     df_res = run_grid_search(
         dataset_fn=small_dataset_fn,
         task_type="classification",
-        aug_rotate_options=(False,),
-        aug_mask_angle_options=(False,),
-        aug_dihedral_options=(False,),
+        augmentation_options=(AugmentationConfig(),),
         seeds=(42,),
         add_3d_options=(False,),
         mask_ratios=(0.10,),

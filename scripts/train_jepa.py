@@ -28,6 +28,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -36,9 +37,27 @@ import yaml
 # Attempt to import reusable components from the package.
 try:
     from data.mdataset import GraphData, GraphDataset
+    from data.augment import AugmentationConfig
 
 except Exception:
+    GraphData = GraphDataset = None  # type: ignore[assignment]
     load_directory_dataset = None  # type: ignore[assignment]
+
+    @dataclass(frozen=True)
+    class AugmentationConfig:
+        rotate: bool = False
+        mask_angle: bool = False
+        dihedral: bool = False
+
+        @classmethod
+        def from_dict(cls, cfg: Optional[dict] = None) -> "AugmentationConfig":
+            cfg = cfg or {}
+            return cls(
+                rotate=bool(cfg.get("rotate", False)),
+                mask_angle=bool(cfg.get("mask_angle", False)),
+                dihedral=bool(cfg.get("dihedral", False)),
+            )
+
 
 # Models
 try:
@@ -315,6 +334,9 @@ def load_config(config_path: str) -> dict:
 
 # Load defaults eagerly.  These are used as defaults for CLI arguments.
 CONFIG = load_config(Path(__file__).with_name("default.yaml"))
+DEFAULT_AUG = AugmentationConfig.from_dict(
+    CONFIG.get("pretrain", {}).get("augmentations", {})
+)
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +523,12 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         logger.exception("JEPA pretraining failed")
         wb.log({"phase": "pretrain", "status": "error"})
         sys.exit(2)
+    
+    aug_cfg = AugmentationConfig(
+        rotate=args.aug_rotate,
+        mask_angle=args.aug_mask_angle,
+        dihedral=args.aug_dihedral,
+    )
 
     # Optionally run contrastive baseline
     if args.contrastive:
@@ -522,9 +550,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 lr=args.lr,
                 device=device,
                 use_wandb=args.use_wandb,
-                random_rotate=args.aug_rotate,
-                mask_angle=args.aug_mask_angle,
-                perturb_dihedral=args.aug_dihedral,
+                random_rotate=aug_cfg.rotate,
+                mask_angle=aug_cfg.mask_angle,
+                perturb_dihedral=aug_cfg.dihedral,
                 wandb_project=args.wandb_project,
                 wandb_tags=args.wandb_tags,
                 disable_tqdm=True,  # suppress single‑epoch progress bars
@@ -1156,14 +1184,25 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     # Convert numerical lists to tuples and boolean flags
     contiguities = tuple(bool(c) for c in args.contiguities)
     add_3d_opts = tuple(bool(a) for a in args.add_3d_options)
-    aug_rotate_opts = tuple(bool(a) for a in getattr(args, "aug_rotate_options", [0]))
-    aug_mask_angle_opts = tuple(bool(a) for a in getattr(args, "aug_mask_angle_options", [0]))
-    aug_dihedral_opts = tuple(bool(a) for a in getattr(args, "aug_dihedral_options", [0]))
+    aug_rotate_opts = tuple(
+        bool(a) for a in getattr(args, "aug_rotate_options", [int(DEFAULT_AUG.rotate)])
+    )
+    aug_mask_angle_opts = tuple(
+        bool(a) for a in getattr(args, "aug_mask_angle_options", [int(DEFAULT_AUG.mask_angle)])
+    )
+    aug_dihedral_opts = tuple(
+        bool(a) for a in getattr(args, "aug_dihedral_options", [int(DEFAULT_AUG.dihedral)])
+    )
+
+    from itertools import product
+
+    augmentation_options = tuple(
+        AugmentationConfig(rotate=r, mask_angle=m, dihedral=d)
+        for r, m, d in product(aug_rotate_opts, aug_mask_angle_opts, aug_dihedral_opts)
+    )
 
     if "contrastive" not in {m.lower() for m in args.methods}:
-        aug_rotate_opts = (False,)
-        aug_mask_angle_opts = (False,)
-        aug_dihedral_opts = (False,)
+        augmentation_options = (AugmentationConfig(),)
     seeds: tuple
     # Determine seeds: use CLI if provided, otherwise fall back to configuration defaults
     if args.seeds is not None and len(args.seeds) > 0:
@@ -1326,9 +1365,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             gnn_types=tuple(args.gnn_types),
             ema_decays=tuple(args.ema_decays),
             add_3d_options=add_3d_opts,
-            aug_rotate_options=aug_rotate_opts,
-            aug_mask_angle_options=aug_mask_angle_opts,
-            aug_dihedral_options=aug_dihedral_opts,
+            augmentation_options=augmentation_options,
             pretrain_batch_sizes=tuple(args.pretrain_batch_sizes),
             finetune_batch_sizes=tuple(args.finetune_batch_sizes),
             pretrain_epochs_options=tuple(args.pretrain_epochs_options),
@@ -1457,16 +1494,19 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     p.add_argument(
         "--aug-rotate",
         action="store_true",
+        default=DEFAULT_AUG.rotate,
         help="Randomly rotate coordinates during pretraining",
     )
     p.add_argument(
         "--aug-mask-angle",
         action="store_true",
+        default=DEFAULT_AUG.mask_angle,
         help="Mask bond angles during pretraining",
     )
     p.add_argument(
         "--aug-dihedral",
         action="store_true",
+        default=DEFAULT_AUG.dihedral,
         help="Perturb dihedral angles during pretraining",
     )
     # Optimisation
@@ -1855,21 +1895,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--aug-rotate-options",
         type=int,
         nargs="+",
-        default=[0],
+        default=[int(DEFAULT_AUG.rotate)],
         help="Apply random rotation augmentation (0 for False, 1 for True)",
     )
     grid.add_argument(
         "--aug-mask-angle-options",
         type=int,
         nargs="+",
-        default=[0],
+        default=[int(DEFAULT_AUG.mask_angle)],
         help="Apply angle masking augmentation (0 for False, 1 for True)",
     )
     grid.add_argument(
         "--aug-dihedral-options",
         type=int,
         nargs="+",
-        default=[0],
+        default=[int(DEFAULT_AUG.dihedral)],
         help="Apply dihedral perturbation augmentation (0 for False, 1 for True)",
     )
     grid.add_argument(

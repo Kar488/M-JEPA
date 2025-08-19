@@ -68,6 +68,7 @@ def test_ensure_graph_dataset_and_dataset_from_loader(gs_module):
 
 
 def test_build_configs_and_normalize(gs_module):
+    from data.augment import AugmentationConfig
     cfgs = gs_module._build_configs(
         mask_ratios=(0.1,),
         contiguities=(False,),
@@ -76,9 +77,7 @@ def test_build_configs_and_normalize(gs_module):
         gnn_types=("gcn",),
         ema_decays=(0.9,),
         add_3d_options=(False,),
-        aug_rotate_options=(False,),
-        aug_mask_angle_options=(False,),
-        aug_dihedral_options=(False,),
+        augmentation_options=(AugmentationConfig(),),
         pretrain_batch_sizes=(8,),
         finetune_batch_sizes=(4,),
         pretrain_epochs_options=(1,),

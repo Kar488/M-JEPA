@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from data.mdataset import GraphDataset
+from data.augment import AugmentationConfig
 from models.ema import EMA
 from models.encoder import GNNEncoder
 from models.predictor import MLPPredictor
@@ -46,15 +47,11 @@ class Config:
     num_layers: int
     ema_decay: float
     gnn_type: str
-    random_rotate: bool
-    mask_angle: bool
-    perturb_dihedral: bool
+    augmentations: AugmentationConfig
 
 
 def run_ablation(
-    aug_rotate: bool = False,
-    aug_mask_angle: bool = False,
-    aug_dihedral: bool = False,
+    augmentations: AugmentationConfig = AugmentationConfig(),
     *,
     # Real-run inputs (optional): pass either datasets OR SMILES+labels
     dataset_class: Optional[object] = None,
@@ -113,9 +110,12 @@ def run_ablation(
     param_grid = dict(
         mask_ratio=[0.1, 0.15, 0.25],
         contiguous=[False, True],
-        random_rotate=[True] if aug_rotate else [False, True],
-        mask_angle=[True] if aug_mask_angle else [False, True],
-        perturb_dihedral=[True] if aug_dihedral else [False, True],
+         augmentations=[
+            AugmentationConfig(rotate=r, mask_angle=m, dihedral=d)
+            for r in ([True] if augmentations.rotate else [False, True])
+            for m in ([True] if augmentations.mask_angle else [False, True])
+            for d in ([True] if augmentations.dihedral else [False, True])
+        ],
         hidden_dim=[128, 256],          # ints
         num_layers=[2, 3],              # ints
         ema_decay=[0.95, 0.99],         # floats
@@ -141,6 +141,7 @@ def run_ablation(
             num_layers=params["num_layers"],
             gnn_type=params["gnn_type"],
         )
+        aug_cfg = params["augmentations"]
         ema_helper = EMA(encoder, decay=params["ema_decay"])
         predictor = MLPPredictor(
             embed_dim=params["hidden_dim"],
@@ -159,9 +160,9 @@ def run_ablation(
             lr=lr_pretrain,
             device=device,
             reg_lambda=1e-4,
-            random_rotate=params["random_rotate"],
-            mask_angle=params["mask_angle"],
-            perturb_dihedral=params["perturb_dihedral"],
+            random_rotate=aug_cfg.rotate,
+            mask_angle=aug_cfg.mask_angle,
+            perturb_dihedral=aug_cfg.dihedral,
         )
 
         # Linear head training (tests monkeypatch this to a tiny dict)
@@ -189,9 +190,7 @@ def run_ablation(
         cfg = Config(
             mask_ratio=params["mask_ratio"],
             contiguous=params["contiguous"],
-            random_rotate=params["random_rotate"],
-            mask_angle=params["mask_angle"],
-            perturb_dihedral=params["perturb_dihedral"],
+            augmentations=aug_cfg,
             hidden_dim=params["hidden_dim"],
             num_layers=params["num_layers"],
             ema_decay=params["ema_decay"],
@@ -203,7 +202,10 @@ def run_ablation(
             "rmse": reg_metrics.get("rmse", float("nan")),
             "mae": reg_metrics.get("mae", float("nan")),
         }
-        configs.append(asdict(cfg))
+        cfg_dict = asdict(cfg)
+        aug_dict = cfg_dict.pop("augmentations")
+        cfg_dict.update(aug_dict)
+        configs.append(cfg_dict)
         results.append(row)
 
     return pd.concat([pd.DataFrame(configs), pd.DataFrame(results)], axis=1)

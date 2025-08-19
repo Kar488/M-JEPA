@@ -7,8 +7,10 @@ from rdkit import Chem
 from rdkit.Chem import rdMolTransforms as MT
 
 from data.mdataset import GraphData
+from dataclasses import dataclass
 
 __all__ = [
+    "AugmentationConfig",
     "random_rotation",
     "mask_random_angle",
     "perturb_dihedral",
@@ -19,6 +21,26 @@ __all__ = [
     "generate_views",
     "apply_graph_augmentations",
 ]
+
+@dataclass(frozen=True)
+class AugmentationConfig:
+    """Default settings for geometric augmentations."""
+
+    rotate: bool = False
+    mask_angle: bool = False
+    dihedral: bool = False
+
+    @classmethod
+    def from_dict(cls, cfg: Optional[dict] = None) -> "AugmentationConfig":
+        """Create an :class:`AugmentationConfig` from a dictionary."""
+
+        cfg = cfg or {}
+        return cls(
+            rotate=bool(cfg.get("rotate", False)),
+            mask_angle=bool(cfg.get("mask_angle", False)),
+            dihedral=bool(cfg.get("dihedral", False)),
+        )
+
 
 
 def random_rotation(mol: Chem.Mol, conf_id: int = 0) -> Chem.Mol:
