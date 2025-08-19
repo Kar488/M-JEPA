@@ -1,24 +1,36 @@
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 from itertools import product
 from typing import Dict, List, NamedTuple, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 
-from dataclasses import asdict, dataclass
-
 try:  # augmentation utilities are optional in some tests
     from data.augment import AugmentationConfig, iter_augmentation_options
 except Exception:  # pragma: no cover - fallback stubs
+
     @dataclass(frozen=True)
     class AugmentationConfig:  # type: ignore[misc]
         random_rotate: bool = False
         mask_angle: bool = False
         perturb_dihedral: bool = False
 
-    def iter_augmentation_options(*args, **kwargs):  # type: ignore
-        yield AugmentationConfig()
+    def iter_augmentation_options(
+        rotate_opts=None,
+        mask_angle_opts=None,
+        dihedral_opts=None,
+    ):  # type: ignore
+        """Yield ``AugmentationConfig`` for combinations of provided flags."""
+
+        r_opts = [bool(v) for v in (rotate_opts or (False, True))]
+        m_opts = [bool(v) for v in (mask_angle_opts or (False, True))]
+        d_opts = [bool(v) for v in (dihedral_opts or (False, True))]
+
+        for r, m, d in product(r_opts, m_opts, d_opts):
+            yield AugmentationConfig(random_rotate=r, mask_angle=m, perturb_dihedral=d)
+
 
 from data.mdataset import GraphDataset
 from models.ema import EMA
