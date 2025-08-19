@@ -517,8 +517,12 @@ def train_contrastive(
                         )
                     z1_list.append(proj(h1))
                     z2_list.append(proj(h2))
-            z1 = F.normalize(torch.cat(z1_list, dim=0), dim=-1)
-            z2 = F.normalize(torch.cat(z2_list, dim=0), dim=-1)
+            z1 = torch.nan_to_num(
+                F.normalize(torch.cat(z1_list, dim=0), dim=-1)
+            )
+            z2 = torch.nan_to_num(
+                F.normalize(torch.cat(z2_list, dim=0), dim=-1)
+            )
             with torch.cuda.amp.autocast(enabled=use_amp and device_t.type == "cuda"):
                 logits = z1 @ z2.t() / temperature
                 target = torch.arange(z1.size(0), device=device_t)

@@ -1,18 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import product
-from typing import Callable, Iterable, Iterator, List, Optional, Sequence
-
-import numpy as np
-from rdkit import Chem
-from rdkit.Chem import rdMolTransforms as MT
-
-from data.mdataset import GraphData
 from dataclasses import dataclass
+from itertools import product
+from typing import Any, Callable, Iterable, Iterator, List, Optional, Sequence, TYPE_CHECKING
+
+try:  # optional heavy deps
+    import numpy as np  # type: ignore
+except Exception:  # pragma: no cover
+    np = None  # type: ignore
+
+try:  # rdkit is optional outside tests
+    from rdkit import Chem  # type: ignore
+    from rdkit.Chem import rdMolTransforms as MT  # type: ignore
+except Exception:  # pragma: no cover
+    Chem = None  # type: ignore
+    MT = None  # type: ignore
+
+try:  # GraphData is optional for lightweight imports
+    from data.mdataset import GraphData  # type: ignore
+except Exception:  # pragma: no cover
+    GraphData = Any  # type: ignore
 
 __all__ = [
-    "AugmentationConfig",
     "AugmentationConfig",
     "iter_augmentation_options",
     "random_rotation",
@@ -26,34 +36,50 @@ __all__ = [
     "apply_graph_augmentations",
 ]
 
-@dataclass(frozen=True)
-class AugmentationConfig:
-    """Default settings for geometric augmentations."""
-
-    rotate: bool = False
-    mask_angle: bool = False
-    dihedral: bool = False
-
-    @classmethod
-    def from_dict(cls, cfg: Optional[dict] = None) -> "AugmentationConfig":
-        """Create an :class:`AugmentationConfig` from a dictionary."""
-
-        cfg = cfg or {}
-        return cls(
-            rotate=bool(cfg.get("rotate", False)),
-            mask_angle=bool(cfg.get("mask_angle", False)),
-            dihedral=bool(cfg.get("dihedral", False)),
-        )
-
-
 
 @dataclass(frozen=True)
 class AugmentationConfig:
     """Configuration flags for optional geometric augmentations."""
 
-    random_rotate: bool
-    mask_angle: bool
-    perturb_dihedral: bool
+    random_rotate: bool = False
+    mask_angle: bool = False
+    perturb_dihedral: bool = False
+
+    def __init__(
+        self,
+        random_rotate: bool = False,
+        mask_angle: bool = False,
+        perturb_dihedral: bool = False,
+        *,
+        rotate: Optional[bool] = None,
+        dihedral: Optional[bool] = None,
+    ) -> None:
+        object.__setattr__(
+            self, "random_rotate", random_rotate or bool(rotate)
+        )
+        object.__setattr__(self, "mask_angle", mask_angle)
+        object.__setattr__(
+            self, "perturb_dihedral", perturb_dihedral or bool(dihedral)
+        )
+
+    @property
+    def rotate(self) -> bool:
+        return self.random_rotate
+
+    @property
+    def dihedral(self) -> bool:
+        return self.perturb_dihedral
+
+    @classmethod
+    def from_dict(cls, cfg: Optional[dict] = None) -> "AugmentationConfig":
+        cfg = cfg or {}
+        return cls(
+            random_rotate=bool(cfg.get("random_rotate", cfg.get("rotate", False))),
+            mask_angle=bool(cfg.get("mask_angle", False)),
+            perturb_dihedral=bool(
+                cfg.get("perturb_dihedral", cfg.get("dihedral", False))
+            ),
+        )
 
 
 def iter_augmentation_options(
@@ -73,7 +99,7 @@ def iter_augmentation_options(
     d_opts = [bool(v) for v in (dihedral_opts or (False, True))]
 
     for r, m, d in product(r_opts, m_opts, d_opts):
-        yield AugmentationConfig(r, m, d)
+        yield AugmentationConfig(random_rotate=r, mask_angle=m, perturb_dihedral=d)
 
 
 def random_rotation(mol: Chem.Mol, conf_id: int = 0) -> Chem.Mol:
@@ -82,7 +108,7 @@ def random_rotation(mol: Chem.Mol, conf_id: int = 0) -> Chem.Mol:
     Apply a random 3D rotation to an RDKit molecule's conformer by
     multiplying atomic coordinates with a random orthogonal matrix.
     """
-    if mol.GetNumConformers() == 0:
+    if Chem is None or np is None or mol.GetNumConformers() == 0:
         return mol
     conf = mol.GetConformer(conf_id)
     rot = np.random.randn(3, 3)
@@ -101,7 +127,7 @@ def mask_random_angle(mol: Chem.Mol, conf_id: int = 0) -> Chem.Mol:
     Mask a randomly chosen bond angle by setting it to zero degrees in
     the specified conformer, effectively removing local flexibility.
     """
-    if mol.GetNumConformers() == 0:
+    if Chem is None or np is None or mol.GetNumConformers() == 0:
         return mol
     atoms = [a.GetIdx() for a in mol.GetAtoms() if a.GetDegree() >= 2]
     if not atoms:
@@ -126,7 +152,7 @@ def perturb_dihedral(
     Randomly perturb a dihedral angle by up to ``max_deg`` degrees in
     the selected conformer to add small structural noise.
     """
-    if mol.GetNumConformers() == 0:
+    if Chem is None or np is None or mol.GetNumConformers() == 0:
         return mol
     quadruples = []
     for b in mol.GetBonds():
@@ -334,9 +360,11 @@ def mask_subgraph(
 def apply_graph_augmentations(
     g: GraphData,
     *,
+    random_rotate: bool = False,
     rotate: bool = False,
     mask_angle: bool = False,
     perturb_dihedral: bool = False,
+    dihedral: bool = False,
 ):
     """Play with the molecule's shape using optional tricks.
 
@@ -344,7 +372,7 @@ def apply_graph_augmentations(
     :class:`GraphData` instance and update coordinates and geometric edge
     attributes accordingly.
     """
-    if g.x.shape[1] < 7:
+    if Chem is None or np is None or g.x.shape[1] < 7:
         return g
     num_nodes = g.x.shape[0]
     coords = g.x[:, -3:].copy()
@@ -363,12 +391,14 @@ def apply_graph_augmentations(
     for i in range(num_nodes):
         conf.SetAtomPosition(i, tuple(map(float, coords[i])))
     mol.AddConformer(conf, assignId=True)
-    if rotate:
+    random_rotate = random_rotate or rotate
+    perturb_dihedral_flag = perturb_dihedral or dihedral
+    if random_rotate:
         random_rotation(mol)
     if mask_angle:
         mask_random_angle(mol)
-    if perturb_dihedral:
-        perturb_dihedral(mol)
+    if perturb_dihedral_flag:
+        globals()["perturb_dihedral"](mol)
     conf = mol.GetConformer()
     for i in range(num_nodes):
         p = conf.GetAtomPosition(i)
