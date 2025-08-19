@@ -6,9 +6,21 @@ from typing import Dict, List, NamedTuple, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from data.augment import iter_augmentation_options
+from dataclasses import asdict, dataclass
+
+try:  # augmentation utilities are optional in some tests
+    from data.augment import AugmentationConfig, iter_augmentation_options
+except Exception:  # pragma: no cover - fallback stubs
+    @dataclass(frozen=True)
+    class AugmentationConfig:  # type: ignore[misc]
+        random_rotate: bool = False
+        mask_angle: bool = False
+        perturb_dihedral: bool = False
+
+    def iter_augmentation_options(*args, **kwargs):  # type: ignore
+        yield AugmentationConfig()
+
 from data.mdataset import GraphDataset
-from data.augment import AugmentationConfig
 from models.ema import EMA
 from models.encoder import GNNEncoder
 from models.predictor import MLPPredictor
@@ -121,9 +133,9 @@ def run_ablation(
 
     aug_options = list(
         iter_augmentation_options(
-            [True] if aug_rotate else [False, True],
-            [True] if aug_mask_angle else [False, True],
-            [True] if aug_dihedral else [False, True],
+            [True] if augmentations.random_rotate else [False, True],
+            [True] if augmentations.mask_angle else [False, True],
+            [True] if augmentations.perturb_dihedral else [False, True],
         )
     )
 
@@ -194,13 +206,11 @@ def run_ablation(
             cfg = Config(
                 mask_ratio=params["mask_ratio"],
                 contiguous=params["contiguous"],
-                random_rotate=aug.random_rotate,
-                mask_angle=aug.mask_angle,
-                perturb_dihedral=aug.perturb_dihedral,
                 hidden_dim=params["hidden_dim"],
                 num_layers=params["num_layers"],
                 ema_decay=params["ema_decay"],
                 gnn_type=params["gnn_type"],
+                augmentations=aug,
             )
             row = {
                 "roc_auc": class_metrics.get("roc_auc", float("nan")),
@@ -208,7 +218,9 @@ def run_ablation(
                 "rmse": reg_metrics.get("rmse", float("nan")),
                 "mae": reg_metrics.get("mae", float("nan")),
             }
-            configs.append(cfg._asdict())
+            cfg_dict = cfg._asdict()
+            cfg_dict.update(asdict(cfg_dict.pop("augmentations")))
+            configs.append(cfg_dict)
             results.append(row)
 
     return pd.concat([pd.DataFrame(configs), pd.DataFrame(results)], axis=1)
