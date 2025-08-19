@@ -3,17 +3,22 @@ import sys
 import types
 
 import pytest
+
 torch = pytest.importorskip("torch")
 pytest.importorskip("torch_geometric")
-from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader
+from torch_geometric.data import Data  # noqa: E402
+from torch_geometric.loader import DataLoader  # noqa: E402
+
+from data.augment import iter_augmentation_options  # noqa: E402
 
 
 def _make_graph(x_dim: int = 3, edge_dim: int = 2, label: int = 1) -> Data:
     x = torch.randn(4, x_dim)
     edge_index = torch.tensor([[0, 1], [1, 0]])
     edge_attr = torch.randn(edge_index.shape[1], edge_dim)
-    return Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=torch.tensor([label]))
+    return Data(
+        x=x, edge_index=edge_index, edge_attr=edge_attr, y=torch.tensor([label])
+    )
 
 
 @pytest.fixture(scope="module")
@@ -76,9 +81,9 @@ def test_build_configs_and_normalize(gs_module):
         gnn_types=("gcn",),
         ema_decays=(0.9,),
         add_3d_options=(False,),
-        aug_rotate_options=(False,),
-        aug_mask_angle_options=(False,),
-        aug_dihedral_options=(False,),
+        augmentation_options=tuple(
+            iter_augmentation_options([False], [False], [False])
+        ),
         pretrain_batch_sizes=(8,),
         finetune_batch_sizes=(4,),
         pretrain_epochs_options=(1,),
@@ -94,7 +99,9 @@ def test_build_configs_and_normalize(gs_module):
     tr, va, te = gs_module._normalize_ds(ds_dict)
     assert len(tr) == 1 and len(va) == 1 and te is None
 
-    tr_loader, va_loader, te_loader = gs_module._normalize_ds_to_loaders(( [g1], [g2], None ), 2, 1)
+    tr_loader, va_loader, te_loader = gs_module._normalize_ds_to_loaders(
+        ([g1], [g2], None), 2, 1
+    )
     assert len(list(tr_loader)) == 1
     assert len(list(va_loader)) == 1
     assert te_loader is None

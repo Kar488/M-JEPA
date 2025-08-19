@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-import numpy as np
-from typing import Callable, Iterable, List, Optional, Sequence
+from dataclasses import dataclass
+from itertools import product
+from typing import Callable, Iterable, Iterator, List, Optional, Sequence
 
+import numpy as np
 from rdkit import Chem
 from rdkit.Chem import rdMolTransforms as MT
 
 from data.mdataset import GraphData
 
 __all__ = [
+    "AugmentationConfig",
+    "iter_augmentation_options",
     "random_rotation",
     "mask_random_angle",
     "perturb_dihedral",
@@ -19,6 +23,35 @@ __all__ = [
     "generate_views",
     "apply_graph_augmentations",
 ]
+
+
+@dataclass(frozen=True)
+class AugmentationConfig:
+    """Configuration flags for optional geometric augmentations."""
+
+    random_rotate: bool
+    mask_angle: bool
+    perturb_dihedral: bool
+
+
+def iter_augmentation_options(
+    rotate_opts: Optional[Iterable[bool]] = None,
+    mask_angle_opts: Optional[Iterable[bool]] = None,
+    dihedral_opts: Optional[Iterable[bool]] = None,
+) -> Iterator[AugmentationConfig]:
+    """Yield ``AugmentationConfig`` for all flag combinations.
+
+    Parameters accept any iterable of truthy values and default to
+    ``(False, True)`` when omitted.  Passing ``[True]`` for a flag forces that
+    augmentation to be enabled, mirroring the previous manual loops.
+    """
+
+    r_opts = [bool(v) for v in (rotate_opts or (False, True))]
+    m_opts = [bool(v) for v in (mask_angle_opts or (False, True))]
+    d_opts = [bool(v) for v in (dihedral_opts or (False, True))]
+
+    for r, m, d in product(r_opts, m_opts, d_opts):
+        yield AugmentationConfig(r, m, d)
 
 
 def random_rotation(mol: Chem.Mol, conf_id: int = 0) -> Chem.Mol:
@@ -76,19 +109,23 @@ def perturb_dihedral(
     quadruples = []
     for b in mol.GetBonds():
         j, k = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
-        js = [n.GetIdx() for n in mol.GetAtomWithIdx(j).GetNeighbors() if n.GetIdx() != k]
-        ks = [n.GetIdx() for n in mol.GetAtomWithIdx(k).GetNeighbors() if n.GetIdx() != j]
+        js = [
+            n.GetIdx() for n in mol.GetAtomWithIdx(j).GetNeighbors() if n.GetIdx() != k
+        ]
+        ks = [
+            n.GetIdx() for n in mol.GetAtomWithIdx(k).GetNeighbors() if n.GetIdx() != j
+        ]
         for i in js:
-            for l in ks:
-                quadruples.append((i, j, k, l))
+            for ell in ks:
+                quadruples.append((i, j, k, ell))
     if not quadruples:
         return mol
-    i, j, k, l = quadruples[np.random.randint(len(quadruples))]
+    i, j, k, ell = quadruples[np.random.randint(len(quadruples))]
     conf = mol.GetConformer(conf_id)
     try:
-        current = MT.GetDihedralDeg(conf, int(i), int(j), int(k), int(l))
+        current = MT.GetDihedralDeg(conf, int(i), int(j), int(k), int(ell))
         delta = float(np.random.uniform(-max_deg, max_deg))
-        MT.SetDihedralDeg(conf, int(i), int(j), int(k), int(l), current + delta)
+        MT.SetDihedralDeg(conf, int(i), int(j), int(k), int(ell), current + delta)
     except Exception:
         pass
     return mol
@@ -129,22 +166,22 @@ def _geom_features_for_bond(
     except Exception:
         d[0] = 0.0
     k = _pick_neighbor(mol, i, j)
-    l = _pick_neighbor(mol, j, i)
+    ell = _pick_neighbor(mol, j, i)
     if k is not None:
         try:
             ang = float(MT.GetAngleRad(conf, int(k), int(i), int(j)))
             d[1], d[2], d[3] = np.cos(ang), np.sin(ang), 1.0
         except Exception:
             pass
-    if l is not None:
+    if ell is not None:
         try:
-            ang = float(MT.GetAngleRad(conf, int(i), int(j), int(l)))
+            ang = float(MT.GetAngleRad(conf, int(i), int(j), int(ell)))
             d[4], d[5], d[6] = np.cos(ang), np.sin(ang), 1.0
         except Exception:
             pass
-    if (k is not None) and (l is not None):
+    if (k is not None) and (ell is not None):
         try:
-            dih = float(MT.GetDihedralRad(conf, int(k), int(i), int(j), int(l)))
+            dih = float(MT.GetDihedralRad(conf, int(k), int(i), int(j), int(ell)))
             d[7], d[8], d[9] = np.cos(dih), np.sin(dih), 1.0
         except Exception:
             pass
@@ -331,7 +368,9 @@ def _clone_graph(g: GraphData) -> GraphData:
 
 def generate_views(
     graph: GraphData,
-    structural_ops: Sequence[Callable[[GraphData], GraphData | tuple[GraphData, ...]]] = (),
+    structural_ops: Sequence[
+        Callable[[GraphData], GraphData | tuple[GraphData, ...]]
+    ] = (),
     geometric_ops: Sequence[Callable[[GraphData], GraphData]] = (),
 ) -> List[GraphData]:
     """Apply structural and geometric operations to produce graph views."""

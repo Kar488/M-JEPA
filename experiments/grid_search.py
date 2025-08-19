@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import logging
-import warnings
-import time
 import math
+import time
+import warnings
 from dataclasses import asdict, dataclass
 from itertools import product
 from typing import (  # noqa: E501
@@ -24,6 +24,7 @@ import tqdm
 from torch_geometric.data import Data as PyGData
 from torch_geometric.loader import DataLoader as GeoLoader
 
+from data.augment import AugmentationConfig
 from experiments.baseline_integration import baseline_pretrain_and_embed
 from models.ema import EMA
 from models.predictor import MLPPredictor
@@ -199,9 +200,7 @@ def _build_configs(
     gnn_types: Iterable[str],
     ema_decays: Iterable[float],
     add_3d_options: Iterable[bool],
-    aug_rotate_options: Iterable[bool],
-    aug_mask_angle_options: Iterable[bool],
-    aug_dihedral_options: Iterable[bool],
+    augmentation_options: Iterable[AugmentationConfig],
     pretrain_batch_sizes: Iterable[int],
     finetune_batch_sizes: Iterable[int],
     pretrain_epochs_options: Iterable[int],
@@ -216,16 +215,47 @@ def _build_configs(
         gnn_types,
         ema_decays,
         add_3d_options,
-        aug_rotate_options,
-        aug_mask_angle_options,
-        aug_dihedral_options,
+        augmentation_options,
         pretrain_batch_sizes,
         finetune_batch_sizes,
         pretrain_epochs_options,
         finetune_epochs_options,
         lrs,
     )
-    configs = [Config(*tpl) for tpl in combos]
+    configs = [
+        Config(
+            mask_ratio,
+            contiguous,
+            hidden_dim,
+            num_layers,
+            gnn_type,
+            ema_decay,
+            add_3d,
+            aug.random_rotate,
+            aug.mask_angle,
+            aug.perturb_dihedral,
+            pre_bs,
+            finetune_bs,
+            pre_epochs,
+            finetune_epochs,
+            lr,
+        )
+        for (
+            mask_ratio,
+            contiguous,
+            hidden_dim,
+            num_layers,
+            gnn_type,
+            ema_decay,
+            add_3d,
+            aug,
+            pre_bs,
+            finetune_bs,
+            pre_epochs,
+            finetune_epochs,
+            lr,
+        ) in combos
+    ]
     logger.debug("Generated %d grid search configurations", len(configs))
     return configs
 
@@ -666,7 +696,9 @@ def _run_one_config_method(
             )
             remaining = time_left() if time_left is not None else float("inf")
             if remaining <= 0:
-                logger.info("Time budget exhausted before contrastive pretraining; stopping.")
+                logger.info(
+                    "Time budget exhausted before contrastive pretraining; stopping."
+                )
                 break
             _tb = 0 if math.isinf(remaining) else remaining
             try:
@@ -704,7 +736,7 @@ def _run_one_config_method(
                     temperature=0.1,
                     random_rotate=cfg.aug_rotate,
                     mask_angle=cfg.aug_mask_angle,
-                    perturb_dihedral=cfg.aug_dihedral
+                    perturb_dihedral=cfg.aug_dihedral,
                 )
             remaining = time_left() if time_left is not None else float("inf")
             if remaining <= 0:
@@ -844,9 +876,9 @@ def run_grid_search(
     gnn_types: Tuple[str, ...] = ("mpnn", "gcn", "gat", "edge_mpnn"),
     ema_decays: Tuple[float, ...] = (0.95, 0.99),
     add_3d_options: Tuple[bool, ...] = (False, True),
-    aug_rotate_options: Tuple[bool, ...] = (False,),
-    aug_mask_angle_options: Tuple[bool, ...] = (False,),
-    aug_dihedral_options: Tuple[bool, ...] = (False,),
+    augmentation_options: Tuple[AugmentationConfig, ...] = (
+        AugmentationConfig(False, False, False),
+    ),
     pretrain_batch_sizes: Tuple[int, ...] = (256,),
     finetune_batch_sizes: Tuple[int, ...] = (64,),
     pretrain_epochs_options: Tuple[int, ...] = (50,),
@@ -878,11 +910,9 @@ def run_grid_search(
         if time_budget_mins <= 0:
             return float("inf")
         return max(0.0, time_budget_mins - (time.monotonic() - start) / 60.0)
-    
+
     if "contrastive" not in {m.lower() for m in methods}:
-        aug_rotate_options = (False,)
-        aug_mask_angle_options = (False,)
-        aug_dihedral_options = (False,)
+        augmentation_options = (AugmentationConfig(False, False, False),)
 
     cfgs = _build_configs(
         mask_ratios,
@@ -892,9 +922,7 @@ def run_grid_search(
         gnn_types,
         ema_decays,
         add_3d_options,
-        aug_rotate_options,
-        aug_mask_angle_options,
-        aug_dihedral_options,
+        augmentation_options,
         pretrain_batch_sizes,
         finetune_batch_sizes,
         pretrain_epochs_options,

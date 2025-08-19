@@ -1,41 +1,50 @@
 """Tiny, fast grid search that runs end-to-end on a small subset."""
 
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-# Configure a source parquet (adjust path to one of your shards)
-SOURCE = Path("data/ZINC-canonicalized/train-00000-of-00003-1dd8e62fc2556455.parquet")  # change if needed
+from data import GraphDataset
+from data.augment import iter_augmentation_options
 
-import sys, types, importlib.util 
+# Configure a source parquet (adjust path to one of your shards)
+SOURCE = Path(
+    "data/ZINC-canonicalized/train-00000-of-00003-1dd8e62fc2556455.parquet"
+)  # change if needed
+
 
 # Monkeypatch tqdm to use a dummy class that does nothing
 class DummyTqdm:
     def __init__(self, iterable=None, *args, **kwargs):
         self.iterable = iterable or []
+
     def __iter__(self):
         return iter(self.iterable)
+
     def update(self, n=1):
         pass
+
     def set_description(self, desc=None):
         pass
+
     def close(self):
         pass
+
 
 @pytest.fixture(autouse=True)
 def _silence_tqdm(monkeypatch):
     """Make tqdm think we're not in a TTY so it doesn't draw a progress bar."""
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
 
+
 @pytest.fixture
 def tmp_parquet(tmp_path):
     path = tmp_path / "tmp_small.parquet"
     yield path
 
-
-from data import GraphDataset, GraphData
 
 @pytest.fixture
 def fake_train_head(monkeypatch):
@@ -57,8 +66,8 @@ def fake_train_head(monkeypatch):
             pass
     return calls
 
-def test_grid_search_small(fake_train_head, wb,tmp_parquet):
 
+def test_grid_search_small(fake_train_head, wb, tmp_parquet):
     calls = fake_train_head
 
     pytest.importorskip("rdkit")
@@ -83,16 +92,17 @@ def test_grid_search_small(fake_train_head, wb,tmp_parquet):
             smiles_col = use_cols[0]
         else:
             raise SystemExit("Could not find a 'smiles' column in the Parquet subset.")
-        
-        df["label"] = np.random.randint(0, 2, size=len(df)) # fake labels since its not in dataset
-        df.to_parquet(tmp_parquet, index=False) 
+
+        df["label"] = np.random.randint(
+            0, 2, size=len(df)
+        )  # fake labels since its not in dataset
+        df.to_parquet(tmp_parquet, index=False)
 
         def small_dataset_fn(add_3d: bool):
-            
-            ds =  GraphDataset.from_parquet(
+            ds = GraphDataset.from_parquet(
                 filepath=str(tmp_parquet),
                 smiles_col=smiles_col,
-                label_col="label", # label column is somehow ignored by loader
+                label_col="label",  # label column is somehow ignored by loader
                 cache_dir=None,
                 add_3d=add_3d,
             )
@@ -105,7 +115,7 @@ def test_grid_search_small(fake_train_head, wb,tmp_parquet):
 
     else:
         # Fallback: small toy dataset
-        
+
         def small_dataset_fn(add_3d: bool):
             smiles = [
                 "CCO",
@@ -119,20 +129,19 @@ def test_grid_search_small(fake_train_head, wb,tmp_parquet):
                 "COC",
                 "CCN(CC)CC",
             ]
-            labels = np.random.randint(0, 2, size=len(smiles)).tolist() # fake labels since its not in dataset
-            return GraphDataset.from_smiles_list(
-                smiles, labels=labels, add_3d=add_3d
-            )
-        
+            labels = np.random.randint(
+                0, 2, size=len(smiles)
+            ).tolist()  # fake labels since its not in dataset
+            return GraphDataset.from_smiles_list(smiles, labels=labels, add_3d=add_3d)
 
     # Run the grid search with the small dataset function
     # Note: this will run on CPU only, so adjust params accordingly
     df_res = run_grid_search(
         dataset_fn=small_dataset_fn,
         task_type="classification",
-        aug_rotate_options=(False,),
-        aug_mask_angle_options=(False,),
-        aug_dihedral_options=(False,),
+        augmentation_options=tuple(
+            iter_augmentation_options([False], [False], [False])
+        ),
         seeds=(42,),
         add_3d_options=(False,),
         mask_ratios=(0.10,),
@@ -148,7 +157,7 @@ def test_grid_search_small(fake_train_head, wb,tmp_parquet):
         lrs=(1e-3,),
         device="cpu",
         n_jobs=0,
-    ) 
+    )
 
     out = Path("outputs/small_grid_results.csv")
     out.parent.mkdir(parents=True, exist_ok=True)
