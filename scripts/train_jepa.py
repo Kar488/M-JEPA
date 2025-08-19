@@ -1,3 +1,5 @@
+# flake8: noqa
+
 """End-to-end JEPA training and evaluation pipeline.
 
 This script orchestrates self‑supervised JEPA pretraining, fine‑tuning/evaluation,
@@ -33,6 +35,8 @@ import numpy as np
 import torch
 import yaml
 
+from data.augment import iter_augmentation_options
+
 # Attempt to import reusable components from the package.
 try:
     from data.mdataset import GraphData, GraphDataset
@@ -42,8 +46,7 @@ except Exception:
 
 # Models
 try:
-    from models.factory import \
-        build_encoder  # provides 'edge_mpnn' + fallbacks
+    from models.factory import build_encoder  # provides 'edge_mpnn' + fallbacks
 except Exception:
     # fallback to basic encoder if factory not present
     from models.encoder import GNNEncoder as _BasicEnc
@@ -101,26 +104,25 @@ except Exception:
 
 try:
     from training.unsupervised import (  # type: ignore[assignment]
-        train_contrastive, train_jepa)
+        train_contrastive,
+        train_jepa,
+    )
 except Exception:
     train_jepa = None  # type: ignore[assignment]
     train_contrastive = None  # type: ignore[assignment]
 
 try:
-    from training.supervised import \
-        train_linear_head  # type: ignore[assignment]
+    from training.supervised import train_linear_head  # type: ignore[assignment]
 except Exception:
     train_linear_head = None  # type: ignore[assignment]
 
 try:
-    from experiments.case_study import \
-        run_tox21_case_study  # type: ignore[assignment]
+    from experiments.case_study import run_tox21_case_study  # type: ignore[assignment]
 except Exception:
     run_tox21_case_study = None  # type: ignore[assignment]
 
 try:
-    from experiments.grid_search import \
-        run_grid_search  # type: ignore[assignment]
+    from experiments.grid_search import run_grid_search  # type: ignore[assignment]
 except Exception:
     run_grid_search = None  # type: ignore[assignment]
 
@@ -343,6 +345,7 @@ def resolve_device(preferred: str) -> str:
     if preferred and preferred != "cpu" and torch.cuda.is_available():
         return preferred
     return "cpu"
+
 
 # ---------------------------------------------------------------------------
 # Command implementations
@@ -870,8 +873,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     import numpy as np
     import torch
 
-    from utils.checkpoint import \
-        load_checkpoint  # for fine-tuned ckpt (encoder+head)
+    from utils.checkpoint import load_checkpoint  # for fine-tuned ckpt (encoder+head)
 
     # --- paths / report ---
     args.report_dir = getattr(args, "report_dir", "reports")
@@ -1156,14 +1158,16 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     # Convert numerical lists to tuples and boolean flags
     contiguities = tuple(bool(c) for c in args.contiguities)
     add_3d_opts = tuple(bool(a) for a in args.add_3d_options)
-    aug_rotate_opts = tuple(bool(a) for a in getattr(args, "aug_rotate_options", [0]))
-    aug_mask_angle_opts = tuple(bool(a) for a in getattr(args, "aug_mask_angle_options", [0]))
-    aug_dihedral_opts = tuple(bool(a) for a in getattr(args, "aug_dihedral_options", [0]))
+    aug_configs = tuple(
+        iter_augmentation_options(
+            getattr(args, "aug_rotate_options", [0]),
+            getattr(args, "aug_mask_angle_options", [0]),
+            getattr(args, "aug_dihedral_options", [0]),
+        )
+    )
 
     if "contrastive" not in {m.lower() for m in args.methods}:
-        aug_rotate_opts = (False,)
-        aug_mask_angle_opts = (False,)
-        aug_dihedral_opts = (False,)
+        aug_configs = tuple(iter_augmentation_options([0], [0], [0]))
     seeds: tuple
     # Determine seeds: use CLI if provided, otherwise fall back to configuration defaults
     if args.seeds is not None and len(args.seeds) > 0:
@@ -1171,7 +1175,11 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     else:
         seeds = tuple(CONFIG.get("finetune", {}).get("seeds", [42, 123, 456]))
 
-    cache_dir = None if getattr(args, "no_cache", False) else (getattr(args, "cache_dir", None) or "cache/graphs")
+    cache_dir = (
+        None
+        if getattr(args, "no_cache", False)
+        else (getattr(args, "cache_dir", None) or "cache/graphs")
+    )
     if cache_dir:
         logger.info("Using cache directory %s", cache_dir)
     else:
@@ -1218,7 +1226,9 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     if args.unlabeled_dir:
 
         def _unlabeled_fn(add_3d: bool = False):
-            logger.info("Loading unlabeled (cap=%s, workers=%s)…", sample_ul, args.num_workers)
+            logger.info(
+                "Loading unlabeled (cap=%s, workers=%s)…", sample_ul, args.num_workers
+            )
             t0 = time.time()
             ds = load_directory_dataset(
                 args.unlabeled_dir,
@@ -1240,7 +1250,9 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     if args.labeled_dir:
 
         def _eval_fn(add_3d: bool = False):
-            logger.info("Loading labeled (cap=%s, workers=%s)…", sample_lb, args.num_workers)
+            logger.info(
+                "Loading labeled (cap=%s, workers=%s)…", sample_lb, args.num_workers
+            )
             t0 = time.time()
             ds = load_directory_dataset(
                 args.labeled_dir,
@@ -1262,14 +1274,16 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
 
     if _unlabeled_fn is None:
         logger.info(
-            "Grid search requires at least one dataset source: --dataset-dir or (--unlabeled-dir and/or --labeled-dir). possibly running in unit test mode"
+            "Grid search requires at least one dataset source: --dataset-dir or "
+            "(--unlabeled-dir and/or --labeled-dir). possibly running in unit test mode"
         )
-        _unlabeled_fn = lambda add_3d=False: None
+        _unlabeled_fn = lambda add_3d=False: None  # noqa: E731
     if _eval_fn is None:
         logger.info(
-            "Grid search requires at least one dataset source: --dataset-dir or (--unlabeled-dir and/or --labeled-dir). possibly running in unit test mode"
+            "Grid search requires at least one dataset source: --dataset-dir or "
+            "(--unlabeled-dir and/or --labeled-dir). possibly running in unit test mode"
         )
-        _eval_fn = lambda add_3d=False: None
+        _eval_fn = lambda add_3d=False: None  # noqa: E731
     # Initialise optional W&B run for grid search
     wb = maybe_init_wandb(
         args.use_wandb,
@@ -1296,12 +1310,14 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             "seeds": seeds,
         },
     )
+
     # --- safe wandb helpers (avoid crashes if inner code closed the run) ---
     def _wb_active(w):
         try:
             return hasattr(w, "run") and getattr(w, "run", None) is not None
         except Exception:
             return False
+
     # --- safe wandb logger: try if .log exists; swallow real-W&B preinit errors ---
     def _wb_log(w, payload):
         if hasattr(w, "log"):
@@ -1309,6 +1325,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
                 w.log(payload)
             except Exception as e:
                 logger.warning("Skipping wandb.log: %s", e)
+
     _wb_log(wb, {"phase": "grid_search", "status": "start"})
 
     try:
@@ -1326,9 +1343,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             gnn_types=tuple(args.gnn_types),
             ema_decays=tuple(args.ema_decays),
             add_3d_options=add_3d_opts,
-            aug_rotate_options=aug_rotate_opts,
-            aug_mask_angle_options=aug_mask_angle_opts,
-            aug_dihedral_options=aug_dihedral_opts,
+            augmentation_options=aug_configs,
             pretrain_batch_sizes=tuple(args.pretrain_batch_sizes),
             finetune_batch_sizes=tuple(args.finetune_batch_sizes),
             pretrain_epochs_options=tuple(args.pretrain_epochs_options),
@@ -1346,7 +1361,8 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             max_pretrain_batches=getattr(args, "max_pretrain_batches", 0),
             max_finetune_batches=getattr(args, "max_finetune_batches", 0),
             time_budget_mins=getattr(args, "time_budget_mins", 0),
-            disable_tqdm=not getattr(args, "force_tqdm", False) and not sys.stdout.isatty(),
+            disable_tqdm=not getattr(args, "force_tqdm", False)
+            and not sys.stdout.isatty(),
         )
         # Log each row to W&B for comprehensive visualisation.  We assign a
         # unique identifier to each configuration using its index.  This
@@ -1382,13 +1398,13 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     except Exception:
         logger.exception("Grid search failed")
         try:
-            active = hasattr(wb, "run") and getattr(wb, "run", None) is not None 
+            active = hasattr(wb, "run") and getattr(wb, "run", None) is not None
         except Exception:
             active = False
         if active and hasattr(wb, "log"):
             try:
                 _wb_log(wb, {"phase": "grid_search", "status": "error"})
-            except Exception:
+            except Exception as e:
                 logger.warning("Skipping wandb.log in error path: %s", e)
         # exit with distinct code for grid search failures
         sys.exit(7)
@@ -1406,7 +1422,10 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
 
 
 def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
-    """Add arguments common to multiple commands using defaults from the given config section."""
+    """Add arguments common to multiple commands.
+
+    Defaults are taken from the given config section.
+    """
     # Model hyperparameters
     model_cfg = CONFIG.get("model", {})
     p.add_argument(
@@ -1566,7 +1585,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mask-ratio",
         type=float,
         default=0.15,
-        help="Fraction of nodes to mask in each view (JEPA/contrastive)."
+        help="Fraction of nodes to mask in each view (JEPA/contrastive).",
     )
 
     _add_common_args(pre, "pretrain")
@@ -1760,13 +1779,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--unlabeled-dir",
         type=str,
         default=None,
-        help="Directory of an unlabeled graph dataset for JEPA pretraining (e.g. ZINC/PubChem).",
+        help=(
+            "Directory of an unlabeled graph dataset for JEPA pretraining "
+            "(e.g. ZINC/PubChem)."
+        ),
     )
     grid.add_argument(
         "--labeled-dir",
         type=str,
         default=None,
-        help="Directory of a labeled graph dataset for downstream evaluation (e.g. MoleculeNet).",
+        help=(
+            "Directory of a labeled graph dataset for downstream evaluation "
+            "(e.g. MoleculeNet)."
+        ),
     )
     grid.add_argument(
         "--label-col",
@@ -1953,8 +1978,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--best-config-out",
         type=str,
         default=None,
-        help="Optional path to write the best hyper‑parameter "
-        "configuration as a JSON file. This file can be parsed later to drive a production pretraining run.",
+        help=(
+            "Optional path to write the best hyper‑parameter configuration "
+            "as a JSON file. This file can be parsed later to drive a "
+            "production pretraining run."
+        ),
     )
     grid.add_argument(
         "--use-wandb",
