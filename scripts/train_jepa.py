@@ -29,7 +29,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, TYPE_CHECKING
 from dataclasses import dataclass
 
 import numpy as np
@@ -38,13 +38,18 @@ import yaml
 
 from data.augment import iter_augmentation_options
 
+if TYPE_CHECKING:
+    from data.mdataset import GraphDataset
+else:
+    GraphDataset = Any  # runtime placeholder
+
 # Attempt to import reusable components from the package.
 try:
-    from data.mdataset import GraphData, GraphDataset
+    from data.mdataset import GraphData
     from data.augment import AugmentationConfig
 
 except Exception:
-    GraphData = GraphDataset = None  # type: ignore[assignment]
+    GraphData = None  # type: ignore[assignment]
     load_directory_dataset = None  # type: ignore[assignment]
 
     @dataclass(frozen=True)
@@ -284,7 +289,7 @@ def load_directory_dataset(
     n_rows_per_file: Optional[int] = None,
     max_graphs: Optional[int] = None,
     num_workers: int = 0,
-) -> GraphDataset:
+) -> "GraphDataset":
     return GraphDataset.from_directory(
         dirpath=dirpath,
         ext=ext,
@@ -308,7 +313,7 @@ def load_parquet_dataset(
     add_3d: bool = False,
     random_seed: Optional[int] = None,
     n_rows: Optional[int] = None,
-) -> GraphDataset:
+) -> "GraphDataset":
     return GraphDataset.from_parquet(
         filepath=filepath,
         smiles_col=smiles_col,
