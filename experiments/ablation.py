@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 from itertools import product
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, NamedTuple, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -42,8 +41,7 @@ def _unwrap_dataset(ds):
     return ds[0] if isinstance(ds, tuple) else ds
 
 
-@dataclass(frozen=True)
-class Config:
+class Config(NamedTuple):
     """Configuration for a single ablation run."""
 
     mask_ratio: float
@@ -210,7 +208,7 @@ def run_ablation(
                 "rmse": reg_metrics.get("rmse", float("nan")),
                 "mae": reg_metrics.get("mae", float("nan")),
             }
-            configs.append(asdict(cfg))
+            configs.append(cfg._asdict())
             results.append(row)
 
     return pd.concat([pd.DataFrame(configs), pd.DataFrame(results)], axis=1)
