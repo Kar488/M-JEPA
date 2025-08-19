@@ -424,7 +424,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
         # Sample a subset of the unlabeled dataset if requested.  Use getattr to
         # avoid AttributeError when the caller hasn’t set sample_unlabeled.
-        sample_ul = getattr(args, "sample-unlabeled", 0)
+        sample_ul = getattr(args, "sample_unlabeled", 0)
         if (
             sample_ul
             and hasattr(unlabeled, "__len__")
@@ -639,7 +639,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
 
         # Sample a subset of labeled graphs if requested.  Use getattr to
         # handle cases where sample_labeled isn’t provided.
-        sample_lb = getattr(args, "sample-labeled", 0)
+        sample_lb = getattr(args, "sample_labeled", 0)
         if (
             sample_lb
             and hasattr(labeled, "__len__")
