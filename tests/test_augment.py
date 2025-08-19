@@ -1,18 +1,30 @@
+import sys
+
 import numpy as np
+import pandas as pd
 import pytest
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdMolTransforms as MT
+from rdkit.Chem import AllChem
+from rdkit.Chem import rdMolTransforms as MT
 
 from data.augment import (
-    random_rotation,
-    mask_random_angle,
-    perturb_dihedral,
-    delete_random_bond,
-    mask_random_atom,
-    remove_random_subgraph,
+    AugmentationConfig,
     apply_graph_augmentations,
+    delete_random_bond,
+    generate_views,
+    mask_random_angle,
+    mask_random_atom,
+    perturb_dihedral,
+    random_rotation,
+    remove_random_subgraph,
 )
 from data.mdataset import GraphDataset
+
+
+@pytest.fixture(autouse=True)
+def _silence_tqdm(monkeypatch):
+    """Make tqdm think we're not in a TTY so it doesn't draw a progress bar."""
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
 
 
 def _build_mol(smiles: str = "CCO") -> Chem.Mol:
@@ -29,7 +41,11 @@ def _coords(mol: Chem.Mol) -> np.ndarray:
     conf = mol.GetConformer()
     return np.array(
         [
-            [conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y, conf.GetAtomPosition(i).z]
+            [
+                conf.GetAtomPosition(i).x,
+                conf.GetAtomPosition(i).y,
+                conf.GetAtomPosition(i).z,
+            ]
             for i in range(mol.GetNumAtoms())
         ],
         dtype=float,
@@ -61,11 +77,15 @@ def _dihedrals(mol: Chem.Mol) -> np.ndarray:
     out = []
     for bond in mol.GetBonds():
         j, k = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
-        js = [n.GetIdx() for n in mol.GetAtomWithIdx(j).GetNeighbors() if n.GetIdx() != k]
-        ks = [n.GetIdx() for n in mol.GetAtomWithIdx(k).GetNeighbors() if n.GetIdx() != j]
+        js = [
+            n.GetIdx() for n in mol.GetAtomWithIdx(j).GetNeighbors() if n.GetIdx() != k
+        ]
+        ks = [
+            n.GetIdx() for n in mol.GetAtomWithIdx(k).GetNeighbors() if n.GetIdx() != j
+        ]
         for i in js:
-            for l in ks:
-                out.append(MT.GetDihedralDeg(conf, int(i), int(j), int(k), int(l)))
+            for ell in ks:
+                out.append(MT.GetDihedralDeg(conf, int(i), int(j), int(k), int(ell)))
     return np.array(out, dtype=float)
 
 
@@ -143,32 +163,64 @@ def test_apply_graph_augmentations_rotate():
     assert np.allclose(np.sort(dih0), np.sort(dih1), atol=1e-5)
 
 
-def test_delete_random_bond_removes_edges():
+def test_delete_random_bond_produces_valid_view():
     g = GraphDataset.smiles_to_graph("CCO", random_seed=0)
     e0 = g.edge_index.shape[1]
     np.random.seed(0)
-    delete_random_bond(g)
-    assert g.edge_index.shape[1] == e0 - 2
-    if g.edge_attr is not None:
-        assert g.edge_attr.shape[0] == e0 - 2
+    view = generate_views(g, structural_ops=[delete_random_bond])[0]
+    assert view.edge_index.shape[1] == e0 - 2
+    if view.edge_attr is not None:
+        assert view.edge_attr.shape[0] == e0 - 2
+    view.to_tensors()  # should succeed
 
 
-def test_mask_random_atom_zeroes_features():
+def test_mask_random_atom_produces_valid_view():
     g = GraphDataset.smiles_to_graph("CCO", random_seed=0)
     np.random.seed(0)
-    mask_random_atom(g)
-    assert np.any(np.all(g.x == 0, axis=1))
-    idx = int(np.where(np.all(g.x == 0, axis=1))[0][0])
-    if g.edge_attr is not None:
-        mask = (g.edge_index[0] == idx) | (g.edge_index[1] == idx)
-        assert np.all(g.edge_attr[mask] == 0)
+    view = generate_views(g, structural_ops=[mask_random_atom])[0]
+    assert np.any(np.all(view.x == 0, axis=1))
+    idx = int(np.where(np.all(view.x == 0, axis=1))[0][0])
+    if view.edge_attr is not None:
+        mask = (view.edge_index[0] == idx) | (view.edge_index[1] == idx)
+        assert np.all(view.edge_attr[mask] == 0)
+    view.to_tensors()
 
 
-def test_remove_random_subgraph_drops_nodes():
+def test_remove_random_subgraph_produces_valid_view():
     g = GraphDataset.smiles_to_graph("CCCC", random_seed=0)
     n0 = g.num_nodes()
     np.random.seed(0)
-    remove_random_subgraph(g)
-    assert g.num_nodes() < n0
-    if g.edge_index.size > 0:
-        assert g.edge_index.max() < g.num_nodes()
+    view = generate_views(g, structural_ops=[remove_random_subgraph])[0]
+    assert view.num_nodes() < n0
+    if view.edge_index.size > 0:
+        assert view.edge_index.max() < view.num_nodes()
+    view.to_tensors()
+
+
+def test_run_ablation_forwards_augment(monkeypatch):
+    pytest.importorskip("torch")
+    pytest.importorskip("rdkit")
+    from experiments import ablation
+
+    calls = []
+
+    def fake_train_jepa(
+        *, random_rotate=False, mask_angle=False, perturb_dihedral=False, **kwargs
+    ):
+        calls.append((random_rotate, mask_angle, perturb_dihedral))
+        return []
+
+    def fake_train_head(*args, **kwargs):
+        return {"roc_auc": 0.0, "pr_auc": 0.0, "rmse": 0.0, "mae": 0.0}
+
+    monkeypatch.setattr(ablation, "train_jepa", fake_train_jepa)
+    monkeypatch.setattr(ablation, "train_linear_head", fake_train_head)
+
+    df = ablation.run_ablation(
+        augmentations=AugmentationConfig(
+            random_rotate=True, mask_angle=True, perturb_dihedral=True
+        )
+    )
+    assert isinstance(df, pd.DataFrame)
+    assert not df.empty
+    assert calls and all(rr and ma and pd for rr, ma, pd in calls)
