@@ -482,6 +482,15 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             ema_helper._load_state_dict_forgiving(ckpt_state["ema"])
         start_epoch = ckpt_state.get("epoch", 0) + 1
 
+    # Augmentation kwargs for JEPA pretraining
+    kwargs: Dict[str, bool] = {}
+    if args.aug_rotate:
+        kwargs["random_rotate"] = True
+    if args.aug_mask_angle:
+        kwargs["mask_angle"] = True
+    if args.aug_dihedral:
+        kwargs["perturb_dihedral"] = True
+
     # Pretrain JEPA
     try:
         wb.log({"phase": "pretrain", "status": "start"})
@@ -509,6 +518,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 wandb_project=args.wandb_project,
                 wandb_tags=args.wandb_tags,
                 disable_tqdm=True,  # suppress single‑epoch progress bars
+                **kwargs,
             )
             # save after each epoch (or every N epochs)
             if (epoch + 1) % save_every == 0 or (epoch + 1) == args.epochs:

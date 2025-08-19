@@ -5,22 +5,32 @@ import types
 
 # Minimal torch and model stubs for importing train_jepa without heavy deps
 if "torch" not in sys.modules:
+    torch_nn = types.SimpleNamespace(Module=object)
     torch_stub = types.SimpleNamespace(
         save=lambda obj, path: open(path, "wb").close(),
         load=lambda *args, **kwargs: {},
         manual_seed=lambda *args, **kwargs: None,
         cuda=types.SimpleNamespace(is_available=lambda: False),
+        nn=torch_nn,
+        __path__=[],
     )
     sys.modules["torch"] = torch_stub
-    sys.modules["torch.nn"] = types.SimpleNamespace(Module=object)
+    sys.modules["torch.nn"] = torch_nn
 
 sys.modules.setdefault("models.factory", types.SimpleNamespace(build_encoder=lambda *a, **k: None))
 sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
+sys.modules.setdefault("data.augment", types.SimpleNamespace(iter_augmentation_options=lambda *a, **k: None))
 
 from scripts import train_jepa as tj
 
 
-def make_args(tmp_path, contrastive=False):
+def make_args(
+    tmp_path,
+    contrastive=False,
+    aug_rotate=False,
+    aug_mask_angle=False,
+    aug_dihedral=False,
+):
     return argparse.Namespace(
         unlabeled_dir=str(tmp_path),
         gnn_type="gcn",
@@ -35,9 +45,9 @@ def make_args(tmp_path, contrastive=False):
         output=str(tmp_path / "encoder.pt"),
         contiguous=False,
         device="cpu",
-        aug_rotate=False,
-        aug_mask_angle=False,
-        aug_dihedral=False,
+        aug_rotate=aug_rotate,
+        aug_mask_angle=aug_mask_angle,
+        aug_dihedral=aug_dihedral,
         use_wandb=False,
         wandb_project="test",
         wandb_tags=[],
@@ -163,7 +173,13 @@ def test_cmd_pretrain_with_contrastive_branch(tmp_path, monkeypatch):
     }
     setup_stubs(monkeypatch, calls)
 
-    args = make_args(tmp_path, contrastive=True)
+    args = make_args(
+        tmp_path,
+        contrastive=True,
+        aug_rotate=True,
+        aug_mask_angle=True,
+        aug_dihedral=True,
+    )
     tj.cmd_pretrain(args)
 
     assert calls["load_directory_dataset"] == 1
@@ -172,9 +188,11 @@ def test_cmd_pretrain_with_contrastive_branch(tmp_path, monkeypatch):
     assert os.path.exists(args.output)
     contrastive_path = tmp_path / "encoder_contrastive.pt"
     assert contrastive_path.exists()
-    # JEPA should not receive augmentation flags
-    assert "random_rotate" not in calls["train_jepa_kwargs"]
-    # Contrastive branch should receive them
+    # JEPA should receive augmentation flags when enabled
+    assert calls["train_jepa_kwargs"].get("random_rotate") is args.aug_rotate
+    assert calls["train_jepa_kwargs"].get("mask_angle") is args.aug_mask_angle
+    assert calls["train_jepa_kwargs"].get("perturb_dihedral") is args.aug_dihedral
+    # Contrastive branch should also receive them
     assert calls["train_contrastive_kwargs"].get("random_rotate") is args.aug_rotate
     assert calls["train_contrastive_kwargs"].get("mask_angle") is args.aug_mask_angle
     assert calls["train_contrastive_kwargs"].get("perturb_dihedral") is args.aug_dihedral
