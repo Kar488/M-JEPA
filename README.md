@@ -209,3 +209,33 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
         # if it doesn’t stop within a few seconds, force it:
         kill -9 3358           # sends SIGKILL — immediate terminatio
         ```
+  6) Ensure we are using the larger disk space in vast instance
+
+      ```bash
+      # make sure project is at /srv/mjepa (or your repo root)
+      cd /srv/mjepa
+
+      # create parent dirs first
+      # make sure targets exist and are writable
+      sudo mkdir -p /data/mjepa/{cache/graphs,outputs,logs,wandb}
+      sudo chown -R "$USER":"$USER" /data/mjepa
+
+      # now re-point them into /data
+      rm -rf cache/graphs  # only if it exists already
+      ln -s /data/mjepa/cache/graphs cache/graphs
+
+      rm -rf outputs
+      ln -s /data/mjepa/outputs outputs
+
+      rm -rf logs
+      ln -s /data/mjepa/logs logs
+
+      rm -rf wandb
+      ln -s /data/mjepa/wandb wandb
+
+      echo 'export WANDB_DIR=/data/mjepa/wandb' >> ~/.bashrc
+      export WANDB_DIR=/data/mjepa/wandb
+
+      # we should see the logs proxy to the large disk folder
+      ls -ld cache outputs logs wandb
+      ```

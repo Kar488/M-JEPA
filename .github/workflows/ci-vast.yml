@@ -462,7 +462,8 @@ jobs:
               export MAMBA_ROOT_PREFIX="$HOME/micromamba"
               # ensure micromamba’s shell functions are available in this non-login shell
               eval "$("$MMBIN" shell hook -s bash)" || true
-
+              
+              export WANDB_DIR=/data/mjepa/wandb
               : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
               mkdir -p logs outputs
@@ -559,10 +560,11 @@ jobs:
             # ensure micromamba’s shell functions are available in this non-login shell
             eval "$("$MMBIN" shell hook -s bash)" || true
 
+            export WANDB_DIR=/data/mjepa/wandb
             : "${APP_DIR:?APP_DIR not set}"
             cd "$APP_DIR"
             mkdir -p logs outputs cache/graphs
-            # stream Python logs immediately (and keep wandb chatty-free)
+            +  # stream Python logs immediately (and keep wandb chatty-free)
             export PYTHONUNBUFFERED=1 WANDB_CONSOLE=off WANDB__SERVICE_WAIT=0
 
             # Determine hyper‑parameters from the grid search.  If the JSON
@@ -682,6 +684,7 @@ jobs:
               # ensure micromamba’s shell functions are available in this non-login shell
               eval "$("$MMBIN" shell hook -s bash)" || true
 
+              export WANDB_DIR=/data/mjepa/wandb
               : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
               mkdir -p logs outputs
@@ -776,6 +779,7 @@ jobs:
               fi
               export MAMBA_ROOT_PREFIX="$HOME/micromamba"
               eval "$("$MMBIN" shell hook -s bash)" || true
+              export WANDB_DIR=/data/mjepa/wandb
               cd "$APP_DIR"
               mkdir -p logs outputs
 
@@ -875,6 +879,7 @@ jobs:
               export MAMBA_ROOT_PREFIX="$HOME/micromamba"
               eval "$("$MMBIN" shell hook -s bash)" || true
 
+              export WANDB_DIR=/data/mjepa/wandb
               cd "$APP_DIR"
               mkdir -p logs outputs
 
