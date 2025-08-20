@@ -523,14 +523,33 @@ def train_contrastive(
             z2 = torch.nan_to_num(
                 F.normalize(torch.cat(z2_list, dim=0), dim=-1)
             )
+            # --- new safety + symmetric loss logic ---
+            n1, n2 = z1.size(0), z2.size(0)
+            N = min(n1, n2)
+            if N < 2:
+                continue  # skip degenerate tiny batch
+            if n1 != n2:
+                z1 = z1[:N]
+                z2 = z2[:N]
+
             with torch.cuda.amp.autocast(enabled=use_amp and device_t.type == "cuda"):
-                logits = z1 @ z2.t() / temperature
-                target = torch.arange(z1.size(0), device=device_t)
+                logits_12 = (z1 @ z2.t()) / temperature   # [N, N]
+                logits_21 = (z2 @ z1.t()) / temperature   # [N, N]
+
+                # Optional: block trivial positives in the negatives
+                eye = torch.eye(N, device=device_t, dtype=logits_12.dtype)
+                logits_12 = logits_12 - eye * 1e9
+                logits_21 = logits_21 - eye * 1e9
+
+                labels = torch.arange(N, device=device_t)
+
                 loss = 0.5 * (
-                    F.cross_entropy(logits, target)
-                    + F.cross_entropy(logits.t(), target)
+                    F.cross_entropy(logits_12, labels) +
+                    F.cross_entropy(logits_21, labels)
                 )
+
             opt.zero_grad(set_to_none=True)
+            
             if isinstance(scaler, torch.cuda.amp.GradScaler):
                 scaler.scale(loss).backward()
                 scaler.step(opt)
