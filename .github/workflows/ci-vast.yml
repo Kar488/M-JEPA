@@ -558,7 +558,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT
-          command_timeout: 180m         # <-- default is 10m; bump this
+          command_timeout: 240m         # <-- default is 10m; bump this - keep in sync with run command below
           script: |
             set -euxo pipefail
 
@@ -656,7 +656,7 @@ jobs:
             export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
             # change timeout if needed, e.g. 120m for 2 hours
             # bump workers to 2 once stabble
-            "$MMBIN" run -n mjepa stdbuf -oL -eL timeout -s SIGINT 120m python -u scripts/train_jepa.py pretrain \
+            "$MMBIN" run -n mjepa stdbuf -oL -eL timeout -s SIGINT 240m python -u scripts/train_jepa.py pretrain \
               --unlabeled-dir data/ZINC-canonicalized \
               "${PRETRAIN_ARR[@]}" \
               --cache-dir /data/mjepa/cache/graphs \

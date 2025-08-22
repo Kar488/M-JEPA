@@ -46,6 +46,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
       https://huggingface.co/datasets/BASF-AI/PubChem-Raw - 2.09M
       https://huggingface.co/datasets/sagawa/ZINC-canonicalized - 20.7M
       https://huggingface.co/datasets/HUBioDataLab/tox21/resolve/main/data.csv - 7.83K
+      https://huggingface.co/datasets/katielink/moleculenet-benchmark/tree/af500889de49a7c64ede443c2928fd5e876dd677/esol - train 1.21K
 
    -  The test suite uses small synthetic or bundled samples and does **not**
       require any of the large datasets.
