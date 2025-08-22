@@ -18,7 +18,7 @@ concurrency:
 env:
   APP_DIR: /srv/mjepa
   VENV_DIR: /srv/mjepa/.venv
-  PIP_CACHE_DIR: /srv/mjepa/.cache/pip
+  PIP_CACHE_DIR: /data/mjepa/.pip-cache
   FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}
   WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
   WANDB_PROJECT: m-jepa
@@ -216,6 +216,12 @@ jobs:
     needs: [tests_quick, vast_smoke]
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Set Mamba root
+        run: |
+          export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
+          echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
+
       - name: Deploy, install deps (CUDA)
         uses: appleboy/ssh-action@v1
         env:
@@ -292,7 +298,7 @@ jobs:
             fi
 
             # Shell hook via absolute path; no dependence on PATH
-            export MAMBA_ROOT_PREFIX="$MM_PREFIX"
+            export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
             export MAMBA_EXE="$MM_BIN"
             set +u
             eval "$("$MM_BIN" shell hook -s bash)"
@@ -423,6 +429,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: vast_deploy_and_prepare_environment
     steps:
+        - name: Set Mamba root
+          run: |
+            export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
+            echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
+
         # Separate deployment phases: pretrain, finetune, benchmark and case study
         # In production‑like workflows the hyper‑parameter sweep is run
         # before the full pretraining to identify the best settings.  The grid
@@ -459,7 +470,7 @@ jobs:
                 echo "micromamba not found; run the prepare step first." >&2
                 exit 1
               fi
-              export MAMBA_ROOT_PREFIX="$HOME/micromamba"
+              export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
               # ensure micromamba’s shell functions are available in this non-login shell
               eval "$("$MMBIN" shell hook -s bash)" || true
               
@@ -531,6 +542,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: vast_learn_hyperparameters
     steps:
+    - name: Set Mamba root
+      run: |
+        export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
+        echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
+    
     - name: Pretrain JEPA on Vast
       uses: appleboy/ssh-action@v1
       timeout-minutes: 180            # GitHub step timeout
@@ -556,16 +572,18 @@ jobs:
               echo "micromamba not found; run the prepare step first." >&2
               exit 1
             fi
-            export MAMBA_ROOT_PREFIX="$HOME/micromamba"
+            export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
             # ensure micromamba’s shell functions are available in this non-login shell
             eval "$("$MMBIN" shell hook -s bash)" || true
 
             export WANDB_DIR=/data/mjepa/wandb
+            # (optional) avoid port/login issues
+            export WANDB_MODE=offline
             : "${APP_DIR:?APP_DIR not set}"
             cd "$APP_DIR"
             mkdir -p logs outputs cache/graphs
-            # stream Python logs immediately (and keep wandb chatty-free)
-            export PYTHONUNBUFFERED=1 WANDB_CONSOLE=off WANDB__SERVICE_WAIT=0
+            # stream Python logs immediately (and keep wandb chatty-free)  WANDB_CONSOLE=off WANDB__SERVICE_WAIT=0
+            export PYTHONUNBUFFERED=1
 
             # Determine hyper‑parameters from the grid search.  If the JSON
             # file exists, parse it and construct CLI flags for the pretrain
@@ -655,6 +673,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: vast_pretrain
     steps:
+        - name: Set Mamba root
+          run: |
+            export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
+            echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
+
         - name: Finetune on Vast
           uses: appleboy/ssh-action@v1
           timeout-minutes: 180            # GitHub step timeout
@@ -680,11 +703,13 @@ jobs:
                 echo "micromamba not found; run the prepare step first." >&2
                 exit 1
               fi
-              export MAMBA_ROOT_PREFIX="$HOME/micromamba"
+              export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
               # ensure micromamba’s shell functions are available in this non-login shell
               eval "$("$MMBIN" shell hook -s bash)" || true
 
               export WANDB_DIR=/data/mjepa/wandb
+              # (optional) avoid port/login issues
+              export WANDB_MODE=offline
               : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
               mkdir -p logs outputs
@@ -752,6 +777,11 @@ jobs:
     needs: vast_finetune
     runs-on: ubuntu-latest
     steps:
+        - name: Set Mamba root
+          run: |
+            export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
+            echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
+
         - name: Benchmark on Vast
           uses: appleboy/ssh-action@v1
           timeout-minutes: 180            # GitHub step timeout
@@ -777,9 +807,11 @@ jobs:
                 echo "micromamba not found; run the prepare step first." >&2
                 exit 1
               fi
-              export MAMBA_ROOT_PREFIX="$HOME/micromamba"
+              export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
               eval "$("$MMBIN" shell hook -s bash)" || true
               export WANDB_DIR=/data/mjepa/wandb
+              # (optional) avoid port/login issues
+              export WANDB_MODE=offline
               cd "$APP_DIR"
               mkdir -p logs outputs
 
@@ -850,6 +882,11 @@ jobs:
     needs: vast_finetune
     runs-on: ubuntu-latest
     steps:
+        - name: Set Mamba root
+          run: |
+            export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
+            echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
+
         - name: Tox21 case study on Vast
           uses: appleboy/ssh-action@v1
           timeout-minutes: 180            # GitHub step timeout
@@ -876,10 +913,12 @@ jobs:
                 echo "micromamba not found; run the prepare step first." >&2
                 exit 1
               fi
-              export MAMBA_ROOT_PREFIX="$HOME/micromamba"
+              export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
               eval "$("$MMBIN" shell hook -s bash)" || true
 
               export WANDB_DIR=/data/mjepa/wandb
+              # (optional) avoid port/login issues
+              export WANDB_MODE=offline
               cd "$APP_DIR"
               mkdir -p logs outputs
 
