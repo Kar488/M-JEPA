@@ -194,6 +194,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
         #Now Git hub action runner will show this as running and idle
         mkdir ~/actions-runner && cd ~/actions-runner # Recreate the actions‑runner directory in this user’s home and rerun the steps
         ```
+    g) setup git pro account for increased action minutes and set budget limit to some $ and disallow block on expiry
         
 
   5) After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
@@ -238,4 +239,21 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
       # we should see the logs proxy to the large disk folder
       ls -ld cache outputs logs wandb
+
+      # if it fails we run this due to memoty disk full failures because we wrote to root, then do this after pre train hands
+      # kill any stuck python/mamba
+      pkill -f "[mM]amba|python.*train_jepa.py" || true
+
+      # remove stale lock
+      rm -f ~/.cache/mamba/proc/proc.lock 2>/dev/null || true
+
+      # purge any leftover local artifacts
+      rm -rf cache 2>/dev/null || true         # we just recreated it as a symlink above
+      rm -rf wandb/* outputs/* 2>/dev/null || true
+      pip cache purge || true
+
+      # check space
+      df -h / /data
       ```
+
+      

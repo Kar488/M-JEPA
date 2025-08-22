@@ -507,6 +507,7 @@ jobs:
                   --unlabeled-dir data/ZINC-canonicalized \
                   --labeled-dir data/katielinkmoleculenet_benchmark/train \
                   --label-col "measured log solubility in mols per litre" \
+                  --cache-dir /data/mjepa/cache/graphs \
                   --task-type regression \
                   --methods jepa contrastive \
                   --mask-ratios 0.15 0.3 0.5 \
@@ -658,7 +659,7 @@ jobs:
             "$MMBIN" run -n mjepa stdbuf -oL -eL timeout -s SIGINT 120m python -u scripts/train_jepa.py pretrain \
               --unlabeled-dir data/ZINC-canonicalized \
               "${PRETRAIN_ARR[@]}" \
-              --cache-dir cache/graphs \
+              --cache-dir /data/mjepa/cache/graphs \
               --num-workers 0 \
               --ckpt-dir "$CKPT_DIR" \
               --save-every 1 \
@@ -761,6 +762,7 @@ jobs:
                 --encoder outputs/encoder.pt \
                 --task-type regression \
                 --label-col "measured log solubility in mols per litre" \
+                --cache-dir /data/mjepa/cache/graphs \
                 "${FINETUNE_ARR[@]}" \
                 --num-workers 8 \
                 --patience 10 \
@@ -872,6 +874,7 @@ jobs:
                             "$MMBIN" run -n mjepa python scripts/train_jepa.py benchmark \
                               --labeled-dir data/katielinkmoleculenet_benchmark/train \
                               --report-dir outputs/reports \
+                              --cache-dir /data/mjepa/cache/graphs \
                               "${BENCH_HPARAM_ARR[@]}" \
                               "${BENCH_MODEL_ARR[@]}" \
                               --use-wandb \
@@ -952,6 +955,7 @@ jobs:
                             # Case study stage (keep CSV/task explicit, merge the rest)
                             "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
                               --csv data/tox21/data.csv \
+                              --cache-dir /data/mjepa/cache/graphs \
                               --task NR-AR \
                               "${TOX_ARR[@]}" \
                               --use-wandb \
