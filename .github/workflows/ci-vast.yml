@@ -550,7 +550,7 @@ jobs:
     
     - name: Pretrain JEPA on Vast
       uses: appleboy/ssh-action@v1
-      timeout-minutes: 180            # GitHub step timeout
+      timeout-minutes: 240            # GitHub step timeout
       with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
@@ -582,7 +582,7 @@ jobs:
             export WANDB_MODE=offline
             : "${APP_DIR:?APP_DIR not set}"
             cd "$APP_DIR"
-            mkdir -p logs outputs cache/graphs
+            # mkdir -p logs outputs cache/graphs - redundant as we cache in large folder now
             # stream Python logs immediately (and keep wandb chatty-free)  WANDB_CONSOLE=off WANDB__SERVICE_WAIT=0
             export PYTHONUNBUFFERED=1
 
@@ -593,7 +593,7 @@ jobs:
             # workflow to remain functional even if the grid search skipped.
 
             PRETRAIN_ARR=()
-            CKPT_DIR="outputs/ckpts/pretrain"
+            CKPT_DIR="/data/mjepa/outputs/ckpts/pretrain"
             mkdir -p "$CKPT_DIR"
 
             RESUME_ARGS=()
@@ -658,9 +658,11 @@ jobs:
             # bump workers to 2 once stabble
             "$MMBIN" run -n mjepa stdbuf -oL -eL timeout -s SIGINT 240m python -u scripts/train_jepa.py pretrain \
               --unlabeled-dir data/ZINC-canonicalized \
+              --sample-unlabeled 50000 \
+              --batch_size 64 \
               "${PRETRAIN_ARR[@]}" \
               --cache-dir /data/mjepa/cache/graphs \
-              --num-workers 0 \
+              --num-workers 8 \
               --ckpt-dir "$CKPT_DIR" \
               --save-every 1 \
               --output outputs/encoder.pt \
@@ -715,7 +717,7 @@ jobs:
               cd "$APP_DIR"
               mkdir -p logs outputs
 
-              CKPT_DIR="outputs/ckpts/finetune"
+              CKPT_DIR="/data/mjepa/outputs/ckpts/finetune"
               mkdir -p "$CKPT_DIR"
               RESUME_ARGS=()
               LATEST=$(ls -1t "$CKPT_DIR"/seed_*/ft_epoch_*.pt 2>/dev/null | head -n 1 || true)
@@ -873,8 +875,8 @@ jobs:
 
                             "$MMBIN" run -n mjepa python scripts/train_jepa.py benchmark \
                               --labeled-dir data/katielinkmoleculenet_benchmark/train \
-                              --report-dir outputs/reports \
-                              --cache-dir /data/mjepa/cache/graphs \
+                              --report-dir data/mjepa/outputs/reports \
+                              --cache-dir data/mjepa/cache/graphs \
                               "${BENCH_HPARAM_ARR[@]}" \
                               "${BENCH_MODEL_ARR[@]}" \
                               --use-wandb \

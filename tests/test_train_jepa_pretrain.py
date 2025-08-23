@@ -34,6 +34,7 @@ def make_args(
     return argparse.Namespace(
         unlabeled_dir=str(tmp_path),
         gnn_type="gcn",
+        seeds=(42,),
         hidden_dim=16,
         num_layers=2,
         mask_ratio=0.15,
@@ -142,7 +143,7 @@ def test_cmd_pretrain_creates_checkpoint_and_calls_training(tmp_path, monkeypatc
         "MLPPredictor": 0,
         "train_jepa": 0,
         "train_contrastive": 0,
-        "maybe_init_wandb": 0,
+        "maybe_init_wandb": 0, 
         "train_jepa_kwargs": {},
         "train_contrastive_kwargs": {},
     }
@@ -167,7 +168,7 @@ def test_cmd_pretrain_with_contrastive_branch(tmp_path, monkeypatch):
         "MLPPredictor": 0,
         "train_jepa": 0,
         "train_contrastive": 0,
-        "maybe_init_wandb": 0,
+        "maybe_init_wandb": 0, 
         "train_jepa_kwargs": {},
         "train_contrastive_kwargs": {},
     }

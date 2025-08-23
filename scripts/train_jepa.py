@@ -523,23 +523,31 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
     # Load unlabeled dataset
     try:
-        unlabeled = load_directory_dataset(
-            args.unlabeled_dir,
-            add_3d=args.add_3d,
-            num_workers=getattr(args, "num_workers", 0),
-            cache_dir=getattr(args, "cache_dir", None),
-        )  # type: ignore[arg-type]
-
+        seeds: tuple
+        # Determine seeds: use CLI if provided, otherwise fall back to configuration defaults
+        if args.seeds is not None and len(args.seeds) > 0:
+            seeds = tuple(args.seeds)
+        else:
+            seeds = tuple(CONFIG.get("finetune", {}).get("seeds", [42, 123, 456]))
+        
         # Sample a subset of the unlabeled dataset if requested.  Use getattr to
         # avoid AttributeError when the caller hasn’t set sample_unlabeled.
-        sample_ul = getattr(args, "sample_unlabeled", 0)
+        sample_ul = getattr(args, "sample_unlabeled", 0) or None
         if (
             sample_ul
             and hasattr(unlabeled, "__len__")
             and len(unlabeled) > sample_ul
             and hasattr(unlabeled, "random_subset")
         ):
-            unlabeled = unlabeled.random_subset(sample_ul, seed=42)
+            unlabeled = unlabeled.random_subset(sample_ul, seed=seeds)
+
+        unlabeled = load_directory_dataset(
+            args.unlabeled_dir,
+            add_3d=args.add_3d,
+            num_workers=getattr(args, "num_workers", 0),
+            cache_dir=getattr(args, "cache_dir", None),
+            max_graphs=sample_ul,
+        )  # type: ignore[arg-type]
 
         wb.log({"phase": "data_load", "unlabeled_graphs": len(unlabeled)})
     except Exception:
