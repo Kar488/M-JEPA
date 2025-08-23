@@ -659,7 +659,7 @@ jobs:
             "$MMBIN" run -n mjepa stdbuf -oL -eL timeout -s SIGINT 240m python -u scripts/train_jepa.py pretrain \
               --unlabeled-dir data/ZINC-canonicalized \
               --sample-unlabeled 50000 \
-              --batch_size 64 \
+              --batch-size 64 \
               "${PRETRAIN_ARR[@]}" \
               --cache-dir /data/mjepa/cache/graphs \
               --num-workers 8 \
