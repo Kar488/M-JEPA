@@ -45,13 +45,21 @@ jobs:
     runs-on: ubuntu-latest
     env:
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      # override globals so CI writes locally (not /data)
+      MAMBA_ROOT_PREFIX: ${{ github.workspace }}/.mamba-root
+      WANDB_DIR: ${{ github.workspace }}/.wandb
+      CACHE_DIR: ${{ github.workspace }}/.cache/graphs
     steps:
       - uses: actions/checkout@v4
         # if you use submodules, add:
         # with:
         #   submodules: recursive
         #   fetch-depth: 0
-
+      - name: Init local dirs (CI)
+        run: |
+          mkdir -p "$MAMBA_ROOT_PREFIX" "$WANDB_DIR" "$CACHE_DIR"
+          echo "MAMBA_ROOT_PREFIX=$MAMBA_ROOT_PREFIX"
+          df -h .
       - name: Set up Miniconda (with mamba)
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -66,12 +74,12 @@ jobs:
       - name: Install RDKit + DeepChem (conda-forge)
         shell: bash -l {0}
         run: |
-            mamba create -y -n mjepa -c conda-forge python=3.10 rdkit=2023.09.5 scipy=1.10.1 pip
+            mamba create -y -n mjepa -c conda-forge python=3.10 rdkit=2023.09.5 "scipy<1.11" pip
 
       - name: Install DeepChem (pip, no deps)
         shell: bash -l {0}
         run: |
-          mamba run -n mjepa python -m pip install deepchem==2.8.0
+          mamba run -n mjepa python -m pip install --no-deps deepchem==2.8.0
 
       - name: Set versions (for cache key)
         run: |
@@ -257,8 +265,14 @@ jobs:
               WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
           script: |
             set -euxo pipefail
+            echo "== preflight =="
+            echo "arch: $(uname -m)"
+            id || true
+            df -h / /data || true
+            ls -ld /data /data/mjepa || true
             # ---- init persistent experiment dirs on the REMOTE ----
             mkdir -p /data/mjepa/experiments /data/mjepa/wandb /data/mjepa/cache/graphs
+            ls -ld /data/mjepa/micromamba || true
             mkdir -p "$EXP_ROOT"/{grid,pretrain,finetune,bench,tox21,logs}
             ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
             echo "[init] RUN_ID=$RUN_ID  EXP_ROOT=$EXP_ROOT"
@@ -332,7 +346,12 @@ jobs:
             ENV_NAME="mjepa"
             ENV_DIR="$MAMBA_ROOT_PREFIX/envs/$ENV_NAME"
             if ! [ -d "$ENV_DIR" ]; then
-              "$MM_BIN" create -y -n "$ENV_NAME" -c conda-forge python=3.10 rdkit=2023.09.5 scipy=1.10.1 pip
+              echo "== creating env at $ENV_DIR =="
+              "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" create -y -n "$ENV_NAME" -c conda-forge \
+                python=3.10 rdkit=2023.09.5 "scipy<1.11" pip -vv \
+                || { echo "micromamba create failed"; "$MM_BIN" info -a || true; exit 1; }
+            else
+              echo "== env exists: $ENV_DIR =="
             fi
 
             # 4) put pip temp/cache on your big volume + pre-clean ---
@@ -340,17 +359,17 @@ jobs:
             export PIP_CACHE_DIR="$APP_DIR/.pip-cache"
             export TMPDIR="$APP_DIR/.tmp"
             export PIP_DISABLE_PIP_VERSION_CHECK=1
-            "$MMBIN" clean -y --all --force-pkgs-dirs || true
-            "$MMBIN" run -n "$ENV_NAME" python -m pip cache purge || true
+            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" clean -y --all --force-pkgs-dirs || true
+            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip cache purge || true
             rm -rf "$APP_DIR/.tmp"/pip-* || true
 
             # 5) Base Python deps + DeepChem
-            "$MMBIN" run -n "$ENV_NAME" python -m pip install -U pip setuptools wheel "numpy<2"
-            "$MMBIN" run -n "$ENV_NAME" python -m pip install deepchem==2.8.0
+            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install -U pip setuptools wheel "numpy<2"
+            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install deepchem==2.8.0
 
 
             # 6) Torch (skip install if already present with CUDA to save space)
-            cat <<'PY' | "$MMBIN" run -n "$ENV_NAME" python - >/tmp/torch_check.json || true
+            cat <<'PY' | "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python - >/tmp/torch_check.json || true
             try:
                 import torch, json
                 print(json.dumps({"present": True,
@@ -363,7 +382,7 @@ jobs:
                 echo "✓ Torch with CUDA already present in env; skipping install"
               else
                 echo "Installing Torch (cu121)…"
-                "$MMBIN" run -n "$ENV_NAME" python -m pip install --no-cache-dir \
+                "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install --no-cache-dir \
                   --index-url https://download.pytorch.org/whl/cu121 "torch==2.2.1"
               fi
 
@@ -373,7 +392,7 @@ jobs:
             #"$MMBIN" run -n "$ENV_NAME" python -m pip install --no-deps --no-cache-dir torch-geometric==2.5.3
 
             # Detect if DeepChem / your code needs torch_scatter / torch_geometric
-            PYG_URL=$("$MMBIN" run -n "$ENV_NAME" python - <<'PY'
+            PYG_URL=$("$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python - <<'PY'
             import torch
             ver = torch.__version__.split('+')[0]         # e.g. 2.2.1
             cuda = torch.version.cuda                     # e.g. 12.1 or None
@@ -383,7 +402,7 @@ jobs:
             )
 
             # Detect if we really need PyG bits
-            "$MMBIN" run -n "$ENV_NAME" python - <<'PY' >/tmp/pyg_need.json || true
+            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python - <<'PY' >/tmp/pyg_need.json || true
             import json, importlib.util
             needs = {"torch_scatter": False, "torch_geometric": False, "torch_sparse": False}
             miss = lambda m: importlib.util.find_spec(m) is None
@@ -409,14 +428,14 @@ jobs:
 
             # Install only what’s required (matching your Torch/CUDA)
             if grep -q '"torch_scatter": true' /tmp/pyg_need.json; then
-              "$MMBIN" run -n "$ENV_NAME" python -m pip install --no-cache-dir -f "$PYG_URL" torch-scatter==2.1.2
+              "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install --no-cache-dir -f "$PYG_URL" torch-scatter==2.1.2
             fi
             if grep -q '"torch_sparse": true' /tmp/pyg_need.json; then
-              "$MMBIN" run -n "$ENV_NAME" python -m pip install --no-cache-dir -f "$PYG_URL" \
+              "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install --no-cache-dir -f "$PYG_URL" \
                 torch-sparse==0.6.18 torch-cluster==1.6.3 torch-spline-conv==1.2.2
             fi
             if grep -q '"torch_geometric": true' /tmp/pyg_need.json; then
-              "$MMBIN" run -n "$ENV_NAME" python -m pip install --no-deps --no-cache-dir torch-geometric==2.5.3
+              "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install --no-deps --no-cache-dir torch-geometric==2.5.3
             fi
 
 
@@ -424,17 +443,17 @@ jobs:
             if [ -f "$APP_DIR/requirements.txt" ]; then
               grep -viE '^(rdkit|torch|torch-geometric|torch-scatter)([=<>].*)?$' "$APP_DIR/requirements.txt" > /tmp/req-safe.txt || true
               if [ -s /tmp/req-safe.txt ]; then
-                "$MMBIN" run -n "$ENV_NAME" python -m pip install -r /tmp/req-safe.txt
+                "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install -r /tmp/req-safe.txt
               fi
             fi
 
             # 9) Clean caches to reclaim space
-            "$MMBIN" run -n "$ENV_NAME" python -m pip cache purge || true
-            "$MMBIN" clean -y --all --force-pkgs-dirs || true
+             "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip cache purge || true
+            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" clean -y --all --force-pkgs-dirs || true
             rm -rf "$APP_DIR/.tmp"/pip-* || true
 
             # 10) Sanity (CUDA + Murcko) — heredoc piped to avoid indent issues
-            "$MMBIN" run -n "$ENV_NAME" python - <<'PY'
+            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python - <<'PY'
             import torch
             from rdkit.Chem.Scaffolds import MurckoScaffold as MS
             print("torch:", torch.__version__, "cuda avail:", torch.cuda.is_available())
@@ -813,7 +832,7 @@ jobs:
                 --save-every 1 \
                 --metric val_loss \
                 "${RESUME_ARGS[@]}" \
-                --use-wandb \ 
+                --use-wandb \
                 2>&1 | tee -a "$LOG_DIR/finetune_$(date +%F_%H-%M).log"
 
   vast_benchmark:
