@@ -264,6 +264,16 @@ jobs:
               WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
           script: |
             set -euxo pipefail
+            # ensure optional envs exist even if not forwarded (safe under set -u)
+            : "${WANDB_DIR:=/data/mjepa/wandb}"
+            : "${CACHE_DIR:=/data/mjepa/cache/graphs}"
+            # normalize RUN_ID if missing; keep EXP_ROOT usable
+            if [ -z "${EXP_ROOT:-}" ]; then
+              RUN_ID="${RUN_ID:-$(date +%s)}"
+              EXP_ROOT="/data/mjepa/experiments/${RUN_ID}"
+            else
+              RUN_ID="${RUN_ID:-$(basename "$EXP_ROOT")}"
+            fi
 
             # Normalize EXP_ROOT / RUN_ID so nounset (-u) won't explode if RUN_ID wasn't forwarded
             if [ -z "${EXP_ROOT:-}" ]; then
@@ -513,15 +523,18 @@ jobs:
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
-              # Normalize EXP_ROOT / RUN_ID so nounset (-u) won't explode if RUN_ID wasn't forwarded
+              set -euxo pipefail
+              # ensure optional envs exist even if not forwarded (safe under set -u)
+              : "${WANDB_DIR:=/data/mjepa/wandb}"
+              : "${CACHE_DIR:=/data/mjepa/cache/graphs}"
+              # normalize RUN_ID if missing; keep EXP_ROOT usable
               if [ -z "${EXP_ROOT:-}" ]; then
-                # last resort: derive both from timestamp
                 RUN_ID="${RUN_ID:-$(date +%s)}"
                 EXP_ROOT="/data/mjepa/experiments/${RUN_ID}"
               else
-                # if RUN_ID missing but EXP_ROOT is present, infer it from EXP_ROOT
                 RUN_ID="${RUN_ID:-$(basename "$EXP_ROOT")}"
               fi
+              
               # ---- init persistent experiment dirs on the REMOTE ----
               # --- ensure persistent dirs exist on the remote (Option 3) ---
               mkdir -p /data/mjepa/experiments /data/mjepa/wandb /data/mjepa/cache/graphs
