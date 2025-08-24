@@ -8,7 +8,7 @@ on:
     inputs:
       force_refresh:
         description: "Ignore cached grid search outputs and recompute"
-        required: true
+        required: false
         default: "false"
 
 concurrency:
@@ -22,6 +22,22 @@ env:
   FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}
   WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
   WANDB_PROJECT: m-jepa
+
+  # --- additions for persistent experiments ---
+  MAMBA_ROOT_PREFIX: /data/mjepa/micromamba
+  WANDB_DIR: /data/mjepa/wandb
+  CACHE_DIR: /data/mjepa/cache/graphs
+
+  # default run id, can be overridden per workflow dispatch
+  RUN_ID: ${{ github.run_id }}
+  EXP_ROOT: /data/mjepa/experiments/${{ github.run_id }}
+
+  GRID_DIR: /data/mjepa/experiments/${{ github.run_id }}/grid
+  PRETRAIN_DIR: /data/mjepa/experiments/${{ github.run_id }}/pretrain
+  FINETUNE_DIR: /data/mjepa/experiments/${{ github.run_id }}/finetune
+  BENCH_DIR: /data/mjepa/experiments/${{ github.run_id }}/bench
+  TOX21_DIR: /data/mjepa/experiments/${{ github.run_id }}/tox21
+  LOG_DIR: /data/mjepa/experiments/${{ github.run_id }}/logs
 
 jobs:
   tests_quick:
@@ -211,7 +227,7 @@ jobs:
           PY
 
   vast_deploy_and_prepare_environment:
-    name: Deploy + Prepare environment Vast
+    name: Deploy + Prepare environment
     runs-on: ubuntu-latest
     needs: [tests_quick, vast_smoke]
     steps:
@@ -236,9 +252,17 @@ jobs:
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          envs: REPO_TOKEN,REPO,APP_DIR,BRANCH,VENV_DIR
+          envs: REPO_TOKEN,REPO,APP_DIR,BRANCH,VENV_DIR, \
+              RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
           script: |
             set -euxo pipefail
+            # ---- init persistent experiment dirs on the REMOTE ----
+            mkdir -p /data/mjepa/experiments /data/mjepa/wandb /data/mjepa/cache/graphs
+            mkdir -p "$EXP_ROOT"/{grid,pretrain,finetune,bench,tox21,logs}
+            ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
+            echo "[init] RUN_ID=$RUN_ID  EXP_ROOT=$EXP_ROOT"
+            echo "[init] WANDB_DIR=$WANDB_DIR  CACHE_DIR=$CACHE_DIR  MAMBA_ROOT_PREFIX=$MAMBA_ROOT_PREFIX"
 
             # 0) GitHub SSH for cloning
             #mkdir -p ~/.ssh
@@ -298,7 +322,7 @@ jobs:
             fi
 
             # Shell hook via absolute path; no dependence on PATH
-            export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
+            export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
             export MAMBA_EXE="$MM_BIN"
             set +u
             eval "$("$MM_BIN" shell hook -s bash)"
@@ -454,10 +478,18 @@ jobs:
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             # Force refresh will rerun grid search default is false and not run grid search if outputs exist
-            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT
+            envs: REPO_TOKEN,REPO,APP_DIR,BRANCH,VENV_DIR, \
+              RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
+              # ---- init persistent experiment dirs on the REMOTE ----
+              # --- ensure persistent dirs exist on the remote (Option 3) ---
+              mkdir -p /data/mjepa/experiments /data/mjepa/wandb /data/mjepa/cache/graphs
+              mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR"
+              ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
+              echo "[grid-init] RUN_ID=$RUN_ID  EXP_ROOT=$EXP_ROOT"
 
               # --- locate micromamba robustly ---
               if command -v micromamba >/dev/null 2>&1; then
@@ -470,14 +502,16 @@ jobs:
                 echo "micromamba not found; run the prepare step first." >&2
                 exit 1
               fi
-              export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
+              export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
               # ensure micromamba’s shell functions are available in this non-login shell
               eval "$("$MMBIN" shell hook -s bash)" || true
+
+              export WANDB_DIR="${WANDB_DIR:-/data/mjepa/wandb}"
               
-              export WANDB_DIR=/data/mjepa/wandb
               : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
-              mkdir -p logs outputs
+              # redundant as we cache in large folder now
+              # mkdir -p logs outputs
 
               # Perform a hyper‑parameter grid search with a restricted search space
               # using separate unlabeled and labelled datasets.  Both JEPA and
@@ -499,15 +533,15 @@ jobs:
               # zero values for max-pretrain-batches and max-finetune-batches mean no limit
               # time-budget-mins 0 means no time limit
               # moleculenet dataset, column "measured log solubility in mols per litre" is used for regression task
-
-              if [ "${FORCE_REFRESH}" != "true" ] && [ -f outputs/grid_results.csv ] && [ -f outputs/best_grid_config.json ]; then
+              
+              if [ "${FORCE_REFRESH}" != "true" ] && [ -f "$GRID_DIR/grid_results.csv" ] && [ -f "$GRID_DIR/best_grid_config.json" ]; then
                 echo "Grid search outputs already exist; skipping grid search."
               else
                 "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
                   --unlabeled-dir data/ZINC-canonicalized \
                   --labeled-dir data/katielinkmoleculenet_benchmark/train \
                   --label-col "measured log solubility in mols per litre" \
-                  --cache-dir /data/mjepa/cache/graphs \
+                  --cache-dir "$CACHE_DIR" \
                   --task-type regression \
                   --methods jepa contrastive \
                   --mask-ratios 0.15 0.3 0.5 \
@@ -531,11 +565,11 @@ jobs:
                   --num-workers 8 \
                   --time-budget-mins 60 \
                   --force-tqdm \
-                  --out-csv outputs/grid_results.csv \
-                  --best-config-out outputs/best_grid_config.json \
+                  --out-csv "$GRID_DIR/grid_results.csv" \
+                  --best-config-out "$GRID_DIR/best_grid_config.json" \
                   --use-wandb \
                   $FR \
-                  2>&1 | tee -a logs/grid_search_$(date +%F_%H-%M).log
+                  2>&1 | tee -a "$GRID_DIR/grid_$(date +%F_%H-%M).log"
               fi
 
   vast_pretrain:
@@ -557,10 +591,14 @@ jobs:
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT
+          # Force refresh will rerun grid search default is false and not run grid search if outputs exist
+          envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
+            RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
+            WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
           command_timeout: 240m         # <-- default is 10m; bump this - keep in sync with run command below
           script: |
             set -euxo pipefail
+            mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$LOG_DIR"
 
             # --- locate micromamba robustly ---
             if command -v micromamba >/dev/null 2>&1; then
@@ -573,7 +611,7 @@ jobs:
               echo "micromamba not found; run the prepare step first." >&2
               exit 1
             fi
-            export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
+            export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
             # ensure micromamba’s shell functions are available in this non-login shell
             eval "$("$MMBIN" shell hook -s bash)" || true
 
@@ -593,8 +631,8 @@ jobs:
             # workflow to remain functional even if the grid search skipped.
 
             PRETRAIN_ARR=()
-            CKPT_DIR="/data/mjepa/outputs/ckpts/pretrain"
-            mkdir -p "$CKPT_DIR"
+            CKPT_DIR="$PRETRAIN_DIR"
+            mkdir -p "$CKPT_DIR" "$LOG_DIR"
 
             RESUME_ARGS=()
             LATEST=$(ls -1t "$CKPT_DIR"/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
@@ -603,8 +641,8 @@ jobs:
               RESUME_ARGS=(--resume-ckpt "$LATEST")
             fi
 
-            if [ -f outputs/best_grid_config.json ] || [ -f scripts/default.yaml ]; then
-              PRETRAIN_JSON="outputs/best_grid_config.json"
+            if [ -f "$GRID_DIR/best_grid_config.json" ] || [ -f scripts/default.yaml ]; then
+              PRETRAIN_JSON="$GRID_DIR/best_grid_config.json"
               PRETRAIN_YAML="scripts/default.yaml"
 
               mapfile -t PRETRAIN_ARR < <("$MMBIN" run -n mjepa python -c '
@@ -642,7 +680,9 @@ jobs:
               add("--ema-decay",   cfg.get("ema_decay"))
               add("--lr",          cfg.get("lr"))
               add("--epochs",      cfg.get("pretrain_epochs", cfg.get("epochs", 20)))
-              add("--batch-size",  cfg.get("pretrain_batch_size", cfg.get("batch_size", 4)))
+              add("--batch-size",  cfg.get("pretrain_bs", cfg.get("pretrain_batch_size", cfg.get("batch_size", 4))))
+              if "seeds" in cfg and cfg["seeds"] is not None:
+                add("--seeds", cfg["seeds"])
               method = (cfg.get("method") or "").lower()
               if method == "contrastive":
                   args.append("--contrastive")
@@ -659,17 +699,15 @@ jobs:
             "$MMBIN" run -n mjepa stdbuf -oL -eL timeout -s SIGINT 240m python -u scripts/train_jepa.py pretrain \
               --unlabeled-dir data/ZINC-canonicalized \
               --sample-unlabeled 50000 \
-              --batch-size 64 \
-              "${PRETRAIN_ARR[@]}" \
-              --cache-dir /data/mjepa/cache/graphs \
+              --cache-dir "$CACHE_DIR" \
               --num-workers 8 \
               --ckpt-dir "$CKPT_DIR" \
               --save-every 1 \
-              --output outputs/encoder.pt \
+              --output "$PRETRAIN_DIR/encoder.pt" \
               "${RESUME_ARGS[@]}" \
               --use-wandb \
-              --seeds 42 \
-              2>&1 | tee -a logs/pretrain_$(date +%F_%H-%M).log
+              "${PRETRAIN_ARR[@]}" \
+              2>&1 | tee -a "$LOG_DIR/pretrain_$(date +%F_%H-%M).log"
 
   vast_finetune:
     name: Apply fine tuning
@@ -690,7 +728,9 @@ jobs:
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT
+            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
+              RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -706,19 +746,20 @@ jobs:
                 echo "micromamba not found; run the prepare step first." >&2
                 exit 1
               fi
-              export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
+              export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
               # ensure micromamba’s shell functions are available in this non-login shell
               eval "$("$MMBIN" shell hook -s bash)" || true
 
-              export WANDB_DIR=/data/mjepa/wandb
+              export WANDB_DIR="${WANDB_DIR:-/data/mjepa/wandb}"
               # (optional) avoid port/login issues
-              export WANDB_MODE=offline
+              export WANDB_MODE=online
               : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
-              mkdir -p logs outputs
+              # redundant 
+              # mkdir -p logs outputs
+              mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$LOG_DIR"
 
-              CKPT_DIR="/data/mjepa/outputs/ckpts/finetune"
-              mkdir -p "$CKPT_DIR"
+              CKPT_DIR="$FINETUNE_DIR"
               RESUME_ARGS=()
               LATEST=$(ls -1t "$CKPT_DIR"/seed_*/ft_epoch_*.pt 2>/dev/null | head -n 1 || true)
               if [ -n "$LATEST" ]; then
@@ -728,8 +769,8 @@ jobs:
 
               # Build FINETUNE args from best_grid_config.json and scripts/default.yaml (if present)
               FINETUNE_ARR=()
-              if [ -f outputs/best_grid_config.json ] || [ -f scripts/default.yaml ]; then
-                FINETUNE_JSON="outputs/best_grid_config.json"
+              if [ -f "$GRID_DIR/best_grid_config.json" ] || [ -f scripts/default.yaml ]; then
+                FINETUNE_JSON="$GRID_DIR/best_grid_config.json"
                 FINETUNE_YAML="scripts/default.yaml"
                 mapfile -t FINETUNE_ARR < <("$MMBIN" run -n mjepa python -c 'import sys, json, os
                 try:
@@ -761,10 +802,10 @@ jobs:
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
               "$MMBIN" run -n mjepa python scripts/train_jepa.py finetune \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
-                --encoder outputs/encoder.pt \
+                --encoder "$PRETRAIN_DIR/encoder.pt" \
                 --task-type regression \
                 --label-col "measured log solubility in mols per litre" \
-                --cache-dir /data/mjepa/cache/graphs \
+                --cache-dir "$CACHE_DIR" \
                 "${FINETUNE_ARR[@]}" \
                 --num-workers 8 \
                 --patience 10 \
@@ -772,9 +813,8 @@ jobs:
                 --save-every 1 \
                 --metric val_loss \
                 "${RESUME_ARGS[@]}" \
-                --use-wandb \
-                --seeds 42 \
-                2>&1 | tee -a "logs/finetune_$(date +%F_%H-%M).log"
+                --use-wandb \ 
+                2>&1 | tee -a "$LOG_DIR/finetune_$(date +%F_%H-%M).log"
 
   vast_benchmark:
     name: Conduct Benchmarks
@@ -795,7 +835,9 @@ jobs:
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT
+            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
+              RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -811,31 +853,34 @@ jobs:
                 echo "micromamba not found; run the prepare step first." >&2
                 exit 1
               fi
-              export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
+              export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
               eval "$("$MMBIN" shell hook -s bash)" || true
-              export WANDB_DIR=/data/mjepa/wandb
+              export WANDB_DIR="${WANDB_DIR:-/data/mjepa/wandb}"
               # (optional) avoid port/login issues
-              export WANDB_MODE=offline
+              export WANDB_MODE=online
               cd "$APP_DIR"
-              mkdir -p logs outputs
+              : "${APP_DIR:?APP_DIR not set}"
+              cd "$APP_DIR"
+              # persistent locations (idempotent)
+              mkdir -p "$BENCH_DIR" "$LOG_DIR" "$BENCH_DIR/reports"
 
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
 
               # Build encoder/ckpt args dynamically
               BENCH_MODEL_ARR=()
-              [ -f outputs/encoder.pt ]             && BENCH_MODEL_ARR+=(--jepa-encoder outputs/encoder.pt)
-              [ -f outputs/encoder_jepa.pt ]        && BENCH_MODEL_ARR+=(--jepa-encoder outputs/encoder_jepa.pt)
-              [ -f outputs/encoder_contrastive.pt ] && BENCH_MODEL_ARR+=(--contrastive-encoder outputs/encoder_contrastive.pt)
+              [ -f "$PRETRAIN_DIR/encoder.pt" ]             && BENCH_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder.pt")
+              [ -f "$PRETRAIN_DIR/encoder_jepa.pt" ]        && BENCH_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder_jepa.pt")
+              [ -f "$PRETRAIN_DIR/encoder_contrastive.pt" ] && BENCH_MODEL_ARR+=(--contrastive-encoder "$PRETRAIN_DIR/encoder_contrastive.pt")
               FT_CKPT=""
-              if compgen -G "outputs/ckpts/finetune/seed_*/ft_best*.pt" > /dev/null; then
-                FT_CKPT="$(ls -1t outputs/ckpts/finetune/seed_*/ft_best*.pt | head -n1)"
-              elif compgen -G "outputs/ckpts/finetune/seed_*/ft_epoch_*.pt" > /dev/null; then
-                FT_CKPT="$(ls -1t outputs/ckpts/finetune/seed_*/ft_epoch_*.pt | head -n1)"
+              if compgen -G "$FINETUNE_DIR/seed_*/ft_best*.pt" > /dev/null; then
+                FT_CKPT="$(ls -1t "$FINETUNE_DIR"/seed_*/ft_best*.pt | head -n1)"
+              elif compgen -G "$FINETUNE_DIR/seed_*/ft_epoch_*.pt" > /dev/null; then
+                FT_CKPT="$(ls -1t "$FINETUNE_DIR"/seed_*/ft_epoch_*.pt | head -n1)"
               fi
               [ -n "${FT_CKPT:-}" ] && BENCH_MODEL_ARR+=(--ft-ckpt "$FT_CKPT")
 
               # Merge scripts/default.yaml (benchmark:) + best_grid_config.json into CLI flags
-              BENCH_JSON="outputs/best_grid_config.json"
+              BENCH_JSON="$GRID_DIR/best_grid_config.json"
               BENCH_YAML="scripts/default.yaml"
               BENCH_HPARAM_ARR=()
               mapfile -t BENCH_HPARAM_ARR < <("$MMBIN" run -n mjepa python -c '
@@ -873,14 +918,14 @@ jobs:
               if seed: args += ["--seeds", str(seed)]
               print("\n".join(args))' "$BENCH_JSON" "$BENCH_YAML")
 
-                            "$MMBIN" run -n mjepa python scripts/train_jepa.py benchmark \
-                              --labeled-dir data/katielinkmoleculenet_benchmark/train \
-                              --report-dir data/mjepa/outputs/reports \
-                              --cache-dir data/mjepa/cache/graphs \
-                              "${BENCH_HPARAM_ARR[@]}" \
-                              "${BENCH_MODEL_ARR[@]}" \
-                              --use-wandb \
-                              2>&1 | tee -a "logs/benchmark_$(date +%F_%H-%M).log"
+              "$MMBIN" run -n mjepa python scripts/train_jepa.py benchmark \
+                --labeled-dir data/katielinkmoleculenet_benchmark/train \
+                --report-dir "$BENCH_DIR/reports" \
+                --cache-dir "$CACHE_DIR" \
+                "${BENCH_HPARAM_ARR[@]}" \
+                "${BENCH_MODEL_ARR[@]}" \
+                --use-wandb \
+                2>&1 | tee -a "$LOG_DIR/benchmark_$(date +%F_%H-%M).log"
 
   vast_tox21:
     name: Execute Tox21 Study
@@ -901,7 +946,9 @@ jobs:
             port: ${{ secrets.VAST_PORT }}
             key: ${{ secrets.VAST_SSH_KEY }}
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT
+            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
+              RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -918,21 +965,23 @@ jobs:
                 echo "micromamba not found; run the prepare step first." >&2
                 exit 1
               fi
-              export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
+              export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
               eval "$("$MMBIN" shell hook -s bash)" || true
 
-              export WANDB_DIR=/data/mjepa/wandb
+              export WANDB_DIR="${WANDB_DIR:-/data/mjepa/wandb}"
               # (optional) avoid port/login issues
-              export WANDB_MODE=offline
+              export WANDB_MODE=online
+              : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
-              mkdir -p logs outputs
+              # persistent dirs (idempotent)
+              mkdir -p "$TOX21_DIR" "$LOG_DIR"
 
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
 
               # Case study stage (remove --config; keep args explicit)
               TOX_ARR=()
               mapfile -t TOX_ARR < <("$MMBIN" run -n mjepa python -c '
-              import os, sys
+              import os, sys, json
               try:
                   import yaml
               except Exception:
@@ -947,6 +996,15 @@ jobs:
                   y=yaml.safe_load(open(yp)) or {}
                   y=y.get("tox21", y)
                   if isinstance(y, dict): cfg.update(y)
+
+              # also overlay grid seeds if present
+              jpath = os.path.join(os.environ.get("GRID_DIR",""), "best_grid_config.json")
+              if jpath and os.path.isfile(jpath):
+                  try:
+                      j=json.load(open(jpath)) or {}
+                      if isinstance(j, dict): cfg.update({k:v for k,v in j.items() if k in ("seed","seeds")})
+                  except Exception:
+                      pass
               add("--pretrain-epochs", cfg.get("pretrain_epochs", 1))
               add("--finetune-epochs", cfg.get("finetune_epochs", 1))
               add("--num-workers",     cfg.get("num_workers", 8))
@@ -957,8 +1015,8 @@ jobs:
                             # Case study stage (keep CSV/task explicit, merge the rest)
                             "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
                               --csv data/tox21/data.csv \
-                              --cache-dir /data/mjepa/cache/graphs \
+                              --cache-dir "$CACHE_DIR" \
                               --task NR-AR \
                               "${TOX_ARR[@]}" \
                               --use-wandb \
-                              2>&1 | tee -a "logs/tox21_$(date +%F_%H-%M).log"
+                              2>&1 | tee -a "$LOG_DIR/tox21_$(date +%F_%H-%M).log"
