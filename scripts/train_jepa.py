@@ -1744,6 +1744,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.15,
         help="Fraction of nodes to mask in each view (JEPA/contrastive).",
     )
+    pre.add_argument(
+        "--sample-unlabeled",
+        type=int,
+        default=0,
+        help="If >0, load at most N graphs from the unlabeled dataset.",
+    )
 
     _add_common_args(pre, "pretrain")
     pre.set_defaults(func=cmd_pretrain)
