@@ -147,12 +147,12 @@ jobs:
       - name: Install test tooling
         shell: bash -l {0}
         run: |
-          mamba run -n mjepa python -m pip install -U pytest pytest-xdist
+          mamba run -n mjepa python -m pip install -U pytest pytest-xdist pytest-cov
 
       - name: Run quick tests
         shell: bash -l {0}
         run: |
-          mamba run -n mjepa python -m pytest -m "not gpu and not slow" -q -p no:cov
+          mamba run -n mjepa python -m pytest -m "not gpu and not slow" -q
 
   # tests_slow:
     # Future enhancements to long running tests locally

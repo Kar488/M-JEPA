@@ -1,13 +1,16 @@
+# .coveragerc (repo root)
+
 [run]
 omit =
     */__init__.py
-    main.py 
+    main.py
     third_party/*
     tests/*
-    */envs/*/lib/python*/*
     */site-packages/*
+    */dist-packages/*
+    */envs/*/lib/python*/*
+    */.mamba-root/*
 
 [report]
-omit =
-    */__init__.py
-    main.py
+fail_under = 70
+skip_empty = True
