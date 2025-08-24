@@ -533,13 +533,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         # Sample a subset of the unlabeled dataset if requested.  Use getattr to
         # avoid AttributeError when the caller hasn’t set sample_unlabeled.
         sample_ul = getattr(args, "sample_unlabeled", 0) or None
-        if (
-            sample_ul
-            and hasattr(unlabeled, "__len__")
-            and len(unlabeled) > sample_ul
-            and hasattr(unlabeled, "random_subset")
-        ):
-            unlabeled = unlabeled.random_subset(sample_ul, seed=seeds)
+        
 
         unlabeled = load_directory_dataset(
             args.unlabeled_dir,
@@ -548,6 +542,14 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             cache_dir=getattr(args, "cache_dir", None),
             max_graphs=sample_ul,
         )  # type: ignore[arg-type]
+
+        if (
+            sample_ul
+            and hasattr(unlabeled, "__len__")
+            and len(unlabeled) > sample_ul
+            and hasattr(unlabeled, "random_subset")
+        ):
+            unlabeled = unlabeled.random_subset(sample_ul, seed=seeds)
 
         wb.log({"phase": "data_load", "unlabeled_graphs": len(unlabeled)})
     except Exception:

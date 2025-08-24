@@ -8,7 +8,7 @@ on:
     inputs:
       force_refresh:
         description: "Ignore cached grid search outputs and recompute"
-        required: false
+        required: true
         default: "false"
 
 concurrency:
@@ -579,7 +579,7 @@ jobs:
 
             export WANDB_DIR=/data/mjepa/wandb
             # (optional) avoid port/login issues
-            export WANDB_MODE=offline
+            export WANDB_MODE=online
             : "${APP_DIR:?APP_DIR not set}"
             cd "$APP_DIR"
             # mkdir -p logs outputs cache/graphs - redundant as we cache in large folder now
