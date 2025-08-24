@@ -45,11 +45,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-      # override globals so CI writes locally (not /data)
-      #put conda/mamba env OUTSIDE the repo so coverage --cov=. won't include it
-      MAMBA_ROOT_PREFIX: ${{ runner.temp }}/mamba-root
-      WANDB_DIR: ${{ runner.temp }}/wandb
-      CACHE_DIR: ${{ runner.temp }}/graphs-cache
     steps:
       - uses: actions/checkout@v4
         # if you use submodules, add:
@@ -58,7 +53,10 @@ jobs:
         #   fetch-depth: 0
       - name: Init local dirs (CI)
         run: |
-          mkdir -p "$MAMBA_ROOT_PREFIX" "$WANDB_DIR" "$CACHE_DIR"
+          echo "MAMBA_ROOT_PREFIX=$RUNNER_TEMP/mamba-root" >> $GITHUB_ENV 
+          echo "WANDB_DIR=$RUNNER_TEMP/wandb"             >> $GITHUB_ENV
+          echo "CACHE_DIR=$RUNNER_TEMP/graphs-cache"      >> $GITHUB_ENV
+          mkdir -p "$RUNNER_TEMP/mamba-root" "$RUNNER_TEMP/wandb" "$RUNNER_TEMP/graphs-cache"
           echo "MAMBA_ROOT_PREFIX=$MAMBA_ROOT_PREFIX"
           df -h .
       - name: Set up Miniconda (with mamba)
