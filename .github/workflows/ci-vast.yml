@@ -46,9 +46,10 @@ jobs:
     env:
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
       # override globals so CI writes locally (not /data)
-      MAMBA_ROOT_PREFIX: ${{ github.workspace }}/.mamba-root
-      WANDB_DIR: ${{ github.workspace }}/.wandb
-      CACHE_DIR: ${{ github.workspace }}/.cache/graphs
+      #put conda/mamba env OUTSIDE the repo so coverage --cov=. won't include it
+      MAMBA_ROOT_PREFIX: ${{ runner.temp }}/mamba-root
+      WANDB_DIR: ${{ runner.temp }}/wandb
+      CACHE_DIR: ${{ runner.temp }}/graphs-cache
     steps:
       - uses: actions/checkout@v4
         # if you use submodules, add:
@@ -153,7 +154,7 @@ jobs:
       - name: Run quick tests
         shell: bash -l {0}
         run: |
-          mamba run -n mjepa python -m pytest -m "not gpu and not slow" -q
+          mamba run -n mjepa python -m pytest -m "not gpu and not slow" -q -p no:cov
 
   # tests_slow:
     # Future enhancements to long running tests locally
