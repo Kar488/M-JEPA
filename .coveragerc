@@ -4,6 +4,8 @@ omit =
     main.py 
     third_party/*
     tests/*
+    */envs/*/lib/python*/*
+    */site-packages/*
 
 [report]
 omit =
