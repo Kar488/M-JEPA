@@ -264,6 +264,17 @@ jobs:
               WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
           script: |
             set -euxo pipefail
+
+            # Normalize EXP_ROOT / RUN_ID so nounset (-u) won't explode if RUN_ID wasn't forwarded
+            if [ -z "${EXP_ROOT:-}" ]; then
+              # last resort: derive both from timestamp
+              RUN_ID="${RUN_ID:-$(date +%s)}"
+              EXP_ROOT="/data/mjepa/experiments/${RUN_ID}"
+            else
+              # if RUN_ID missing but EXP_ROOT is present, infer it from EXP_ROOT
+              RUN_ID="${RUN_ID:-$(basename "$EXP_ROOT")}"
+            fi
+
             echo "== preflight =="
             echo "arch: $(uname -m)"
             id || true
