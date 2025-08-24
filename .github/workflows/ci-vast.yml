@@ -518,23 +518,23 @@ jobs:
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             # Force refresh will rerun grid search default is false and not run grid search if outputs exist
             envs: REPO_TOKEN,REPO,APP_DIR,BRANCH,VENV_DIR, \
-              RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
+             RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
+             WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT
             command_timeout: 180m         # <-- default is 10m; bump this
-            script: |
+            script: | 
               set -euxo pipefail
-              set -euxo pipefail
-              # ensure optional envs exist even if not forwarded (safe under set -u)
+              # safe defaults so set -u never explodes
               : "${WANDB_DIR:=/data/mjepa/wandb}"
               : "${CACHE_DIR:=/data/mjepa/cache/graphs}"
-              # normalize RUN_ID if missing; keep EXP_ROOT usable
+              : "${MAMBA_ROOT_PREFIX:=/data/mjepa/micromamba}"
+              # normalize RUN_ID/EXP_ROOT if one is missing
               if [ -z "${EXP_ROOT:-}" ]; then
                 RUN_ID="${RUN_ID:-$(date +%s)}"
                 EXP_ROOT="/data/mjepa/experiments/${RUN_ID}"
               else
                 RUN_ID="${RUN_ID:-$(basename "$EXP_ROOT")}"
               fi
-              
+
               # ---- init persistent experiment dirs on the REMOTE ----
               # --- ensure persistent dirs exist on the remote (Option 3) ---
               mkdir -p /data/mjepa/experiments /data/mjepa/wandb /data/mjepa/cache/graphs
@@ -575,7 +575,7 @@ jobs:
 
               # Skip grid search if cached outputs exist
               FR=""
-              if [ "${FORCE_REFRESH}" = "true" ]; then
+              if [ "${FORCE_REFRESH:-false}" = "true" ]; then
                 FR="--force-refresh"
               fi
 
