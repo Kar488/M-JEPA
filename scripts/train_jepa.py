@@ -2335,7 +2335,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Ignore cached grid search outputs and recompute",
     )
-
+    p_grid = sub.add_parser("grid-search", help="Run hyperparameter sweep")
+    # include common runtime/perf flags for grid, so it accepts --num-workers/--prefetch-factor/--bf16, etc.
+    _add_common_args(p_grid)
     grid.set_defaults(func=cmd_grid_search)
 
     return parser
