@@ -2335,9 +2335,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Ignore cached grid search outputs and recompute",
     )
-    p_grid = sub.add_parser("grid-search", help="Run hyperparameter sweep")
-    # include common runtime/perf flags for grid, so it accepts --num-workers/--prefetch-factor/--bf16, etc.
-    _add_common_args(p_grid)
+    # Optimisation for GPU
+    grid.add_argument("--prefetch-factor", type=int, default=4,
+                    help="Dataloader prefetch factor (workers>0 only).")
+    grid.add_argument("--pin-memory", action="store_true", default=True,
+                        help="Pin CUDA host memory in DataLoader.")
+    grid.add_argument("--persistent-workers", action="store_true", default=True,
+                        help="Keep worker processes alive across epochs (workers>0).")
+    grid.add_argument("--bf16", action="store_true",
+                        help="Enable bfloat16 autocast on GPU.")
+    grid.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP")
     grid.set_defaults(func=cmd_grid_search)
 
     return parser
