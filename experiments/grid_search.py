@@ -1057,8 +1057,7 @@ def run_grid_search(
                 stop_early = True
                 break
 
-            rows.append(
-                _run_one_config_method(
+            res = _run_one_config_method(
                     cfg, method, unlabeled_dataset_fn, eval_dataset_fn, task_type, seeds,
                     device, use_wandb, ckpt_dir, ckpt_every, use_scheduler, warmup_steps,
                     baseline_unlabeled_file, baseline_eval_file, baseline_smiles_col,
@@ -1067,7 +1066,11 @@ def run_grid_search(
                     max_pretrain_batches, max_finetune_batches, time_left,
                     num_workers, pin_memory, persistent_workers, prefetch_factor, bf16
                 )
-            )
+            # ensure required keys present for downstream selectors/tests
+            row = dict(res) if isinstance(res, dict) else {"result": res}
+            row.setdefault("method", method)
+            rows.append(row)
+            
             processed += 1
             if pbar is not None:
                 pbar.update(1)

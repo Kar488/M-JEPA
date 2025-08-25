@@ -8,6 +8,7 @@ import torch
 # Stub out modules that require heavy dependencies (e.g., RDKit)
 data_dataset = types.ModuleType("data.mdataset")
 
+
 @dataclass
 class GraphData:
     x: np.ndarray
