@@ -224,7 +224,12 @@ def train_linear_head(
             num_graphs = batch_ptr.numel() - 1
             if graph_emb.shape[0] != num_graphs:
                 graph_emb = graph_emb[:num_graphs]
-               
+            
+            param = next(head.parameters(), None)
+            if param is not None and graph_emb.dtype != param.dtype:
+                # Option 1: cast the input tensor to the head’s dtype
+                graph_emb = graph_emb.to(param.dtype)
+                
             preds = head(graph_emb).squeeze(1)
             # Guard against any numerical issues in the head
             if not torch.isfinite(preds).all():
