@@ -3,19 +3,29 @@ import argparse
 import types
 import pytest
 
-if "torch" not in sys.modules:
-    torch_stub = types.SimpleNamespace(
+try:  # pragma: no cover - torch may be unavailable
+    import torch  # noqa: F401
+except Exception:  # pragma: no cover
+    torch = types.SimpleNamespace(
         cuda=types.SimpleNamespace(is_available=lambda: False),
         manual_seed=lambda *a, **k: None,
         save=lambda *a, **k: None,
         load=lambda *a, **k: {},
         nn=types.SimpleNamespace(Module=object),
     )
-    sys.modules["torch"] = torch_stub
-    sys.modules["torch.nn"] = torch_stub.nn
+    sys.modules["torch"] = torch
+    sys.modules["torch.nn"] = torch.nn
 
-sys.modules.setdefault("models.factory", types.SimpleNamespace(build_encoder=lambda *a, **k: None))
-sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
+try:  # pragma: no cover - optional dependency
+    import models.factory  # noqa: F401
+except Exception:  # pragma: no cover
+    sys.modules.setdefault(
+        "models.factory", types.SimpleNamespace(build_encoder=lambda *a, **k: None)
+    )
+try:  # pragma: no cover - optional dependency
+    import models.encoder  # noqa: F401
+except Exception:  # pragma: no cover
+    sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
 
 from scripts import train_jepa as tj
 

@@ -9,7 +9,7 @@ import pathlib
 import importlib.util, sys, pathlib, inspect, os
 
 def import_pooling_fresh():
-    path = pathlib.Path(__file__).resolve().parents[1] / "utils" / "pooling.py"
+    path = pathlib.Path(__file__).resolve().parents[2] / "utils" / "pooling.py"
     mod_name = "pooling_under_test"
 
     # ensure we don't reuse a previous module object
