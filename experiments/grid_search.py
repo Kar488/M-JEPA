@@ -1110,6 +1110,16 @@ def run_grid_search(
     # ---- Centralized selection policy (no env/config) ----
     TIE_EPS = 0.01  # 1% window
 
+    def _first_valid_metric(df: pd.DataFrame, candidates):
+        """Return first metric name that exists and has at least one non-NaN value."""
+        cols = set(df.columns)
+        for m in candidates:
+            if m in cols:
+                s = pd.to_numeric(df[m], errors="coerce")
+                if s.notna().any():
+                    return m
+        return None
+    
     def _selection_policy(df: pd.DataFrame, task_type: str):
         """
         Returns: primary_metric (str), maximize_primary (bool),
@@ -1119,22 +1129,19 @@ def run_grid_search(
         is_reg = (task_type or "").lower().startswith("regress")
         if is_reg:
             # Regression: RMSE (min), tie by MAE (min)
-            primary = "probe_rmse_mean" if "probe_rmse_mean" in cols else (
-                    "rmse_mean"       if "rmse_mean"       in cols else None)
+            primary = _first_valid_metric(df, ["probe_rmse_mean", "rmse_mean"])
             if primary is None:
                 raise ValueError("Regression selection requires probe_rmse_mean or rmse_mean.")
-            tb = "probe_mae_mean" if "probe_mae_mean" in cols else ("mae_mean" if "mae_mean" in cols else None)
+            tb = _first_valid_metric(df, ["probe_mae_mean", "mae_mean"])
             tiebreakers = [(tb, False)] if tb else []
             return primary, False, tiebreakers
         else:
             # Classification: ROC-AUC (max), tie by Brier (min) then PR-AUC (max)
-            for primary in ("probe_roc_auc_mean", "roc_auc_mean", "auroc_mean"):
-                if primary in cols:
-                    break
-            else:
+            primary = _first_valid_metric(df, ["probe_roc_auc_mean", "roc_auc_mean", "auroc_mean"])
+            if primary is None:
                 raise ValueError("Classification selection requires roc_auc_mean/probe_roc_auc_mean/auroc_mean.")
-            tb1 = "probe_brier_mean" if "probe_brier_mean" in cols else ("brier_mean" if "brier_mean" in cols else None)
-            tb2 = "probe_pr_auc_mean" if "probe_pr_auc_mean" in cols else ("pr_auc_mean" if "pr_auc_mean" in cols else None)
+            tb1 = _first_valid_metric(df, ["probe_brier_mean", "brier_mean"])
+            tb2 = _first_valid_metric(df, ["probe_pr_auc_mean", "pr_auc_mean"])
             tiebreakers = []
             if tb1: tiebreakers.append((tb1, False))  # minimize Brier
             if tb2: tiebreakers.append((tb2, True))   # maximize PR-AUC
