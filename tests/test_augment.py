@@ -3,6 +3,7 @@ import sys
 import numpy as np
 import pandas as pd
 import pytest
+pytest.importorskip("rdkit")
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Chem import rdMolTransforms as MT

@@ -2,7 +2,9 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import pytest
 
+pytest.importorskip("rdkit")
 from training.supervised import stratified_split, train_linear_head
 
 

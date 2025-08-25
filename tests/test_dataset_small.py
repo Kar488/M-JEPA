@@ -7,6 +7,7 @@ import pandas as pd
 
 import sys
 import importlib
+pytest.importorskip("rdkit")
 from data import GraphDataset
 
 def test_dataset_from_smiles_list(toy_smiles):

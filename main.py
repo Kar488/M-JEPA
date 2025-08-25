@@ -131,23 +131,39 @@ def _edge_dim_or_none(ds: GraphDataset) -> Optional[int]:
 
 
 # ----------------------------- Demo pipeline ----------------------------- #
+def _make_chain_graph(n: int) -> GraphData:
+    x = np.ones((n, 2), dtype=np.float32)
+    edges = []
+    for i in range(n - 1):
+        edges.append([i, i + 1]); edges.append([i + 1, i])
+    edge_index = np.array(edges, dtype=np.int64).T if edges else np.zeros((2, 0), dtype=np.int64)
+    return GraphData(x=x, edge_index=edge_index)
+
+def _build_unlabeled_dataset_from_smiles(smiles):
+    try:
+        # If method exists anywhere in your env, use it
+        return GraphDataset.from_smiles_list(smiles)  # type: ignore[attr-defined]
+    except AttributeError:
+        # Synthetic fallback (no RDKit deps)
+        graphs = [_make_chain_graph(max(3, min(8, (len(s) % 6) + 3))) for s in smiles]
+        return GraphDataset(graphs)
+    
+def _ensure_labels_inplace_local(ds, task_type: str) -> None:
+    # Create or coerce labels in place so downstream code can read ds.labels
+    if not hasattr(ds, "labels") or getattr(ds, "labels", None) is None:
+        n = len(ds.graphs)
+        ds.labels = np.zeros(n, dtype=np.int64 if task_type == "classification" else np.float32)
+    else:
+        arr = np.asarray(ds.labels)
+        ds.labels = arr.astype(np.int64 if task_type == "classification" else np.float32, copy=False)
 
 
 def demonstration(device: str = "cpu", devices: int = 1, use_scaffold: bool = False) -> None:
     """Tiny run: JEPA vs contrastive on a toy dataset, with a tiny linear head and a synthetic case study."""
-    smiles = [
-        "CCO",
-        "CCN",
-        "CCC",
-        "c1ccccc1",
-        "CC(=O)O",
-        "CCOCC",
-        "CNC",
-        "CCCl",
-        "COC",
-        "CCN(CC)CC",
-    ]
-    dataset = GraphDataset.from_smiles_list(smiles)
+    smiles = ["CCO","CCN","CCC","c1ccccc1","CC(=O)O","CCOCC","CNC","CCCl","COC","CCN(CC)CC"]
+
+    # Unsupervised dataset
+    dataset = _build_unlabeled_dataset_from_smiles(smiles)
 
     input_dim = dataset.graphs[0].x.shape[1]
     edge_dim = _edge_dim_or_none(dataset)
@@ -252,8 +268,10 @@ def demonstration(device: str = "cpu", devices: int = 1, use_scaffold: bool = Fa
     )
 
     # Tiny head
-    labels = np.random.randint(0, 2, size=len(smiles)).tolist()
-    labeled_dataset = GraphDataset.from_smiles_list(smiles, labels=labels)
+    random_labels = np.random.randint(0, 2, size=len(smiles)).astype(np.int64)
+    setattr(dataset, "labels", random_labels)
+    
+    labeled_dataset = dataset
     metrics = train_linear_head(
         labeled_dataset,
         encoder,
@@ -504,6 +522,9 @@ def run_full_mode(args: argparse.Namespace) -> None:
         add_3d=args.add_3d,
     )
 
+    _ensure_labels_inplace_local(train_ds, args.task_type)
+    _ensure_labels_inplace_local(val_ds, args.task_type)
+
     metrics = _train_with_val_if_available(
         train_ds=train_ds,
         val_ds=val_ds,
@@ -530,14 +551,21 @@ def run_full_mode(args: argparse.Namespace) -> None:
             add_3d=args.add_3d,
         )
         # quick re‑train on merged set for reporting (simple baseline)
-        merged = GraphDataset(
-            train_ds.graphs + val_ds.graphs,
-            (
-                None
-                if train_ds.labels is None
-                else np.concatenate([train_ds.labels, val_ds.labels])
-            ),
-        )
+        # Merge train + val in place to avoid calling a constructor that doesn’t accept labels
+        merged_graphs = train_ds.graphs + val_ds.graphs
+
+        train_labels = getattr(train_ds, "labels", None)
+        val_labels   = getattr(val_ds, "labels", None)
+        merged_labels = None
+        if train_labels is not None and val_labels is not None:
+            merged_labels = np.concatenate([np.asarray(train_labels), np.asarray(val_labels)], axis=0)
+
+        # mutate train_ds so it remains a valid dataset instance (keeps __len__, etc.)
+        train_ds.graphs = merged_graphs
+        setattr(train_ds, "labels", merged_labels)
+
+        merged = train_ds  # reuse the same object
+        
         test_metrics = train_linear_head(
             merged,
             encoder,

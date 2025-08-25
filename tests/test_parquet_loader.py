@@ -1,5 +1,8 @@
 import pandas as pd
 import torch
+import pytest
+
+pytest.importorskip("torch_geometric")
 
 from data.parquet_loader import load_dataloaders
 

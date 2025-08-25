@@ -22,9 +22,7 @@ import pandas as pd
 import torch
 import tqdm
 from torch_geometric.data import Data as PyGData
-from torch_geometric.loader import DataLoader as GeoLoader
-
-from data.augment import AugmentationConfig
+from torch_geometric.loader import DataLoader as GeoLoader 
 from experiments.baseline_integration import baseline_pretrain_and_embed
 from models.ema import EMA
 from models.predictor import MLPPredictor
@@ -661,7 +659,7 @@ def _run_one_config_method(
                 )
                 row = {k: float(v) for k, v in m.items() if k != "head"}
             except TypeError:
-                logger.exception("Fine-tuning failed in contrastive")
+                logger.exception("Fine-tuning failed in JEPA")
                 m = train_linear_head(
                     dataset=ds_eval,
                     encoder=encoder,
@@ -781,6 +779,12 @@ def _run_one_config_method(
                     use_scaffold=use_scaffold,
                     max_batches=max_finetune_batches,
                     time_budget_mins=_tb,
+                    # perf knobs
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                    persistent_workers=persistent_workers,
+                    prefetch_factor=prefetch_factor,
+                    bf16=bf16,
                 )
                 row = {k: float(v) for k, v in m.items() if k != "head"}
             except TypeError:
@@ -793,12 +797,6 @@ def _run_one_config_method(
                     batch_size=cfg.finetune_bs,
                     device=device,
                     use_scaffold=use_scaffold,
-                    # perf knobs
-                    num_workers=num_workers,
-                    pin_memory=pin_memory,
-                    persistent_workers=persistent_workers,
-                    prefetch_factor=prefetch_factor,
-                    bf16=bf16,
                 )
                 row = {k: float(v) for k, v in m.items() if k != "head"}
 
@@ -997,8 +995,8 @@ def run_grid_search(
         # If tests provided dataset_fn, build loaders per-config
         prebuilt_loaders = None
         if use_single_builder:
-            pre_bs = getattr(cfg, "pretrain_batch_size", 32)
-            ft_bs = getattr(cfg, "finetune_batch_size", 32)
+            pre_bs = cfg.pretrain_bs
+            ft_bs  = cfg.finetune_bs
 
             # get datasets straight from dataset_fn
             try:
@@ -1082,10 +1080,8 @@ def run_grid_search(
         "cluster_silhouette_mean",
     ]
     metrics_min = [
-        "rmse_mean",
-        "mae_mean",
-        "probe_rmse_mean",
-        "probe_mae_mean",
+        "rmse_mean","mae_mean","probe_rmse_mean","probe_mae_mean",
+        "brier_mean","probe_brier_mean",
     ]
     best_rows: List[Dict[str, Any]] = []
     # metrics where higher is better
@@ -1110,6 +1106,68 @@ def run_grid_search(
 
     if best_rows:
         df = pd.concat([df, pd.DataFrame(best_rows)], ignore_index=True)
+
+    # ---- Centralized selection policy (no env/config) ----
+    TIE_EPS = 0.01  # 1% window
+
+    def _selection_policy(df: pd.DataFrame, task_type: str):
+        """
+        Returns: primary_metric (str), maximize_primary (bool),
+                tiebreakers: List[Tuple[column_name (str), maximize (bool)]]
+        """
+        cols = set(df.columns)
+        is_reg = (task_type or "").lower().startswith("regress")
+        if is_reg:
+            # Regression: RMSE (min), tie by MAE (min)
+            primary = "probe_rmse_mean" if "probe_rmse_mean" in cols else (
+                    "rmse_mean"       if "rmse_mean"       in cols else None)
+            if primary is None:
+                raise ValueError("Regression selection requires probe_rmse_mean or rmse_mean.")
+            tb = "probe_mae_mean" if "probe_mae_mean" in cols else ("mae_mean" if "mae_mean" in cols else None)
+            tiebreakers = [(tb, False)] if tb else []
+            return primary, False, tiebreakers
+        else:
+            # Classification: ROC-AUC (max), tie by Brier (min) then PR-AUC (max)
+            for primary in ("probe_roc_auc_mean", "roc_auc_mean", "auroc_mean"):
+                if primary in cols:
+                    break
+            else:
+                raise ValueError("Classification selection requires roc_auc_mean/probe_roc_auc_mean/auroc_mean.")
+            tb1 = "probe_brier_mean" if "probe_brier_mean" in cols else ("brier_mean" if "brier_mean" in cols else None)
+            tb2 = "probe_pr_auc_mean" if "probe_pr_auc_mean" in cols else ("pr_auc_mean" if "pr_auc_mean" in cols else None)
+            tiebreakers = []
+            if tb1: tiebreakers.append((tb1, False))  # minimize Brier
+            if tb2: tiebreakers.append((tb2, True))   # maximize PR-AUC
+            return primary, True, tiebreakers
+
+
+    # ----- Final primary selection (with optional tie-breaker) -----
+    primary, maximize, tiebreakers = _selection_policy(df, task_type)
+    dfx = df.copy()
+    dfx[primary] = pd.to_numeric(dfx[primary], errors="coerce")
+    dfx = dfx.dropna(subset=[primary])
+    if dfx.empty:
+        raise ValueError(f"No valid values for primary metric '{primary}'")
+    best_idx = dfx[primary].idxmax() if maximize else dfx[primary].idxmin()
+    best_val = float(dfx.loc[best_idx, primary])
+
+    # tie window
+    close = dfx[dfx[primary] >= best_val * (1.0 - TIE_EPS)] if maximize \
+            else dfx[dfx[primary] <= best_val * (1.0 + TIE_EPS)]
+    suffix = primary
+    for tb, tb_max in tiebreakers:
+        if not tb or tb not in close.columns:
+            continue
+        close[tb] = pd.to_numeric(close[tb], errors="coerce")
+        close_tb = close.dropna(subset=[tb])
+        if close_tb.empty or len(close_tb) <= 1:
+            continue
+        best_idx = close_tb[tb].idxmax() if tb_max else close_tb[tb].idxmin()
+        suffix = f"{primary}+tie:{tb}"
+        break
+    final_row = df.loc[best_idx].to_dict()
+    final_row["best_metric"] = suffix
+    df = pd.concat([df, pd.DataFrame([final_row])], ignore_index=True)
 
     if out_csv is not None:
         df.to_csv(out_csv, index=False)

@@ -2,6 +2,9 @@ import sys
 import types
 import numpy as np
 import torch
+import pytest
+
+pytest.importorskip("torch_geometric")
 from torch_geometric.data import Data
 
 # Provide a minimal stub for rdkit so experiments.probing can be imported

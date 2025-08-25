@@ -10,12 +10,9 @@ except Exception:  # pragma: no cover - torch not available
     torch = types.SimpleNamespace()
 import pytest
 import logging
-# Check if RDKit is available
-try:
-    from rdkit import Chem
-    RDKit_AVAILABLE = True
-except ImportError:
-    RDKit_AVAILABLE = False
+pytest.importorskip("rdkit")
+from rdkit import Chem
+RDKit_AVAILABLE = True
 
     
 # training.supervised imports data.scaffold_split which requires RDKit. Provide a

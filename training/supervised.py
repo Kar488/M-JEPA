@@ -30,6 +30,78 @@ from utils.early_stopping import EarlyStopping
 
 logger = logging.getLogger(__name__)
 
+# Test harness supprt
+def _simple_pack_batch(dataset, batch_indices, task_type: str):
+    """
+    Builds a mini-batch from dataset.graphs where each graph g has:
+      g.x: (n_i, F)
+      g.edge_index: (2, E_i) optional
+    Returns TORCH tensors:
+      batch_x: (N, F) float32
+      batch_adj: (N, N) float32 dense adjacency
+      batch_ptr: (B+1,) int64
+      batch_labels: (B,) float32 (for BCEWithLogits) or None
+    """
+    xs, edges_np, ptr = [], [], [0]
+    node_offset = 0
+
+    for idx in batch_indices:
+        g = dataset.graphs[idx]
+        # node features -> np
+        x = g.x
+        if isinstance(x, np.ndarray):
+            x_np = x
+        elif hasattr(x, "detach"):
+            x_np = x.detach().cpu().numpy()
+        else:
+            x_np = np.asarray(x)
+        xs.append(x_np)
+        n = x_np.shape[0]
+
+        # edges -> np
+        ei = getattr(g, "edge_index", None)
+        if ei is None:
+            ei_np = np.zeros((2, 0), dtype=np.int64)
+        elif isinstance(ei, np.ndarray):
+            ei_np = ei
+        elif hasattr(ei, "detach"):
+            ei_np = ei.detach().cpu().numpy()
+        else:
+            ei_np = np.asarray(ei)
+        if ei_np.size > 0:
+            edges_np.append(ei_np + node_offset)
+
+        node_offset += n
+        ptr.append(node_offset)
+
+    X = np.concatenate(xs, axis=0).astype(np.float32)
+    N = X.shape[0]
+
+    # dense (N x N) adjacency expected by encoder (uses adj @ h)
+    if edges_np:
+        E = np.concatenate(edges_np, axis=1).astype(np.int64)
+        adj = np.zeros((N, N), dtype=np.float32)
+        adj[E[0], E[1]] = 1.0
+    else:
+        adj = np.zeros((N, N), dtype=np.float32)
+
+    ptr_arr = np.asarray(ptr, dtype=np.int64)
+
+    labels = getattr(dataset, "labels", None)
+    if labels is None:
+        batch_labels_t = None
+    else:
+        lab = np.asarray(labels)
+        sel = np.asarray(batch_indices, dtype=np.int64)
+        lbl = lab[sel].astype(np.float32, copy=False)  # BCE expects float
+        batch_labels_t = torch.from_numpy(lbl)
+
+    return (
+        torch.from_numpy(X),               # (N,F) float32
+        torch.from_numpy(adj),             # (N,N) float32
+        torch.from_numpy(ptr_arr),         # (B+1,) int64
+        batch_labels_t,                    # (B,) float32 or None
+    )
 
 def stratified_split(
     indices: List[int], labels: np.ndarray, train_frac: float, val_frac: float
@@ -210,7 +282,15 @@ def train_linear_head(
                 break
        
             batch_indices = train_idx_rank[start : start + batch_size]
+
+            assert getattr(dataset, "labels", None) is not None, "Dataset must have labels."
+            if not hasattr(dataset, "get_batch"):
+                 # supporting main demo test
+                def _compat_get_batch(batch_indices):
+                    return _simple_pack_batch(dataset, batch_indices, task_type)
+                setattr(dataset, "get_batch", _compat_get_batch)
             batch_x, batch_adj, batch_ptr, batch_labels = dataset.get_batch(batch_indices)
+
             batch_x = batch_x.to(device_t)
             batch_adj = batch_adj.to(device_t)
             

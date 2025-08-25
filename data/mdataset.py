@@ -65,16 +65,22 @@ class GraphData:
             adj[i, j] = 1.0
         return x, adj
 
+from typing import Optional, Sequence
+import numpy as np
 
 class GraphDataset:
     def __init__(
         self,
         graphs: List[GraphData],
-        labels: Optional[np.ndarray] = None,
+        labels: Optional[Sequence] = None,
         smiles: Optional[List[str]] = None,
     ):
         self.graphs = graphs
-        self.labels = labels
+        self.labels = None if labels is None else np.asarray(labels)
+        if self.labels is not None:
+            if self.labels.ndim != 1 or self.labels.shape[0] != len(self.graphs):
+                raise ValueError("labels must be 1D and the same length as graphs")
+            
         self.smiles = smiles
         logger.debug(
             "Initialized GraphDataset with %d graphs%s",
@@ -84,7 +90,11 @@ class GraphDataset:
 
     def __len__(self) -> int:
         return len(self.graphs)
-
+    
+    def __getitem__(self, idx):
+        g = self.graphs[idx]
+        return (g, self.labels[idx]) if self.labels is not None else g
+    
     def get_batch(
         self, indices: List[int]
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:

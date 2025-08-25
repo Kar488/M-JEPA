@@ -9,7 +9,7 @@ on:
       force_refresh:
         description: "Ignore cached grid search outputs and recompute"
         required: false
-        default: "false"
+        default: "true"
 
 concurrency:
   group: vast-${{ github.ref }}
@@ -294,6 +294,7 @@ jobs:
 
             mkdir -p /data/mjepa/experiments /data/mjepa/wandb /data/mjepa/cache/graphs
             ls -ld /data/mjepa/micromamba || true
+            
             mkdir -p "$EXP_ROOT"/{grid,pretrain,finetune,bench,tox21,logs}
             ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
             echo "[init] RUN_ID=$RUN_ID  EXP_ROOT=$EXP_ROOT"
@@ -555,8 +556,8 @@ jobs:
               fi
 
               mkdir -p /data/mjepa/experiments /data/mjepa/wandb /data/mjepa/cache/graphs
+
               mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR"
-              ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
               echo "[grid-init] RUN_ID=$RUN_ID  EXP_ROOT=$EXP_ROOT"
 
               # --- locate micromamba robustly ---
@@ -577,9 +578,7 @@ jobs:
               export WANDB_DIR="${WANDB_DIR:-/data/mjepa/wandb}"
               
               : "${APP_DIR:?APP_DIR not set}"
-              cd "$APP_DIR"
-              # redundant as we cache in large folder now
-              # mkdir -p logs outputs
+              cd "$APP_DIR" 
 
               # Perform a hyper‑parameter grid search with a restricted search space
               # using separate unlabeled and labelled datasets.  Both JEPA and
@@ -602,10 +601,47 @@ jobs:
               # time-budget-mins 0 means no time limit
               # moleculenet dataset, column "measured log solubility in mols per litre" is used for regression task
               
-              if [ "${FORCE_REFRESH}" != "true" ] && [ -f "$GRID_DIR/grid_results.csv" ] && [ -f "$GRID_DIR/best_grid_config.json" ]; then
-                echo "Grid search outputs already exist; skipping grid search."
+
+              # Consider a stage cached when all listed files exist and are non-empty.
+              is_cached_stage() {
+                local root="$1"; shift
+                for rel in "$@"; do
+                  [ -s "$root/$rel" ] || return 1
+                done
+                return 0
+              }
+
+              # Try to reuse the last successful run pointed to by /data/mjepa/experiments/latest
+              maybe_rebind_to_latest() {
+                local stage="$1"; shift
+                local req=( "$@" )
+                if [ "${FORCE_REFRESH:-false}" = "true" ]; then return 1; fi
+                [ -L /data/mjepa/experiments/latest ] || return 1
+                local L; L="$(readlink -f /data/mjepa/experiments/latest)" || return 1
+                # Don’t treat current run as cache
+                [ "$L" != "$EXP_ROOT" ] || return 1
+                is_cached_stage "$L" "${req[@]}" || return 1
+
+                echo "Reusing cached $stage from $L"
+                EXP_ROOT="$L"
+                RUN_ID="$(basename "$EXP_ROOT")"
+                GRID_DIR="$EXP_ROOT/grid"
+                PRETRAIN_DIR="$EXP_ROOT/pretrain"
+                FINETUNE_DIR="$EXP_ROOT/finetune"
+                BENCH_DIR="$EXP_ROOT/bench"
+                TOX21_DIR="$EXP_ROOT/tox21"
+                LOG_DIR="$EXP_ROOT/logs"
+                return 0
+              }
+                
+              # Default FORCE_REFRESH if unset
+              if maybe_rebind_to_latest grid "grid/grid_results.csv" "grid/best_grid_config.json"; then
+                echo "BEST_GRID_JSON=$GRID_DIR/best_grid_config.json" >> "$GITHUB_ENV"
+                echo "Grid cache hit — skipping grid-search"
               else
+                # Allow the pipeline to continue while capturing python's exit code via PIPESTATUS
                 set +e
+                set -o pipefail
                 "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
                   --unlabeled-dir data/ZINC-canonicalized \
                   --labeled-dir data/katielinkmoleculenet_benchmark/train \
@@ -648,6 +684,7 @@ jobs:
                 if [ "$GRID_STATUS" -eq 0 ]; then
                   ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
                   echo "Grid complete; linked 'latest' -> $EXP_ROOT"
+                  echo "BEST_GRID_JSON=$GRID_DIR/best_grid_config.json" >> "$GITHUB_ENV"
                 else
                   echo "Grid failed; leaving 'latest' unchanged"
                   exit 7
@@ -676,7 +713,8 @@ jobs:
           # Force refresh will rerun grid search default is false and not run grid search if outputs exist
           envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
             RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-            WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
+            WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,BEST_GRID_JSON
+            
           command_timeout: 240m         # <-- default is 10m; bump this - keep in sync with run command below
           script: |
             set -euxo pipefail
@@ -716,7 +754,7 @@ jobs:
             export WANDB_MODE=online
             : "${APP_DIR:?APP_DIR not set}"
             cd "$APP_DIR"
-            # mkdir -p logs outputs cache/graphs - redundant as we cache in large folder now
+            
             # stream Python logs immediately (and keep wandb chatty-free)  WANDB_CONSOLE=off WANDB__SERVICE_WAIT=0
             export PYTHONUNBUFFERED=1
 
@@ -737,60 +775,74 @@ jobs:
               RESUME_ARGS=(--resume-ckpt "$LATEST")
             fi
 
-            if [ -f "$GRID_DIR/best_grid_config.json" ] || [ -f scripts/default.yaml ]; then
+            # Prefer cached best from latest, else current run, else YAML
+            if [ -s "${BEST_GRID_JSON:-}" ]; then
+              PRETRAIN_JSON="$BEST_GRID_JSON"
+            elif [ -s "$GRID_DIR/best_grid_config.json" ]; then
               PRETRAIN_JSON="$GRID_DIR/best_grid_config.json"
-              PRETRAIN_YAML="scripts/default.yaml"
-
-              PRETRAIN_STR="$("$MMBIN" run -n mjepa \
-              python - "$PRETRAIN_JSON" "$PRETRAIN_YAML" <<'PY'
-              import json, sys, os
-              # Try YAML; tolerate absence of PyYAML
-              try:
-                  import yaml
-              except Exception:
-                  yaml = None
-              cfg = {}
-              # 1) YAML defaults (top-level or under "pretrain")
-              ypath = sys.argv[2] if len(sys.argv) > 2 else ""
-              if ypath and os.path.isfile(ypath) and yaml is not None:
-                  y = yaml.safe_load(open(ypath)) or {}
-                  y = y.get("pretrain", y)
-                  if isinstance(y, dict):
-                      cfg.update(y)
-              # 2) Grid JSON overlays
-              jpath = sys.argv[1] if len(sys.argv) > 1 else ""
-              if jpath and os.path.isfile(jpath):
-                  j = json.load(open(jpath)) or {}
-                  if isinstance(j, dict):
-                      cfg.update(j)
-              # 3) Build CLI args
-              args = []
-              def add(flag, val):
-                  if val is None:
-                      return
-                  args.extend([flag, str(val)])
-              add("--gnn-type",    cfg.get("gnn_type"))
-              add("--hidden-dim",  cfg.get("hidden_dim"))
-              add("--num-layers",  cfg.get("num_layers"))
-              add("--mask-ratio",  cfg.get("mask_ratio", 0.15))
-              if bool(cfg.get("add_3d")): args.append("--add-3d")
-              if bool(cfg.get("contiguous", cfg.get("contiguity"))): args.append("--contiguous")
-              add("--ema-decay",   cfg.get("ema_decay"))
-              add("--lr",          cfg.get("lr"))
-              add("--epochs",      cfg.get("pretrain_epochs", cfg.get("epochs", 20)))
-              add("--batch-size",  cfg.get("pretrain_bs", cfg.get("pretrain_batch_size", cfg.get("batch_size", 4))))
-              if "seeds" in cfg and cfg["seeds"] is not None:
-                  add("--seeds", cfg["seeds"])
-              method = (cfg.get("method") or "").lower()
-              if method == "contrastive":
-                  args.append("--contrastive")
-              print("\n".join(args))
-              PY
-              )"
-              readarray -t PRETRAIN_ARR <<< "$PRETRAIN_STR"
-              echo "Resolved pretrain args: ${PRETRAIN_ARR[*]}"
+            else
+              PRETRAIN_JSON=""
             fi
-            +            # -------- Pretrain cache / resume guard --------
+            PRETRAIN_YAML="scripts/default.yaml"
+
+            if [ -z "$PRETRAIN_JSON" ] && [ ! -s "$PRETRAIN_YAML" ]; then
+              echo "[pretrain] No grid config and no scripts/default.yaml — cannot resolve hyperparams"
+              exit 9
+            fi
+
+            PRETRAIN_STR="$("$MMBIN" run -n mjepa python - "$PRETRAIN_JSON" "$PRETRAIN_YAML" <<'PY'
+            import json, sys, os
+            try:
+              import yaml
+            except Exception:
+              yaml = None
+
+            jpath = sys.argv[1] if len(sys.argv) > 1 else ""
+            ypath = sys.argv[2] if len(sys.argv) > 2 else ""
+            cfg = {}
+
+
+            # 1) YAML defaults (top-level or under "pretrain")
+            if ypath and os.path.isfile(ypath) and yaml is not None:
+              y = yaml.safe_load(open(ypath)) or {}
+              y = y.get("pretrain", y)
+              if isinstance(y, dict):
+                cfg.update(y)
+
+            # 2) Grid JSON overlays
+            if jpath and os.path.isfile(jpath):
+              j = json.load(open(jpath)) or {}
+              if isinstance(j, dict):
+                cfg.update(j)
+
+            args = []
+            def add(flag, val):
+              if val is None:
+                return
+            args.extend([flag, str(val)])
+
+            # Core hparams
+            add("--gnn-type",    cfg.get("gnn_type"))
+            add("--hidden-dim",  cfg.get("hidden_dim"))
+            add("--num-layers",  cfg.get("num_layers"))
+            add("--mask-ratio",  cfg.get("mask_ratio", 0.15))
+            if bool(cfg.get("add_3d")): args.append("--add-3d")
+            if bool(cfg.get("contiguous", cfg.get("contiguity"))): args.append("--contiguous")
+            add("--ema-decay",   cfg.get("ema_decay"))
+            add("--lr",          cfg.get("lr"))
+            add("--epochs",      cfg.get("pretrain_epochs", cfg.get("epochs", 20)))
+            add("--batch-size",  cfg.get("pretrain_bs", cfg.get("pretrain_batch_size", cfg.get("batch_size", 4))))
+            if "seeds" in cfg and cfg["seeds"] is not None:
+              add("--seeds", cfg["seeds"])
+            if method == "contrastive":
+              args.append("--contrastive") 
+            print("\n".join(args))
+            PY
+            )"
+            readarray -t PRETRAIN_ARR <<< "$PRETRAIN_STR"
+            echo "Resolved pretrain args: ${PRETRAIN_ARR[*]}"
+            
+            # -------- Pretrain cache / resume guard --------
             # Build a stamp unique to (code, config, effective args)
             COMMIT_SHA=$(git -C "$APP_DIR" rev-parse --short HEAD || echo "nogit")
             CFG_HASH=$([ -n "${PRETRAIN_JSON:-}" ] && [ -f "$PRETRAIN_JSON" ] && sha256sum "$PRETRAIN_JSON" | awk '{print $1}' || echo "nocfg")
@@ -873,7 +925,7 @@ jobs:
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
               RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,BEST_GRID_JSON
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -898,8 +950,7 @@ jobs:
               export WANDB_MODE=online
               : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
-              # redundant 
-              # mkdir -p logs outputs
+               
               mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$LOG_DIR"
 
               CKPT_DIR="$FINETUNE_DIR"
@@ -911,38 +962,66 @@ jobs:
               fi
 
               # Build FINETUNE args from best_grid_config.json and scripts/default.yaml (if present)
-              FINETUNE_ARR=()
-              if [ -f "$GRID_DIR/best_grid_config.json" ] || [ -f scripts/default.yaml ]; then
+              # ---------- Resolve fine-tune config precedence ---------- 
+              # 1) Prefer cached best from grid step (latest), 2) current run’s grid, 3) YAML defaults
+              if [ -s "${BEST_GRID_JSON:-}" ]; then
+                FINETUNE_JSON="$BEST_GRID_JSON"
+              elif [ -s "$GRID_DIR/best_grid_config.json" ]; then
                 FINETUNE_JSON="$GRID_DIR/best_grid_config.json"
-                FINETUNE_YAML="scripts/default.yaml"
-                mapfile -t FINETUNE_ARR < <("$MMBIN" run -n mjepa python -c 'import sys, json, os
-                try:
-                    import yaml
-                except Exception:
-                    yaml=None
-                cfg={}
-                # YAML defaults (top-level or under "finetune")
-                yp=sys.argv[2]
-                if yp and os.path.isfile(yp) and yaml is not None:
-                    y=yaml.safe_load(open(yp)) or {}
-                    y=y.get("finetune", y)
-                    if isinstance(y, dict): cfg.update(y)
-                # Grid JSON overrides
-                jp=sys.argv[1]
-                if jp and os.path.isfile(jp):
-                    j=json.load(open(jp)) or {}
-                    if isinstance(j, dict): cfg.update(j)
-                args=[]
-                def add(flag,val):
-                    if val is None: return
-                    args.extend([flag,str(val)])
-                add("--batch-size", cfg.get("finetune_bs", cfg.get("batch_size", 4)))
-                add("--epochs",     cfg.get("finetune_epochs", cfg.get("epochs", 1)))
-                print("\n".join(args))' "$FINETUNE_JSON" "$FINETUNE_YAML")
+              else
+                FINETUNE_JSON=""
+              fi
+              FINETUNE_YAML="scripts/default.yaml"
+              if [ -z "$FINETUNE_JSON" ] && [ ! -s "$FINETUNE_YAML" ]; then
+                echo "[finetune] No grid config and no scripts/default.yaml — cannot resolve hyperparams"
+                exit 9
               fi
 
-              # Finetune stage
+              # ---------- Build fine-tune CLI args (safe heredoc; no indentation pitfalls) ----------
+              FINETUNE_STR="$("$MMBIN" run -n mjepa python - "$FINETUNE_JSON" "$FINETUNE_YAML" <<'PY'
+              import json, sys, os
+              try:
+                  import yaml
+              except Exception:
+                  yaml = None
+
+              jpath = sys.argv[1] if len(sys.argv) > 1 else ""
+              ypath = sys.argv[2] if len(sys.argv) > 2 else ""
+              cfg = {}
+              # YAML defaults (top-level or under "finetune")
+              if ypath and os.path.isfile(ypath) and yaml is not None:
+                  y = yaml.safe_load(open(ypath)) or {}
+                  y = y.get("finetune", y)
+                  if isinstance(y, dict):
+                      cfg.update(y)
+              # Grid JSON overlays
+              if jpath and os.path.isfile(jpath):
+                  j = json.load(open(jpath)) or {}
+                  if isinstance(j, dict):
+                      cfg.update(j)
+
+              args = []
+              def add(flag, val):
+                  if val is None:
+                      return
+                  args.extend([flag, str(val)])
+
+              # Core hparams (prefer finetune_* keys; fall back to generic)
+              # TODO - CHECK IF WE NEED ALL PARAMS
+              add("--epochs",     cfg.get("finetune_epochs", cfg.get("epochs")))
+              add("--batch-size", cfg.get("finetune_bs", cfg.get("finetune_batch_size", cfg.get("batch_size"))))
+              add("--lr",         cfg.get("bench_lr", cfg.get("lr")))
+
+              print("\n".join(args))
+              PY
+              )"
+              readarray -t FINETUNE_ARR <<< "$FINETUNE_STR"
+              echo "[finetune] Resolved args: ${FINETUNE_ARR[*]}"
+
+              # Finetune stage- TODO ENSURE PRETRAIN_DIR is picked up from cache if applicable
+
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
+              echo "[finetune] cmd: train_jepa.py finetune ${FINETUNE_ARR[*]} --use-wandb ..."
               "$MMBIN" run -n mjepa python scripts/train_jepa.py finetune \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --encoder "$PRETRAIN_DIR/encoder.pt" \
@@ -975,7 +1054,7 @@ jobs:
 
         - name: Benchmark on Vast
           uses: appleboy/ssh-action@v1
-          timeout-minutes: 180            # GitHub step timeout
+          timeout-minutes: 240            # GitHub step timeout
           with:
             host: ${{ secrets.VAST_HOST }}
             username: ${{ secrets.VAST_USER }}
@@ -984,8 +1063,8 @@ jobs:
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
               RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
-            command_timeout: 180m         # <-- default is 10m; bump this
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,BEST_GRID_JSON
+            command_timeout: 240m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
 
@@ -1013,11 +1092,12 @@ jobs:
 
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
 
-              # Build encoder/ckpt args dynamically
+              # Build encoder/ckpt args dynamically 
               BENCH_MODEL_ARR=()
               [ -f "$PRETRAIN_DIR/encoder.pt" ]             && BENCH_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder.pt")
               [ -f "$PRETRAIN_DIR/encoder_jepa.pt" ]        && BENCH_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder_jepa.pt")
               [ -f "$PRETRAIN_DIR/encoder_contrastive.pt" ] && BENCH_MODEL_ARR+=(--contrastive-encoder "$PRETRAIN_DIR/encoder_contrastive.pt")
+              
               FT_CKPT=""
               if compgen -G "$FINETUNE_DIR/seed_*/ft_best*.pt" > /dev/null; then
                 FT_CKPT="$(ls -1t "$FINETUNE_DIR"/seed_*/ft_best*.pt | head -n1)"
@@ -1026,45 +1106,68 @@ jobs:
               fi
               [ -n "${FT_CKPT:-}" ] && BENCH_MODEL_ARR+=(--ft-ckpt "$FT_CKPT")
 
+
+
               # Merge scripts/default.yaml (benchmark:) + best_grid_config.json into CLI flags
-              BENCH_JSON="$GRID_DIR/best_grid_config.json"
+              # ---------- Resolve benchmark config precedence ----------
+              # 1) Prefer cached best from grid step (latest), 2) current run’s grid, 3) YAML defaults
+
+              # Prefer cached best from grid step (latest), else current run’s grid, else YAML only
+              if [ -s "${BEST_GRID_JSON:-}" ]; then
+                BENCH_JSON="$BEST_GRID_JSON"
+              elif [ -s "$GRID_DIR/best_grid_config.json" ]; then
+                BENCH_JSON="$GRID_DIR/best_grid_config.json"
+              else
+                BENCH_JSON=""
+              fi
               BENCH_YAML="scripts/default.yaml"
-              BENCH_HPARAM_ARR=()
-              mapfile -t BENCH_HPARAM_ARR < <("$MMBIN" run -n mjepa python -c '
-              import sys, json, os
+              if [ -z "$BENCH_JSON" ] && [ ! -s "$BENCH_YAML" ]; then
+                echo "[bench] No grid config and no scripts/default.yaml — cannot resolve hyperparams"
+                exit 9
+              fi
+
+
+              # ---------- Build benchmark CLI args (safe heredoc) ----------
+              BENCH_STR="$("$MMBIN" run -n mjepa python - "$BENCH_JSON" "$BENCH_YAML" <<'PY'
+              import json, sys, os
               try:
                   import yaml
               except Exception:
-                  yaml=None
-              cfg={}
-              # YAML defaults (prefer section "benchmark")
-              yp=sys.argv[2]
-              if yp and os.path.isfile(yp) and yaml is not None:
-                  y=yaml.safe_load(open(yp)) or {}
-                  y=y.get("benchmark", y)
-                  if isinstance(y, dict): cfg.update(y)
-              # Grid JSON (may provide batch_size/epochs via {finetune_bs, epochs})
-              jp=sys.argv[1]
-              if jp and os.path.isfile(jp):
-                  j=json.load(open(jp)) or {}
-                  if isinstance(j, dict): cfg.update(j)
-              args=[]
-              def add(flag,val):
-                  if val is None: return
-                  args.extend([flag,str(val)])
-              # sensible defaults, overrideable by YAML/JSON
-              add("--batch-size", cfg.get("batch_size", cfg.get("finetune_bs", 4)))
-              add("--epochs",     cfg.get("epochs", 1))
-              add("--num-workers",cfg.get("num_workers", 8))
-              add("--patience",   cfg.get("patience", 10))
-              # optional: task/label (default ESOL regression; override in YAML if different)
-              task = cfg.get("task_type") or cfg.get("task") or "regression"
-              label= cfg.get("label_col") or "measured log solubility in mols per litre"
-              args += ["--task-type", str(task), "--label-col", str(label)]
-              seed = cfg.get("seeds") or cfg.get("seed")
-              if seed: args += ["--seeds", str(seed)]
-              print("\n".join(args))' "$BENCH_JSON" "$BENCH_YAML")
+                  yaml = None
 
+              jpath = sys.argv[1] if len(sys.argv) > 1 else ""
+              ypath = sys.argv[2] if len(sys.argv) > 2 else ""
+              cfg = {}
+              # YAML defaults (top-level or under "bench" / "benchmark")
+              if ypath and os.path.isfile(ypath) and yaml is not None:
+                  y = yaml.safe_load(open(ypath)) or {}
+                  y = y.get("bench", y.get("benchmark", y))
+                  if isinstance(y, dict):
+                      cfg.update(y)
+              # Grid JSON overlays
+              if jpath and os.path.isfile(jpath):
+                  j = json.load(open(jpath)) or {}
+                  if isinstance(j, dict):
+                      cfg.update(j)
+
+              args = []
+              def add(flag, val):
+                  if val is None:
+                      return
+                  args.extend([flag, str(val)])
+
+              # Core knobs (prefer bench_* keys; fall back to generic)
+              add("--batch-size", cfg.get("bench_bs", cfg.get("bench_batch_size", cfg.get("batch_size"))))
+              add("--epochs",     cfg.get("bench_epochs", cfg.get("epochs")))  # if your bench subcommand supports it
+              add("--lr",         cfg.get("bench_lr", cfg.get("lr")))
+
+              print("\n".join(args))
+              PY
+              )"
+              readarray -t BENCH_ARR <<< "$BENCH_STR"
+              echo "[bench] Resolved args: ${BENCH_ARR[*]}"
+
+              echo "[bench] cmd: train_jepa.py bench ${BENCH_ARR[*]} --use-wandb ..."
               "$MMBIN" run -n mjepa python scripts/train_jepa.py benchmark \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --report-dir "$BENCH_DIR/reports" \
@@ -1100,7 +1203,7 @@ jobs:
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
               RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,BEST_GRID_JSON
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -1131,49 +1234,79 @@ jobs:
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
 
               # Case study stage (remove --config; keep args explicit)
-              TOX_ARR=()
-              mapfile -t TOX_ARR < <("$MMBIN" run -n mjepa python -c '
-              import os, sys, json
+              # ---------- Resolve tox21 config precedence ----------
+              # 1) Prefer cached best from grid (latest), 2) current run’s grid, 3) YAML defaults
+              if [ -s "${BEST_GRID_JSON:-}" ]; then
+                TOX_JSON="$BEST_GRID_JSON"
+              elif [ -s "$GRID_DIR/best_grid_config.json" ]; then
+                TOX_JSON="$GRID_DIR/best_grid_config.json"
+              else
+                TOX_JSON=""
+              fi
+              TOX_YAML="scripts/default.yaml"
+              if [ -z "$TOX_JSON" ] && [ ! -s "$TOX_YAML" ]; then
+                echo "[tox21] No grid config and no scripts/default.yaml — cannot resolve hyperparams"
+                exit 9
+              fi
+
+              # ---------- Build tox21 CLI args (safe heredoc) ----------
+              TOX_STR="$("$MMBIN" run -n mjepa python - "$TOX_JSON" "$TOX_YAML" <<'PY'
+              import json, sys, os
               try:
                   import yaml
               except Exception:
-                  yaml=None
-              args=[]
-              def add(flag,val):
-                  if val is None: return
-                  args.extend([flag,str(val)])
-              cfg={}
-              yp="scripts/default.yaml"
-              if os.path.isfile(yp) and yaml is not None:
-                  y=yaml.safe_load(open(yp)) or {}
-                  y=y.get("tox21", y)
-                  if isinstance(y, dict): cfg.update(y)
+                  yaml = None
 
-              # also overlay grid seeds if present
-              jpath = os.path.join(os.environ.get("GRID_DIR",""), "best_grid_config.json")
+              jpath = sys.argv[1] if len(sys.argv) > 1 else ""
+              ypath = sys.argv[2] if len(sys.argv) > 2 else ""
+              cfg = {}
+              # YAML defaults (top-level or under "tox21")
+              if ypath and os.path.isfile(ypath) and yaml is not None:
+                  y = yaml.safe_load(open(ypath)) or {}
+                  y = y.get("tox21", y)
+                  if isinstance(y, dict):
+                      cfg.update(y)
+              # Grid JSON overlays
               if jpath and os.path.isfile(jpath):
-                  try:
-                      j=json.load(open(jpath)) or {}
-                      if isinstance(j, dict): cfg.update({k:v for k,v in j.items() if k in ("seed","seeds")})
-                  except Exception:
-                      pass
-              add("--pretrain-epochs", cfg.get("pretrain_epochs", 1))
-              add("--finetune-epochs", cfg.get("finetune_epochs", 1))
-              add("--num-workers",     cfg.get("num_workers", 8))
-              add("--num-top-exclude", cfg.get("num_top_exclude", 5))
-              seed = cfg.get("seeds") or cfg.get("seed")
-              if seed: args += ["--seeds", str(seed)]
-              print("\n".join(args))')
-                            # Case study stage (keep CSV/task explicit, merge the rest)
-                            "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
-                              --csv data/tox21/data.csv \
-                              --cache-dir "$CACHE_DIR" \
-                              --num-workers 8 \
-                              --prefetch-factor 4 \
-                              --persistent-workers \
-                              --pin-memory \
-                              --bf16 \
-                              --task NR-AR \
-                              "${TOX_ARR[@]}" \
-                              --use-wandb \
-                              2>&1 | tee -a "$LOG_DIR/tox21_$(date +%F_%H-%M).log"
+                  j = json.load(open(jpath)) or {}
+                  if isinstance(j, dict):
+                      cfg.update(j)
+
+              args = []
+              def add(flag, val):
+                  if val is None:
+                      return
+                  args.extend([flag, str(val)])
+
+              # Core hparams (prefer tox21_* keys; fall back to generic)
+              add("--batch-size", cfg.get("tox21_bs", cfg.get("batch_size")))
+              add("--epochs",     cfg.get("tox21_epochs", cfg.get("epochs")))
+              add("--lr",         cfg.get("tox21_lr", cfg.get("lr")))
+
+              print("\\n".join(args))
+              PY
+              )"
+              readarray -t TOX21_ARR <<< "$TOX_STR"
+              echo "[tox21] Resolved args: ${TOX21_ARR[*]}"
+
+              # Include any available pretrained encoders
+              TOX_MODEL_ARR=()
+              [ -f "$PRETRAIN_DIR/encoder.pt" ]             && TOX_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder.pt")
+              [ -f "$PRETRAIN_DIR/encoder_jepa.pt" ]        && TOX_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder_jepa.pt")
+              [ -f "$PRETRAIN_DIR/encoder_contrastive.pt" ] && TOX_MODEL_ARR+=(--contrastive-encoder "$PRETRAIN_DIR/encoder_contrastive.pt")
+
+              
+              # Case study stage (keep CSV/task explicit, merge the rest)
+              echo "[tox21] cmd: train_jepa.py tox21 ${TOX21_ARR[*]} ${TOX_MODEL_ARR[*]} --use-wandb ..."
+              "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
+                --csv data/tox21/data.csv \
+                --cache-dir "$CACHE_DIR" \
+                --num-workers 8 \
+                --prefetch-factor 4 \
+                --persistent-workers \
+                --pin-memory \
+                --bf16 \
+                --task NR-AR \
+                "${TOX_ARR[@]}" \
+                --use-wandb \
+                2>&1 | tee -a "$LOG_DIR/tox21_$(date +%F_%H-%M).log"

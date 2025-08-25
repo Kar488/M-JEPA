@@ -3,6 +3,9 @@ import types
 import numpy as np
 import pandas as pd
 
+import pytest
+
+dc = pytest.importorskip("deepchem")
 from data import moleculenet_dc
 import deepchem as dc
 
