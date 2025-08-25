@@ -8,10 +8,10 @@ from pathlib import Path
 
 pytest.importorskip("fastparquet")
 
-import importlib.util, sys, pathlib, inspect, os
+import importlib.util, inspect, os
 
 def load_scaffold_module_fresh():
-    path = pathlib.Path(__file__).resolve().parents[1] / "data" / "scaffold_split.py"
+    path = Path(__file__).resolve().parents[2] / "data" / "scaffold_split.py"
     mod_name = "scaffold_under_test"
 
     # ensure we don't reuse a previous module object

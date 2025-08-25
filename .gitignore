@@ -5,6 +5,7 @@ training/__pycache__/
 experiments/__pycache__/
 utils/__pycache__/
 models/__pycache__/
+tests/__pycache__/
 *.py[cod]
 *.pyd
 *.pyo
