@@ -633,8 +633,8 @@ jobs:
                   --max-finetune-batches 50 \
                   --num-workers 8 \
                   --prefetch-factor 4 \
-                  --persistent_workers \
-                  --pin_memory \
+                  --persistent-workers \
+                  --pin-memory \
                   --time-budget-mins 60 \
                   --bf16 \
                   --force-tqdm \
@@ -825,8 +825,8 @@ jobs:
               --plot-dir "$PRETRAIN_DIR/plots" \
               --num-workers 8 \
               --prefetch-factor 4 \
-              --persistent_workers \
-              --pin_memory \
+              --persistent-workers \
+              --pin-memory \
               --bf16 \
               --ckpt-dir "$CKPT_DIR" \
               --save-every 1 \
@@ -952,8 +952,8 @@ jobs:
                 "${FINETUNE_ARR[@]}" \
                 --num-workers 8 \
                 --prefetch-factor 4 \
-                --persistent_workers \
-                --pin_memory \
+                --persistent-workers \
+                --pin-memory \
                 --bf16 \
                 --patience 10 \
                 --ckpt-dir "$CKPT_DIR" \
@@ -1071,8 +1071,8 @@ jobs:
                 --cache-dir "$CACHE_DIR" \
                 --num-workers 8 \
                 --prefetch-factor 4 \
-                --persistent_workers \
-                --pin_memory \
+                --persistent-workers \
+                --pin-memory \
                 --bf16 \
                 "${BENCH_HPARAM_ARR[@]}" \
                 "${BENCH_MODEL_ARR[@]}" \
@@ -1170,8 +1170,8 @@ jobs:
                               --cache-dir "$CACHE_DIR" \
                               --num-workers 8 \
                               --prefetch-factor 4 \
-                              --persistent_workers \
-                              --pin_memory \
+                              --persistent-workers \
+                              --pin-memory \
                               --bf16 \
                               --task NR-AR \
                               "${TOX_ARR[@]}" \
