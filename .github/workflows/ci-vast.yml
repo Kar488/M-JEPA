@@ -638,14 +638,13 @@ jobs:
                   --out-csv "$GRID_DIR/grid_results.csv" \
                   --best-config-out "$GRID_DIR/best_grid_config.json" \
                   --use-wandb \
-                  $FR \
-                  2>&1 | tee -a "$GRID_DIR/grid_$(date +%F_%H-%M).log"
-                then
-                  ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
-                  echo "Grid complete; linked 'latest' -> $EXP_ROOT"
-                else
-                  echo "Grid failed; leaving 'latest' unchanged"
-                  exit 7
+                  $FR 2>&1 | tee -a "$GRID_DIR/grid_$(date +%F_%H-%M).log"
+              then
+                ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
+                echo "Grid complete; linked 'latest' -> $EXP_ROOT"
+              else
+                echo "Grid failed; leaving 'latest' unchanged"
+                exit 7
               fi
 
   vast_pretrain:
