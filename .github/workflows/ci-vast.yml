@@ -620,19 +620,21 @@ jobs:
                   --gnn-types mpnn \
                   --ema-decays 0.996 0.998 0.999 \
                   --add-3d-options 1 \
-                  --pretrain-batch-sizes 4 8 16 \
-                  --finetune-batch-sizes 4 \
-                  --pretrain-epochs-options 20 30 \
+                  --pretrain-batch-sizes 64 128 256 \
+                  --finetune-batch-sizes 128 256 \
+                  --pretrain-epochs-options 30 50 \
                   --finetune-epochs-options 1 \
                   --learning-rates 1e-4 \
                   --seeds 1 2 3 \
                   --sample-unlabeled 50000 \
                   --sample-labeled 5000 \
                   --n-rows-per-file 50 \
-                  --max-pretrain-batches 0 \
-                  --max-finetune-batches 0 \
-                  --num-workers 16 \
+                  --max-pretrain-batches 200 \
+                  --max-finetune-batches 50 \
+                  --num-workers 8 \
                   --prefetch-factor 4 \
+                  --persistent_workers \
+                  --pin_memory \
                   --time-budget-mins 60 \
                   --bf16 \
                   --force-tqdm \
@@ -739,7 +741,8 @@ jobs:
               PRETRAIN_JSON="$GRID_DIR/best_grid_config.json"
               PRETRAIN_YAML="scripts/default.yaml"
 
-              mapfile -t PRETRAIN_ARR < <("$MMBIN" run -n mjepa python -c '
+              PRETRAIN_STR="$("$MMBIN" run -n mjepa \
+              python - "$PRETRAIN_JSON" "$PRETRAIN_YAML" <<'PY'
               import json, sys, os
               # Try YAML; tolerate absence of PyYAML
               try:
@@ -748,14 +751,14 @@ jobs:
                   yaml = None
               cfg = {}
               # 1) YAML defaults (top-level or under "pretrain")
-              ypath = sys.argv[2]
+              ypath = sys.argv[2] if len(sys.argv) > 2 else ""
               if ypath and os.path.isfile(ypath) and yaml is not None:
                   y = yaml.safe_load(open(ypath)) or {}
                   y = y.get("pretrain", y)
                   if isinstance(y, dict):
                       cfg.update(y)
               # 2) Grid JSON overlays
-              jpath = sys.argv[1]
+              jpath = sys.argv[1] if len(sys.argv) > 1 else ""
               if jpath and os.path.isfile(jpath):
                   j = json.load(open(jpath)) or {}
                   if isinstance(j, dict):
@@ -763,7 +766,8 @@ jobs:
               # 3) Build CLI args
               args = []
               def add(flag, val):
-                  if val is None: return
+                  if val is None:
+                      return
                   args.extend([flag, str(val)])
               add("--gnn-type",    cfg.get("gnn_type"))
               add("--hidden-dim",  cfg.get("hidden_dim"))
@@ -776,12 +780,15 @@ jobs:
               add("--epochs",      cfg.get("pretrain_epochs", cfg.get("epochs", 20)))
               add("--batch-size",  cfg.get("pretrain_bs", cfg.get("pretrain_batch_size", cfg.get("batch_size", 4))))
               if "seeds" in cfg and cfg["seeds"] is not None:
-                add("--seeds", cfg["seeds"])
+                  add("--seeds", cfg["seeds"])
               method = (cfg.get("method") or "").lower()
               if method == "contrastive":
                   args.append("--contrastive")
-              print("\\n".join(args))
-              ' "$PRETRAIN_JSON" "$PRETRAIN_YAML")
+              print("\n".join(args))
+              PY
+              )"
+              readarray -t PRETRAIN_ARR <<< "$PRETRAIN_STR"
+              echo "Resolved pretrain args: ${PRETRAIN_ARR[*]}"
             fi
             +            # -------- Pretrain cache / resume guard --------
             # Build a stamp unique to (code, config, effective args)
@@ -816,8 +823,10 @@ jobs:
               --sample-unlabeled 50000 \
               --cache-dir "$CACHE_DIR" \
               --plot-dir "$PRETRAIN_DIR/plots" \
-              --num-workers 16 \
+              --num-workers 8 \
               --prefetch-factor 4 \
+              --persistent_workers \
+              --pin_memory \
               --bf16 \
               --ckpt-dir "$CKPT_DIR" \
               --save-every 1 \
@@ -941,8 +950,10 @@ jobs:
                 --label-col "measured log solubility in mols per litre" \
                 --cache-dir "$CACHE_DIR" \
                 "${FINETUNE_ARR[@]}" \
-                --num-workers 16 \
+                --num-workers 8 \
                 --prefetch-factor 4 \
+                --persistent_workers \
+                --pin_memory \
                 --bf16 \
                 --patience 10 \
                 --ckpt-dir "$CKPT_DIR" \
@@ -1058,6 +1069,11 @@ jobs:
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --report-dir "$BENCH_DIR/reports" \
                 --cache-dir "$CACHE_DIR" \
+                --num-workers 8 \
+                --prefetch-factor 4 \
+                --persistent_workers \
+                --pin_memory \
+                --bf16 \
                 "${BENCH_HPARAM_ARR[@]}" \
                 "${BENCH_MODEL_ARR[@]}" \
                 --use-wandb \
@@ -1152,6 +1168,11 @@ jobs:
                             "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
                               --csv data/tox21/data.csv \
                               --cache-dir "$CACHE_DIR" \
+                              --num-workers 8 \
+                              --prefetch-factor 4 \
+                              --persistent_workers \
+                              --pin_memory \
+                              --bf16 \
                               --task NR-AR \
                               "${TOX_ARR[@]}" \
                               --use-wandb \

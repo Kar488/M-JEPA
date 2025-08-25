@@ -253,7 +253,7 @@ def train_linear_head(
                 f"batch_ptr={batch_ptr.tolist()}, batch_indices={batch_indices}"
             )
             with _amp_ctx:
-                loss = loss_fn(preds, targets)
+                loss = loss_fn(preds.float(), targets.float())
             batch_losses.append(loss.item())
             optimiser.zero_grad()
             loss.backward()
@@ -322,7 +322,8 @@ def train_linear_head(
             
             with _amp_ctx:
                 preds = head(graph_emb).squeeze(1)
-            preds = preds.detach().cpu().numpy()
+            # Cast BF16/FP16 → FP32 before numpy conversion to avoid TypeError
+            preds = preds.detach().to(torch.float32).cpu().numpy()
             # Sanitize before aggregation to keep sklearn happy
             preds = np.nan_to_num(preds, nan=0.0, posinf=0.0, neginf=0.0)
             targets = dataset.labels[batch_indices]
