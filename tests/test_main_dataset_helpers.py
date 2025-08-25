@@ -4,7 +4,9 @@ import sys
 import types
 
 # Provide minimal stubs for heavy optional dependencies
-if "rdkit" not in sys.modules:
+try:  # pragma: no cover - optional dependency
+    import rdkit  # noqa: F401
+except Exception:  # pragma: no cover
     rdkit_stub = types.ModuleType("rdkit")
     chem_stub = types.ModuleType("Chem")
     scaffolds_stub = types.ModuleType("Scaffolds")
@@ -17,7 +19,9 @@ if "rdkit" not in sys.modules:
     sys.modules["rdkit.Chem"] = chem_stub
     sys.modules["rdkit.Chem.Scaffolds"] = scaffolds_stub
 
-if "sklearn" not in sys.modules:
+try:  # pragma: no cover - optional dependency
+    import sklearn  # noqa: F401
+except Exception:  # pragma: no cover
     sklearn_stub = types.ModuleType("sklearn")
     metrics_stub = types.ModuleType("metrics")
     def _dummy_metric(*args, **kwargs):
@@ -36,6 +40,25 @@ if "sklearn" not in sys.modules:
     sklearn_stub.metrics = metrics_stub
     sys.modules["sklearn"] = sklearn_stub
     sys.modules["sklearn.metrics"] = metrics_stub
+
+try:  # pragma: no cover - optional dependency
+    import torch_geometric  # noqa: F401
+except Exception:  # pragma: no cover
+    tg_stub = types.ModuleType("torch_geometric")
+    tg_stub.__path__ = []
+    tg_data = types.ModuleType("data")
+    class _DummyData:
+        pass
+    tg_data.Data = _DummyData
+    tg_loader = types.ModuleType("loader")
+    class _DummyLoader:
+        pass
+    tg_loader.DataLoader = _DummyLoader
+    tg_stub.data = tg_data
+    tg_stub.loader = tg_loader
+    sys.modules["torch_geometric"] = tg_stub
+    sys.modules["torch_geometric.data"] = tg_data
+    sys.modules["torch_geometric.loader"] = tg_loader
 
 from main import (
     _build_unlabeled_dataset_from_smiles,

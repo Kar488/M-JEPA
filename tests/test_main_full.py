@@ -8,7 +8,9 @@ import types
 torch = pytest.importorskip("torch")
 
 # Provide a minimal RDKit stub to satisfy imports
-if "rdkit" not in sys.modules:
+try:  # pragma: no cover - optional dependency
+    import rdkit  # noqa: F401
+except Exception:  # pragma: no cover
     rdkit_stub = types.ModuleType("rdkit")
     chem_stub = types.ModuleType("Chem")
     scaffolds_stub = types.ModuleType("Scaffolds")
@@ -22,7 +24,9 @@ if "rdkit" not in sys.modules:
     sys.modules["rdkit.Chem.Scaffolds"] = scaffolds_stub
 
 # Minimal stub for torch_geometric to satisfy optional imports
-if "torch_geometric" not in sys.modules:
+try:  # pragma: no cover - optional dependency
+    import torch_geometric  # noqa: F401
+except Exception:  # pragma: no cover
     tg_stub = types.ModuleType("torch_geometric")
     tg_stub.__path__ = []
     tg_data = types.ModuleType("data")

@@ -7,11 +7,13 @@ import pandas as pd
 import pytest
 import requests
 
-# Minimal torch stub for modules that import it
-torch_stub = types.SimpleNamespace(Tensor=object)
-torch_stub.cuda = types.SimpleNamespace(is_available=lambda: False)
-torch_stub.float32 = None
-sys.modules.setdefault("torch", torch_stub)
+try:  # pragma: no cover - torch may be unavailable
+    import torch  # noqa: F401
+except Exception:  # pragma: no cover
+    torch = types.SimpleNamespace(Tensor=object)
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    torch.float32 = None
+    sys.modules.setdefault("torch", torch)
 
 from scripts import download_unlabeled
 from scripts.download_unlabeled import (

@@ -3,18 +3,27 @@ import sys
 import types
 import numpy as np
 
-# Minimal torch stub for importing train_jepa without heavy deps
-if "torch" not in sys.modules:
-    torch_stub = types.SimpleNamespace(
+try:  # pragma: no cover - torch may be unavailable
+    import torch  # noqa: F401
+except Exception:  # pragma: no cover
+    torch = types.SimpleNamespace(
         load=lambda *args, **kwargs: {"encoder": {}},
         manual_seed=lambda *args, **kwargs: None,
         cuda=types.SimpleNamespace(is_available=lambda: False),
     )
-    sys.modules["torch"] = torch_stub
+    sys.modules["torch"] = torch
 
 # ensure modules for encoder
-sys.modules.setdefault("models.factory", types.SimpleNamespace(build_encoder=lambda *a, **k: None))
-sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
+try:  # pragma: no cover - optional dependency
+    import models.factory  # noqa: F401
+except Exception:  # pragma: no cover
+    sys.modules.setdefault(
+        "models.factory", types.SimpleNamespace(build_encoder=lambda *a, **k: None)
+    )
+try:  # pragma: no cover - optional dependency
+    import models.encoder  # noqa: F401
+except Exception:  # pragma: no cover
+    sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
 
 from scripts import train_jepa as tj
 
