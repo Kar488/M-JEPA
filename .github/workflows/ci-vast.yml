@@ -684,7 +684,7 @@ jobs:
                 if [ "$GRID_STATUS" -eq 0 ]; then
                   ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
                   echo "Grid complete; linked 'latest' -> $EXP_ROOT"
-                  echo "BEST_GRID_JSON=$GRID_DIR/best_grid_config.json" >> "$GITHUB_ENV"
+                  echo "$GRID_DIR/best_grid_config.json" > /data/mjepa/experiments/.best_grid_json
                 else
                   echo "Grid failed; leaving 'latest' unchanged"
                   exit 7
@@ -713,7 +713,7 @@ jobs:
           # Force refresh will rerun grid search default is false and not run grid search if outputs exist
           envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
             RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-            WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,BEST_GRID_JSON
+            WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
             
           command_timeout: 240m         # <-- default is 10m; bump this - keep in sync with run command below
           script: |
@@ -755,6 +755,14 @@ jobs:
             : "${APP_DIR:?APP_DIR not set}"
             cd "$APP_DIR"
             
+            # Resolve BEST_GRID_JSON locally (no GitHub env)
+            if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/.best_grid_json ]; then
+              BEST_GRID_JSON="$(cat /data/mjepa/experiments/.best_grid_json)"
+            fi
+            if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/latest/grid/best_grid_config.json ]; then
+              BEST_GRID_JSON="/data/mjepa/experiments/latest/grid/best_grid_config.json"
+            fi
+
             # stream Python logs immediately (and keep wandb chatty-free)  WANDB_CONSOLE=off WANDB__SERVICE_WAIT=0
             export PYTHONUNBUFFERED=1
 
@@ -925,7 +933,7 @@ jobs:
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
               RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,BEST_GRID_JSON
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -950,6 +958,14 @@ jobs:
               export WANDB_MODE=online
               : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
+
+              # Resolve BEST_GRID_JSON locally (no GitHub env)
+              if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/.best_grid_json ]; then
+                BEST_GRID_JSON="$(cat /data/mjepa/experiments/.best_grid_json)"
+              fi
+              if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/latest/grid/best_grid_config.json ]; then
+                BEST_GRID_JSON="/data/mjepa/experiments/latest/grid/best_grid_config.json"
+              fi
                
               mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$LOG_DIR"
 
@@ -1063,7 +1079,7 @@ jobs:
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
               RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,BEST_GRID_JSON
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
             command_timeout: 240m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -1087,6 +1103,16 @@ jobs:
               cd "$APP_DIR"
               : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
+
+              
+              # Resolve BEST_GRID_JSON locally (no GitHub env)
+              if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/.best_grid_json ]; then
+                BEST_GRID_JSON="$(cat /data/mjepa/experiments/.best_grid_json)"
+              fi
+              if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/latest/grid/best_grid_config.json ]; then
+                BEST_GRID_JSON="/data/mjepa/experiments/latest/grid/best_grid_config.json"
+              fi
+
               # persistent locations (idempotent)
               mkdir -p "$BENCH_DIR" "$LOG_DIR" "$BENCH_DIR/reports"
 
@@ -1203,7 +1229,7 @@ jobs:
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
               RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,BEST_GRID_JSON
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -1228,6 +1254,16 @@ jobs:
               export WANDB_MODE=online
               : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
+
+              
+              # Resolve BEST_GRID_JSON locally (no GitHub env)
+              if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/.best_grid_json ]; then
+                BEST_GRID_JSON="$(cat /data/mjepa/experiments/.best_grid_json)"
+              fi
+              if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/latest/grid/best_grid_config.json ]; then
+                BEST_GRID_JSON="/data/mjepa/experiments/latest/grid/best_grid_config.json"
+              fi
+
               # persistent dirs (idempotent)
               mkdir -p "$TOX21_DIR" "$LOG_DIR"
 

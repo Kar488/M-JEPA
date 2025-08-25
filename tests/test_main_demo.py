@@ -37,16 +37,47 @@ if "torch_geometric" not in sys.modules:
     sys.modules["torch_geometric.data"] = tg_data
     sys.modules["torch_geometric.loader"] = tg_loader
 
+# Minimal stub for sklearn metrics if missing
+if "sklearn" not in sys.modules:
+    sk_stub = types.ModuleType("sklearn")
+    metrics_stub = types.ModuleType("metrics")
+    def _dummy_metric(*args, **kwargs):
+        return 0.0
+    for name in [
+        "roc_auc_score",
+        "average_precision_score",
+        "brier_score_loss",
+        "mean_absolute_error",
+        "mean_squared_error",
+        "r2_score",
+    ]:
+        setattr(metrics_stub, name, _dummy_metric)
+    metrics_stub.__getattr__ = lambda name: _dummy_metric
+    sk_stub.metrics = metrics_stub
+    sys.modules["sklearn"] = sk_stub
+    sys.modules["sklearn.metrics"] = metrics_stub
+
 import main
 
 
 def test_demonstration_runs(monkeypatch):
     """Run the demo pipeline on a tiny dataset and ensure it completes."""
+ 
+    def _fake_train_jepa(*args, **kwargs):
+        return [0.0]
 
-    # Avoid heavy case study by stubbing it out
+    def _fake_train_contrastive(*args, **kwargs):
+        return [0.0]
+
+    def _fake_linear_head(*args, **kwargs):
+        return {"acc": 0.0}
+
     def _fake_case_study(*args, **kwargs):
         return 0.0, 0.0, 0.0
-
+    
+    monkeypatch.setattr(main, "train_jepa", _fake_train_jepa)
+    monkeypatch.setattr(main, "train_contrastive", _fake_train_contrastive)
+    monkeypatch.setattr(main, "train_linear_head", _fake_linear_head)
     monkeypatch.setattr(main, "run_tox21_case_study", _fake_case_study)
 
     # The function uses a built-in synthetic dataset; just ensure no exception

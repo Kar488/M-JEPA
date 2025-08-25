@@ -561,10 +561,8 @@ def train_contrastive(
                 logits_12 = (z1 @ z2.t()) / temperature   # [N, N]
                 logits_21 = (z2 @ z1.t()) / temperature   # [N, N]
 
-                # Optional: block trivial positives in the negatives
-                eye = torch.eye(N, device=device_t, dtype=logits_12.dtype)
-                logits_12 = logits_12 - eye * 1e9
-                logits_21 = logits_21 - eye * 1e9
+                # NOTE: Do NOT mask the diagonal here.
+                # In the N×N (z1 @ z2.T) setup, the diagonal entries are the positives.
 
                 labels = torch.arange(N, device=device_t)
 

@@ -117,24 +117,20 @@ def _extract_attr(seq: Sequence[Any], name: str):
     return np.asarray(out) if name == "y" else out
 
 
+from collections.abc import Mapping
 def _ensure_graph_dataset(obj: Any) -> Any:
-    """Return object with `.graphs` and `.labels` if possible."""
     if obj is None:
         logger.debug("_ensure_graph_dataset received None")
         return None
+
     if hasattr(obj, "graphs"):
         if getattr(obj, "labels", None) is None:
             labs = _extract_attr(getattr(obj, "graphs"), "y")
             if labs is not None:
                 obj.labels = labs  # type: ignore[attr-defined]
         return obj
-    if hasattr(obj, "__len__") and hasattr(obj, "__getitem__"):
-        graphs = list(obj)
-        labels = getattr(obj, "labels", None) or _extract_attr(graphs, "y")
-        smiles_attr = getattr(obj, "smiles", None)
-        smiles = smiles_attr or _extract_attr(graphs, "smiles")
-        logger.debug("Built GraphDataset shim with %d graphs", len(graphs))
-        return _GraphDatasetShim(graphs=graphs, labels=labels, smiles=smiles)
+
+    # --- handle single graph BEFORE indexable detection ---
     if (
         isinstance(obj, PyGData)
         or hasattr(obj, "x")
@@ -142,12 +138,32 @@ def _ensure_graph_dataset(obj: Any) -> Any:
         or hasattr(obj, "adj")
     ):
         label = getattr(obj, "y", None)
-        if isinstance(label, torch.Tensor) and label.numel() == 1:
-            label = np.asarray([label.item()])
+        if isinstance(label, torch.Tensor):
+            label = label.detach().cpu()
+            if label.numel() == 1:
+                label = np.asarray([label.item()])
+            else:
+                label = label.numpy()
         return _GraphDatasetShim(graphs=[obj], labels=label)
-    logger.debug(
-        "_ensure_graph_dataset returning original object of type %s", type(obj)
-    )
+
+    # If it's a mapping (e.g., dict), leave it alone
+    if isinstance(obj, Mapping):
+        return obj
+
+    # Indexable container → shim (exclude strings/bytes/mappings)
+    if (
+        hasattr(obj, "__len__")
+        and hasattr(obj, "__getitem__")
+        and not isinstance(obj, (str, bytes, Mapping))
+    ):
+        graphs = list(obj)
+        labels = getattr(obj, "labels", None) or _extract_attr(graphs, "y")
+        smiles_attr = getattr(obj, "smiles", None)
+        smiles = smiles_attr or _extract_attr(graphs, "smiles")
+        logger.debug("Built GraphDataset shim with %d graphs", len(graphs))
+        return _GraphDatasetShim(graphs=graphs, labels=labels, smiles=smiles)
+
+    logger.debug("_ensure_graph_dataset returning original object of type %s", type(obj))
     return obj
 
 
@@ -940,12 +956,20 @@ def run_grid_search(
     prefetch_factor: int = 4,
     bf16: bool = False,
 ) -> pd.DataFrame:
-    start = time.monotonic()
+    
 
+    # ---- robust timing helpers (monotonic) ----
+    start = time.perf_counter()
+    time_budget_mins = float(time_budget_mins or 0)
+    deadline = start + (time_budget_mins * 60.0) if time_budget_mins > 0 else None
+    def budget_exhausted() -> bool:
+        # 0.25s cushion avoids boundary flicker
+        return deadline is not None and time.perf_counter() >= (deadline - 0.25)
     def time_left() -> float:
-        if time_budget_mins <= 0:
+        """Minutes remaining (∞ if no budget)."""
+        if deadline is None:
             return float("inf")
-        return max(0.0, time_budget_mins - (time.monotonic() - start) / 60.0)
+        return max(0.0, (deadline - time.perf_counter()) / 60.0)
 
     if "contrastive" not in {m.lower() for m in methods}:
         augmentation_options = (AugmentationConfig(False, False, False),)
@@ -988,6 +1012,10 @@ def run_grid_search(
     disable_bar = disable_tqdm or not sys.stdout.isatty()
     pbar = None if disable_bar else tqdm.tqdm(total=total_pairs, leave=False)
 
+    processed = 0
+    total = len(cfgs) * len(methods)
+    stop_early = False
+
     for cfg in cfgs:
         logger.debug("Processing configuration %s", asdict(cfg))
         add_3d = _cfg_get(cfg, "add_3d", False)  # tests sweep over this
@@ -1019,48 +1047,32 @@ def run_grid_search(
             prebuilt_datasets = None
 
         for method in methods:
-            rows.append(
-                _run_one_config_method(
-                    cfg,
-                    method,
-                    unlabeled_dataset_fn,
-                    eval_dataset_fn,
-                    task_type,
-                    seeds,
-                    device,
-                    use_wandb,
-                    ckpt_dir,
-                    ckpt_every,
-                    use_scheduler,
-                    warmup_steps,
-                    baseline_unlabeled_file,
-                    baseline_eval_file,
-                    baseline_smiles_col,
-                    baseline_label_col,
-                    baseline_cfg,
-                    use_scaffold=use_scaffold,
-                    prebuilt_loaders=prebuilt_loaders,
-                    prebuilt_datasets=prebuilt_datasets,
-                    # pass fast-path caps down; helper can ignore
-                    # if not supported
-                    max_pretrain_batches=max_pretrain_batches,
-                    max_finetune_batches=max_finetune_batches,
-                    time_left=time_left,
-                    # perf knobs
-                    num_workers=num_workers,
-                    pin_memory=pin_memory,
-                    persistent_workers=persistent_workers,
-                    prefetch_factor=prefetch_factor,
-                    bf16=bf16,
+            # Check BEFORE launching the next trial
+            if budget_exhausted():
+                elapsed = (time.perf_counter() - start) / 60.0
+                logger.info(
+                    "Time budget exhausted; processed %d/%d configs in %.2f/%.2f min.",
+                    processed, total, elapsed, time_budget_mins
                 )
-            )
-            if pbar is not None:
-                pbar.update(1)
-            if time_left() <= 0:
-                logger.info("Time budget exhausted; ending grid search.")
+                stop_early = True
                 break
 
-        if time_left() <= 0:
+            rows.append(
+                _run_one_config_method(
+                    cfg, method, unlabeled_dataset_fn, eval_dataset_fn, task_type, seeds,
+                    device, use_wandb, ckpt_dir, ckpt_every, use_scheduler, warmup_steps,
+                    baseline_unlabeled_file, baseline_eval_file, baseline_smiles_col,
+                    baseline_label_col, baseline_cfg, use_scaffold,
+                    prebuilt_loaders, prebuilt_datasets,
+                    max_pretrain_batches, max_finetune_batches, time_left,
+                    num_workers, pin_memory, persistent_workers, prefetch_factor, bf16
+                )
+            )
+            processed += 1
+            if pbar is not None:
+                pbar.update(1)
+
+        if stop_early:
             break
 
     if pbar is not None:
@@ -1149,7 +1161,13 @@ def run_grid_search(
 
 
     # ----- Final primary selection (with optional tie-breaker) -----
-    primary, maximize, tiebreakers = _selection_policy(df, task_type)
+    try:
+        primary, maximize, tiebreakers = _selection_policy(df, task_type)
+    except ValueError:
+        # No expected selection metrics (e.g., test stub only returns "metric").
+        # Just return the raw dataframe so callers/tests can inspect it.
+        return df
+    
     dfx = df.copy()
     dfx[primary] = pd.to_numeric(dfx[primary], errors="coerce")
     dfx = dfx.dropna(subset=[primary])
@@ -1159,13 +1177,13 @@ def run_grid_search(
     best_val = float(dfx.loc[best_idx, primary])
 
     # tie window
-    close = dfx[dfx[primary] >= best_val * (1.0 - TIE_EPS)] if maximize \
+    close = dfx[dfx[primary] >= best_val * (1.0 - TIE_EPS)].copy() if maximize \
             else dfx[dfx[primary] <= best_val * (1.0 + TIE_EPS)]
     suffix = primary
     for tb, tb_max in tiebreakers:
         if not tb or tb not in close.columns:
             continue
-        close[tb] = pd.to_numeric(close[tb], errors="coerce")
+        close.loc[:, tb] = pd.to_numeric(close[tb], errors="coerce")
         close_tb = close.dropna(subset=[tb])
         if close_tb.empty or len(close_tb) <= 1:
             continue

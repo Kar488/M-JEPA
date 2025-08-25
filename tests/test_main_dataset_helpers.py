@@ -1,0 +1,98 @@
+import numpy as np
+import pytest
+import sys
+import types
+
+# Provide minimal stubs for heavy optional dependencies
+if "rdkit" not in sys.modules:
+    rdkit_stub = types.ModuleType("rdkit")
+    chem_stub = types.ModuleType("Chem")
+    scaffolds_stub = types.ModuleType("Scaffolds")
+    scaffolds_stub.MurckoScaffold = types.SimpleNamespace(
+        GetScaffoldForMol=lambda mol: None
+    )
+    chem_stub.Scaffolds = scaffolds_stub
+    rdkit_stub.Chem = chem_stub
+    sys.modules["rdkit"] = rdkit_stub
+    sys.modules["rdkit.Chem"] = chem_stub
+    sys.modules["rdkit.Chem.Scaffolds"] = scaffolds_stub
+
+if "sklearn" not in sys.modules:
+    sklearn_stub = types.ModuleType("sklearn")
+    metrics_stub = types.ModuleType("metrics")
+    def _dummy_metric(*args, **kwargs):
+        return 0.0
+    # populate common metrics
+    for name in [
+        "roc_auc_score",
+        "average_precision_score",
+        "brier_score_loss",
+        "mean_absolute_error",
+        "mean_squared_error",
+        "r2_score",
+    ]:
+        setattr(metrics_stub, name, _dummy_metric)
+    metrics_stub.__getattr__ = lambda name: _dummy_metric
+    sklearn_stub.metrics = metrics_stub
+    sys.modules["sklearn"] = sklearn_stub
+    sys.modules["sklearn.metrics"] = metrics_stub
+
+from main import (
+    _build_unlabeled_dataset_from_smiles,
+    _ensure_labels_inplace_local,
+    load_parquet_dataset,
+    load_directory_dataset,
+)
+from data.mdataset import GraphDataset, GraphData
+
+pd = pytest.importorskip("pandas")
+try:
+    import pyarrow  # type: ignore  # noqa: F401
+except Exception:  # pragma: no cover
+    pytest.importorskip("fastparquet")
+
+
+def test_build_unlabeled_dataset_fallback(monkeypatch):
+    monkeypatch.delattr(GraphDataset, "from_smiles_list", raising=False)
+    smiles = ["CCO", "CCN"]
+    ds = _build_unlabeled_dataset_from_smiles(smiles)
+    assert len(ds.graphs) == len(smiles)
+    for g in ds.graphs:
+        assert np.all(g.x == 1.0)
+        n = g.x.shape[0]
+        assert g.edge_index.shape == (2, 2 * (n - 1))
+
+
+def test_ensure_labels_inplace_local_dtypes():
+    g = GraphData(
+        x=np.ones((2, 1), dtype=np.float32),
+        edge_index=np.zeros((2, 0), dtype=np.int64),
+    )
+    ds_cls = GraphDataset([g, g])
+    _ensure_labels_inplace_local(ds_cls, "classification")
+    assert ds_cls.labels.dtype == np.int64
+    assert ds_cls.labels.tolist() == [0, 0]
+
+    ds_reg = GraphDataset([g], labels=[1.5])
+    _ensure_labels_inplace_local(ds_reg, "regression")
+    assert ds_reg.labels.dtype == np.float32
+    assert ds_reg.labels[0] == pytest.approx(1.5)
+
+
+def test_load_parquet_dataset(tmp_path):
+    df = pd.DataFrame({"smiles": ["CCO", "CCN"], "label": [0.0, 1.0]})
+    path = tmp_path / "data.parquet"
+    df.to_parquet(path)
+    ds = load_parquet_dataset(str(path), label_col="label")
+    assert len(ds.graphs) == 2
+    assert ds.labels.tolist() == [0.0, 1.0]
+
+
+def test_load_directory_dataset(tmp_path):
+    df1 = pd.DataFrame({"smiles": ["CCO"], "label": [1.0]})
+    df2 = pd.DataFrame({"smiles": ["CCN"], "label": [0.0]})
+    df1.to_parquet(tmp_path / "a.parquet")
+    df2.to_parquet(tmp_path / "b.parquet")
+    ds = load_directory_dataset(str(tmp_path), label_col="label")
+    assert len(ds.graphs) == 2
+    assert sorted(ds.labels.tolist()) == [0.0, 1.0]

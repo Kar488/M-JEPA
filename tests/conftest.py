@@ -10,6 +10,15 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from utils.logging import maybe_init_wandb
 import shutil
 
+# --- debug: show which torch is imported under pytest ---
+import importlib, sys
+try:
+    torch = importlib.import_module("torch")
+    print("[pytest] torch ->", torch, getattr(torch, "__file__", None))
+except Exception as e:
+    print("[pytest] torch import failed:", repr(e))
+# --------------------------------------------------------
+
 # adding this to support MurckoScaffold failures  in moleculenet_dc tests
 def pytest_sessionstart(session):
     try:
