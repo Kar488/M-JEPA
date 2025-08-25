@@ -3,10 +3,12 @@ import os
 import sys
 import types
 
-# Minimal torch and model stubs for importing train_jepa without heavy deps
-if "torch" not in sys.modules:
+try:  # pragma: no cover - torch may be unavailable
+    import torch  # noqa: F401
+    import torch.nn as torch_nn  # noqa: F401
+except Exception:  # pragma: no cover
     torch_nn = types.SimpleNamespace(Module=object)
-    torch_stub = types.SimpleNamespace(
+    torch = types.SimpleNamespace(
         save=lambda obj, path: open(path, "wb").close(),
         load=lambda *args, **kwargs: {},
         manual_seed=lambda *args, **kwargs: None,
@@ -14,12 +16,25 @@ if "torch" not in sys.modules:
         nn=torch_nn,
         __path__=[],
     )
-    sys.modules["torch"] = torch_stub
+    sys.modules["torch"] = torch
     sys.modules["torch.nn"] = torch_nn
 
-sys.modules.setdefault("models.factory", types.SimpleNamespace(build_encoder=lambda *a, **k: None))
-sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
-sys.modules.setdefault("data.augment", types.SimpleNamespace(iter_augmentation_options=lambda *a, **k: None))
+try:  # pragma: no cover - optional dependency
+    import models.factory  # noqa: F401
+except Exception:  # pragma: no cover
+    sys.modules.setdefault(
+        "models.factory", types.SimpleNamespace(build_encoder=lambda *a, **k: None)
+    )
+try:  # pragma: no cover - optional dependency
+    import models.encoder  # noqa: F401
+except Exception:  # pragma: no cover
+    sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
+try:  # pragma: no cover - optional dependency
+    import data.augment  # noqa: F401
+except Exception:  # pragma: no cover
+    sys.modules.setdefault(
+        "data.augment", types.SimpleNamespace(iter_augmentation_options=lambda *a, **k: None)
+    )
 
 from scripts import train_jepa as tj
 

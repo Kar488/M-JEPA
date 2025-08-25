@@ -1,43 +1,13 @@
 import argparse
 import numpy as np
 import pytest
-import sys
-import types
 
-# Skip tests if torch is not installed
-torch = pytest.importorskip("torch")
-
-# Provide a minimal RDKit stub to satisfy imports
-if "rdkit" not in sys.modules:
-    rdkit_stub = types.ModuleType("rdkit")
-    chem_stub = types.ModuleType("Chem")
-    scaffolds_stub = types.ModuleType("Scaffolds")
-    scaffolds_stub.MurckoScaffold = types.SimpleNamespace(
-        GetScaffoldForMol=lambda mol: None
-    )
-    chem_stub.Scaffolds = scaffolds_stub
-    rdkit_stub.Chem = chem_stub
-    sys.modules["rdkit"] = rdkit_stub
-    sys.modules["rdkit.Chem"] = chem_stub
-    sys.modules["rdkit.Chem.Scaffolds"] = scaffolds_stub
-
-# Minimal stub for torch_geometric to satisfy optional imports
-if "torch_geometric" not in sys.modules:
-    tg_stub = types.ModuleType("torch_geometric")
-    tg_stub.__path__ = []
-    tg_data = types.ModuleType("data")
-    class _DummyData:  # placeholder
-        pass
-    tg_data.Data = _DummyData
-    tg_loader = types.ModuleType("loader")
-    class _DummyLoader:
-        pass
-    tg_loader.DataLoader = _DummyLoader
-    tg_stub.data = tg_data
-    tg_stub.loader = tg_loader
-    sys.modules["torch_geometric"] = tg_stub
-    sys.modules["torch_geometric.data"] = tg_data
-    sys.modules["torch_geometric.loader"] = tg_loader
+pytest.importorskip("torch")
+pytest.importorskip("rdkit")
+pytest.importorskip("torch_geometric")
+pytest.importorskip("sklearn")
+pytest.importorskip("matplotlib")
+pytest.importorskip("seaborn")
 
 from data.mdataset import GraphDataset, GraphData
 import main
@@ -56,7 +26,7 @@ def _make_graph(n_nodes: int) -> GraphData:
 def _make_dataset(n: int, labeled: bool) -> GraphDataset:
     graphs = [_make_graph(3 + i) for i in range(n)]
     labels = np.arange(n) % 2 if labeled else None
-    return GraphDataset(graphs)
+    return GraphDataset(graphs, labels=labels)
 
 
 def test_run_full_mode(monkeypatch, tmp_path):
@@ -114,13 +84,6 @@ def test_run_full_mode(monkeypatch, tmp_path):
         finetune_lr=1e-3,
         finetune_bs=2,
         val_patience=1,
-        proj_dim=4,
-        temperature=0.1,
-        tox21_csv=None,
-        tox21_task=None,
-        tox21_epochs=1,
-        tox21_topk=0.1,
     )
 
-    # Should run without raising exceptions
-    main.run_full_mode(args)
+    main.run_full(args)

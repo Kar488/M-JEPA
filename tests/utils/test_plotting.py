@@ -1,4 +1,6 @@
-import matplotlib
+import pytest
+
+matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
 from matplotlib.figure import Figure
 import pandas as pd

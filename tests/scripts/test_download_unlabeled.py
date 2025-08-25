@@ -7,11 +7,13 @@ import pandas as pd
 import pytest
 import requests
 
-# Minimal torch stub for modules that import it
-torch_stub = types.SimpleNamespace(Tensor=object)
-torch_stub.cuda = types.SimpleNamespace(is_available=lambda: False)
-torch_stub.float32 = None
-sys.modules.setdefault("torch", torch_stub)
+try:  # pragma: no cover - torch may be unavailable
+    import torch  # noqa: F401
+except Exception:  # pragma: no cover
+    torch = types.SimpleNamespace(Tensor=object)
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    torch.float32 = None
+    sys.modules.setdefault("torch", torch)
 
 from scripts import download_unlabeled
 from scripts.download_unlabeled import (
@@ -36,11 +38,8 @@ def mock_graphdataset(monkeypatch):
         graphs = [DummyGraph() for _ in smiles_list]
         return types.SimpleNamespace(smiles=smiles_list, graphs=graphs)
 
-    monkeypatch.setattr(
-        download_unlabeled.GraphDataset,
-        "from_smiles_list",
-        staticmethod(fake_from_smiles_list),
-    )
+    dummy_ds = types.SimpleNamespace(from_smiles_list=staticmethod(fake_from_smiles_list))
+    monkeypatch.setattr(download_unlabeled, "GraphDataset", dummy_ds, raising=False)
 
 
 def test_stream_zinc_success(monkeypatch):
@@ -99,6 +98,7 @@ def test_stream_pubchem_http_error(monkeypatch):
 
 
 def test_save_shards(tmp_path):
+    pytest.importorskip("pyarrow")
     smiles = ["C", "O", "N"]
     save_shards(smiles, tmp_path, shard_size=2)
     files = sorted(p.name for p in tmp_path.glob("*.parquet"))
@@ -110,6 +110,7 @@ def test_save_shards(tmp_path):
 
 
 def test_save_parquet(tmp_path):
+    pytest.importorskip("pyarrow")
     out_file = tmp_path / "mols.parquet"
     save_parquet(["C", "O"], out_file)
     assert out_file.exists()
@@ -119,6 +120,7 @@ def test_save_parquet(tmp_path):
 
 
 def test_cli_main(monkeypatch, tmp_path):
+    pytest.importorskip("pyarrow")
     def fake_stream_zinc(batch_size, start_page=1, sleep=0.5):
         yield 1, ["C"]
 

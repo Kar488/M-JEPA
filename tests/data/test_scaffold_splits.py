@@ -6,6 +6,8 @@ import pandas as pd
 import pytest
 from pathlib import Path
 
+pytest.importorskip("fastparquet")
+
 import importlib.util, sys, pathlib, inspect, os
 
 def load_scaffold_module_fresh():

@@ -3,8 +3,10 @@ import types
 from dataclasses import dataclass
 
 import numpy as np
-import torch 
+import torch
 import pytest
+
+pytest.importorskip("sklearn")
 from sklearn.metrics import brier_score_loss
 
 # Stubs for modules requiring optional dependencies

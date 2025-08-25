@@ -1,28 +1,6 @@
-import sys
-import types
-import pytest
-
-# create lightweight torch and torch.distributed stubs
-torch_stub = types.SimpleNamespace()
-torch_stub.cuda = types.SimpleNamespace(is_available=lambda: False)
-
-dist_stub = types.SimpleNamespace(
-    is_available=lambda: True,
-    is_initialized=lambda: False,
-    init_process_group=lambda **kwargs: None,
-    get_rank=lambda: 0,
-    get_world_size=lambda: 1,
-    destroy_process_group=lambda: None,
-)
-
-torch_stub.distributed = dist_stub
-sys.modules.setdefault("torch", torch_stub)
-sys.modules.setdefault("torch.distributed", dist_stub)
-
-import utils.ddp as ddp
-
 import pytest
 import torch
+import utils.ddp as ddp
 
 # @pytest.fixture(autouse=True)
 # def _disable_ddp(monkeypatch):
@@ -50,7 +28,7 @@ def test_init_distributed_initializes(monkeypatch):
 
     state = {"init": False}
 
-    dist_stub.is_initialized = lambda: state["init"]
+    ddp.dist.is_initialized = lambda: state["init"]
 
     def fake_init_process_group(backend, init_method, rank, world_size):
         state["init"] = True
@@ -67,7 +45,7 @@ def test_init_distributed_initializes(monkeypatch):
 
 
 def test_get_rank_world_size_default(monkeypatch):
-    dist_stub.is_initialized = lambda: False
+    ddp.dist.is_initialized = lambda: False
     assert ddp.get_rank() == 0
     assert ddp.get_world_size() == 1
 
