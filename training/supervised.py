@@ -96,11 +96,13 @@ def train_linear_head(
     batch_size: int = 32,
     device: str = "cuda",
     patience: int = 10,
+    num_workers=0, pin_memory=True, persistent_workers=True, prefetch_factor=4, bf16=False, 
     use_scaffold: bool = False,
     devices: int = 1,
     *,
     max_batches: int = 0,
     time_budget_mins: int = 0,
+    **unused,
 ) -> Dict[str, float]:
     """Train a linear head on a frozen encoder for classification or regression.
 
@@ -117,6 +119,11 @@ def train_linear_head(
         lr: Learning rate for the optimiser.
         batch_size: Batch size for training.
         device: Computation device.
+        num_workers: Number of subprocesses to use for data loading.
+        pin_memory: if true data transfer from CPU → GPU faster.
+        persistent_workers: if true avoids the overhead of respawning worker processes every epoch.
+        prefetch_factor: number of batches loaded in advance by each worker.
+        bf16: if true mixed precision training on newer GPUs/TPUs
         patience: Number of epochs with no improvement before stopping.
         use_scaffold: Whether to use scaffold split if SMILES are provided.
         devices: Number of GPUs for DDP.
@@ -207,9 +214,12 @@ def train_linear_head(
             batch_x = batch_x.to(device_t)
             batch_adj = batch_adj.to(device_t)
             
-            node_emb = encoder(batch_x, batch_adj)
-            
-            graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+            import contextlib
+            # autocast for the forward path (bf16 on 4090; else full precision)
+            _amp_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if (bf16 and device_t.type=="cuda") else contextlib.nullcontext()
+            with _amp_ctx:
+                node_emb = encoder(batch_x, batch_adj)
+                graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
 
             num_graphs = batch_ptr.numel() - 1
             if graph_emb.shape[0] != num_graphs:
@@ -222,11 +232,7 @@ def train_linear_head(
 
             # Ensure targets are a Tensor on the same device/dtype as preds
             if batch_labels is not None:
-                targets = batch_labels
-                if not isinstance(targets, torch.Tensor):
-                    targets = torch.tensor(
-                        targets = torch.as_tensor(targets)
-                    )
+                targets = batch_labels if isinstance(batch_labels, torch.Tensor) else torch.as_tensor(batch_labels)
                 targets = targets.to(device=device_t, dtype=preds.dtype, non_blocking=True)
             else:
                 targets = torch.tensor(
@@ -241,8 +247,8 @@ def train_linear_head(
                 f"Preds length {preds.shape[0]} != targets length {targets.shape[0]}; "
                 f"batch_ptr={batch_ptr.tolist()}, batch_indices={batch_indices}"
             )
-
-            loss = loss_fn(preds, targets)
+            with _amp_ctx:
+                loss = loss_fn(preds, targets)
             batch_losses.append(loss.item())
             optimiser.zero_grad()
             loss.backward()
@@ -259,14 +265,17 @@ def train_linear_head(
                 batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
                 batch_x = batch_x.to(device_t)
                 batch_adj = batch_adj.to(device_t)
-                node_emb = encoder(batch_x, batch_adj)
-                graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+
+                with _amp_ctx:
+                    node_emb = encoder(batch_x, batch_adj)
+                    graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
                 
                 num_graphs = batch_ptr.numel() - 1
                 if graph_emb.shape[0] != num_graphs:
                     graph_emb = graph_emb[:num_graphs]
 
-                preds = head(graph_emb).squeeze(1)
+                with _amp_ctx:
+                    preds = head(graph_emb).squeeze(1)
                 # Guard against any numerical issues in the head
                 preds = torch.nan_to_num(preds)
                 # Match target dtype/device to preds for MSE
@@ -297,14 +306,18 @@ def train_linear_head(
             batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
             batch_x = batch_x.to(device_t)
             batch_adj = batch_adj.to(device_t)
-            node_emb = encoder(batch_x, batch_adj)
-            graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+
+            with _amp_ctx:
+                node_emb = encoder(batch_x, batch_adj)
+                graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
 
             num_graphs = batch_ptr.numel() - 1
             if graph_emb.shape[0] != num_graphs:
                 graph_emb = graph_emb[:num_graphs]
             
-            preds = head(graph_emb).squeeze(1).detach().cpu().numpy()
+            with _amp_ctx:
+                preds = head(graph_emb).squeeze(1)
+            preds = preds.detach().cpu().numpy()
             # Sanitize before aggregation to keep sklearn happy
             preds = np.nan_to_num(preds, nan=0.0, posinf=0.0, neginf=0.0)
             targets = dataset.labels[batch_indices]

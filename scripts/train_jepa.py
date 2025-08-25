@@ -216,7 +216,16 @@ except Exception:
 
         return DummyWB()
 
+try:
+    from utils.plotting import plot_training_curves  # type: ignore[assignment]
+except Exception:
+    def plot_training_curves(*args, **kwargs):  # type: ignore[assignment]
+        class _DummyFig:
+            def savefig(self, *a, **k):
+                pass
 
+        return _DummyFig()
+    
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -341,7 +350,7 @@ def load_directory_dataset(
     n_rows_per_file: Optional[int] = None,
     max_graphs: Optional[int] = None,
     num_workers: int = 0,
-) -> "GraphDataset":
+) -> "GraphDataset": # type: ignore
     if GraphDataset is None:
         raise ImportError(
             "GraphDataset is unavailable. Ensure `data.mdataset.GraphDataset`"
@@ -370,7 +379,7 @@ def load_parquet_dataset(
     add_3d: bool = False,
     random_seed: Optional[int] = None,
     n_rows: Optional[int] = None,
-) -> "GraphDataset":
+) -> "GraphDataset": # type: ignore
     if GraphDataset is None:
         raise ImportError(
             "GraphDataset is unavailable. Ensure `data.mdataset.GraphDataset`"
@@ -492,7 +501,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
     # W&B run
     wb = maybe_init_wandb(
         args.use_wandb,
-        project=args.wandb_project,
+        project=getattr(args, "wandb_project", os.getenv("WANDB_PROJECT", "m-jepa")),
         tags=args.wandb_tags,
         config={
             "unlabeled_dir": args.unlabeled_dir,
@@ -508,6 +517,24 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         },
     )
 
+    def _wb_run_ok(wb):
+        return (wb is not None) and (getattr(wb, "run", None) is not None)
+
+    def _wb_log(wb, payload: dict):
+        if _wb_run_ok(wb):
+            run = wb.run
+            # prefer run.log when present to avoid the preinit wrapper
+            (getattr(run, "log", wb.log))(payload)
+
+    def _wb_summary(wb, payload: dict):
+        if _wb_run_ok(wb):
+            wb.summary.update(payload)
+
+    def _wb_finish(wb):
+        if _wb_run_ok(wb):
+            try: wb.finish()
+            except Exception: pass
+
     from utils.checkpoint import load_checkpoint, save_checkpoint
 
     # Resume state
@@ -515,195 +542,259 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
     os.makedirs(args.ckpt_dir, exist_ok=True)
     save_every = max(1, int(getattr(args, "save_every", 1)))
     start_epoch = 0
+
     if getattr(args, "resume_ckpt", None):
-        wb.log({"phase": "pretrain", "status": "resume", "ckpt": args.resume_ckpt})
+        _wb_log(wb,{"phase": "pretrain", "status": "resume", "ckpt": args.resume_ckpt})
         ckpt_state = load_checkpoint(args.resume_ckpt)
     else:
         ckpt_state = {}
 
-    # Load unlabeled dataset
     try:
-        seeds: tuple
-        # Determine seeds: use CLI if provided, otherwise fall back to configuration defaults
-        if args.seeds is not None and len(args.seeds) > 0:
-            seeds = tuple(args.seeds)
-        else:
-            seeds = tuple(CONFIG.get("finetune", {}).get("seeds", [42, 123, 456]))
-        
-        # Sample a subset of the unlabeled dataset if requested.  Use getattr to
-        # avoid AttributeError when the caller hasn’t set sample_unlabeled.
-        sample_ul = getattr(args, "sample_unlabeled", 0) or None
-        
+        # Load unlabeled dataset
+        try:
+            seeds: tuple
+            # Determine seeds: use CLI if provided, otherwise fall back to configuration defaults
+            if args.seeds is not None and len(args.seeds) > 0:
+                seeds = tuple(args.seeds)
+            else:
+                seeds = tuple(CONFIG.get("finetune", {}).get("seeds", [42, 123, 456]))
+            
+            # Sample a subset of the unlabeled dataset if requested.  Use getattr to
+            # avoid AttributeError when the caller hasn’t set sample_unlabeled.
+            sample_ul = getattr(args, "sample_unlabeled", 0) or None
+            
 
-        unlabeled = load_directory_dataset(
-            args.unlabeled_dir,
-            add_3d=args.add_3d,
-            num_workers=getattr(args, "num_workers", 0),
-            cache_dir=getattr(args, "cache_dir", None),
-            max_graphs=sample_ul,
-        )  # type: ignore[arg-type]
+            unlabeled = load_directory_dataset(
+                args.unlabeled_dir,
+                add_3d=args.add_3d,
+                num_workers=getattr(args, "num_workers", 0),
+                cache_dir=getattr(args, "cache_dir", None),
+                max_graphs=sample_ul,
+            )  # type: ignore[arg-type]
 
-        if (
-            sample_ul
-            and hasattr(unlabeled, "__len__")
-            and len(unlabeled) > sample_ul
-            and hasattr(unlabeled, "random_subset")
-        ):
-            unlabeled = unlabeled.random_subset(sample_ul, seed=seeds)
+            _wb_log(wb,{"phase": "data_load", "unlabeled_graphs": len(unlabeled)})
+        except Exception:
+            logger.exception("Failed to load unlabeled dataset")
+            _wb_log(wb,{"phase": "data_load", "status": "error"})
+            sys.exit(1)
 
-        wb.log({"phase": "data_load", "unlabeled_graphs": len(unlabeled)})
-    except Exception:
-        logger.exception("Failed to load unlabeled dataset")
-        wb.log({"phase": "data_load", "status": "error"})
-        sys.exit(1)
+        input_dim = unlabeled.graphs[0].x.shape[1]
+        edge_dim = (
+            None
+            if unlabeled.graphs[0].edge_attr is None
+            else unlabeled.graphs[0].edge_attr.shape[1]
+        )
+        device = resolve_device(args.device)
 
-    input_dim = unlabeled.graphs[0].x.shape[1]
-    edge_dim = (
-        None
-        if unlabeled.graphs[0].edge_attr is None
-        else unlabeled.graphs[0].edge_attr.shape[1]
-    )
-    device = resolve_device(args.device)
-
-    # Build encoder and EMA copy
-    encoder = build_encoder(
-        gnn_type=args.gnn_type,
-        input_dim=input_dim,
-        hidden_dim=args.hidden_dim,
-        num_layers=args.num_layers,
-        edge_dim=edge_dim,
-    )
-    ema_encoder = build_encoder(
-        gnn_type=args.gnn_type,
-        input_dim=input_dim,
-        hidden_dim=args.hidden_dim,
-        num_layers=args.num_layers,
-        edge_dim=edge_dim,
-    )
-    ema_helper = EMA(encoder, decay=args.ema_decay)  # type: ignore[call-arg]
-    predictor = MLPPredictor(embed_dim=args.hidden_dim, hidden_dim=args.hidden_dim * 2)  # type: ignore[call-arg]
-
-    # If resuming, load model/optimizer states
-    if ckpt_state:
-        if "encoder" in ckpt_state:
-            encoder._load_state_dict_forgiving(ckpt_state["encoder"])
-        if "ema_encoder" in ckpt_state:
-            ema_encoder._load_state_dict_forgiving(ckpt_state["ema_encoder"])
-        if "predictor" in ckpt_state:
-            predictor._load_state_dict_forgiving(ckpt_state["predictor"])
-        if "ema" in ckpt_state and hasattr(ema_helper, "load_state_dict"):
-            ema_helper._load_state_dict_forgiving(ckpt_state["ema"])
-        start_epoch = ckpt_state.get("epoch", 0) + 1
-
-    # Augmentation kwargs for JEPA pretraining
-    kwargs: Dict[str, bool] = {}
-    if args.aug_rotate:
-        kwargs["random_rotate"] = True
-    if args.aug_mask_angle:
-        kwargs["mask_angle"] = True
-    if args.aug_dihedral:
-        kwargs["perturb_dihedral"] = True
-
-    # Pretrain JEPA
-    try:
-        wb.log({"phase": "pretrain", "status": "start"})
-        for epoch in range(start_epoch, args.epochs):
-            train_jepa(
-                dataset=unlabeled,
-                encoder=encoder,
-                ema_encoder=ema_encoder,
-                predictor=predictor,
-                ema=ema_helper,
-                epochs=1,  # one epoch per loop so we can checkpoint each epoch
-                max_batches=getattr(
-                    args, "max_pretrain_batches", 0
-                ),  # ensure it does not crash for unit tests
-                time_budget_mins=getattr(
-                    args, "time_budget_mins", 0
-                ),  # ensure it does not crash for unit tests
-                batch_size=args.batch_size,
-                mask_ratio=args.mask_ratio,
-                contiguous=args.contiguous,
-                lr=args.lr,
-                device=device,
-                reg_lambda=1e-4,
-                use_wandb=args.use_wandb,
-                wandb_project=args.wandb_project,
-                wandb_tags=args.wandb_tags,
-                disable_tqdm=True,  # suppress single‑epoch progress bars
-                **kwargs,
-            )
-            # save after each epoch (or every N epochs)
-            if (epoch + 1) % save_every == 0 or (epoch + 1) == args.epochs:
-                save_checkpoint(
-                    os.path.join(args.ckpt_dir, f"pt_epoch_{epoch+1}.pt"),
-                    epoch=epoch,
-                    encoder=encoder.state_dict(),
-                    ema_encoder=ema_encoder.state_dict(),
-                    predictor=(
-                        predictor.state_dict()
-                        if hasattr(predictor, "state_dict")
-                        else None
-                    ),
-                    ema=ema_helper.state_dict()
-                    if hasattr(ema_helper, "state_dict")
-                    else None,
-                )
-        wb.log({"phase": "pretrain", "status": "success"})
-    except Exception:
-        logger.exception("JEPA pretraining failed")
-        wb.log({"phase": "pretrain", "status": "error"})
-        sys.exit(2)
-
-    aug_cfg = AugmentationConfig(
-        rotate=args.aug_rotate,
-        mask_angle=args.aug_mask_angle,
-        dihedral=args.aug_dihedral,
-    )
-
-    # Optionally run contrastive baseline
-    if args.contrastive:
-        cont_encoder = build_encoder(
+        # Build encoder and EMA copy
+        encoder = build_encoder(
             gnn_type=args.gnn_type,
             input_dim=input_dim,
             hidden_dim=args.hidden_dim,
             num_layers=args.num_layers,
             edge_dim=edge_dim,
         )
+        ema_encoder = build_encoder(
+            gnn_type=args.gnn_type,
+            input_dim=input_dim,
+            hidden_dim=args.hidden_dim,
+            num_layers=args.num_layers,
+            edge_dim=edge_dim,
+        )
+        ema_helper = EMA(encoder, decay=args.ema_decay)  # type: ignore[call-arg]
+        predictor = MLPPredictor(embed_dim=args.hidden_dim, hidden_dim=args.hidden_dim * 2)  # type: ignore[call-arg]
+
+        # If resuming, load model/optimizer states
+        if ckpt_state:
+            if "encoder" in ckpt_state:
+                encoder._load_state_dict_forgiving(ckpt_state["encoder"])
+            if "ema_encoder" in ckpt_state:
+                ema_encoder._load_state_dict_forgiving(ckpt_state["ema_encoder"])
+            if "predictor" in ckpt_state:
+                predictor._load_state_dict_forgiving(ckpt_state["predictor"])
+            if "ema" in ckpt_state and hasattr(ema_helper, "load_state_dict"):
+                ema_helper._load_state_dict_forgiving(ckpt_state["ema"])
+            start_epoch = ckpt_state.get("epoch", 0) + 1
+
+        # Augmentation kwargs for JEPA pretraining
+        kwargs: Dict[str, bool] = {}
+        if args.aug_rotate:
+            kwargs["random_rotate"] = True
+        if args.aug_mask_angle:
+            kwargs["mask_angle"] = True
+        if args.aug_dihedral:
+            kwargs["perturb_dihedral"] = True
+
+        # Pretrain JEPA
+        pretrain_losses: List[float] = []
         try:
-            wb.log({"phase": "pretrain_contrastive", "status": "start"})
-            train_contrastive(  # type: ignore[call-arg]
-                dataset=unlabeled,
-                encoder=cont_encoder,
-                epochs=args.epochs,
-                batch_size=args.batch_size,
-                mask_ratio=args.mask_ratio,
-                lr=args.lr,
-                device=device,
-                use_wandb=args.use_wandb,
-                random_rotate=aug_cfg.rotate,
-                mask_angle=aug_cfg.mask_angle,
-                perturb_dihedral=aug_cfg.dihedral,
-                wandb_project=args.wandb_project,
-                wandb_tags=args.wandb_tags,
-                disable_tqdm=True,  # suppress single‑epoch progress bars
-            )
-            wb.log({"phase": "pretrain_contrastive", "status": "success"})
+            _wb_log(wb,{"phase": "pretrain", "status": "start"})
+            for epoch in range(start_epoch, args.epochs):
+                ep_loss = train_jepa(
+                    dataset=unlabeled,
+                    encoder=encoder,
+                    ema_encoder=ema_encoder,
+                    predictor=predictor,
+                    ema=ema_helper,
+                    epochs=1,  # one epoch per loop so we can checkpoint each epoch
+                    max_batches=getattr(
+                        args, "max_pretrain_batches", 0
+                    ),  # ensure it does not crash for unit tests
+                    time_budget_mins=getattr(
+                        args, "time_budget_mins", 0
+                    ),  # ensure it does not crash for unit tests
+                    batch_size=args.batch_size,
+                    mask_ratio=args.mask_ratio,
+                    contiguous=args.contiguous,
+                    lr=args.lr,
+                    device=device,
+                    reg_lambda=1e-4,
+                    use_wandb=args.use_wandb,
+                    wandb_project=args.wandb_project,
+                    wandb_tags=args.wandb_tags,
+                    disable_tqdm=True,  # suppress single‑epoch progress bars
+                    # dataloader & AMP knobs
+                    num_workers=getattr(args, "num_workers", 0),
+                    pin_memory=getattr(args, "pin_memory", True),
+                    persistent_workers=getattr(args, "persistent_workers", True),
+                    prefetch_factor=getattr(args, "prefetch_factor", 4),
+                    bf16=getattr(args, "bf16", False),
+                    # forward augmentation flags only when enabled
+                    **kwargs,
+                )
+                pretrain_losses.extend(ep_loss)
+                # save after each epoch (or every N epochs)
+                if (epoch + 1) % save_every == 0 or (epoch + 1) == args.epochs:
+                    save_checkpoint(
+                        os.path.join(args.ckpt_dir, f"pt_epoch_{epoch+1}.pt"),
+                        epoch=epoch,
+                        encoder=encoder.state_dict(),
+                        ema_encoder=ema_encoder.state_dict(),
+                        predictor=(
+                            predictor.state_dict()
+                            if hasattr(predictor, "state_dict")
+                            else None
+                        ),
+                        ema=ema_helper.state_dict()
+                        if hasattr(ema_helper, "state_dict")
+                        else None,
+                    )
+            _wb_log(wb,{"phase": "pretrain", "status": "success"})
         except Exception:
-            logger.exception("Contrastive pretraining failed")
-            wb.log({"phase": "pretrain_contrastive", "status": "error"})
+            logger.exception("JEPA pretraining failed")
+            _wb_log(wb,{"phase": "pretrain", "status": "error"})
             sys.exit(2)
 
-    # Save checkpoints
-    ckpt_base = args.output
-    torch.save({"encoder": encoder.state_dict()}, ckpt_base)
-    wb.log({"jepa_checkpoint": ckpt_base})
-    if args.contrastive:
-        cont_path = f"{os.path.splitext(ckpt_base)[0]}_contrastive.pt"
-        torch.save({"encoder": cont_encoder.state_dict()}, cont_path)
-        wb.log({"contrastive_checkpoint": cont_path})
+        aug_cfg = AugmentationConfig(
+            rotate=args.aug_rotate,
+            mask_angle=args.aug_mask_angle,
+            dihedral=args.aug_dihedral,
+        )
 
-    wb.finish()
+        # Optionally run contrastive baseline
+        cont_losses: List[float] = []
+        if args.contrastive:
+            cont_encoder = build_encoder(
+                gnn_type=args.gnn_type,
+                input_dim=input_dim,
+                hidden_dim=args.hidden_dim,
+                num_layers=args.num_layers,
+                edge_dim=edge_dim,
+            )
+            try:
+                _wb_log(wb,{"phase": "pretrain_contrastive", "status": "start"})
+                cont_losses = train_contrastive(  # type: ignore[call-arg]
+                    dataset=unlabeled,
+                    encoder=cont_encoder,
+                    epochs=args.epochs,
+                    batch_size=args.batch_size,
+                    mask_ratio=args.mask_ratio,
+                    lr=args.lr,
+                    device=device,
+                    use_wandb=args.use_wandb,
+                    random_rotate=aug_cfg.rotate,
+                    mask_angle=aug_cfg.mask_angle,
+                    perturb_dihedral=aug_cfg.dihedral,
+                    wandb_project=args.wandb_project,
+                    wandb_tags=args.wandb_tags,
+                    disable_tqdm=True,  # suppress single‑epoch progress bars
+                    # dataloader & AMP knobs
+                    num_workers=getattr(args, "num_workers", 0),
+                    pin_memory=getattr(args, "pin_memory", True),
+                    persistent_workers=getattr(args, "persistent_workers", True),
+                    prefetch_factor=getattr(args, "prefetch_factor", 4),
+                    bf16=getattr(args, "bf16", False),
+                )
+                
+                _wb_log(wb,{"phase": "pretrain_contrastive", "status": "success"})
+            except Exception:
+                logger.exception("Contrastive pretraining failed")
+                _wb_log(wb,{"phase": "pretrain_contrastive", "status": "error"})
+                sys.exit(2)
+
+        # Save checkpoints
+        ckpt_base = args.output
+        os.makedirs(os.path.dirname(ckpt_base) or ".", exist_ok=True)
+        torch.save({"encoder": encoder.state_dict()}, ckpt_base)
+        _wb_log(wb,{"jepa_checkpoint": ckpt_base})
+        if args.contrastive:
+            cont_path = f"{os.path.splitext(ckpt_base)[0]}_contrastive.pt"
+            torch.save({"encoder": cont_encoder.state_dict()}, cont_path)
+            _wb_log(wb,{"contrastive_checkpoint": cont_path})
+        
+        #keep a stable pointer the FT step can always find
+        try:
+            link = os.path.join(args.ckpt_dir, "encoder.pt")
+            if os.path.realpath(link) != os.path.realpath(ckpt_base):
+                if os.path.islink(link) or os.path.exists(link):
+                    os.remove(link)
+                os.symlink(ckpt_base, link)
+        except Exception:
+            logger.warning("Could not create encoder.pt symlink", exc_info=True)
+
+        # Plot training losses to W&B and filesystem
+        try:
+            curves = {"jepa": pretrain_losses}
+            if cont_losses:
+                curves["contrastive"] = cont_losses
+            fig = plot_training_curves(curves, wb=wb)
+
+            # Respect --plot-dir if provided; otherwise default to <ckpt_dir>/plots
+            plot_dir = getattr(args, "plot_dir", None) or os.path.join(args.ckpt_dir, "plots")
+            os.makedirs(plot_dir, exist_ok=True)
+            out_png = os.path.join(plot_dir, "pretrain_loss.png")
+            fig.savefig(out_png, dpi=200)
+
+            # Log to W&B only if a run exists (avoid preinit errors)
+            try:
+                import wandb as _wandb
+                if (wb is not None) and (getattr(wb, "run", None) is not None):
+                    wb.log({"pretrain/loss_plot": _wandb.Image(out_png)})
+            except Exception:
+                pass
+
+            # Also write a CSV of epoch losses next to the checkpoint
+            csv_path = os.path.join(args.ckpt_dir, "pretrain_losses.csv")
+            with open(csv_path, "w", encoding="utf-8") as f:
+                f.write("epoch,loss\n")
+                for i, v in enumerate(pretrain_losses, 1):
+                    f.write(f"{i},{float(v)}\n")
+
+            # Free the figure
+            try:
+                import matplotlib.pyplot as _plt
+                _plt.close(fig)
+            except Exception:
+                pass
+        except Exception:
+            logger.exception("Failed to plot training curves")
+
+
+    except Exception as e:
+        _wb_log(wb, {"phase": "pretrain", "status": "error", "msg": str(e)})
+        raise
+    finally:
+        _wb_finish(wb)
 
 
 def cmd_finetune(args: argparse.Namespace) -> None:
@@ -727,7 +818,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         or build_encoder is None
         or train_linear_head is None
     ):
-        wb.error("Fine‑tuning modules are unavailable.")
+        logger.error("Fine-tuning modules are unavailable.")
         sys.exit(3)
 
     # Determine seeds: CLI overrides config
@@ -837,8 +928,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         if "encoder" in resume_state:
             logger.info("Overriding encoder from resume checkpoint")
             _load_state_dict_forgiving(encoder, resume_state["encoder"])
-        if "head" in resume_state and hasattr(head, "load_state_dict"):
-            _load_state_dict_forgiving(head, resume_state["head"])
+
 
         # Build linear head for fine-tuning
         # compute num_classes robustly for classification; for regression we won’t use it
@@ -876,6 +966,9 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                 in_dim=_in_dim, num_classes=1, task_type="regression"
             )
 
+        if "head" in resume_state and hasattr(head, "load_state_dict"):
+            _load_state_dict_forgiving(head, resume_state["head"])
+        
         _maybe_to(head, device)
 
         # Optimizer & scheduler
@@ -914,7 +1007,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                 metrics = train_linear_head(
                     dataset=labeled,
                     encoder=encoder,
-                    head=head,
+                    head_type=getattr(args, "head", "linear"),  # <- change
                     task_type=args.task_type,
                     epochs=1,
                     max_batches=getattr(
@@ -930,6 +1023,12 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     devices=args.devices,
                     optimizer=optimizer,
                     scheduler=scheduler,
+                    # dataloader & AMP knobs
+                    num_workers=getattr(args, "num_workers", 0),
+                    pin_memory=getattr(args, "pin_memory", True),
+                    persistent_workers=getattr(args, "persistent_workers", True),
+                    prefetch_factor=getattr(args, "prefetch_factor", 4),
+                    bf16=getattr(args, "bf16", False),
                 )
                 current = metrics.get(metric_name, None)
                 if current is not None:
@@ -1519,6 +1618,13 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             time_budget_mins=getattr(args, "time_budget_mins", 0),
             disable_tqdm=not getattr(args, "force_tqdm", False)
             and not sys.stdout.isatty(),
+            
+            # dataloader & AMP knobs
+            num_workers=getattr(args, "num_workers", 0),
+            pin_memory=getattr(args, "pin_memory", True),
+            persistent_workers=getattr(args, "persistent_workers", True),
+            prefetch_factor=getattr(args, "prefetch_factor", 4),
+            bf16=getattr(args, "bf16", False),
         )
         # Log each row to W&B for comprehensive visualisation.  We assign a
         # unique identifier to each configuration using its index.  This
@@ -1647,6 +1753,7 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
         default=DEFAULT_AUG.dihedral,
         help="Perturb dihedral angles during pretraining",
     )
+
     # Optimisation
     sec_cfg = CONFIG.get(section, {})
     p.add_argument(
@@ -1679,6 +1786,15 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device",
     )
+    # Optimisation for GPU
+    p.add_argument("--prefetch-factor", type=int, default=4,
+                    help="Dataloader prefetch factor (workers>0 only).")
+    p.add_argument("--pin-memory", action="store_true", default=True,
+                        help="Pin CUDA host memory in DataLoader.")
+    p.add_argument("--persistent-workers", action="store_true", default=True,
+                        help="Keep worker processes alive across epochs (workers>0).")
+    p.add_argument("--bf16", action="store_true",
+                        help="Enable bfloat16 autocast on GPU.")
     p.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP")
     # W&B
     wandb_cfg = CONFIG.get("wandb", {})
@@ -1751,6 +1867,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="If >0, load at most N graphs from the unlabeled dataset.",
+    )
+    pre.add_argument(
+        "--plot-dir",
+        required=True,
+        default=CONFIG.get("plot_dir", "plots"),
+        help="Directory to save training plots",
     )
 
     _add_common_args(pre, "pretrain")

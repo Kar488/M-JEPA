@@ -484,6 +484,12 @@ def _run_one_config_method(
     max_pretrain_batches: int = 0,
     max_finetune_batches: int = 0,
     time_left: Optional[Callable[[], float]] = None,
+    # performance knobs
+    num_workers: int = 0,
+    pin_memory: bool = True,
+    persistent_workers: bool = True,
+    prefetch_factor: int = 4,
+    bf16: bool = False,
 ) -> Dict[str, Any]:
     logger.info("Running method %s with config %s", method, asdict(cfg))
 
@@ -605,6 +611,12 @@ def _run_one_config_method(
                     warmup_steps=warmup_steps,
                     max_batches=max_pretrain_batches,
                     time_budget_mins=_tb,
+                    # perf knobs
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                    persistent_workers=persistent_workers,
+                    prefetch_factor=prefetch_factor,
+                    bf16=bf16,
                 )
             except TypeError:
                 # Backward-compatible call
@@ -640,6 +652,12 @@ def _run_one_config_method(
                     use_scaffold=use_scaffold,
                     max_batches=max_finetune_batches,
                     time_budget_mins=_tb,
+                    # perf knobs
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                    persistent_workers=persistent_workers,
+                    prefetch_factor=prefetch_factor,
+                    bf16=bf16,
                 )
                 row = {k: float(v) for k, v in m.items() if k != "head"}
             except TypeError:
@@ -723,6 +741,12 @@ def _run_one_config_method(
                     perturb_dihedral=_dih,
                     max_batches=max_pretrain_batches,
                     time_budget_mins=_tb,
+                    # perf knobs
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                    persistent_workers=persistent_workers,
+                    prefetch_factor=prefetch_factor,
+                    bf16=bf16,
                 )
             except TypeError:
                 # older signature without extra knobs
@@ -769,6 +793,12 @@ def _run_one_config_method(
                     batch_size=cfg.finetune_bs,
                     device=device,
                     use_scaffold=use_scaffold,
+                    # perf knobs
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                    persistent_workers=persistent_workers,
+                    prefetch_factor=prefetch_factor,
+                    bf16=bf16,
                 )
                 row = {k: float(v) for k, v in m.items() if k != "head"}
 
@@ -905,6 +935,12 @@ def run_grid_search(
     max_finetune_batches: int = 0,
     time_budget_mins: int = 0,
     disable_tqdm: bool = False,
+    # performance knobs to propagate into trainers
+    num_workers: int = 0,
+    pin_memory: bool = True,
+    persistent_workers: bool = True,
+    prefetch_factor: int = 4,
+    bf16: bool = False,
 ) -> pd.DataFrame:
     start = time.monotonic()
 
@@ -1012,6 +1048,12 @@ def run_grid_search(
                     max_pretrain_batches=max_pretrain_batches,
                     max_finetune_batches=max_finetune_batches,
                     time_left=time_left,
+                    # perf knobs
+                    num_workers=num_workers,
+                    pin_memory=pin_memory,
+                    persistent_workers=persistent_workers,
+                    prefetch_factor=prefetch_factor,
+                    bf16=bf16,
                 )
             )
             if pbar is not None:

@@ -13,6 +13,7 @@ from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
+    brier_score_loss,
     mean_absolute_error,
     mean_squared_error,
     roc_auc_score,
@@ -29,6 +30,7 @@ def train_linear_on_embeddings_classification(
         "roc_auc": float(roc_auc_score(y, proba)),
         "pr_auc": float(average_precision_score(y, proba)),
         "acc": float((clf.predict(X) == y).mean()),
+        "brier": float(brier_score_loss(y, proba)),
     }
 
 
@@ -62,6 +64,7 @@ def train_linear_on_embeddings_with_val(
                 roc_auc=float(roc_auc_score(y, proba)),
                 pr_auc=float(average_precision_score(y, proba)),
                 acc=float(accuracy_score(y, clf.predict(X))),
+                brier=float(brier_score_loss(y, proba)),
             )
 
         out = {f"val_{k}": v for k, v in _eval(X_val, y_val.astype(int)).items()}

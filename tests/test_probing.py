@@ -72,6 +72,7 @@ def test_linear_probe_classification():
         "probe_roc_auc",
         "probe_pr_auc",
         "probe_acc",
+        "probe_brier",
     }
     for v in metrics.values():
         assert isinstance(v, float)

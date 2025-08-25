@@ -53,6 +53,7 @@ def make_args(
         wandb_project="test",
         wandb_tags=[],
         add_3d=False,
+        plot_dir=str(tmp_path),
     )
 
 
@@ -112,6 +113,7 @@ def setup_stubs(monkeypatch, calls):
     def train_jepa_stub(**kwargs):
         calls["train_jepa"] += 1
         calls["train_jepa_kwargs"] = kwargs
+        return [0.1]
 
     monkeypatch.setattr(tj, "train_jepa", train_jepa_stub)
 
@@ -120,6 +122,17 @@ def setup_stubs(monkeypatch, calls):
         calls["train_contrastive_kwargs"] = kwargs
 
     monkeypatch.setattr(tj, "train_contrastive", train_contrastive_stub)
+
+    class DummyFig:
+        def savefig(self, path, dpi=200):
+            calls["saved_plot"] = path
+            open(path, "wb").close()
+
+    def plot_training_curves_stub(*args, **kwargs):
+        calls["plot_training_curves"] += 1
+        return DummyFig()
+
+    monkeypatch.setattr(tj, "plot_training_curves", plot_training_curves_stub)
 
     class DummyWB:
         def log(self, *args, **kwargs):
@@ -143,9 +156,11 @@ def test_cmd_pretrain_creates_checkpoint_and_calls_training(tmp_path, monkeypatc
         "MLPPredictor": 0,
         "train_jepa": 0,
         "train_contrastive": 0,
-        "maybe_init_wandb": 0, 
+        "maybe_init_wandb": 0,
         "train_jepa_kwargs": {},
         "train_contrastive_kwargs": {},
+        "plot_training_curves": 0,
+        "saved_plot": None,
     }
     setup_stubs(monkeypatch, calls)
 
@@ -158,6 +173,8 @@ def test_cmd_pretrain_creates_checkpoint_and_calls_training(tmp_path, monkeypatc
     assert "random_rotate" not in calls["train_jepa_kwargs"]
     assert "mask_angle" not in calls["train_jepa_kwargs"]
     assert "perturb_dihedral" not in calls["train_jepa_kwargs"]
+    assert calls["plot_training_curves"] == 1
+    assert os.path.exists(os.path.join(args.plot_dir, "pretrain_loss.png"))
 
 
 def test_cmd_pretrain_with_contrastive_branch(tmp_path, monkeypatch):
@@ -168,9 +185,11 @@ def test_cmd_pretrain_with_contrastive_branch(tmp_path, monkeypatch):
         "MLPPredictor": 0,
         "train_jepa": 0,
         "train_contrastive": 0,
-        "maybe_init_wandb": 0, 
+        "maybe_init_wandb": 0,
         "train_jepa_kwargs": {},
         "train_contrastive_kwargs": {},
+        "plot_training_curves": 0,
+        "saved_plot": None,
     }
     setup_stubs(monkeypatch, calls)
 

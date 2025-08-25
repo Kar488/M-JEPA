@@ -25,7 +25,11 @@ def test_pretrain_parser_defaults_and_handler(tmp_path):
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["pretrain"])
-    args = parser.parse_args(["pretrain", "--unlabeled-dir", str(tmp_path)])
+    args = parser.parse_args([
+        "pretrain",
+        f"--unlabeled-dir={tmp_path}",
+        f"--plot-dir={tmp_path}",
+    ])
     assert args.func is cmd_pretrain
     assert args.unlabeled_dir == str(tmp_path)
     assert args.output == "encoder.pt"

@@ -106,7 +106,10 @@ def load_dataloaders(
     parquet_root: str,
     batch_size: int,
     *,
-    num_workers: int = 0,
+    num_workers: int = 0, 
+    pin_memory: bool = True,
+    persistent_workers: bool = True,
+    prefetch_factor: int = 4,
     **loader_kwargs,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """Hand out train, validation and test batches.
@@ -122,13 +125,16 @@ def load_dataloaders(
     val_ds = ParquetGraphDataset(_split_files(root, "val"))
     test_ds = ParquetGraphDataset(_split_files(root, "test"))
 
-    train_loader = DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers, **loader_kwargs
+    common = dict(
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=bool(num_workers) and persistent_workers,
+        **loader_kwargs,
     )
-    val_loader = DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, **loader_kwargs
-    )
-    test_loader = DataLoader(
-        test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, **loader_kwargs
-    )
+    if num_workers > 0 and prefetch_factor is not None:
+        common["prefetch_factor"] = prefetch_factor
+
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  **common)
+    val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, **common)
+    test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False, **common)
     return train_loader, val_loader, test_loader

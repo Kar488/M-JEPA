@@ -123,6 +123,12 @@ def train_jepa(
     max_batches: int = 0,
     time_budget_mins: int = 0,
     disable_tqdm: bool = False,
+    num_workers=0, 
+    pin_memory=True, 
+    persistent_workers=True, 
+    prefetch_factor=4, 
+    bf16=False, 
+    **unused
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     distributed = (devices > 1) and init_distributed(ddp_backend)
@@ -168,7 +174,12 @@ def train_jepa(
         _torch._dynamo = _DummyDynamo()
 
     opt = optim.Adam(list(encoder.parameters()) + list(predictor.parameters()), lr=lr)
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp and device_t.type == "cuda")
+    # AMP setup (bf16 on 4090). GradScaler is only for fp16, not bf16.
+    amp_enabled = (device_t.type == "cuda") and (use_amp or bf16)
+    _amp_dtype = torch.bfloat16 if bf16 else torch.float16
+    scaler = torch.cuda.amp.GradScaler(enabled=(use_amp and (not bf16) and device_t.type == "cuda"))
+
+
     steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
     total_steps = epochs * steps_per_epoch
     sch = cosine_with_warmup(opt, warmup_steps, total_steps) if use_scheduler else None
@@ -265,7 +276,8 @@ def train_jepa(
                 )
                 g_ctx, g_tgt = views
                 with torch.cuda.amp.autocast(
-                    enabled=use_amp and device_t.type == "cuda"
+                    enabled=amp_enabled,
+                    dtype=_amp_dtype,
                 ):
                     h_c = _encode_graph(encoder, g_ctx)
                     with torch.no_grad():
@@ -280,7 +292,10 @@ def train_jepa(
             h_c_g = _pool_graph_emb(h_c_nodes, g_ctx)  # [D] or [B, D]
             h_t_g = _pool_graph_emb(h_t_nodes, g_tgt)  # [D] or [B, D]
 
-            with torch.cuda.amp.autocast(enabled=use_amp and device_t.type == "cuda"):
+            with torch.cuda.amp.autocast(
+                enabled=amp_enabled,
+                dtype=_amp_dtype,
+            ):
                 pred = predictor(h_c_g)
 
                 if pred.dim() == 1 and h_t_g.dim() == 2 and h_t_g.size(0) == 1:
@@ -381,6 +396,12 @@ def train_contrastive(
     max_batches: int = 0,
     time_budget_mins: int = 0,
     disable_tqdm: bool = False,
+    num_workers=0, 
+    pin_memory=True, 
+    persistent_workers=True, 
+    prefetch_factor=4, 
+    bf16=False, 
+    **unused
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     distributed = (devices > 1) and init_distributed(ddp_backend)
@@ -408,7 +429,13 @@ def train_contrastive(
             nn.Linear(projection_dim, projection_dim),
         ).to(device_t)
         opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp and device_t.type == "cuda")
+
+    # GradScaler is for fp16; disable when using bf16
+    scaler = torch.cuda.amp.GradScaler(enabled=(use_amp and (not bf16) and device_t.type == "cuda"))
+    # AMP setup (bf16 on 4090)
+    amp_enabled = (device_t.type == "cuda") and (use_amp or bf16)
+    _amp_dtype = torch.bfloat16 if bf16 else torch.float16
+
     steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
     total_steps = epochs * steps_per_epoch
     sch = cosine_with_warmup(opt, warmup_steps, total_steps) if use_scheduler else None
@@ -504,9 +531,7 @@ def train_contrastive(
                     )
                 v1 = generate_views(g, structural_ops=struct_ops, geometric_ops=geom_ops)[0]
                 v2 = generate_views(g, structural_ops=struct_ops, geometric_ops=geom_ops)[0]
-                with torch.cuda.amp.autocast(
-                    enabled=use_amp and device_t.type == "cuda"
-                ):
+                with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
                     h1 = _ensure_2d(_encode(encoder, v1, device_t))
                     h2 = _ensure_2d(_encode(encoder, v2, device_t))
                     if isinstance(proj[0], nn.Linear) and proj[
@@ -532,7 +557,7 @@ def train_contrastive(
                 z1 = z1[:N]
                 z2 = z2[:N]
 
-            with torch.cuda.amp.autocast(enabled=use_amp and device_t.type == "cuda"):
+            with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
                 logits_12 = (z1 @ z2.t()) / temperature   # [N, N]
                 logits_21 = (z2 @ z1.t()) / temperature   # [N, N]
 

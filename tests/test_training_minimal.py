@@ -3,8 +3,9 @@ import types
 from dataclasses import dataclass
 
 import numpy as np
-import torch
+import torch 
 import pytest
+from sklearn.metrics import brier_score_loss
 
 # Stubs for modules requiring optional dependencies
 data_dataset = types.ModuleType("data.mdataset")
@@ -149,3 +150,7 @@ def test_train_linear_on_embeddings():
     assert metrics["roc_auc"] == pytest.approx(1.0)
     assert metrics["pr_auc"] == pytest.approx(1.0)
     assert metrics["acc"] == pytest.approx(1.0)
+    
+    p = float(np.mean(y))  # class prevalence
+    baseline = brier_score_loss(y, np.full_like(y, p, dtype=float))
+    assert metrics["brier"] < baseline + 1e-6

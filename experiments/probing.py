@@ -16,7 +16,12 @@ from torch_geometric.loader import DataLoader as GeoLoader
 from torch_geometric.data import Data as PyGData
 
 from utils.graph_ops import _encode_graph, _pool_graph_emb
-from sklearn.metrics import accuracy_score, average_precision_score, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    brier_score_loss,
+    roc_auc_score,
+)
 
 def _adj_to_edge_index(adj):
     import torch
@@ -128,6 +133,7 @@ def linear_probe_classification(
         "probe_roc_auc": _safe_auc(yt, proba),
         "probe_pr_auc": float(average_precision_score(yt, proba)),
         "probe_acc": float(accuracy_score(yt, pred)),
+        "probe_brier": float(brier_score_loss(yt, proba)),
     }
 
 

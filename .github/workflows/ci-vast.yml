@@ -291,6 +291,7 @@ jobs:
             df -h / /data || true
             ls -ld /data /data/mjepa || true
             # ---- init persistent experiment dirs on the REMOTE ----
+
             mkdir -p /data/mjepa/experiments /data/mjepa/wandb /data/mjepa/cache/graphs
             ls -ld /data/mjepa/micromamba || true
             mkdir -p "$EXP_ROOT"/{grid,pretrain,finetune,bench,tox21,logs}
@@ -535,8 +536,24 @@ jobs:
                 RUN_ID="${RUN_ID:-$(basename "$EXP_ROOT")}"
               fi
 
-              # ---- init persistent experiment dirs on the REMOTE ----
-              # --- ensure persistent dirs exist on the remote (Option 3) ---
+              # ---- init persistent experiment dirs on the REMOTE ---- 
+
+              # If this RUN_ID has no grid cache and we're not forcing refresh,
+              # rebind to the last successful experiment via 'latest'.
+              if [ "${FORCE_REFRESH:-false}" != "true" ] && [ ! -f "$GRID_DIR/best_grid_config.json" ]; then
+                if [ -L /data/mjepa/experiments/latest ] && [ -f /data/mjepa/experiments/latest/grid/best_grid_config.json ]; then
+                  echo "Reusing cached grid from /data/mjepa/experiments/latest"
+                  EXP_ROOT="$(readlink -f /data/mjepa/experiments/latest)"
+                  RUN_ID="$(basename "$EXP_ROOT")"
+                  GRID_DIR="$EXP_ROOT/grid"
+                  PRETRAIN_DIR="$EXP_ROOT/pretrain"
+                  FINETUNE_DIR="$EXP_ROOT/finetune"
+                  BENCH_DIR="$EXP_ROOT/bench"
+                  TOX21_DIR="$EXP_ROOT/tox21"
+                  LOG_DIR="$EXP_ROOT/logs"
+                fi
+              fi
+
               mkdir -p /data/mjepa/experiments /data/mjepa/wandb /data/mjepa/cache/graphs
               mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR"
               ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
@@ -602,7 +619,7 @@ jobs:
                   --gnn-types mpnn \
                   --ema-decays 0.996 0.998 0.999 \
                   --add-3d-options 1 \
-                  --pretrain-batch-sizes 4 \
+                  --pretrain-batch-sizes 4 8 16 \
                   --finetune-batch-sizes 4 \
                   --pretrain-epochs-options 20 30 \
                   --finetune-epochs-options 1 \
@@ -613,14 +630,22 @@ jobs:
                   --n-rows-per-file 50 \
                   --max-pretrain-batches 0 \
                   --max-finetune-batches 0 \
-                  --num-workers 8 \
+                  --num-workers 16 \
+                  --prefetch-factor 4 \ 
                   --time-budget-mins 60 \
+                  --bf16 \
                   --force-tqdm \
                   --out-csv "$GRID_DIR/grid_results.csv" \
                   --best-config-out "$GRID_DIR/best_grid_config.json" \
                   --use-wandb \
                   $FR \
                   2>&1 | tee -a "$GRID_DIR/grid_$(date +%F_%H-%M).log"
+                then
+                  ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
+                  echo "Grid complete; linked 'latest' -> $EXP_ROOT"
+                else
+                  echo "Grid failed; leaving 'latest' unchanged"
+                  exit 7
               fi
 
   vast_pretrain:
@@ -650,6 +675,20 @@ jobs:
           script: |
             set -euxo pipefail
             mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$LOG_DIR"
+
+            # Reuse prior experiment if this RUN_ID has no grid config
+            if [ "${FORCE_REFRESH:-false}" != "true" ] && [ ! -f "$GRID_DIR/best_grid_config.json" ]; then
+              if [ -L /data/mjepa/experiments/latest ] && [ -f /data/mjepa/experiments/latest/grid/best_grid_config.json ]; then
+                echo "Pretrain rebinding to cached EXP_ROOT via 'latest'"
+                EXP_ROOT="$(readlink -f /data/mjepa/experiments/latest)"
+                RUN_ID="$(basename "$EXP_ROOT")"
+                GRID_DIR="$EXP_ROOT/grid"
+                PRETRAIN_DIR="$EXP_ROOT/pretrain"
+                LOG_DIR="$EXP_ROOT/logs"
+                CKPT_DIR="$PRETRAIN_DIR"
+                mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$LOG_DIR"
+              fi
+            fi
 
             # --- locate micromamba robustly ---
             if command -v micromamba >/dev/null 2>&1; then
@@ -740,6 +779,27 @@ jobs:
               print("\\n".join(args))
               ' "$PRETRAIN_JSON" "$PRETRAIN_YAML")
             fi
+            +            # -------- Pretrain cache / resume guard --------
+            # Build a stamp unique to (code, config, effective args)
+            COMMIT_SHA=$(git -C "$APP_DIR" rev-parse --short HEAD || echo "nogit")
+            CFG_HASH=$([ -n "${PRETRAIN_JSON:-}" ] && [ -f "$PRETRAIN_JSON" ] && sha256sum "$PRETRAIN_JSON" | awk '{print $1}' || echo "nocfg")
+            if [ "${#PRETRAIN_ARR[@]}" -gt 0 ]; then
+              ARGS_HASH=$(printf '%s\n' "${PRETRAIN_ARR[@]}" | sha256sum | awk '{print $1}')
+            else
+              ARGS_HASH="noargs"
+            fi
+            STAMP="$PRETRAIN_DIR/.stamp_${COMMIT_SHA}_${CFG_HASH}_${ARGS_HASH}"
+
+            # Skip if same recipe already finished (unless FORCE_REFRESH=true)
+            if [ -f "$STAMP" ] && [ "${FORCE_REFRESH:-false}" != "true" ]; then
+              echo "Pretrain cache hit ($STAMP) — skipping."
+              # Ensure a canonical encoder pointer for downstream
+              if [ ! -e "$PRETRAIN_DIR/encoder.pt" ]; then
+                LAST=$(ls -1t "$PRETRAIN_DIR"/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
+                [ -n "$LAST" ] && ln -sfn "$LAST" "$PRETRAIN_DIR/encoder.pt"
+              fi
+              exit 0
+            fi
 
             # Pretraining stage with selected hyper‑parameters.  Contrastive
             # baseline is enabled by default to match earlier behaviour.
@@ -751,7 +811,10 @@ jobs:
               --unlabeled-dir data/ZINC-canonicalized \
               --sample-unlabeled 50000 \
               --cache-dir "$CACHE_DIR" \
-              --num-workers 8 \
+              --plot-dir "$PRETRAIN_DIR/plots" \
+              --num-workers 16 \
+              --prefetch-factor 4 \
+              --bf16 \
               --ckpt-dir "$CKPT_DIR" \
               --save-every 1 \
               --output "$PRETRAIN_DIR/encoder.pt" \
@@ -759,6 +822,22 @@ jobs:
               --use-wandb \
               "${PRETRAIN_ARR[@]}" \
               2>&1 | tee -a "$LOG_DIR/pretrain_$(date +%F_%H-%M).log"
+
+            STATUS=$?
+
+            # Ensure a stable encoder pointer for downstream steps
+            if [ ! -e "$PRETRAIN_DIR/encoder.pt" ]; then
+              LAST=$(ls -1t "$PRETRAIN_DIR"/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
+              [ -n "$LAST" ] && ln -sfn "$LAST" "$PRETRAIN_DIR/encoder.pt"
+            fi
+
+            # Mark this recipe complete only on success
+            if [ $STATUS -eq 0 ]; then
+              touch "$STAMP"
+              ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
+              echo "Pretrain complete; linked 'latest' -> $EXP_ROOT"
+            fi
+            exit $STATUS
 
   vast_finetune:
     name: Apply fine tuning
@@ -858,7 +937,9 @@ jobs:
                 --label-col "measured log solubility in mols per litre" \
                 --cache-dir "$CACHE_DIR" \
                 "${FINETUNE_ARR[@]}" \
-                --num-workers 8 \
+                --num-workers 16 \
+                --prefetch-factor 4 \
+                --bf16 \
                 --patience 10 \
                 --ckpt-dir "$CKPT_DIR" \
                 --save-every 1 \

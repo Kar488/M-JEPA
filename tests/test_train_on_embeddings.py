@@ -11,7 +11,7 @@ def test_classification_and_regression(wb):
     X_clf = np.array([[0, 0], [1, 1], [0, 1], [1, 0]], dtype=float)
     y_clf = np.array([0, 1, 0, 1])
     clf_out = train_linear_on_embeddings_classification(X_clf, y_clf)
-    assert set(clf_out) == {"roc_auc", "pr_auc", "acc"}
+    assert set(clf_out) == {"roc_auc", "pr_auc", "acc", "brier"}
     wb.log({"clf_acc": clf_out["acc"]})
 
     X_reg = np.array([[0.0], [1.0], [2.0], [3.0]])
@@ -31,7 +31,7 @@ def test_with_validation(wb):
     clf_metrics = train_linear_on_embeddings_with_val(
         "classification", X_train, y_train, X_val, y_val, X_test, y_test
     )
-    assert all(k in clf_metrics for k in ["val_roc_auc", "test_pr_auc"])
+    assert all(k in clf_metrics for k in ["val_roc_auc", "test_pr_auc", "val_brier"])
     wb.log({"val_acc": clf_metrics["val_acc"]})
 
     X_train_r = np.arange(9, dtype=float).reshape(3, 3)

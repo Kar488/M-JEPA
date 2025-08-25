@@ -84,3 +84,9 @@ case_study:
 wandb:
   project: m-jepa        # Default W&B project name
   tags: []               # Optional list of tags
+
+
+###############################################################
+# Default directory for storing plots
+###############################################################
+plot_dir: plots          # Directory to save training plots

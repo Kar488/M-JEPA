@@ -255,6 +255,12 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
       # check space
       df -h / /data
+
+      #GPU consumption
+      watch -n 1 nvidia-smi
+      nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu,power.draw \
+           --format=csv,noheader,nounits --loop=1 \
+           --filename /data/mjepa/experiments/$RUN_ID/logs/nv_smi.csv
       ```
 
       
