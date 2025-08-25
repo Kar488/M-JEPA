@@ -605,6 +605,7 @@ jobs:
               if [ "${FORCE_REFRESH}" != "true" ] && [ -f "$GRID_DIR/grid_results.csv" ] && [ -f "$GRID_DIR/best_grid_config.json" ]; then
                 echo "Grid search outputs already exist; skipping grid search."
               else
+                set +e
                 "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
                   --unlabeled-dir data/ZINC-canonicalized \
                   --labeled-dir data/katielinkmoleculenet_benchmark/train \
@@ -631,7 +632,7 @@ jobs:
                   --max-pretrain-batches 0 \
                   --max-finetune-batches 0 \
                   --num-workers 16 \
-                  --prefetch-factor 4 \ 
+                  --prefetch-factor 4 \
                   --time-budget-mins 60 \
                   --bf16 \
                   --force-tqdm \
@@ -639,12 +640,16 @@ jobs:
                   --best-config-out "$GRID_DIR/best_grid_config.json" \
                   --use-wandb \
                   $FR 2>&1 | tee -a "$GRID_DIR/grid_$(date +%F_%H-%M).log"
-              then
-                ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
-                echo "Grid complete; linked 'latest' -> $EXP_ROOT"
-              else
-                echo "Grid failed; leaving 'latest' unchanged"
-                exit 7
+                GRID_STATUS=${PIPESTATUS[0]}
+                set -e
+
+                if [ "$GRID_STATUS" -eq 0 ]; then
+                  ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
+                  echo "Grid complete; linked 'latest' -> $EXP_ROOT"
+                else
+                  echo "Grid failed; leaving 'latest' unchanged"
+                  exit 7
+                fi
               fi
 
   vast_pretrain:
