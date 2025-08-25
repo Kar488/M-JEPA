@@ -1,4 +1,7 @@
 import numpy as np
+import pytest
+
+pytest.importorskip("sklearn")
 
 from training.train_on_embeddings import (
     train_linear_on_embeddings_classification,

@@ -1,7 +1,10 @@
 import math
 import numpy as np
-from utils.metrics import compute_classification_metrics, compute_regression_metrics
 import pytest
+
+pytest.importorskip("sklearn")
+
+from utils.metrics import compute_classification_metrics, compute_regression_metrics
 
 def test_compute_classification_metrics():
     y_true = np.array([0, 1] * 5)

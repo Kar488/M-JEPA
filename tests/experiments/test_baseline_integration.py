@@ -1,8 +1,11 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
+import pytest
 
 from experiments import baseline_integration as bi
+
+pytest.importorskip("pyarrow")
 
 
 def test_concat_dir_to_csv(tmp_path, wb):

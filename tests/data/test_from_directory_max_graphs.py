@@ -4,12 +4,15 @@ import types
 from unittest.mock import patch
 
 import pandas as pd
+import pytest
 
 try:  # pragma: no cover - torch may be unavailable
     import torch  # noqa: F401
 except Exception:  # pragma: no cover
     torch = types.SimpleNamespace()
     sys.modules.setdefault("torch", torch)
+
+pytest.importorskip("fastparquet")
 
 from data import GraphDataset
 

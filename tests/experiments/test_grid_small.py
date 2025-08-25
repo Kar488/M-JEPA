@@ -10,6 +10,8 @@ import pytest
 from data import GraphDataset
 from data.augment import iter_augmentation_options
 
+pytest.importorskip("torch_geometric")
+
 # Configure a source parquet (adjust path to one of your shards)
 SOURCE = Path(
     "data/ZINC-canonicalized/train-00000-of-00003-1dd8e62fc2556455.parquet"
