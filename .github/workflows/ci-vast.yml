@@ -523,7 +523,43 @@ jobs:
              RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT
             command_timeout: 180m         # <-- default is 10m; bump this
-            script: | 
+            script: |
+              # 0) Optional pin (leave empty to use 'latest')
+              PIN_EXP_ROOT=""   # e.g., "/data/mjepa/experiments/17234586751"
+              
+              # Try to reuse the last successful run pointed to by /data/mjepa/experiments/latest
+              maybe_rebind_to_latest() {
+                local stage="$1"; shift
+                local req=( "$@" )
+                if [ "${FORCE_REFRESH:-false}" = "true" ]; then return 1; fi
+                local L=""
+                if [ -n "$PIN_EXP_ROOT" ] && [ -d "$PIN_EXP_ROOT" ]; then
+                  L="$PIN_EXP_ROOT"
+                elif [ -L /data/mjepa/experiments/latest ]; then
+                  L="$(readlink -f /data/mjepa/experiments/latest)" || return 1
+                else
+                  return 1
+                fi
+                [ "$L" != "$EXP_ROOT" ] || return 1
+                for r in "$@"; do [ -s "$L/$r" ] || return 1; done
+                echo "Reusing cached $stage from $L"
+                EXP_ROOT="$L"
+                RUN_ID="$(basename "$EXP_ROOT")"
+                GRID_DIR="$EXP_ROOT/grid"; PRETRAIN_DIR="$EXP_ROOT/pretrain"
+                FINETUNE_DIR="$EXP_ROOT/finetune"; BENCH_DIR="$EXP_ROOT/bench"
+                TOX21_DIR="$EXP_ROOT/tox21"; LOG_DIR="$EXP_ROOT/logs"
+                return 0
+              }
+
+              
+              # 1) Try cache
+              if maybe_rebind_to_latest grid "grid/grid_results.csv" "grid/best_grid_config.json"; then
+                echo "$GRID_DIR/best_grid_config.json" > /data/mjepa/experiments/.best_grid_json
+                echo "Grid cache hit — skipping grid-search"
+              else
+                # 2) No cache → now create new run dirs and execute grid
+                mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR"
+
               set -euxo pipefail
               # safe defaults so set -u never explodes
               : "${WANDB_DIR:=/data/mjepa/wandb}"
@@ -595,51 +631,17 @@ jobs:
                 FR="--force-refresh"
               fi
 
-              # sample-unlabeled -- < use a 1000000 (10,000,000- 10M) when working fully matching word doc spec
-              # sample-labeled <-- use a 20000 (20K) when working fully matching word doc spec (≈17K across data classes e.g, ESOL, BACE etc)
-              # zero values for max-pretrain-batches and max-finetune-batches mean no limit
-              # time-budget-mins 0 means no time limit
-              # moleculenet dataset, column "measured log solubility in mols per litre" is used for regression task
-              
-
-              # Consider a stage cached when all listed files exist and are non-empty.
-              is_cached_stage() {
-                local root="$1"; shift
-                for rel in "$@"; do
-                  [ -s "$root/$rel" ] || return 1
-                done
-                return 0
-              }
-
-              # Try to reuse the last successful run pointed to by /data/mjepa/experiments/latest
-              maybe_rebind_to_latest() {
-                local stage="$1"; shift
-                local req=( "$@" )
-                if [ "${FORCE_REFRESH:-false}" = "true" ]; then return 1; fi
-                [ -L /data/mjepa/experiments/latest ] || return 1
-                local L; L="$(readlink -f /data/mjepa/experiments/latest)" || return 1
-                # Don’t treat current run as cache
-                [ "$L" != "$EXP_ROOT" ] || return 1
-                is_cached_stage "$L" "${req[@]}" || return 1
-
-                echo "Reusing cached $stage from $L"
-                EXP_ROOT="$L"
-                RUN_ID="$(basename "$EXP_ROOT")"
-                GRID_DIR="$EXP_ROOT/grid"
-                PRETRAIN_DIR="$EXP_ROOT/pretrain"
-                FINETUNE_DIR="$EXP_ROOT/finetune"
-                BENCH_DIR="$EXP_ROOT/bench"
-                TOX21_DIR="$EXP_ROOT/tox21"
-                LOG_DIR="$EXP_ROOT/logs"
-                return 0
-              }
-                
               # Default FORCE_REFRESH if unset
               if maybe_rebind_to_latest grid "grid/grid_results.csv" "grid/best_grid_config.json"; then
                 echo "BEST_GRID_JSON=$GRID_DIR/best_grid_config.json" >> "$GITHUB_ENV"
                 echo "Grid cache hit — skipping grid-search"
               else
                 # Allow the pipeline to continue while capturing python's exit code via PIPESTATUS
+                # sample-unlabeled -- < use a 1000000 (10,000,000- 10M) when working fully matching word doc spec
+                # sample-labeled <-- use a 20000 (20K) when working fully matching word doc spec (≈17K across data classes e.g, ESOL, BACE etc)
+                # zero values for max-pretrain-batches and max-finetune-batches mean no limit
+                # time-budget-mins 0 means no time limit
+                # moleculenet dataset, column "measured log solubility in mols per litre" is used for regression task
                 set +e
                 set -o pipefail
                 "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
@@ -719,7 +721,7 @@ jobs:
           command_timeout: 30m         # <-- default is 10m; bump this - keep in sync with run command below
           script: |
             set -euxo pipefail
-            mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$LOG_DIR"
+            mkdir -p "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR"
 
             # --- locate micromamba robustly ---
             if command -v micromamba >/dev/null 2>&1; then
@@ -985,7 +987,7 @@ jobs:
                 BEST_GRID_JSON="/data/mjepa/experiments/latest/grid/best_grid_config.json"
               fi
                
-              mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$LOG_DIR"
+              mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR"
 
               CKPT_DIR="$FINETUNE_DIR"
               RESUME_ARGS=()
@@ -1162,7 +1164,7 @@ jobs:
               fi
 
               # persistent locations (idempotent)
-              mkdir -p "$BENCH_DIR" "$LOG_DIR" "$BENCH_DIR/reports"
+              mkdir -p "$BENCH_DIR" "$LOG_DIR" "$BENCH_DIR/reports" 
 
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
 
