@@ -9,15 +9,15 @@ on:
       force_refresh:
         description: "Ignore cached outputs"
         required: false
-        default: "false"
+        default: "true"
       run_unit_tests:
         description: "Run unit tests"
         required: false
-        default: "false"
+        default: "true"
       run_vast_jobs:
         description: "Run Vast deployment and training jobs"
         required: false
-        default: "false"
+        default: "true"
       grid_cache_dir:
         description: "Override grid cache directory"
         required: false
