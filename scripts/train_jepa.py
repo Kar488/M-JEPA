@@ -607,13 +607,13 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         # If resuming, load model/optimizer states
         if ckpt_state:
             if "encoder" in ckpt_state:
-                encoder._load_state_dict_forgiving(ckpt_state["encoder"])
+                _load_state_dict_forgiving(encoder, ckpt_state["encoder"])
             if "ema_encoder" in ckpt_state:
-                ema_encoder._load_state_dict_forgiving(ckpt_state["ema_encoder"])
+                _load_state_dict_forgiving(ema_encoder, ckpt_state["ema_encoder"])
             if "predictor" in ckpt_state:
-                predictor._load_state_dict_forgiving(ckpt_state["predictor"])
+                _load_state_dict_forgiving(predictor, ckpt_state["predictor"])
             if "ema" in ckpt_state and hasattr(ema_helper, "load_state_dict"):
-                ema_helper._load_state_dict_forgiving(ckpt_state["ema"])
+                _load_state_dict_forgiving(ema_helper, ckpt_state["ema"])
             start_epoch = ckpt_state.get("epoch", 0) + 1
 
         # Augmentation kwargs for JEPA pretraining
