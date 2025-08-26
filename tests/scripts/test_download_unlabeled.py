@@ -24,6 +24,16 @@ from scripts.download_unlabeled import (
 )
 
 
+def require_parquet_engine():
+    try:
+        import pyarrow  # type: ignore  # noqa: F401
+    except Exception:  # pragma: no cover
+        try:
+            import fastparquet  # type: ignore  # noqa: F401
+        except Exception:  # pragma: no cover
+            pytest.skip("pyarrow or fastparquet is required for parquet support")
+
+
 @pytest.fixture(autouse=True)
 def mock_graphdataset(monkeypatch):
     import numpy as np
@@ -98,7 +108,7 @@ def test_stream_pubchem_http_error(monkeypatch):
 
 
 def test_save_shards(tmp_path):
-    pytest.importorskip("pyarrow")
+    require_parquet_engine()
     smiles = ["C", "O", "N"]
     save_shards(smiles, tmp_path, shard_size=2)
     files = sorted(p.name for p in tmp_path.glob("*.parquet"))
@@ -110,7 +120,7 @@ def test_save_shards(tmp_path):
 
 
 def test_save_parquet(tmp_path):
-    pytest.importorskip("pyarrow")
+    require_parquet_engine()
     out_file = tmp_path / "mols.parquet"
     save_parquet(["C", "O"], out_file)
     assert out_file.exists()
@@ -120,7 +130,7 @@ def test_save_parquet(tmp_path):
 
 
 def test_cli_main(monkeypatch, tmp_path):
-    pytest.importorskip("pyarrow")
+    require_parquet_engine()
     def fake_stream_zinc(batch_size, start_page=1, sleep=0.5):
         yield 1, ["C"]
 

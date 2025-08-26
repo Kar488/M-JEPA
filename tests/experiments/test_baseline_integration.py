@@ -5,7 +5,16 @@ import pytest
 
 from experiments import baseline_integration as bi
 
-pytest.importorskip("pyarrow")
+try:
+    import pyarrow  # type: ignore  # noqa: F401
+except Exception:  # pragma: no cover
+    try:
+        import fastparquet  # type: ignore  # noqa: F401
+    except Exception:  # pragma: no cover
+        pytest.skip(
+            "pyarrow or fastparquet is required for parquet tests",
+            allow_module_level=True,
+        )
 
 
 def test_concat_dir_to_csv(tmp_path, wb):

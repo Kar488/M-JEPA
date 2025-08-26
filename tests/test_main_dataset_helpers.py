@@ -55,7 +55,13 @@ pd = pytest.importorskip("pandas")
 try:
     import pyarrow  # type: ignore  # noqa: F401
 except Exception:  # pragma: no cover
-    pytest.importorskip("fastparquet")
+    try:
+        import fastparquet  # type: ignore  # noqa: F401
+    except Exception:  # pragma: no cover
+        pytest.skip(
+            "pyarrow or fastparquet is required for parquet tests",
+            allow_module_level=True,
+        )
 
 
 def test_build_unlabeled_dataset_fallback(monkeypatch):
