@@ -141,7 +141,7 @@ jobs:
     needs: vast_smoke
     steps:
       - uses: actions/checkout@v4
-      - name: Deploy, install deps (CUDA)
+      - name: Bootstrap environment
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VAST_HOST }}
@@ -154,6 +154,10 @@ jobs:
           script: |
             set -e
             mkdir -p "$APP_DIR"
+            if [ ! -x "$HOME/micromamba/bin/micromamba" ]; then
+              mkdir -p "$HOME/micromamba"
+              curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C "$HOME/micromamba" bin/micromamba
+            fi
             echo "Prepared environment at $APP_DIR"
       - name: Sync repository
         uses: appleboy/scp-action@v0.1.7
@@ -180,10 +184,6 @@ jobs:
           script: |
             set -e
             cd "$APP_DIR"
-            if [ ! -x "$HOME/micromamba/bin/micromamba" ]; then
-              mkdir -p "$HOME/micromamba"
-              curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C "$HOME/micromamba" bin/micromamba
-            fi
             export MAMBA_ROOT_PREFIX
             eval "$("$HOME/micromamba/bin/micromamba" shell hook -s bash)"
             if ! micromamba env list | grep -q '^mjepa'; then
