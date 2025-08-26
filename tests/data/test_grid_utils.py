@@ -90,6 +90,7 @@ def test_build_configs_and_normalize(gs_module):
         pretrain_epochs_options=(1,),
         finetune_epochs_options=(1,),
         lrs=(1e-3,),
+        temperatures=(0.1,),
     )
     assert len(cfgs) == 2
     assert isinstance(cfgs[0], gs_module.Config)

@@ -526,6 +526,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "lr": args.lr,
+            "temperature": args.temperature,
             "ema_decay": args.ema_decay,
             "contrastive": args.contrastive,
         },
@@ -676,7 +677,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     use_wandb=args.use_wandb,
                     wandb_project=args.wandb_project,
                     wandb_tags=args.wandb_tags,
-                    disable_tqdm=True,  # suppress single‑epoch progress bars
+                    disable_tqdm=not getattr(args, "force_tqdm", False)
+                        and not sys.stdout.isatty(),  # suppress single‑epoch progress bars
                     # dataloader & AMP knobs
                     num_workers=getattr(args, "num_workers", 0),
                     pin_memory=getattr(args, "pin_memory", True),
@@ -734,6 +736,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     batch_size=args.batch_size,
                     mask_ratio=args.mask_ratio,
                     lr=args.lr,
+                    temperature=args.temperature,
                     device=device,
                     use_wandb=args.use_wandb,
                     random_rotate=aug_cfg.rotate,
@@ -741,7 +744,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     perturb_dihedral=aug_cfg.dihedral,
                     wandb_project=args.wandb_project,
                     wandb_tags=args.wandb_tags,
-                    disable_tqdm=True,  # suppress single‑epoch progress bars
+                    disable_tqdm=not getattr(args, "force_tqdm", False)
+                        and not sys.stdout.isatty(),  # suppress single‑epoch progress bars
                     # dataloader & AMP knobs
                     num_workers=getattr(args, "num_workers", 0),
                     pin_memory=getattr(args, "pin_memory", True),
@@ -1605,6 +1609,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             "pretrain_epochs_options": args.pretrain_epochs_options,
             "finetune_epochs_options": args.finetune_epochs_options,
             "learning_rates": args.learning_rates,
+            "temperatures": args.temperatures,
             "seeds": seeds,
         },
     )
@@ -1647,6 +1652,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             pretrain_epochs_options=tuple(args.pretrain_epochs_options),
             finetune_epochs_options=tuple(args.finetune_epochs_options),
             lrs=tuple(args.learning_rates),
+            temperatures=tuple(args.temperatures),
             device=args.device,
             use_wandb=args.use_wandb,
             ckpt_dir=args.ckpt_dir,
@@ -1917,6 +1923,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=CONFIG.get("plot_dir", "plots"),
         help="Directory to save training plots",
     )
+    pre.add_argument(
+        "--force-tqdm",
+        action="store_true",
+        help="Force-enable tqdm progress bars even when not attached to a TTY",
+    )
+    pre.add_argument("--temperatures", type=float, default=0.1,
+                     help="InfoNCE temperature (contrastive only)")
 
     _add_common_args(pre, "pretrain")
     pre.set_defaults(func=cmd_pretrain)
@@ -2378,6 +2391,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Ignore cached grid search outputs and recompute",
     )
+    grid.add_argument("--temperatures", type=float, nargs="+", default=[0.1],
+                      help="List of InfoNCE temperatures to try (contrastive only)")
     # Optimisation for GPU
     grid.add_argument("--prefetch-factor", type=int, default=4,
                     help="Dataloader prefetch factor (workers>0 only).")

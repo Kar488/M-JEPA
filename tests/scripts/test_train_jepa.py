@@ -103,6 +103,7 @@ def test_cmd_pretrain_missing_ema(monkeypatch, tmp_path):
         epochs=1,
         batch_size=1,
         lr=0.001,
+        temperature=(0.1),
         ema_decay=0.99,
         contrastive=False,
         output=str(tmp_path / "encoder.pt"),

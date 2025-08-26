@@ -56,6 +56,7 @@ def make_args(
         epochs=1,
         batch_size=1,
         lr=0.001,
+        temperature=0.1,
         ema_decay=0.99,
         contrastive=contrastive,
         output=str(tmp_path / "encoder.pt"),

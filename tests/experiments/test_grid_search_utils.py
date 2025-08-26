@@ -126,6 +126,7 @@ def test_build_configs_cartesian_product(gs_module):
         pretrain_epochs_options=(1,),
         finetune_epochs_options=(1,),
         lrs=(1e-3,),
+        temperatures=(0.1,),
     )
     assert len(cfgs) == 8
     assert {cfg.mask_ratio for cfg in cfgs} == {0.1, 0.2}
@@ -170,6 +171,7 @@ def test_run_grid_search_integration(gs_module, monkeypatch, caplog):
             pretrain_epochs_options=(1,),
             finetune_epochs_options=(1,),
             lrs=(1e-3,),
+            temperatures=(0.1,),
             device="cpu",
             disable_tqdm=True,
         )

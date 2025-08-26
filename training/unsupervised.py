@@ -540,33 +540,42 @@ def train_contrastive(
                 v1 = generate_views(g, structural_ops=struct_ops, geometric_ops=geom_ops)[0]
                 v2 = generate_views(g, structural_ops=struct_ops, geometric_ops=geom_ops)[0]
                 with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
-                    h1 = _ensure_2d(_encode(encoder, v1, device_t))
-                    h2 = _ensure_2d(_encode(encoder, v2, device_t))
-                    if isinstance(proj[0], nn.Linear) and proj[0].in_features != h1.size(1):
-                        # swap first layer to match encoder dim, then rebuild optimizer once
-                        proj[0] = nn.Linear(h1.size(1), proj[0].out_features).to(device_t)
+
+                    # node features for each view
+                    # move graphs to the model's device if they support .to(), then encode
+                    g1 = v1.to(device_t) if hasattr(v1, "to") else v1
+                    g2 = v2.to(device_t) if hasattr(v2, "to") else v2
+                    h1_nodes = _ensure_2d(_encode_graph(encoder, g1))   # [N1, D]
+                    h2_nodes = _ensure_2d(_encode_graph(encoder, g2))   # [N2, D]
+
+                    # pool to **graph-level** embeddings (one vector per graph)
+                    g1_pool = _ensure_2d(_pool_graph_emb(h1_nodes, v1))                 # [1, D]
+                    g2_pool = _ensure_2d(_pool_graph_emb(h2_nodes, v2))                 # [1, D]
+
+                    # projector expects the pooled feature dim
+                    if isinstance(proj[0], nn.Linear) and proj[0].in_features != g1_pool.size(1):
+                        proj[0] = nn.Linear(g1_pool.size(1), proj[0].out_features).to(device_t)
                         opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
-                    
-                    z1_list.append(proj(h1))
-                    z2_list.append(proj(h2))
-            z1 = torch.nan_to_num(
-                F.normalize(torch.cat(z1_list, dim=0), dim=-1)
-            )
-            z2 = torch.nan_to_num(
-                F.normalize(torch.cat(z2_list, dim=0), dim=-1)
-            )
+                    z1_list.append(proj(g1_pool))                                      # [1, P]
+                    z2_list.append(proj(g2_pool))                                      # [1, P]
+
+            # stack to [B, P] and normalize
+            z1 = torch.nan_to_num(F.normalize(torch.cat(z1_list, dim=0), dim=-1))
+            z2 = torch.nan_to_num(F.normalize(torch.cat(z2_list, dim=0), dim=-1))
+
+
             # --- new safety + symmetric loss logic ---
-            n1, n2 = z1.size(0), z2.size(0)
-            N = min(n1, n2)
+            N = z1.size(0)
             if N < 2:
-                continue  # skip degenerate tiny batch
-            if n1 != n2:
-                z1 = z1[:N]
-                z2 = z2[:N]
+                continue
 
             with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
-                logits_12 = (z1 @ z2.t()) / temperature   # [N, N]
-                logits_21 = (z2 @ z1.t()) / temperature   # [N, N]
+                logits_12 = (z1 @ z2.t()) / float(temperature)   # [N, N]
+                with torch.no_grad():
+                    pos = logits_12.diag().mean().item()
+                    neg = ((logits_12.sum() - logits_12.diag().sum()) / (N*(N-1))).item()
+                    wb and wb.log({"diag/pos_minus_neg": pos - neg, "diag/lnN": math.log(N)}, commit=False)
+                logits_21 = logits_12.t()
 
                 # NOTE: Do NOT mask the diagonal here.
                 # In the N×N (z1 @ z2.T) setup, the diagonal entries are the positives.

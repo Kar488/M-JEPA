@@ -658,9 +658,10 @@ jobs:
                   --add-3d-options 1 \
                   --pretrain-batch-sizes 64 128 256 \
                   --finetune-batch-sizes 128 256 \
+                  --temperatures 0.07 0.1 0.2 \
                   --pretrain-epochs-options 30 50 \
                   --finetune-epochs-options 1 \
-                  --learning-rates 1e-4 \
+                  --learning-rates 3e-4 1e-4 \
                   --seeds 1 2 3 \
                   --sample-unlabeled 50000 \
                   --sample-labeled 5000 \
@@ -824,6 +825,7 @@ jobs:
             if bool(cfg.get("contiguous", cfg.get("contiguity"))): args.append("--contiguous")
             add("--ema-decay",   cfg.get("ema_decay"))
             add("--lr",          cfg.get("lr"))
+            add("--temperature", cfg.get("temperature", 0.1))
             add("--epochs",      cfg.get("pretrain_epochs", cfg.get("epochs", 20)))
             add("--batch-size",  cfg.get("pretrain_bs", cfg.get("pretrain_batch_size", cfg.get("batch_size", 4))))
             if "seeds" in cfg and cfg.get("seeds") is not None:
@@ -900,6 +902,7 @@ jobs:
               --prefetch-factor 4 \
               --persistent-workers \
               --pin-memory \
+              --force-tqdm \
               --bf16 \
               --ckpt-dir "$CKPT_DIR" \
               --save-every 1 \
@@ -1040,6 +1043,9 @@ jobs:
               add("--epochs",     cfg.get("finetune_epochs", cfg.get("epochs")))
               add("--batch-size", cfg.get("finetune_bs", cfg.get("finetune_batch_size", cfg.get("batch_size"))))
               add("--lr",         cfg.get("finetune_lr", cfg.get("lr")))
+              add("--temperature", cfg.get("temperature", 0.1))
+              if "seeds" in cfg and cfg.get("seeds") is not None:
+                add("--seeds", cfg["seeds"])
 
               print("\n".join(args))
               PY
@@ -1233,6 +1239,9 @@ jobs:
               add("--batch-size", cfg.get("bench_bs", cfg.get("bench_batch_size", cfg.get("batch_size"))))
               add("--epochs",     cfg.get("bench_epochs", cfg.get("epochs")))  # if your bench subcommand supports it
               add("--lr",         cfg.get("bench_lr", cfg.get("lr")))
+              add("--temperature", cfg.get("temperature", 0.1))
+              if "seeds" in cfg and cfg.get("seeds") is not None:
+                add("--seeds", cfg["seeds"])
 
               print("\n".join(args))
               PY
@@ -1365,6 +1374,9 @@ jobs:
               add("--batch-size", cfg.get("tox21_bs", cfg.get("batch_size")))
               add("--epochs",     cfg.get("tox21_epochs", cfg.get("epochs")))
               add("--lr",         cfg.get("tox21_lr", cfg.get("lr")))
+              add("--temperature", cfg.get("temperature", 0.1))
+              if "seeds" in cfg and cfg.get("seeds") is not None:
+                add("--seeds", cfg["seeds"])
 
               print("\n".join(args))
               PY

@@ -91,6 +91,7 @@ class Config:
     pretrain_epochs: int
     finetune_epochs: int
     lr: float
+    temperature: float
 
 
 @dataclass
@@ -219,6 +220,7 @@ def _build_configs(
     pretrain_epochs_options: Iterable[int],
     finetune_epochs_options: Iterable[int],
     lrs: Iterable[float],
+    temperatures: Iterable[float],
 ) -> List[Config]:
     combos = product(
         mask_ratios,
@@ -234,6 +236,7 @@ def _build_configs(
         pretrain_epochs_options,
         finetune_epochs_options,
         lrs,
+        temperatures,
     )
     configs = [
         Config(
@@ -250,6 +253,7 @@ def _build_configs(
             pretrain_epochs=pre_epochs,
             finetune_epochs=finetune_epochs,
             lr=lr,
+            temperature=temperature,
         )
         for (
             mask_ratio,
@@ -265,6 +269,7 @@ def _build_configs(
             pre_epochs,
             finetune_epochs,
             lr,
+            temperature,
         ) in combos
     ]
     logger.debug("Generated %d grid search configurations", len(configs))
@@ -743,8 +748,8 @@ def _run_one_config_method(
                     batch_size=cfg.pretrain_bs,
                     mask_ratio=cfg.mask_ratio,
                     lr=cfg.lr,
+                    temperature=cfg.temperature,
                     device=device,
-                    temperature=0.1,
                     use_wandb=use_wandb,
                     ckpt_path=f"{ckpt_dir}/contrast",
                     ckpt_every=ckpt_every,
@@ -772,8 +777,8 @@ def _run_one_config_method(
                     batch_size=cfg.pretrain_bs,
                     mask_ratio=cfg.mask_ratio,
                     lr=cfg.lr,
+                    temperature=cfg.temperature,
                     device=device,
-                    temperature=0.1,
                     random_rotate=_rot,
                     mask_angle=_ang,
                     perturb_dihedral=_dih,
@@ -930,6 +935,7 @@ def run_grid_search(
     pretrain_epochs_options: Tuple[int, ...] = (50,),
     finetune_epochs_options: Tuple[int, ...] = (30,),
     lrs: Tuple[float, ...] = (1e-4,),
+    temperatures: Tuple[float, ...] = (0.1,0.2),
     device: str = "cuda",
     n_jobs: int = 0,
     use_wandb: bool = False,
@@ -988,6 +994,7 @@ def run_grid_search(
         pretrain_epochs_options,
         finetune_epochs_options,
         lrs,
+        temperatures,
     )
 
     # ---------------- dataset wiring ----------------

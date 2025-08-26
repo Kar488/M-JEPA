@@ -215,6 +215,8 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
         ```
   6) Ensure we are using the larger disk space in vast instance
 
+      Code enables to right directory already but just in case
+
       ```bash
       # make sure project is at /srv/mjepa (or your repo root)
       cd /srv/mjepa
@@ -257,12 +259,21 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
       # check space
       df -h / /data
+      ```
+
+  7) Other tasks - such as monitoring and cache enabling of grid search, pre train and fine tune
+
+      cache grid etc
+      set force_refresh to false in ci-vast
+
+      ```bash
 
       #GPU consumption
       watch -n 1 nvidia-smi
       nvidia-smi --query-gpu=timestamp,index,name,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu,power.draw \
            --format=csv,noheader,nounits --loop=1 \
            --filename /data/mjepa/experiments/$RUN_ID/logs/nv_smi.csv
-      ```
 
-      
+      #thread dump on train jepa
+      kill -USR1 <python-pid> 
+      ```
