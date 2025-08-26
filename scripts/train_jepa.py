@@ -36,6 +36,20 @@ import numpy as np
 import torch
 import yaml
 
+#TODO remove later
+# Optional: enable stack dumps on SIGUSR1 (POSIX). Skip gracefully elsewhere e.g, local desktop on windows
+try:
+    import faulthandler, signal
+    _sig = getattr(signal, "SIGUSR1", None)
+    if _sig is not None and hasattr(faulthandler, "register"):
+        faulthandler.register(_sig, all_threads=True)
+    else:
+        # Fallback: at least turn on faulthandler so fatal errors dump traces.
+        faulthandler.enable()
+except Exception:
+    pass
+#kill -USR1 <python-pid>   # stacks will print into log/console
+
 try:
     from data.augment import iter_augmentation_options  # type: ignore
 except Exception:

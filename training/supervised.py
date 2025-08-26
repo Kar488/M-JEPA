@@ -221,6 +221,11 @@ def train_linear_head(
 
     distributed = devices > 1 and init_distributed()
     device_t = torch.device(device)
+    # unify to encoder's device in case 'device' arg and model diverge
+    enc_param = next(encoder.parameters(), None)
+    if enc_param is not None:
+        device_t = enc_param.device
+
     encoder = encoder.to(device_t)
     for p in encoder.parameters():
         p.requires_grad = False
@@ -297,7 +302,8 @@ def train_linear_head(
             batch_x, batch_adj, batch_ptr, batch_labels = dataset.get_batch(batch_indices)
 
             batch_x  = batch_x.to(device_t, non_blocking=True)
-            batch_x  = batch_x.to(device_t, non_blocking=True)
+            batch_adj = batch_adj.to(device_t, non_blocking=True)
+            batch_ptr = batch_ptr.to(device_t, non_blocking=True) if batch_ptr is not None else None
             
             # autocast for the forward path (bf16 on 4090; else full precision)
             _amp_ctx = (
@@ -305,10 +311,11 @@ def train_linear_head(
                 if (bf16 and device_t.type == "cuda")
                 else contextlib.nullcontext()
             )
+
             with torch.no_grad():
                 with _amp_ctx:
                     node_emb = encoder(batch_x, batch_adj)
-                    graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+                    graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t)) if batch_ptr is not None else node_emb.mean(dim=0, keepdim=True)
 
             num_graphs = batch_ptr.numel() - 1
             if graph_emb.shape[0] != num_graphs:
@@ -357,13 +364,14 @@ def train_linear_head(
             for start in range(0, len(val_idx), batch_size):
                 batch_indices = val_idx[start : start + batch_size]
                 batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
-                batch_x = batch_x.to(device_t)
-                batch_adj = batch_adj.to(device_t)
+                batch_x   = batch_x.to(device_t, non_blocking=True)
+                batch_adj = batch_adj.to(device_t, non_blocking=True)
+                batch_ptr = batch_ptr.to(device_t, non_blocking=True) if batch_ptr is not None else None 
 
                 with torch.no_grad():
                     with _amp_ctx:
                         node_emb = encoder(batch_x, batch_adj)
-                        graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+                        graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t)) if batch_ptr is not None else node_emb.mean(dim=0, keepdim=True)
                 
                 num_graphs = batch_ptr.numel() - 1
                 if graph_emb.shape[0] != num_graphs:
@@ -401,11 +409,12 @@ def train_linear_head(
             batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
             batch_x  = batch_x.to(device_t, non_blocking=True)
             batch_adj= batch_adj.to(device_t, non_blocking=True)
+            batch_ptr = batch_ptr.to(device_t, non_blocking=True) if batch_ptr is not None else None 
             
             with torch.no_grad():
                 with _amp_ctx:
                     node_emb = encoder(batch_x, batch_adj)
-                    graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+                    graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t)) if batch_ptr is not None else node_emb.mean(dim=0, keepdim=True)
 
             num_graphs = batch_ptr.numel() - 1
             if graph_emb.shape[0] != num_graphs:
