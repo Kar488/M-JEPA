@@ -86,7 +86,9 @@ jobs:
             channels:
               - conda-forge
           create-args: >-
+
             python=3.10 rdkit=2023.09.5 scipy=1.10.* pip
+
       - name: Install deps
         run: |
           micromamba run -n mjepa python -m pip install --no-deps deepchem==2.8.0
