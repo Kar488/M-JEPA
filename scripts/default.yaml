@@ -24,6 +24,7 @@ pretrain:
     mask_angle: false   # Mask bond angles
     dihedral: false     # Perturb dihedral angles
   contrastive: false    # Whether to also train a contrastive baseline
+  seeds: [0]            # Random seeds for pretraining
 
 finetune:
   epochs: 50            # Training epochs for the linear probe

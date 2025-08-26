@@ -536,6 +536,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             except Exception: pass
 
     from utils.checkpoint import load_checkpoint, save_checkpoint
+    import random
 
     # Resume state
     args.ckpt_dir = getattr(args, "ckpt_dir", "ckpts/pretrain")
@@ -557,7 +558,16 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             if args.seeds is not None and len(args.seeds) > 0:
                 seeds = tuple(args.seeds)
             else:
-                seeds = tuple(CONFIG.get("finetune", {}).get("seeds", [42, 123, 456]))
+                seeds = tuple(CONFIG.get("pretrain", {}).get("seeds", [0]))
+
+            seed = int(seeds[0]) if seeds else 0
+
+
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+            random.seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
             
             # Sample a subset of the unlabeled dataset if requested.  Use getattr to
             # avoid AttributeError when the caller hasn’t set sample_unlabeled.
@@ -1039,8 +1049,9 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                         current = None
                 if current is not None and _is_better(current, best_metric):
                     best_metric = current
+                    best_path = os.path.join(seed_dir, "ft_best.pt")
                     save_checkpoint(
-                        os.path.join(seed_dir, "ft_best.pt"),
+                        best_path,
                         epoch=epoch,
                         encoder=encoder.state_dict(),
                         head=head.state_dict(),
@@ -1048,6 +1059,16 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                         scheduler=scheduler.state_dict(),
                         best_metric=best_metric,
                     )
+
+                    # optional: stable link at the finetune root
+                    try:
+                        link = os.path.join(args.ckpt_dir, "head.pt")
+                        if os.path.islink(link) or os.path.exists(link):
+                            os.remove(link)
+                        os.symlink(best_path, link)
+                    except Exception:
+                        logger.warning("Could not create head.pt symlink", exc_info=True)
+
                 # periodic (and last-epoch) snapshot
                 if ((epoch + 1) % save_every == 0) or ((epoch + 1) == args.epochs):
                     save_payload = {"epoch": epoch}
@@ -1172,6 +1193,13 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         dict with key 'encoder'). Always trains a fresh linear head for fairness.
         """
         metrics_runs: List[Dict[str, float]] = []
+        prev_det = None
+        try:
+            prev_det = torch.are_deterministic_algorithms_enabled()
+            torch.use_deterministic_algorithms(True)
+        except Exception:
+            prev_det = None
+
         for seed in seeds:
             # Repro
             torch.manual_seed(seed)
@@ -1181,7 +1209,8 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             except Exception:
                 pass
             try:
-                torch.use_deterministic_algorithms(True)
+                if prev_det is not None:
+                    torch.use_deterministic_algorithms(True)
             except Exception:
                 pass
 
