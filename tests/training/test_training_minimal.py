@@ -1,16 +1,16 @@
+import importlib
 import sys
 import types
 from dataclasses import dataclass
 
 import numpy as np
-import torch
 import pytest
+import torch
 
 pytest.importorskip("sklearn")
 from sklearn.metrics import brier_score_loss
+from training.train_on_embeddings import train_linear_on_embeddings_classification
 
-# Stubs for modules requiring optional dependencies
-data_dataset = types.ModuleType("data.mdataset")
 
 @dataclass
 class GraphData:
@@ -26,11 +26,6 @@ class GraphDataset:
     def __len__(self):
         return len(self.graphs)
 
-data_dataset.GraphData = GraphData
-data_dataset.GraphDataset = GraphDataset
-sys.modules["data.mdataset"] = data_dataset
-
-utils_pooling = types.ModuleType("utils.pooling")
 
 def global_mean_pool(node_embeddings, graph_ptr=None):
     if graph_ptr is None:
@@ -42,11 +37,6 @@ def global_mean_pool(node_embeddings, graph_ptr=None):
         start = int(end)
     return torch.stack(out, dim=0)
 
-utils_pooling.global_mean_pool = global_mean_pool
-sys.modules["utils.pooling"] = utils_pooling
-
-# data.augment stub
-data_augment = types.ModuleType("data.augment")
 
 @dataclass(frozen=True)
 class AugmentationConfig:
@@ -63,11 +53,14 @@ class AugmentationConfig:
             dihedral=bool(cfg.get("dihedral", False)),
         )
 
+
 def apply_graph_augmentations(g, **kwargs):
     return g
 
+
 def mask_subgraph(g, mask_ratio, contiguous):
     return g, g
+
 
 def generate_views(graph, structural_ops=None, geometric_ops=None):
     if structural_ops:
@@ -77,14 +70,37 @@ def generate_views(graph, structural_ops=None, geometric_ops=None):
         return [out]
     return [graph]
 
-data_augment.apply_graph_augmentations = apply_graph_augmentations
-data_augment.mask_subgraph = mask_subgraph
-data_augment.generate_views = generate_views
-data_augment.AugmentationConfig = AugmentationConfig
-sys.modules["data.augment"] = data_augment
 
-from training.unsupervised import train_jepa
-from training.train_on_embeddings import train_linear_on_embeddings_classification
+@pytest.fixture()
+def stub_data_modules(monkeypatch):
+    data_dataset = types.ModuleType("data.mdataset")
+    data_dataset.GraphData = GraphData
+    data_dataset.GraphDataset = GraphDataset
+    monkeypatch.setitem(sys.modules, "data.mdataset", data_dataset)
+
+    utils_pooling = types.ModuleType("utils.pooling")
+    utils_pooling.global_mean_pool = global_mean_pool
+    monkeypatch.setitem(sys.modules, "utils.pooling", utils_pooling)
+
+    data_augment = types.ModuleType("data.augment")
+    data_augment.apply_graph_augmentations = apply_graph_augmentations
+    data_augment.mask_subgraph = mask_subgraph
+    data_augment.generate_views = generate_views
+    data_augment.AugmentationConfig = AugmentationConfig
+    monkeypatch.setitem(sys.modules, "data.augment", data_augment)
+
+    yield
+
+    for mod in [
+        "data.mdataset",
+        "utils.pooling",
+        "data.augment",
+        "training.unsupervised",
+    ]:
+        sys.modules.pop(mod, None)
+
+    import data.mdataset as real_ds
+    importlib.reload(real_ds)
 
 
 def make_graph():
@@ -94,7 +110,9 @@ def make_graph():
     return GraphData(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
 
-def test_train_jepa_minimal_epoch():
+def test_train_jepa_minimal_epoch(stub_data_modules):
+    from training.unsupervised import train_jepa
+
     g = make_graph()
     dataset = GraphDataset([g])
 
