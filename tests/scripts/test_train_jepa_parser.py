@@ -134,3 +134,4 @@ def test_grid_search_parser_defaults_and_handler(tmp_path):
     assert args.dataset_dir == str(tmp_path)
     assert args.wandb_project == CONFIG["wandb"]["project"]
     assert args.wandb_tags == CONFIG["wandb"].get("tags", [])
+    assert args.target_pretrain_samples == 0

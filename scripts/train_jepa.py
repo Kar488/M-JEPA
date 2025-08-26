@@ -1763,6 +1763,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             out_csv=args.out_csv,
             # If your run_grid_search signature supports these, they’ll be used;
             # otherwise they’ll be ignored (or remove them here).
+            target_pretrain_samples=getattr(args, "target_pretrain_samples", 0),
             max_pretrain_batches=getattr(args, "max_pretrain_batches", 0),
             max_finetune_batches=getattr(args, "max_finetune_batches", 0),
             time_budget_mins=getattr(args, "time_budget_mins", 0),
@@ -2484,6 +2485,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="If >0, stop each pretrain epoch after this many batches.",
+    )
+    grid.add_argument(
+        "--target-pretrain-samples",
+        type=int,
+        default=0,
+        help="If >0, cap each trial to roughly this many pretrain samples",
     )
     grid.add_argument(
         "--max-finetune-batches",
