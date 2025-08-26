@@ -46,12 +46,17 @@ except Exception:  # pragma: no cover - fallback stubs
             yield AugmentationConfig(random_rotate=r, mask_angle=m, perturb_dihedral=d)
 
 
-from data.mdataset import GraphDataset
-from models.ema import EMA
-from models.encoder import GNNEncoder
-from models.predictor import MLPPredictor
-from training.supervised import train_linear_head
-from training.unsupervised import train_jepa
+# ``experiments.ablation`` is exercised heavily in the test-suite where most of
+# its heavy dependencies (``torch`` modules, real dataset implementations, etc.)
+# are replaced by light-weight stubs.  If this module is imported *before* the
+# monkeypatching takes place we would bind the original implementations above
+# and subsequent tests would still use them, defeating the stubs.  To make the
+# behaviour robust we avoid importing these modules at file import time and
+# instead resolve them lazily inside :func:`run_ablation` (and helper functions
+# where appropriate).
+
+# NOTE: typing is still satisfied thanks to ``from __future__ import
+# annotations`` at the top of this file.
 
 # --- helpers ---------------------------------------------------------------
 
@@ -59,13 +64,15 @@ from training.unsupervised import train_jepa
 def _safe_dataset(smiles_list, labels):
     """Return ``(dataset_instance, is_dummy)``.
 
-    If :meth:`GraphDataset.from_smiles_list` is unavailable, create a minimal
-    dataset containing placeholder :class:`GraphData` instances so that call
-    sites expecting ``dataset.graphs`` can still operate without raising
-    ``NoneType`` errors.
+    ``experiments.ablation`` needs only a very small subset of the dataset
+    interface.  Tests often monkeypatch :mod:`data.mdataset` with a simple stub
+    module.  Importing :class:`GraphDataset` inside this helper allows those
+    patches to take effect even if :mod:`experiments.ablation` was imported
+    before the patching occurred.
     """
 
-    try:
+    try:  # Resolve the (possibly monkeypatched) GraphDataset lazily
+        from data.mdataset import GraphDataset  # type: ignore
         ds = GraphDataset.from_smiles_list(smiles_list, labels=labels)
         return ds, False
     except AttributeError:
@@ -119,7 +126,7 @@ class Config(NamedTuple):
 
 
 def run_ablation(
-    augmentations: AugmentationConfig = AugmentationConfig(),
+    augmentations: AugmentationConfig | None = None,
     *,
     # Real-run inputs (optional): pass either datasets OR SMILES+labels
     dataset_class: Optional[object] = None,
@@ -146,6 +153,23 @@ def run_ablation(
     with `epochs_pretrain` (default 1). If nothing is provided, we fall back to a
     tiny toy set for tests and auto-set pretrain epochs to 0 (no-op).
     """
+    # Import core dependencies lazily so that tests can monkeypatch them even if
+    # this module was imported earlier with the real implementations.
+    try:  # The augmentation utilities may be monkeypatched in tests
+        from data.augment import AugmentationConfig as _AugCfg, iter_augmentation_options
+    except Exception:  # pragma: no cover - fall back to local stubs
+        _AugCfg = AugmentationConfig  # type: ignore[assignment]
+        iter_augmentation_options = globals()["iter_augmentation_options"]  # type: ignore[assignment]
+
+    from models.encoder import GNNEncoder
+    from models.ema import EMA
+    from models.predictor import MLPPredictor
+    from training.supervised import train_linear_head
+    from training.unsupervised import train_jepa
+
+    if augmentations is None:
+        augmentations = _AugCfg()
+
     auto_dummy = False
     if dataset_class is None or dataset_reg is None:
         if smiles_list is None:
