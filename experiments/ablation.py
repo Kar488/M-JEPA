@@ -7,6 +7,17 @@ from typing import Dict, List, NamedTuple, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+try:  # pragma: no cover - optional dependency in tests
+    import torch
+
+    if not hasattr(torch, "is_grad_enabled"):  # type: ignore[attr-defined]
+        # Older or stubbed versions of ``torch`` used in the test suite may not
+        # provide :func:`is_grad_enabled`.  Define a no-op substitute so that
+        # any accidental access does not raise ``AttributeError``.
+        torch.is_grad_enabled = lambda: False  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover - torch genuinely unavailable
+    pass
+
 try:  # augmentation utilities are optional in some tests
     from data.augment import AugmentationConfig, iter_augmentation_options
 except Exception:  # pragma: no cover - fallback stubs
