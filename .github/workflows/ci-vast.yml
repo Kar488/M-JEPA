@@ -644,42 +644,26 @@ jobs:
                 # moleculenet dataset, column "measured log solubility in mols per litre" is used for regression task
                 set +e
                 set -o pipefail
+                GRID_STR="$("$MMBIN" run -n mjepa python - <<'PY'
+import yaml, os
+cfg = yaml.safe_load(open('scripts/train_jepa_ci.yml')).get('grid_search', {})
+args = []
+for k, v in cfg.items():
+    flag = '--' + k.replace('_', '-')
+    if isinstance(v, bool):
+        if v:
+            args.append(flag)
+    elif isinstance(v, list):
+        args.append(flag)
+        args.extend([str(x) for x in v])
+    else:
+        args.extend([flag, os.path.expandvars(str(v))])
+print('\n'.join(args))
+PY
+                )"
+                readarray -t GRID_ARR <<< "$GRID_STR"
                 "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
-                  --unlabeled-dir data/ZINC-canonicalized \
-                  --labeled-dir data/katielinkmoleculenet_benchmark/train \
-                  --label-col "measured log solubility in mols per litre" \
-                  --cache-dir "$CACHE_DIR" \
-                  --task-type regression \
-                  --methods jepa contrastive \
-                  --mask-ratios 0.15 0.3 0.5 \
-                  --contiguities 0 1 \
-                  --hidden-dims 256 \
-                  --num-layers-list 3 \
-                  --gnn-types mpnn \
-                  --ema-decays 0.996 0.998 0.999 \
-                  --add-3d-options 1 \
-                  --pretrain-batch-sizes 64 128 256 \
-                  --finetune-batch-sizes 128 256 \
-                  --temperatures 0.07 0.1 0.2 \
-                  --pretrain-epochs-options 30 50 \
-                  --finetune-epochs-options 1 \
-                  --learning-rates 3e-4 1e-4 \
-                  --seeds 1 2 3 \
-                  --sample-unlabeled 50000 \
-                  --sample-labeled 5000 \
-                  --n-rows-per-file 1000 \
-                  --max-pretrain-batches 200 \
-                  --max-finetune-batches 50 \
-                  --num-workers 8 \
-                  --prefetch-factor 4 \
-                  --persistent-workers \
-                  --pin-memory \
-                  --time-budget-mins 120 \
-                  --bf16 \
-                  --force-tqdm \
-                  --out-csv "$GRID_DIR/grid_results.csv" \
-                  --best-config-out "$GRID_DIR/best_grid_config.json" \
-                  --use-wandb \
+                  "${GRID_ARR[@]}" \
                   $FR 2>&1 | tee -a "$GRID_DIR/grid_$(date +%F_%H-%M).log"
                 GRID_STATUS=${PIPESTATUS[0]}
                 set -e
@@ -895,24 +879,27 @@ jobs:
             export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
             # change timeout if needed, e.g. 120m for 2 hours
             # bump workers to 2 once stabble
+            PRETRAIN_STR="$("$MMBIN" run -n mjepa python - <<'PY'
+import yaml, os
+cfg = yaml.safe_load(open('scripts/train_jepa_ci.yml')).get('pretrain', {})
+args = []
+for k, v in cfg.items():
+    flag = '--' + k.replace('_', '-')
+    if isinstance(v, bool):
+        if v:
+            args.append(flag)
+    elif isinstance(v, list):
+        args.append(flag)
+        args.extend([str(x) for x in v])
+    else:
+        args.extend([flag, os.path.expandvars(str(v))])
+print('\n'.join(args))
+PY
+            )"
+            readarray -t PRETRAIN_BASE <<< "$PRETRAIN_STR"
             "$MMBIN" run -n mjepa stdbuf -oL -eL timeout -s SIGINT 240m python -u scripts/train_jepa.py pretrain \
-              --unlabeled-dir data/ZINC-canonicalized \
-              --sample-unlabeled 50000 \
-              --cache-dir "$CACHE_DIR" \
-              --plot-dir "$PRETRAIN_DIR/plots" \
-              --num-workers 8 \
-              --prefetch-factor 4 \
-              --persistent-workers \
-              --pin-memory \
-              --force-tqdm \
-              --bf16 \
-              --sample-unlabeled 50000 \
-              --n-rows-per-file 1000 \
-              --ckpt-dir "$CKPT_DIR" \
-              --save-every 1 \
-              --output "$PRETRAIN_DIR/encoder.pt" \
+              "${PRETRAIN_BASE[@]}" \
               "${RESUME_ARGS[@]}" \
-              --use-wandb \
               "${PRETRAIN_ARR[@]}" \
               2>&1 | tee -a "$LOG_DIR/pretrain_$(date +%F_%H-%M).log"
 
@@ -1087,24 +1074,28 @@ jobs:
 
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
               echo "[finetune] cmd: train_jepa.py finetune ${FINETUNE_ARR[*]} --use-wandb ..."
+              FINETUNE_BASE_STR="$("$MMBIN" run -n mjepa python - <<'PY'
+import yaml, os
+cfg = yaml.safe_load(open('scripts/train_jepa_ci.yml')).get('finetune', {})
+args = []
+for k, v in cfg.items():
+    flag = '--' + k.replace('_', '-')
+    if isinstance(v, bool):
+        if v:
+            args.append(flag)
+    elif isinstance(v, list):
+        args.append(flag)
+        args.extend([str(x) for x in v])
+    else:
+        args.extend([flag, os.path.expandvars(str(v))])
+print('\n'.join(args))
+PY
+              )"
+              readarray -t FINETUNE_BASE <<< "$FINETUNE_BASE_STR"
               "$MMBIN" run -n mjepa python scripts/train_jepa.py finetune \
-                --labeled-dir data/katielinkmoleculenet_benchmark/train \
-                --encoder "$PRETRAIN_DIR/encoder.pt" \
-                --task-type regression \
-                --label-col "measured log solubility in mols per litre" \
-                --cache-dir "$CACHE_DIR" \
+                "${FINETUNE_BASE[@]}" \
                 "${FINETUNE_ARR[@]}" \
-                --num-workers 8 \
-                --prefetch-factor 4 \
-                --persistent-workers \
-                --pin-memory \
-                --bf16 \
-                --patience 10 \
-                --ckpt-dir "$CKPT_DIR" \
-                --save-every 1 \
-                --metric val_loss \
                 "${RESUME_ARGS[@]}" \
-                --use-wandb \
                 2>&1 | tee -a "$LOG_DIR/finetune_$(date +%F_%H-%M).log"
 
   vast_benchmark:
@@ -1251,18 +1242,28 @@ jobs:
               echo "[bench] Resolved args: ${BENCH_ARR[*]}"
 
               echo "[bench] cmd: train_jepa.py bench ${BENCH_ARR[*]} ${BENCH_MODEL_ARR[*]} --use-wandb ..."
+              BENCH_BASE_STR="$("$MMBIN" run -n mjepa python - <<'PY'
+import yaml, os
+cfg = yaml.safe_load(open('scripts/train_jepa_ci.yml')).get('bench', {})
+args = []
+for k, v in cfg.items():
+    flag = '--' + k.replace('_', '-')
+    if isinstance(v, bool):
+        if v:
+            args.append(flag)
+    elif isinstance(v, list):
+        args.append(flag)
+        args.extend([str(x) for x in v])
+    else:
+        args.extend([flag, os.path.expandvars(str(v))])
+print('\n'.join(args))
+PY
+              )"
+              readarray -t BENCH_BASE <<< "$BENCH_BASE_STR"
               "$MMBIN" run -n mjepa python scripts/train_jepa.py bench \
-                --labeled-dir data/katielinkmoleculenet_benchmark/train \
-                --report-dir "$BENCH_DIR/reports" \
-                --cache-dir "$CACHE_DIR" \
-                --num-workers 8 \
-                --prefetch-factor 4 \
-                --persistent-workers \
-                --pin-memory \
-                --bf16 \
+                "${BENCH_BASE[@]}" \
                 "${BENCH_ARR[@]}" \
                 "${BENCH_MODEL_ARR[@]}" \
-                --use-wandb \
                 2>&1 | tee -a "$LOG_DIR/benchmark_$(date +%F_%H-%M).log"
 
   vast_tox21:
@@ -1399,16 +1400,26 @@ jobs:
               
               # Case study stage (keep CSV/task explicit, merge the rest)
               echo "[tox21] cmd: train_jepa.py tox21 ${TOX21_ARR[*]} ${TOX_MODEL_ARR[*]} --use-wandb ..."
+              TOX_BASE_STR="$("$MMBIN" run -n mjepa python - <<'PY'
+import yaml, os
+cfg = yaml.safe_load(open('scripts/train_jepa_ci.yml')).get('tox21', {})
+args = []
+for k, v in cfg.items():
+    flag = '--' + k.replace('_', '-')
+    if isinstance(v, bool):
+        if v:
+            args.append(flag)
+    elif isinstance(v, list):
+        args.append(flag)
+        args.extend([str(x) for x in v])
+    else:
+        args.extend([flag, os.path.expandvars(str(v))])
+print('\n'.join(args))
+PY
+              )"
+              readarray -t TOX_BASE <<< "$TOX_BASE_STR"
               "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
-                --csv data/tox21/data.csv \
-                --cache-dir "$CACHE_DIR" \
-                --num-workers 8 \
-                --prefetch-factor 4 \
-                --persistent-workers \
-                --pin-memory \
-                --bf16 \
-                --task NR-AR \
-                "${TOX_ARR[@]}" \
+                "${TOX_BASE[@]}" \
+                "${TOX21_ARR[@]}" \
                 "${TOX_MODEL_ARR[@]}" \
-                --use-wandb \
                 2>&1 | tee -a "$LOG_DIR/tox21_$(date +%F_%H-%M).log"

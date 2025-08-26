@@ -1,0 +1,78 @@
+# Shared arguments for train_jepa.py used in CI pipelines.
+# Allows common CLI flags to be centralised.
+
+common: &common
+  cache_dir: ${CACHE_DIR}
+  num_workers: 8
+  prefetch_factor: 4
+  persistent_workers: true
+  pin_memory: true
+  bf16: true
+
+grid_search:
+  <<: *common
+  unlabeled_dir: data/ZINC-canonicalized
+  labeled_dir: data/katielinkmoleculenet_benchmark/train
+  label_col: "measured log solubility in mols per litre"
+  task_type: regression
+  methods: [jepa, contrastive]
+  mask_ratios: [0.15, 0.3, 0.5]
+  contiguities: [0, 1]
+  hidden_dims: [256]
+  num_layers_list: [3]
+  gnn_types: [mpnn]
+  ema_decays: [0.996, 0.998, 0.999]
+  add_3d_options: [1]
+  pretrain_batch_sizes: [64, 128, 256]
+  finetune_batch_sizes: [128, 256]
+  temperatures: [0.07, 0.1, 0.2]
+  pretrain_epochs_options: [30, 50]
+  finetune_epochs_options: [1]
+  learning_rates: [3e-4, 1e-4]
+  seeds: [1, 2, 3]
+  sample_unlabeled: 50000
+  sample_labeled: 5000
+  n_rows_per_file: 1000
+  max_pretrain_batches: 200
+  max_finetune_batches: 50
+  time_budget_mins: 120
+  force_tqdm: true
+  out_csv: ${GRID_DIR}/grid_results.csv
+  best_config_out: ${GRID_DIR}/best_grid_config.json
+  use_wandb: true
+
+pretrain:
+  <<: *common
+  unlabeled_dir: data/ZINC-canonicalized
+  sample_unlabeled: 50000
+  plot_dir: ${PRETRAIN_DIR}/plots
+  n_rows_per_file: 1000
+  ckpt_dir: ${CKPT_DIR}
+  save_every: 1
+  output: ${PRETRAIN_DIR}/encoder.pt
+  force_tqdm: true
+  use_wandb: true
+
+finetune:
+  <<: *common
+  labeled_dir: data/katielinkmoleculenet_benchmark/train
+  encoder: ${PRETRAIN_DIR}/encoder.pt
+  task_type: regression
+  label_col: "measured log solubility in mols per litre"
+  ckpt_dir: ${CKPT_DIR}
+  save_every: 1
+  metric: val_loss
+  patience: 10
+  use_wandb: true
+
+bench:
+  <<: *common
+  labeled_dir: data/katielinkmoleculenet_benchmark/train
+  report_dir: ${BENCH_DIR}/reports
+  use_wandb: true
+
+tox21:
+  <<: *common
+  csv: data/tox21/data.csv
+  task: NR-AR
+  use_wandb: true
