@@ -113,6 +113,34 @@ def _unwrap_dataset(ds):
     return ds[0] if isinstance(ds, tuple) else ds
 
 
+def train_jepa(*args, **kwargs):  # type: ignore[assignment]
+    """Lazily import and dispatch to :func:`training.unsupervised.train_jepa`.
+
+    Exposing this helper at module level allows tests to monkeypatch
+    ``experiments.ablation.train_jepa`` before :func:`run_ablation` resolves the
+    real implementation.  Importing inside the wrapper preserves the lazy
+    behaviour that keeps heavyweight dependencies optional during module
+    import.
+    """
+
+    from training.unsupervised import train_jepa as _train_jepa
+
+    return _train_jepa(*args, **kwargs)
+
+
+def train_linear_head(*args, **kwargs):  # type: ignore[assignment]
+    """Lazily import and dispatch to supervised head training.
+
+    Similar to :func:`train_jepa`, tests may monkeypatch this function.  We keep
+    the actual import inside the wrapper to avoid binding to a concrete
+    implementation too early.
+    """
+
+    from training.supervised import train_linear_head as _train_linear_head
+
+    return _train_linear_head(*args, **kwargs)
+
+
 class Config(NamedTuple):
     """Configuration for a single ablation run."""
 
@@ -164,8 +192,6 @@ def run_ablation(
     from models.encoder import GNNEncoder
     from models.ema import EMA
     from models.predictor import MLPPredictor
-    from training.supervised import train_linear_head
-    from training.unsupervised import train_jepa
 
     if augmentations is None:
         augmentations = _AugCfg()
