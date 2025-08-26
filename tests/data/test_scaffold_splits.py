@@ -54,6 +54,24 @@ def _stub_rdkit(monkeypatch):
     monkeypatch.setitem(sys.modules, "rdkit.Chem.Scaffolds", scaffolds)
     monkeypatch.setitem(sys.modules, "rdkit.Chem.Scaffolds.MurckoScaffold", murcko)
 
+
+def _no_rdkit(monkeypatch):
+    import builtins
+
+    # Remove any previously loaded rdkit modules
+    for name in list(sys.modules):
+        if name.startswith("rdkit"):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.startswith("rdkit"):
+            raise ModuleNotFoundError("No module named 'rdkit'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
 def _import_ms():
     from data import scaffold_split as ms
     return ms
@@ -144,3 +162,26 @@ def test_write_scaffold_splits_with_real_smiles(tmp_path, monkeypatch):
 
     # And the union of scaffolds equals what we expect: {"C","N","O"}
     assert train_sc | val_sc | test_sc == {"C", "N", "O"}
+
+
+def test_smiles_to_scaffold_without_rdkit(monkeypatch):
+    _no_rdkit(monkeypatch)
+    ms = load_scaffold_module_fresh()
+    with pytest.raises(RuntimeError, match="RDKit is required"):
+        ms.smiles_to_scaffold("CCO")
+
+
+def test_scaffold_split_indices_without_rdkit(monkeypatch):
+    _no_rdkit(monkeypatch)
+    ms = load_scaffold_module_fresh()
+    monkeypatch.setattr(ms, "smiles_to_scaffold", _dummy_scaffold)
+
+    smiles = ["CCO", "CCN", "NCC", "NC=O", "O=C=O"]
+
+    train, val, test = ms.scaffold_split_indices(
+        smiles, train_frac=0.4, val_frac=0.2, seed=0
+    )
+
+    assert len(train) == 2
+    assert len(val) == 2
+    assert len(test) == 1
