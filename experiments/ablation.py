@@ -9,14 +9,17 @@ import pandas as pd
 
 try:  # pragma: no cover - optional dependency in tests
     import torch
-
+except Exception:  # pragma: no cover - torch genuinely unavailable
+    torch = None  # type: ignore[assignment]
+else:
     if not callable(getattr(torch, "is_grad_enabled", None)):
         # Older or heavily stubbed versions of ``torch`` used in the test suite
         # may ship without :func:`is_grad_enabled`.  Define a no-op substitute so
         # that any accidental access does not raise ``AttributeError``.
-        torch.is_grad_enabled = lambda: False  # type: ignore[attr-defined]
-except Exception:  # pragma: no cover - torch genuinely unavailable
-    pass
+        def _grad_disabled() -> bool:
+            return False
+
+        torch.is_grad_enabled = _grad_disabled  # type: ignore[attr-defined]
 
 try:  # augmentation utilities are optional in some tests
     from data.augment import AugmentationConfig, iter_augmentation_options
