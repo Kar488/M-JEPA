@@ -43,19 +43,36 @@ from training.unsupervised import train_jepa
 
 
 def _safe_dataset(smiles_list, labels):
-    """Return (dataset_instance, is_dummy). If GraphDataset.from_smiles_list
-    is unavailable, return a minimal dummy instance with .graphs = []."""
+    """Return ``(dataset_instance, is_dummy)``.
+
+    If :meth:`GraphDataset.from_smiles_list` is unavailable, create a minimal
+    dataset containing placeholder :class:`GraphData` instances so that call
+    sites expecting ``dataset.graphs`` can still operate without raising
+    ``NoneType`` errors.
+    """
+
     try:
         ds = GraphDataset.from_smiles_list(smiles_list, labels=labels)
         return ds, False
     except AttributeError:
+        try:  # Import lazily to keep the fallback lightweight
+            from data.mdataset import GraphData  # type: ignore
+        except Exception:  # pragma: no cover - extremely small stub
+            @dataclass
+            class GraphData:  # type: ignore[misc]
+                x: np.ndarray
+                edge_index: np.ndarray
+                edge_attr: Optional[np.ndarray] = None
 
         class _DummyDataset:
             def __init__(self, smiles_list, labels):
                 self.smiles_list = smiles_list
                 self.labels = labels
-                # non-empty to avoid edge-cases when code inspects len(graphs)
-                self.graphs = [None] * max(1, len(smiles_list))
+                zero_graph = GraphData(
+                    x=np.zeros((2, 4), dtype=np.float32),
+                    edge_index=np.array([[0, 1], [1, 0]], dtype=np.int64),
+                )
+                self.graphs = [zero_graph for _ in range(max(1, len(smiles_list)))]
 
             def __len__(self):
                 """Return the number of pseudo graphs.
@@ -64,6 +81,7 @@ def _safe_dataset(smiles_list, labels):
                 guard keeps the dummy object compatible with those usages
                 without requiring a full dataset implementation.
                 """
+
                 return len(self.graphs)
 
         return _DummyDataset(smiles_list, labels), True
