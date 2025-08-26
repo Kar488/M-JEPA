@@ -1,12 +1,11 @@
+import importlib
 import sys
 import types
 from dataclasses import dataclass
 
 import numpy as np
+import pytest
 import torch
-
-# Stub out modules that require heavy dependencies (e.g., RDKit)
-data_dataset = types.ModuleType("data.mdataset")
 
 
 @dataclass
@@ -23,12 +22,6 @@ class GraphDataset:
     def __len__(self):
         return len(self.graphs)
 
-data_dataset.GraphData = GraphData
-data_dataset.GraphDataset = GraphDataset
-sys.modules["data.mdataset"] = data_dataset
-
-# Provide a minimal global_mean_pool implementation
-utils_pooling = types.ModuleType("utils.pooling")
 
 def global_mean_pool(node_embeddings, graph_ptr=None):
     if graph_ptr is None:
@@ -40,20 +33,42 @@ def global_mean_pool(node_embeddings, graph_ptr=None):
         start = int(end)
     return torch.stack(out, dim=0)
 
-utils_pooling.global_mean_pool = global_mean_pool
-sys.modules["utils.pooling"] = utils_pooling
 
-torch_scatter = types.ModuleType("torch_scatter")
+@pytest.fixture()
+def stub_graph_dataset(monkeypatch):
+    """Provide lightweight stubs for modules with heavy deps."""
 
-def segment_softmax(src, index):
-    return torch.ones_like(src)
+    data_dataset = types.ModuleType("data.mdataset")
+    data_dataset.GraphData = GraphData
+    data_dataset.GraphDataset = GraphDataset
+    monkeypatch.setitem(sys.modules, "data.mdataset", data_dataset)
 
-torch_scatter.segment_softmax = segment_softmax
-sys.modules["torch_scatter"] = torch_scatter
+    utils_pooling = types.ModuleType("utils.pooling")
+    utils_pooling.global_mean_pool = global_mean_pool
+    monkeypatch.setitem(sys.modules, "utils.pooling", utils_pooling)
 
-from models.edge_encoder import EdgeGNNEncoder
-from models.encoder import GNNEncoder
-from models.gnn_variants import GraphSAGE, GIN, GATMultiHead
+    torch_scatter = types.ModuleType("torch_scatter")
+
+    def segment_softmax(src, index):
+        return torch.ones_like(src)
+
+    torch_scatter.segment_softmax = segment_softmax
+    monkeypatch.setitem(sys.modules, "torch_scatter", torch_scatter)
+
+    yield
+
+    for mod in [
+        "data.mdataset",
+        "utils.pooling",
+        "torch_scatter",
+        "models.edge_encoder",
+        "models.encoder",
+        "models.gnn_variants",
+    ]:
+        sys.modules.pop(mod, None)
+
+    import data.mdataset as real_ds  # reload original module
+    importlib.reload(real_ds)
 
 
 def make_graph():
@@ -63,14 +78,20 @@ def make_graph():
     return GraphData(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
 
-def test_edge_gnn_encoder_forward():
+def test_edge_gnn_encoder_forward(stub_graph_dataset):
+    from models.edge_encoder import EdgeGNNEncoder
+
     g = make_graph()
-    model = EdgeGNNEncoder(input_dim=4, edge_dim=5, hidden_dim=8, num_layers=2, dropout=0.0)
+    model = EdgeGNNEncoder(
+        input_dim=4, edge_dim=5, hidden_dim=8, num_layers=2, dropout=0.0
+    )
     out = model.encode_graph(g, torch.device("cpu"))
     assert out.shape == (8,)
 
 
-def test_gnn_encoder_forward():
+def test_gnn_encoder_forward(stub_graph_dataset):
+    from models.encoder import GNNEncoder
+
     g = make_graph()
     adj = torch.zeros((g.x.shape[0], g.x.shape[0]), dtype=torch.float32)
     for src, dst in g.edge_index.T:
@@ -80,7 +101,9 @@ def test_gnn_encoder_forward():
     assert h.shape == (g.x.shape[0], 8)
 
 
-def test_gnn_variants_forward():
+def test_gnn_variants_forward(stub_graph_dataset):
+    from models.gnn_variants import GATMultiHead, GIN, GraphSAGE
+
     g = make_graph()
     device = torch.device("cpu")
     for cls in (GraphSAGE, GIN, GATMultiHead):
