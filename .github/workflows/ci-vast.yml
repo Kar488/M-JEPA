@@ -165,6 +165,31 @@ jobs:
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           source: "."
           target: "${{ env.APP_DIR }}"
+          strip_components: 0
+          rm_target: true
+      - name: Setup micromamba environment
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          request_pty: true
+          envs: APP_DIR,MAMBA_ROOT_PREFIX,PIP_CACHE_DIR
+          script: |
+            set -e
+            cd "$APP_DIR"
+            if [ ! -x "$HOME/micromamba/bin/micromamba" ]; then
+              mkdir -p "$HOME/micromamba"
+              curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C "$HOME/micromamba" bin/micromamba
+            fi
+            export MAMBA_ROOT_PREFIX
+            eval "$("$HOME/micromamba/bin/micromamba" shell hook -s bash)"
+            if ! micromamba env list | grep -q '^mjepa'; then
+              micromamba create -y -n mjepa python=3.10
+            fi
+            micromamba run -n mjepa bash scripts/setup_gpu.sh
 
   vast_learn_hyperparameters:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
