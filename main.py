@@ -25,54 +25,65 @@ logger = logging.getLogger(__name__)
 
 # Data & utils
 from data.mdataset import GraphData, GraphDataset
-from utils.checkpoint import save_checkpoint
-from utils.plotting import plot_training_curves
+try:  # pragma: no cover - optional dependency
+    from utils.checkpoint import save_checkpoint
+except Exception:  # pragma: no cover
+    def save_checkpoint(*args, **kwargs):  # type: ignore
+        raise ImportError("Checkpointing requires PyTorch")
+
+try:  # pragma: no cover - optional dependency
+    from utils.plotting import plot_training_curves
+except Exception:  # pragma: no cover
+    def plot_training_curves(*args, **kwargs):  # type: ignore
+        return None
 from utils.logging import maybe_init_wandb
 
 # Models
-try:
+try:  # pragma: no cover - optional dependency
     from models.factory import build_encoder  # provides 'edge_mpnn' + fallbacks
-except Exception:
-    # fallback to basic encoder if factory not present
-    from models.encoder import GNNEncoder as _BasicEnc
-
-    def build_encoder(
-        gnn_type: str,
-        input_dim: int,
-        hidden_dim: int,
-        num_layers: int,
-        edge_dim: Optional[int] = None,
-    ):
-        return _BasicEnc(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            num_layers=num_layers,
-            gnn_type=gnn_type,
-        )
-
-
-from models.ema import EMA
-from models.predictor import MLPPredictor
-from training.supervised import train_linear_head
-
-# Training
-from training.unsupervised import train_contrastive, train_jepa
-
-try:
-    from training.supervised_with_val import train_linear_head_with_val
-
-    _HAS_VAL_TRAIN = True
-except Exception:
+    from models.ema import EMA
+    from models.predictor import MLPPredictor
+    from training.supervised import train_linear_head
+    from training.unsupervised import train_contrastive, train_jepa
+    try:
+        from training.supervised_with_val import train_linear_head_with_val
+        _HAS_VAL_TRAIN = True
+    except Exception:  # pragma: no cover
+        _HAS_VAL_TRAIN = False
+        def train_linear_head_with_val(*args, **kwargs):  # type: ignore
+            raise ImportError("Val training unavailable")
+except Exception:  # pragma: no cover
+    def build_encoder(*args, **kwargs):  # type: ignore
+        raise ImportError("Model building requires PyTorch")
+    class EMA:  # type: ignore
+        def __init__(self, *args, **kwargs):
+            raise ImportError("EMA requires PyTorch")
+    class MLPPredictor:  # type: ignore
+        def __init__(self, *args, **kwargs):
+            raise ImportError("Predictor requires PyTorch")
+    def train_linear_head(*args, **kwargs):  # type: ignore
+        raise ImportError("Training requires PyTorch")
+    def train_contrastive(*args, **kwargs):  # type: ignore
+        raise ImportError("Training requires PyTorch")
+    def train_jepa(*args, **kwargs):  # type: ignore
+        raise ImportError("Training requires PyTorch")
+    def train_linear_head_with_val(*args, **kwargs):  # type: ignore
+        raise ImportError("Val training unavailable")
     _HAS_VAL_TRAIN = False
 
 # Experiments
-from experiments.grid_search import run_grid_search
+try:  # pragma: no cover - optional dependency
+    from experiments.grid_search import run_grid_search
+except Exception:  # pragma: no cover
+    def run_grid_search(*args, **kwargs):  # type: ignore
+        raise ImportError("Grid search unavailable")
 
-try:
+try:  # pragma: no cover - optional dependency
     from experiments.case_study import run_tox21_case_study
-
     _HAS_CASE_STUDY = True
-except Exception:
+except Exception:  # pragma: no cover
+    def run_tox21_case_study(*args, **kwargs):  # type: ignore
+        raise ImportError("Case study unavailable")
     _HAS_CASE_STUDY = False
 
 
