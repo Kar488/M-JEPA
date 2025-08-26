@@ -14,6 +14,10 @@ on:
         description: "Run unit tests"
         required: false
         default: "false"
+      run_vast_jobs:
+        description: "Run Vast deployment and training jobs"
+        required: false
+        default: "false"
       grid_cache_dir:
         description: "Override grid cache directory"
         required: false
@@ -82,6 +86,7 @@ jobs:
         run: python -m pytest -m "not gpu and not slow" -q
 
   vast_smoke:
+    if: ${{ github.event.inputs.run_vast_jobs == 'true' }}
     name: Smoke on Vast (GPU present?)
     runs-on: ubuntu-latest
     steps:
@@ -104,6 +109,7 @@ jobs:
             PY
 
   vast_deploy_and_prepare_environment:
+    if: ${{ github.event.inputs.run_vast_jobs == 'true' }}
     name: Deploy + Prepare environment
     runs-on: ubuntu-latest
     needs: vast_smoke
@@ -122,8 +128,19 @@ jobs:
             set -e
             mkdir -p "$APP_DIR"
             echo "Prepared environment at $APP_DIR"
+      - name: Sync repository
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          source: "."
+          target: "${{ env.APP_DIR }}"
 
   vast_learn_hyperparameters:
+    if: ${{ github.event.inputs.run_vast_jobs == 'true' }}
     name: Learn hyperparameters
     runs-on: ubuntu-latest
     needs: vast_deploy_and_prepare_environment
@@ -141,6 +158,7 @@ jobs:
             bash "$APP_DIR/scripts/ci/run-grid.sh"
 
   vast_pretrain:
+    if: ${{ github.event.inputs.run_vast_jobs == 'true' }}
     name: Pretain JEPA Model
     runs-on: ubuntu-latest
     needs: vast_learn_hyperparameters
@@ -158,6 +176,7 @@ jobs:
             bash "$APP_DIR/scripts/ci/run-pretrain.sh"
 
   vast_finetune:
+    if: ${{ github.event.inputs.run_vast_jobs == 'true' }}
     name: Fine tune model
     runs-on: ubuntu-latest
     needs: vast_pretrain
@@ -175,6 +194,7 @@ jobs:
             bash "$APP_DIR/scripts/ci/run-finetune.sh"
 
   vast_benchmark:
+    if: ${{ github.event.inputs.run_vast_jobs == 'true' }}
     name: Benchmark
     runs-on: ubuntu-latest
     needs: vast_finetune
@@ -192,6 +212,7 @@ jobs:
             bash "$APP_DIR/scripts/ci/run-bench.sh"
 
   vast_tox21:
+    if: ${{ github.event.inputs.run_vast_jobs == 'true' }}
     name: Tox21 Evaluation
     runs-on: ubuntu-latest
     needs: vast_finetune
