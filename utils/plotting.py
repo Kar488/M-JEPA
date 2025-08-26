@@ -115,6 +115,19 @@ def plot_hyperparameter_results(
         except Exception:
             pass
         return None
+    # Ensure the metric column is numeric so sorting/comparisons work
+    df = df.copy()
+    df[metric] = pd.to_numeric(df[metric], errors="coerce")
+    df = df.dropna(subset=[metric])
+    if df.empty:
+        logger.warning("No valid numeric data for metric %s", metric)
+        if wb is None:
+            wb = maybe_init_wandb(enable=False)
+        try:
+            wb.log({"warning": "No data to plot."})
+        except Exception:
+            pass
+        return None
     # Determine sorting order: descending for ROC/PR metrics, ascending otherwise
     ascending = metric not in {"roc_auc", "pr_auc"}
     df_sorted = df.sort_values(by=metric, ascending=ascending).copy()
