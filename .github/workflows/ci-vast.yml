@@ -24,6 +24,7 @@ env:
   WANDB_PROJECT: m-jepa
   WANDB_RUN_ID: ${{ github.run_id }}
   WANDB_RESUME: allow
+  WANDB_RUN_GROUP: ${{ github.run_id }}
 
   # --- additions for persistent experiments ---
   MAMBA_ROOT_PREFIX: /data/mjepa/micromamba
@@ -263,7 +264,7 @@ jobs:
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           envs: REPO_TOKEN,REPO,APP_DIR,BRANCH,VENV_DIR, \
               RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_ID,WANDB_RESUME
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_GROUP,WANDB_RUN_ID,WANDB_RESUME
           script: |
             set -euxo pipefail
             # ensure optional envs exist even if not forwarded (safe under set -u)
@@ -506,6 +507,10 @@ jobs:
         # before the full pretraining to identify the best settings.  The grid
         # search step therefore comes first.
         - name: Grid search on Vast
+          env:
+            WANDB_RUN_ID: ${{ env.RUN_ID }}-grid
+            WANDB_RUN_NAME: grid
+            WANDB_JOB_TYPE: grid
           # Run a small hyper‑parameter sweep to test the new
           # `grid-search` subcommand.  This step uses separate unlabeled and
           # labelled datasets to sweep over a narrow search space and logs
@@ -524,7 +529,7 @@ jobs:
             envs: REPO_TOKEN,REPO,APP_DIR,BRANCH,VENV_DIR, \
              RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
-             WANDB_RUN_ID,WANDB_RESUME
+             WANDB_RUN_GROUP,WANDB_RUN_ID,WANDB_RUN_NAME,WANDB_JOB_TYPE,WANDB_RESUME
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               # 0) Optional pin (leave empty to use 'latest')
@@ -692,6 +697,10 @@ jobs:
         echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
     
     - name: Pretrain JEPA on Vast
+      env:
+        WANDB_RUN_ID: ${{ env.RUN_ID }}-pretrain
+        WANDB_RUN_NAME: pretrain
+        WANDB_JOB_TYPE: pretrain
       uses: appleboy/ssh-action@v1
       timeout-minutes: 30            # GitHub step timeout
       with:
@@ -703,7 +712,7 @@ jobs:
           # Force refresh will rerun grid search default is false and not run grid search if outputs exist
           envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
             RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-            WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_ID,WANDB_RESUME
+            WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_GROUP,WANDB_RUN_ID,WANDB_RUN_NAME,WANDB_JOB_TYPE,WANDB_RESUME
             
           command_timeout: 30m         # <-- default is 10m; bump this - keep in sync with run command below
           script: |
@@ -933,6 +942,10 @@ jobs:
             echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
 
         - name: Finetune on Vast
+          env:
+            WANDB_RUN_ID: ${{ env.RUN_ID }}-finetune
+            WANDB_RUN_NAME: finetune
+            WANDB_JOB_TYPE: finetune
           uses: appleboy/ssh-action@v1
           timeout-minutes: 180            # GitHub step timeout
           with:
@@ -943,7 +956,7 @@ jobs:
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
               RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_ID,WANDB_RESUME
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_GROUP,WANDB_RUN_ID,WANDB_RUN_NAME,WANDB_JOB_TYPE,WANDB_RESUME
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -1112,6 +1125,10 @@ jobs:
             echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
 
         - name: Benchmark on Vast
+          env:
+            WANDB_RUN_ID: ${{ env.RUN_ID }}-bench
+            WANDB_RUN_NAME: bench
+            WANDB_JOB_TYPE: bench
           uses: appleboy/ssh-action@v1
           timeout-minutes: 240            # GitHub step timeout
           with:
@@ -1122,7 +1139,7 @@ jobs:
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
               RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_ID,WANDB_RESUME
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_GROUP,WANDB_RUN_ID,WANDB_RUN_NAME,WANDB_JOB_TYPE,WANDB_RESUME
             command_timeout: 240m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
@@ -1280,6 +1297,10 @@ jobs:
             echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
 
         - name: Tox21 case study on Vast
+          env:
+            WANDB_RUN_ID: ${{ env.RUN_ID }}-tox21
+            WANDB_RUN_NAME: tox21
+            WANDB_JOB_TYPE: tox21
           uses: appleboy/ssh-action@v1
           timeout-minutes: 180            # GitHub step timeout
           with:
@@ -1290,7 +1311,7 @@ jobs:
             passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
             envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
               RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_ID,WANDB_RESUME
+              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_GROUP,WANDB_RUN_ID,WANDB_RUN_NAME,WANDB_JOB_TYPE,WANDB_RESUME
             command_timeout: 180m         # <-- default is 10m; bump this
             script: |
               set -euxo pipefail
