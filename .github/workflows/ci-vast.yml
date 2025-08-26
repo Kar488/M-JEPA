@@ -720,20 +720,6 @@ jobs:
             set -euxo pipefail
             mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$LOG_DIR"
 
-            # Reuse prior experiment if this RUN_ID has no grid config
-            if [ "${FORCE_REFRESH:-false}" != "true" ] && [ ! -f "$GRID_DIR/best_grid_config.json" ]; then
-              if [ -L /data/mjepa/experiments/latest ] && [ -f /data/mjepa/experiments/latest/grid/best_grid_config.json ]; then
-                echo "Pretrain rebinding to cached EXP_ROOT via 'latest'"
-                EXP_ROOT="$(readlink -f /data/mjepa/experiments/latest)"
-                RUN_ID="$(basename "$EXP_ROOT")"
-                GRID_DIR="$EXP_ROOT/grid"
-                PRETRAIN_DIR="$EXP_ROOT/pretrain"
-                LOG_DIR="$EXP_ROOT/logs"
-                CKPT_DIR="$PRETRAIN_DIR"
-                mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$LOG_DIR"
-              fi
-            fi
-
             # --- locate micromamba robustly ---
             if command -v micromamba >/dev/null 2>&1; then
               MMBIN="$(command -v micromamba)"
@@ -827,7 +813,7 @@ jobs:
             def add(flag, val):
               if val is None:
                 return
-            args.extend([flag, str(val)])
+              args.extend([flag, str(val)])
 
             # Core hparams
             add("--gnn-type",    cfg.get("gnn_type"))
@@ -840,9 +826,10 @@ jobs:
             add("--lr",          cfg.get("lr"))
             add("--epochs",      cfg.get("pretrain_epochs", cfg.get("epochs", 20)))
             add("--batch-size",  cfg.get("pretrain_bs", cfg.get("pretrain_batch_size", cfg.get("batch_size", 4))))
-            if "seeds" in cfg and cfg["seeds"] is not None:
+            if "seeds" in cfg and cfg.get("seeds") is not None:
               add("--seeds", cfg["seeds"])
-            if method == "contrastive":
+            m = (cfg.get("method") or "").lower()
+            if m == "contrastive":
               args.append("--contrastive") 
             print("\n".join(args))
             PY
@@ -859,10 +846,35 @@ jobs:
             else
               ARGS_HASH="noargs"
             fi
+
             STAMP="$PRETRAIN_DIR/.stamp_${COMMIT_SHA}_${CFG_HASH}_${ARGS_HASH}"
 
+            # Cross-run reuse: if latest run already finished this exact recipe, reuse it
+            if [ ! -f "$STAMP" ] && [ "${FORCE_REFRESH:-false}" != "true" ]; then
+              LROOT="$(readlink -f /data/mjepa/experiments/latest 2>/dev/null || true)"
+              if [ -n "$LROOT" ] && [ "$LROOT" != "$EXP_ROOT" ]; then
+                LSTAMP="$LROOT/pretrain/.stamp_${COMMIT_SHA}_${CFG_HASH}_${ARGS_HASH}"
+                if [ -f "$LSTAMP" ] && compgen -G "$LROOT/pretrain"/seed_*/*epoch_*.pt >/dev/null; then
+                  echo "Pretrain cache match found in latest — reusing artifacts from $LROOT"
+                  # Ensure a canonical encoder pointer in current run
+                 if [ -s "$LROOT/pretrain/encoder.pt" ]; then
+                    ln -sfn "$LROOT/pretrain/encoder.pt" "$PRETRAIN_DIR/encoder.pt"
+                  else
+                    LAST=$(ls -1t "$LROOT"/pretrain/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
+                    [ -n "$LAST" ] && ln -sfn "$LAST" "$PRETRAIN_DIR/encoder.pt"
+                  fi
+                  # Mark this recipe complete for the current run
+                  touch "$STAMP"
+                  exit 0
+                fi
+              fi
+            fi
+
             # Skip if same recipe already finished (unless FORCE_REFRESH=true)
-            if [ -f "$STAMP" ] && [ "${FORCE_REFRESH:-false}" != "true" ]; then
+            if [ -f "$STAMP" ] \
+              && compgen -G "$PRETRAIN_DIR"/seed_*/*epoch_*.pt >/dev/null \
+              && [ "${FORCE_REFRESH:-false}" != "true" ]; then
+
               echo "Pretrain cache hit ($STAMP) — skipping."
               # Ensure a canonical encoder pointer for downstream
               if [ ! -e "$PRETRAIN_DIR/encoder.pt" ]; then
@@ -870,6 +882,7 @@ jobs:
                 [ -n "$LAST" ] && ln -sfn "$LAST" "$PRETRAIN_DIR/encoder.pt"
               fi
               exit 0
+
             fi
 
             # Pretraining stage with selected hyper‑parameters.  Contrastive
@@ -1026,7 +1039,7 @@ jobs:
               # TODO - CHECK IF WE NEED ALL PARAMS
               add("--epochs",     cfg.get("finetune_epochs", cfg.get("epochs")))
               add("--batch-size", cfg.get("finetune_bs", cfg.get("finetune_batch_size", cfg.get("batch_size"))))
-              add("--lr",         cfg.get("bench_lr", cfg.get("lr")))
+              add("--lr",         cfg.get("finetune_lr", cfg.get("lr")))
 
               print("\n".join(args))
               PY
@@ -1035,6 +1048,34 @@ jobs:
               echo "[finetune] Resolved args: ${FINETUNE_ARR[*]}"
 
               # Finetune stage- TODO ENSURE PRETRAIN_DIR is picked up from cache if applicable
+
+              # -------- Finetune cache / encoder guard --------
+              # Ensure an encoder exists (use stable pointer or last epoch)
+              if [ ! -s "$PRETRAIN_DIR/encoder.pt" ]; then
+                LAST_ENC=$(ls -1t "$PRETRAIN_DIR"/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
+                [ -n "$LAST_ENC" ] && ln -sfn "$LAST_ENC" "$PRETRAIN_DIR/encoder.pt"
+              fi
+              if [ ! -s "$PRETRAIN_DIR/encoder.pt" ]; then
+                echo "[finetune] No encoder checkpoint found in $PRETRAIN_DIR"; exit 10
+              fi
+
+              # Build a stamp unique to (encoder, effective args, code)
+              COMMIT_SHA=$(git -C "$APP_DIR" rev-parse --short HEAD || echo "nogit")
+              ENC_HASH=$(sha256sum "$PRETRAIN_DIR/encoder.pt" | awk '{print $1}')
+              if [ "${#FINETUNE_ARR[@]}" -gt 0 ]; then
+                ARGS_HASH=$(printf '%s\n' "${FINETUNE_ARR[@]}" | sha256sum | awk '{print $1}')
+              else
+                ARGS_HASH="noargs"
+              fi
+              STAMP="$FINETUNE_DIR/.stamp_${COMMIT_SHA}_${ENC_HASH}_${ARGS_HASH}"
+
+              # Skip if same recipe already finished (unless FORCE_REFRESH=true)
+              if [ -f "$STAMP" ] \
+                 && { compgen -G "$FINETUNE_DIR"/*head*.pt >/dev/null || compgen -G "$FINETUNE_DIR"/seed_*/ft_epoch_*.pt >/dev/null; } \
+                 && [ "${FORCE_REFRESH:-false}" != "true" ]; then
+                echo "[finetune] cache hit ($STAMP) — skipping."
+                exit 0
+              fi
 
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
               echo "[finetune] cmd: train_jepa.py finetune ${FINETUNE_ARR[*]} --use-wandb ..."
@@ -1097,10 +1138,11 @@ jobs:
               fi
               export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
               eval "$("$MMBIN" shell hook -s bash)" || true
+
               export WANDB_DIR="${WANDB_DIR:-/data/mjepa/wandb}"
               # (optional) avoid port/login issues
               export WANDB_MODE=online
-              cd "$APP_DIR"
+
               : "${APP_DIR:?APP_DIR not set}"
               cd "$APP_DIR"
 
@@ -1123,6 +1165,11 @@ jobs:
               [ -f "$PRETRAIN_DIR/encoder.pt" ]             && BENCH_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder.pt")
               [ -f "$PRETRAIN_DIR/encoder_jepa.pt" ]        && BENCH_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder_jepa.pt")
               [ -f "$PRETRAIN_DIR/encoder_contrastive.pt" ] && BENCH_MODEL_ARR+=(--contrastive-encoder "$PRETRAIN_DIR/encoder_contrastive.pt")
+
+              # Require at least one encoder to benchmark
+              if [ "${#BENCH_MODEL_ARR[@]}" -eq 0 ]; then
+                echo "[bench] No encoder found in $PRETRAIN_DIR (encoder*.pt)"; exit 11
+              fi
               
               FT_CKPT=""
               if compgen -G "$FINETUNE_DIR/seed_*/ft_best*.pt" > /dev/null; then
@@ -1193,8 +1240,8 @@ jobs:
               readarray -t BENCH_ARR <<< "$BENCH_STR"
               echo "[bench] Resolved args: ${BENCH_ARR[*]}"
 
-              echo "[bench] cmd: train_jepa.py bench ${BENCH_ARR[*]} --use-wandb ..."
-              "$MMBIN" run -n mjepa python scripts/train_jepa.py benchmark \
+              echo "[bench] cmd: train_jepa.py bench ${BENCH_ARR[*]} ${BENCH_MODEL_ARR[*]} --use-wandb ..."
+              "$MMBIN" run -n mjepa python scripts/train_jepa.py bench \
                 --labeled-dir data/katielinkmoleculenet_benchmark/train \
                 --report-dir "$BENCH_DIR/reports" \
                 --cache-dir "$CACHE_DIR" \
@@ -1203,7 +1250,7 @@ jobs:
                 --persistent-workers \
                 --pin-memory \
                 --bf16 \
-                "${BENCH_HPARAM_ARR[@]}" \
+                "${BENCH_ARR[@]}" \
                 "${BENCH_MODEL_ARR[@]}" \
                 --use-wandb \
                 2>&1 | tee -a "$LOG_DIR/benchmark_$(date +%F_%H-%M).log"
@@ -1319,7 +1366,7 @@ jobs:
               add("--epochs",     cfg.get("tox21_epochs", cfg.get("epochs")))
               add("--lr",         cfg.get("tox21_lr", cfg.get("lr")))
 
-              print("\\n".join(args))
+              print("\n".join(args))
               PY
               )"
               readarray -t TOX21_ARR <<< "$TOX_STR"
@@ -1330,6 +1377,11 @@ jobs:
               [ -f "$PRETRAIN_DIR/encoder.pt" ]             && TOX_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder.pt")
               [ -f "$PRETRAIN_DIR/encoder_jepa.pt" ]        && TOX_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder_jepa.pt")
               [ -f "$PRETRAIN_DIR/encoder_contrastive.pt" ] && TOX_MODEL_ARR+=(--contrastive-encoder "$PRETRAIN_DIR/encoder_contrastive.pt")
+
+              # Require at least one encoder to run Tox21
+              if [ "${#TOX_MODEL_ARR[@]}" -eq 0 ]; then
+                echo "[tox21] No encoder found in $PRETRAIN_DIR (encoder*.pt)"; exit 11
+              fi
 
               
               # Case study stage (keep CSV/task explicit, merge the rest)
@@ -1344,5 +1396,6 @@ jobs:
                 --bf16 \
                 --task NR-AR \
                 "${TOX_ARR[@]}" \
+                "${TOX_MODEL_ARR[@]}" \
                 --use-wandb \
                 2>&1 | tee -a "$LOG_DIR/tox21_$(date +%F_%H-%M).log"
