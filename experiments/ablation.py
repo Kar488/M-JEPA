@@ -176,7 +176,7 @@ def run_ablation(
                 hidden_dim=params["hidden_dim"],
             )
             train_jepa(
-                dataset=dataset_class,
+                dataset=_unwrap_dataset(dataset_class),
                 encoder=encoder,
                 ema_encoder=ema_encoder,
                 predictor=predictor,
