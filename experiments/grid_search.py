@@ -500,6 +500,7 @@ def _run_one_config_method(
     prebuilt_loaders: Optional[Tuple[Any, Any, Any]] = None,
     prebuilt_datasets: Optional[Tuple[Any, Any, Any]] = None,
     # fast-path caps
+    target_pretrain_samples: int = 0,
     max_pretrain_batches: int = 0,
     max_finetune_batches: int = 0,
     time_left: Optional[Callable[[], float]] = None,
@@ -555,6 +556,21 @@ def _run_one_config_method(
     # Safety: ensure both expose `.graphs` and (if possible) `.labels`
     ds_pre = _ensure_graph_dataset(ds_pre)
     ds_eval = _ensure_graph_dataset(ds_eval) or ds_pre
+
+    # ---- per-config pretrain cap ----
+    max_batches_for_trial = max_pretrain_batches
+    if target_pretrain_samples > 0:
+        try:
+            ds_len = len(ds_pre.graphs)
+        except Exception:
+            ds_len = 0
+        if ds_len > 0 and cfg.pretrain_bs > 0:
+            batches_from_target = math.ceil(target_pretrain_samples / cfg.pretrain_bs)
+            batches_from_data = cfg.pretrain_epochs * math.ceil(ds_len / cfg.pretrain_bs)
+            cap = min(batches_from_target, batches_from_data)
+            max_batches_for_trial = (
+                cap if max_pretrain_batches <= 0 else min(cap, max_pretrain_batches)
+            )
 
     seed_metrics: List[Dict[str, float]] = []
 
@@ -628,7 +644,7 @@ def _run_one_config_method(
                     ckpt_every=ckpt_every,
                     use_scheduler=use_scheduler,
                     warmup_steps=warmup_steps,
-                    max_batches=max_pretrain_batches,
+                    max_batches=max_batches_for_trial,
                     time_budget_mins=_tb,
                     # perf knobs
                     num_workers=num_workers,
@@ -758,7 +774,7 @@ def _run_one_config_method(
                     random_rotate=_rot,
                     mask_angle=_ang,
                     perturb_dihedral=_dih,
-                    max_batches=max_pretrain_batches,
+                    max_batches=max_batches_for_trial,
                     time_budget_mins=_tb,
                     # perf knobs
                     num_workers=num_workers,
@@ -951,6 +967,7 @@ def run_grid_search(
     out_csv: Optional[str] = None,
     use_scaffold: bool = False,
     # --- fast-path caps for grid-search ---
+    target_pretrain_samples: int = 0,
     max_pretrain_batches: int = 0,
     max_finetune_batches: int = 0,
     time_budget_mins: int = 0,
@@ -1004,11 +1021,17 @@ def run_grid_search(
     logger.info("Running grid search over %d configs", len(cfgs))
 
     rows: List[Dict[str, Any]] = []
-    if time_budget_mins or max_pretrain_batches or max_finetune_batches:
+    if (
+        time_budget_mins
+        or max_pretrain_batches
+        or max_finetune_batches
+        or target_pretrain_samples
+    ):
         logger.info(
-            "Grid caps: time_budget=%s min, max_pretrain_batches=%s, "
-            "max_finetune_batches=%s",
+            "Grid caps: time_budget=%s min, target_pretrain_samples=%s, "
+            "max_pretrain_batches=%s, max_finetune_batches=%s",
             time_budget_mins,
+            target_pretrain_samples,
             max_pretrain_batches,
             max_finetune_batches,
         )
@@ -1070,7 +1093,7 @@ def run_grid_search(
                     baseline_unlabeled_file, baseline_eval_file, baseline_smiles_col,
                     baseline_label_col, baseline_cfg, use_scaffold,
                     prebuilt_loaders, prebuilt_datasets,
-                    max_pretrain_batches, max_finetune_batches, time_left,
+                    target_pretrain_samples, max_pretrain_batches, max_finetune_batches, time_left,
                     num_workers, pin_memory, persistent_workers, prefetch_factor, bf16
                 )
             # ensure required keys present for downstream selectors/tests
@@ -1209,6 +1232,7 @@ def run_grid_search(
         # annotate resulting table with caps (useful for debugging)
     df["cap_time_mins"] = time_budget_mins
     df["cap_pretrain_batches"] = max_pretrain_batches
+    df["cap_target_pretrain_samples"] = target_pretrain_samples
     df["cap_finetune_batches"] = max_finetune_batches
 
     all_metrics = list(set(metrics_max + metrics_min))

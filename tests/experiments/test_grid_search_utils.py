@@ -180,3 +180,51 @@ def test_run_grid_search_integration(gs_module, monkeypatch, caplog):
     assert list(df["method"]) == ["m1", "m2"]
     assert "metric" in df.columns
     assert "Running grid search over 1 configs" in caplog.text
+
+
+def test_target_pretrain_samples_caps_batches(gs_module, monkeypatch):
+    dataset = [_make_graph() for _ in range(10)]
+
+    def dataset_fn(add_3d=False):
+        return dataset
+
+    calls = []
+
+    def fake_contrastive(*args, **kwargs):
+        calls.append((kwargs.get("batch_size"), kwargs.get("max_batches")))
+
+    monkeypatch.setattr(gs_module, "train_contrastive", fake_contrastive)
+    monkeypatch.setattr(gs_module, "train_linear_head", lambda *a, **k: {})
+    class Dummy:
+        def to(self, device):
+            return self
+
+    monkeypatch.setattr(gs_module, "build_encoder", lambda *a, **k: Dummy())
+    gs_module._HAS_PROBE = False
+
+    gs_module.run_grid_search(
+        dataset_fn=dataset_fn,
+        methods=("contrastive",),
+        seeds=(0,),
+        mask_ratios=(0.1,),
+        contiguities=(False,),
+        hidden_dims=(8,),
+        num_layers_list=(2,),
+        gnn_types=("gcn",),
+        ema_decays=(0.9,),
+        add_3d_options=(False,),
+        augmentation_options=(AugmentationConfig(False, False, False),),
+        pretrain_batch_sizes=(2, 4),
+        finetune_batch_sizes=(1,),
+        pretrain_epochs_options=(3,),
+        finetune_epochs_options=(1,),
+        lrs=(1e-3,),
+        temperatures=(0.1,),
+        device="cpu",
+        disable_tqdm=True,
+        target_pretrain_samples=8,
+    )
+
+    bs_to_mb = {bs: mb for bs, mb in calls}
+    assert bs_to_mb[2] == 4
+    assert bs_to_mb[4] == 2
