@@ -7,8 +7,12 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
-from rdkit import Chem
-from rdkit.Chem.Scaffolds import MurckoScaffold
+try:  # pragma: no cover - import guard
+    from rdkit import Chem
+    from rdkit.Chem.Scaffolds import MurckoScaffold
+except Exception:  # pragma: no cover - RDKit may be unavailable
+    Chem = None  # type: ignore[assignment]
+    MurckoScaffold = None  # type: ignore[assignment]
 
 import logging
 
@@ -16,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 def smiles_to_scaffold(smiles: str) -> str:
     """Convert a SMILES string to its Bemis–Murcko scaffold SMILES."""
+    if Chem is None or MurckoScaffold is None:
+        raise RuntimeError(
+            "RDKit is required for smiles_to_scaffold but is not available"
+        )
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return ""
