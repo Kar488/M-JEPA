@@ -93,6 +93,7 @@ def test_benchmark_parser_defaults_and_handler(tmp_path):
     ])
     assert args.func is cmd_benchmark
     assert args.labeled_dir == str(tmp_path)
+    assert args.test_dir is None
     assert args.jepa_encoder == "jepa.pt"
     assert args.epochs == CONFIG["benchmark"]["epochs"]
     assert args.batch_size == CONFIG["benchmark"]["batch_size"]

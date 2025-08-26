@@ -100,6 +100,7 @@ def test_cmd_benchmark_selects_best_method(tmp_path, monkeypatch):
 
     args = argparse.Namespace(
         labeled_dir=str(tmp_path),
+        test_dir=None,
         label_col="y",
         task_type="classification",
         epochs=1,
@@ -130,8 +131,58 @@ def test_cmd_benchmark_selects_best_method(tmp_path, monkeypatch):
 def test_cmd_benchmark_modules_missing(monkeypatch):
     monkeypatch.setattr(tj, "load_directory_dataset", None)
     with pytest.raises(SystemExit) as ex:
-        tj.cmd_benchmark(argparse.Namespace())
+        tj.cmd_benchmark(argparse.Namespace(test_dir=None))
     assert ex.value.code == 6
+
+
+def test_cmd_benchmark_eval_only_uses_test_dir(tmp_path, monkeypatch):
+    dataset = DummyDataset()
+
+    def load_dataset_stub(path, label_col=None, add_3d=False, **kwargs):
+        assert path == str(tmp_path / "test")
+        return dataset
+
+    monkeypatch.setattr(tj, "load_directory_dataset", load_dataset_stub)
+
+    def eval_stub(ckpt_path, dataset, args, device):  # pragma: no cover - stub
+        return {"roc_auc": 0.9}
+
+    monkeypatch.setattr(tj, "evaluate_finetuned_head", eval_stub)
+
+    calls = {"train_linear_head": 0}
+
+    def train_head_stub(**kwargs):
+        calls["train_linear_head"] += 1
+        return {"roc_auc": 0.5}
+
+    monkeypatch.setattr(tj, "train_linear_head", train_head_stub)
+
+    args = argparse.Namespace(
+        labeled_dir=str(tmp_path / "train"),
+        test_dir=str(tmp_path / "test"),
+        label_col="y",
+        task_type="classification",
+        epochs=1,
+        batch_size=1,
+        lr=0.01,
+        patience=1,
+        devices=1,
+        seeds=[0],
+        jepa_encoder="jepa.pt",
+        contrastive_encoder=None,
+        gnn_type="gcn",
+        hidden_dim=16,
+        num_layers=2,
+        device="cpu",
+        use_wandb=False,
+        wandb_project="test",
+        wandb_tags=[],
+        add_3d=False,
+        ft_ckpt="ft.pt",
+    )
+
+    tj.cmd_benchmark(args)
+    assert calls["train_linear_head"] == 0
 
 
 # ---------------------------------------------------------------------------
