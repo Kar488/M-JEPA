@@ -1,9 +1,9 @@
-import numpy as np
-import numpy as np
-import pytest
-
+import inspect
 import sys
 import types
+
+import numpy as np
+import pytest
 
 # Provide minimal stubs for heavy optional dependencies
 try:  # pragma: no cover - optional dependency
@@ -26,8 +26,10 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover
     sklearn_stub = types.ModuleType("sklearn")
     metrics_stub = types.ModuleType("metrics")
+
     def _dummy_metric(*args, **kwargs):
         return 0.0
+
     # populate common metrics
     for name in [
         "roc_auc_score",
@@ -43,13 +45,13 @@ except Exception:  # pragma: no cover
     sys.modules["sklearn"] = sklearn_stub
     sys.modules["sklearn.metrics"] = metrics_stub
 
+from data.mdataset import GraphData, GraphDataset
 from main import (
     _build_unlabeled_dataset_from_smiles,
     _ensure_labels_inplace_local,
-    load_parquet_dataset,
     load_directory_dataset,
+    load_parquet_dataset,
 )
-from data.mdataset import GraphDataset, GraphData
 
 pd = pytest.importorskip("pandas")
 try:
@@ -107,3 +109,14 @@ def test_load_directory_dataset(tmp_path):
     df2.to_parquet(tmp_path / "b.parquet")
     ds = load_directory_dataset(str(tmp_path), label_col="label")
     assert len(ds.graphs) == 2
+
+
+def test_graphdataset_interface():
+    sig = inspect.signature(GraphDataset.__init__)
+    assert "labels" in sig.parameters
+
+    assert hasattr(GraphDataset, "from_parquet")
+    assert callable(GraphDataset.from_parquet)
+
+    assert hasattr(GraphDataset, "from_directory")
+    assert callable(GraphDataset.from_directory)
