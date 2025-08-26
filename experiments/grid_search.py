@@ -1070,7 +1070,7 @@ def run_grid_search(
             row = dict(res) if isinstance(res, dict) else {"result": res}
             row.setdefault("method", method)
             rows.append(row)
-            
+
             processed += 1
             if pbar is not None:
                 pbar.update(1)
@@ -1181,7 +1181,7 @@ def run_grid_search(
 
     # tie window
     close = dfx[dfx[primary] >= best_val * (1.0 - TIE_EPS)].copy() if maximize \
-            else dfx[dfx[primary] <= best_val * (1.0 + TIE_EPS)]
+            else dfx[dfx[primary] <= best_val * (1.0 + TIE_EPS)].copy()
     suffix = primary
     for tb, tb_max in tiebreakers:
         if not tb or tb not in close.columns:

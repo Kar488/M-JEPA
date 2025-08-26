@@ -263,10 +263,10 @@ def train_linear_head(
     world = get_world_size() if distributed else 1
     train_idx_rank = train_idx[rank::world]
 
-    _start_wall = _time.time()
+    _start_wall = _time.perf_counter()
 
     def _time_left() -> bool:
-        return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
+        return (time_budget_mins <= 0) or ((_time.perf_counter() - _start_wall) < time_budget_mins * 60)
 
     import contextlib
     # default autocast context so evaluation code has a valid handle even if
@@ -296,8 +296,8 @@ def train_linear_head(
                 setattr(dataset, "get_batch", _compat_get_batch)
             batch_x, batch_adj, batch_ptr, batch_labels = dataset.get_batch(batch_indices)
 
-            batch_x = batch_x.to(device_t)
-            batch_adj = batch_adj.to(device_t)
+            batch_x  = batch_x.to(device_t, non_blocking=True)
+            batch_x  = batch_x.to(device_t, non_blocking=True)
             
             # autocast for the forward path (bf16 on 4090; else full precision)
             _amp_ctx = (
@@ -305,9 +305,10 @@ def train_linear_head(
                 if (bf16 and device_t.type == "cuda")
                 else contextlib.nullcontext()
             )
-            with _amp_ctx:
-                node_emb = encoder(batch_x, batch_adj)
-                graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+            with torch.no_grad():
+                with _amp_ctx:
+                    node_emb = encoder(batch_x, batch_adj)
+                    graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
 
             num_graphs = batch_ptr.numel() - 1
             if graph_emb.shape[0] != num_graphs:
@@ -359,9 +360,10 @@ def train_linear_head(
                 batch_x = batch_x.to(device_t)
                 batch_adj = batch_adj.to(device_t)
 
-                with _amp_ctx:
-                    node_emb = encoder(batch_x, batch_adj)
-                    graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+                with torch.no_grad():
+                    with _amp_ctx:
+                        node_emb = encoder(batch_x, batch_adj)
+                        graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
                 
                 num_graphs = batch_ptr.numel() - 1
                 if graph_emb.shape[0] != num_graphs:
@@ -397,12 +399,13 @@ def train_linear_head(
         for start in range(0, len(test_idx), batch_size):
             batch_indices = test_idx[start : start + batch_size]
             batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
-            batch_x = batch_x.to(device_t)
-            batch_adj = batch_adj.to(device_t)
-
-            with _amp_ctx:
-                node_emb = encoder(batch_x, batch_adj)
-                graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
+            batch_x  = batch_x.to(device_t, non_blocking=True)
+            batch_adj= batch_adj.to(device_t, non_blocking=True)
+            
+            with torch.no_grad():
+                with _amp_ctx:
+                    node_emb = encoder(batch_x, batch_adj)
+                    graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))
 
             num_graphs = batch_ptr.numel() - 1
             if graph_emb.shape[0] != num_graphs:

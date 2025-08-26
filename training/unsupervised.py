@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import os
-import time as _time
+import time as _t
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -190,6 +190,7 @@ def train_jepa(
         tags=wandb_tags,
     )
 
+    start_epoch = 1
     if resume_from and os.path.exists(resume_from):
         ckpt = load_checkpoint(resume_from)
         if "encoder" in ckpt:
@@ -211,16 +212,15 @@ def train_jepa(
     if ckpt_path:
         os.makedirs(ckpt_path, exist_ok=True)
 
-    _start_wall = _time.time()
+    _start_wall = _t.perf_counter()
 
     def _time_left() -> bool:
         return (time_budget_mins <= 0) or (
-            (_time.time() - _start_wall) < time_budget_mins * 60
+            (_t.perf_counter() - _start_wall) < time_budget_mins * 60
         )
 
     # Determine whether to disable the progress bar.  We disable bars either
     # explicitly via disable_tqdm or whenever stdout isn’t a TTY (e.g. tests).
-    start_epoch = 1
     import sys
 
     disable_bar = disable_tqdm or not sys.stdout.isatty()
@@ -266,7 +266,8 @@ def train_jepa(
                     )
                 break
 
-            ctx_list, tgt_list = [], []
+            ctx_nodes, tgt_nodes = [], []
+            ctx_graphs, tgt_graphs = [], []
             for g in batch:
                 views = generate_views(
                     g,
@@ -282,15 +283,18 @@ def train_jepa(
                     h_c = _encode_graph(encoder, g_ctx)
                     with torch.no_grad():
                         h_t = _encode_graph(ema_encoder, g_tgt)
-                ctx_list.append(_ensure_2d(h_c))
-                tgt_list.append(_ensure_2d(h_t))
+                ctx_nodes.append(_ensure_2d(h_c))
+                tgt_nodes.append(_ensure_2d(h_t))
+                ctx_graphs.append(g_ctx)
+                tgt_graphs.append(g_tgt)
 
-            # node embeddings
-            h_c_nodes = torch.cat(ctx_list, dim=0).to(device_t)
-            h_t_nodes = torch.cat(tgt_list, dim=0).to(device_t)
-            # pool to graph-level
-            h_c_g = _pool_graph_emb(h_c_nodes, g_ctx)  # [D] or [B, D]
-            h_t_g = _pool_graph_emb(h_t_nodes, g_tgt)  # [D] or [B, D]
+            # pool **per-graph**, then concatenate to a [B, D] batch
+            h_c_g_list, h_t_g_list = [], []
+            for h_c_i, g_ctx_i, h_t_i, g_tgt_i in zip(ctx_nodes, ctx_graphs, tgt_nodes, tgt_graphs):
+                h_c_g_list.append(_ensure_2d(_pool_graph_emb(h_c_i, g_ctx_i)))
+                h_t_g_list.append(_ensure_2d(_pool_graph_emb(h_t_i, g_tgt_i)))
+            h_c_g = torch.cat(h_c_g_list, dim=0).to(device_t)  # [B, D]
+            h_t_g = torch.cat(h_t_g_list, dim=0).to(device_t)  # [B, D]
 
             with torch.cuda.amp.autocast(
                 enabled=amp_enabled,
@@ -317,7 +321,8 @@ def train_jepa(
             if sch is not None:
                 sch.step()
 
-            ema.update(encoder)
+            _enc = encoder.module if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder
+            ema.update(_enc)
 
             lv = float(loss.detach().cpu().item())
             ep_loss += lv
@@ -344,7 +349,7 @@ def train_jepa(
             if ckpt_path and (ep % ckpt_every == 0 or ep == epochs):
                 save_checkpoint(
                     os.path.join(ckpt_path, f"jepa_ep{ep:04d}.pt"),
-                    encoder=encoder.state_dict(),
+                    encoder=(encoder.module.state_dict() if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder.state_dict()),
                     ema_encoder=ema_encoder.state_dict(),
                     predictor=predictor.state_dict(),
                     optimizer=opt.state_dict(),
@@ -418,7 +423,11 @@ def train_contrastive(
             nn.ReLU(inplace=True),
             nn.Linear(projection_dim, projection_dim),
         ).to(device_t)
+        if device_t.type == "cuda":
+            from torch.nn.parallel import DistributedDataParallel as DDP
+            proj = DDP(proj, device_ids=[torch.cuda.current_device()])
         opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
+
         encoder.train()
         proj.train()
     else:
@@ -534,12 +543,11 @@ def train_contrastive(
                 with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
                     h1 = _ensure_2d(_encode(encoder, v1, device_t))
                     h2 = _ensure_2d(_encode(encoder, v2, device_t))
-                    if isinstance(proj[0], nn.Linear) and proj[
-                        0
-                    ].in_features != h1.size(1):
-                        proj[0] = nn.Linear(h1.size(1), proj[0].out_features).to(
-                            device_t
-                        )
+                    if isinstance(proj[0], nn.Linear) and proj[0].in_features != h1.size(1):
+                        # swap first layer to match encoder dim, then rebuild optimizer once
+                        proj[0] = nn.Linear(h1.size(1), proj[0].out_features).to(device_t)
+                        opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
+                    
                     z1_list.append(proj(h1))
                     z2_list.append(proj(h2))
             z1 = torch.nan_to_num(
@@ -606,7 +614,7 @@ def train_contrastive(
             if ckpt_path and (ep % ckpt_every == 0 or ep == epochs):
                 save_checkpoint(
                     os.path.join(ckpt_path, f"contrastive_ep{ep:04d}.pt"),
-                    encoder=encoder.state_dict(),
+                    encoder=(encoder.module.state_dict() if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder.state_dict()),
                     projector=proj.state_dict(),
                     optimizer=opt.state_dict(),
                     scaler=(
