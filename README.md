@@ -16,6 +16,8 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    ```
    Install torch and deepchem through conda
    Optional: install RDKit via conda or `micromamba` for full chemistry features.
+   For Parquet support, install either `pyarrow` or `fastparquet`; tests will
+   skip gracefully if neither is available.
 
 2. **Authenticate with Weights & Biases**
 
