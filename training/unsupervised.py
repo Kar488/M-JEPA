@@ -212,6 +212,7 @@ def train_jepa(
     if ckpt_path:
         os.makedirs(ckpt_path, exist_ok=True)
 
+
     _start_wall = _t.perf_counter()
 
     def _time_left() -> bool:
@@ -471,12 +472,10 @@ def train_contrastive(
     if ckpt_path:
         os.makedirs(ckpt_path, exist_ok=True)
 
-    _start_wall = _time.time()
+    _start_wall = _t.perf_counter()
 
     def _time_left() -> bool:
-        return (time_budget_mins <= 0) or (
-            (_time.time() - _start_wall) < time_budget_mins * 60
-        )
+        return (time_budget_mins <= 0) or ((_t.perf_counter() - _start_wall) < time_budget_mins * 60)
 
     # Determine whether to disable the progress bar.  Disable when disable_tqdm
     # is set or stdout isn’t a TTY (tests).
