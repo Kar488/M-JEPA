@@ -645,38 +645,38 @@ jobs:
                 set +e
                 set -o pipefail
                 GRID_STR="$("$MMBIN" run -n mjepa python - <<'PY'
-import yaml, os
-cfg = yaml.safe_load(open('scripts/train_jepa_ci.yml')).get('grid_search', {})
-args = []
-for k, v in cfg.items():
-    flag = '--' + k.replace('_', '-')
-    if isinstance(v, bool):
-        if v:
-            args.append(flag)
-    elif isinstance(v, list):
-        args.append(flag)
-        args.extend([str(x) for x in v])
-    else:
-        args.extend([flag, os.path.expandvars(str(v))])
-print('\n'.join(args))
-PY
-                )"
-                readarray -t GRID_ARR <<< "$GRID_STR"
-                "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
-                  "${GRID_ARR[@]}" \
-                  $FR 2>&1 | tee -a "$GRID_DIR/grid_$(date +%F_%H-%M).log"
-                GRID_STATUS=${PIPESTATUS[0]}
-                set -e
+                import yaml, os
+                cfg = yaml.safe_load(open('scripts/ci/train_jepa_ci.yml')).get('grid_search', {})
+                args = []
+                for k, v in cfg.items():
+                    flag = '--' + k.replace('_', '-')
+                    if isinstance(v, bool):
+                        if v:
+                            args.append(flag)
+                    elif isinstance(v, list):
+                        args.append(flag)
+                        args.extend([str(x) for x in v])
+                    else:
+                        args.extend([flag, os.path.expandvars(str(v))])
+                print('\n'.join(args))
+                PY
+                                )"
+                                readarray -t GRID_ARR <<< "$GRID_STR"
+                                "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
+                                  "${GRID_ARR[@]}" \
+                                  $FR 2>&1 | tee -a "$GRID_DIR/grid_$(date +%F_%H-%M).log"
+                                GRID_STATUS=${PIPESTATUS[0]}
+                                set -e
 
-                if [ "$GRID_STATUS" -eq 0 ]; then
-                  ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
-                  echo "Grid complete; linked 'latest' -> $EXP_ROOT"
-                  echo "$GRID_DIR/best_grid_config.json" > /data/mjepa/experiments/.best_grid_json
-                else
-                  echo "Grid failed; leaving 'latest' unchanged"
-                  exit 7
-                fi
-              fi
+                                if [ "$GRID_STATUS" -eq 0 ]; then
+                                  ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
+                                  echo "Grid complete; linked 'latest' -> $EXP_ROOT"
+                                  echo "$GRID_DIR/best_grid_config.json" > /data/mjepa/experiments/.best_grid_json
+                                else
+                                  echo "Grid failed; leaving 'latest' unchanged"
+                                  exit 7
+                                fi
+                              fi
 
   vast_pretrain:
     name: Pretain JEPA Model
@@ -880,44 +880,44 @@ PY
             # change timeout if needed, e.g. 120m for 2 hours
             # bump workers to 2 once stabble
             PRETRAIN_STR="$("$MMBIN" run -n mjepa python - <<'PY'
-import yaml, os
-cfg = yaml.safe_load(open('scripts/train_jepa_ci.yml')).get('pretrain', {})
-args = []
-for k, v in cfg.items():
-    flag = '--' + k.replace('_', '-')
-    if isinstance(v, bool):
-        if v:
-            args.append(flag)
-    elif isinstance(v, list):
-        args.append(flag)
-        args.extend([str(x) for x in v])
-    else:
-        args.extend([flag, os.path.expandvars(str(v))])
-print('\n'.join(args))
-PY
-            )"
-            readarray -t PRETRAIN_BASE <<< "$PRETRAIN_STR"
-            "$MMBIN" run -n mjepa stdbuf -oL -eL timeout -s SIGINT 240m python -u scripts/train_jepa.py pretrain \
-              "${PRETRAIN_BASE[@]}" \
-              "${RESUME_ARGS[@]}" \
-              "${PRETRAIN_ARR[@]}" \
-              2>&1 | tee -a "$LOG_DIR/pretrain_$(date +%F_%H-%M).log"
+            import yaml, os
+            cfg = yaml.safe_load(open('scripts/ci/train_jepa_ci.yml')).get('pretrain', {})
+            args = []
+            for k, v in cfg.items():
+                flag = '--' + k.replace('_', '-')
+                if isinstance(v, bool):
+                    if v:
+                        args.append(flag)
+                elif isinstance(v, list):
+                    args.append(flag)
+                    args.extend([str(x) for x in v])
+                else:
+                    args.extend([flag, os.path.expandvars(str(v))])
+            print('\n'.join(args))
+            PY
+                        )"
+                        readarray -t PRETRAIN_BASE <<< "$PRETRAIN_STR"
+                        "$MMBIN" run -n mjepa stdbuf -oL -eL timeout -s SIGINT 240m python -u scripts/train_jepa.py pretrain \
+                          "${PRETRAIN_BASE[@]}" \
+                          "${RESUME_ARGS[@]}" \
+                          "${PRETRAIN_ARR[@]}" \
+                          2>&1 | tee -a "$LOG_DIR/pretrain_$(date +%F_%H-%M).log"
 
-            STATUS=$?
+                        STATUS=$?
 
-            # Ensure a stable encoder pointer for downstream steps
-            if [ ! -e "$PRETRAIN_DIR/encoder.pt" ]; then
-              LAST=$(ls -1t "$PRETRAIN_DIR"/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
-              [ -n "$LAST" ] && ln -sfn "$LAST" "$PRETRAIN_DIR/encoder.pt"
-            fi
+                        # Ensure a stable encoder pointer for downstream steps
+                        if [ ! -e "$PRETRAIN_DIR/encoder.pt" ]; then
+                          LAST=$(ls -1t "$PRETRAIN_DIR"/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
+                          [ -n "$LAST" ] && ln -sfn "$LAST" "$PRETRAIN_DIR/encoder.pt"
+                        fi
 
-            # Mark this recipe complete only on success
-            if [ $STATUS -eq 0 ]; then
-              touch "$STAMP"
-              ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
-              echo "Pretrain complete; linked 'latest' -> $EXP_ROOT"
-            fi
-            exit $STATUS
+                        # Mark this recipe complete only on success
+                        if [ $STATUS -eq 0 ]; then
+                          touch "$STAMP"
+                          ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
+                          echo "Pretrain complete; linked 'latest' -> $EXP_ROOT"
+                        fi
+                        exit $STATUS
 
   vast_finetune:
     name: Apply fine tuning
@@ -1075,28 +1075,28 @@ PY
               export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
               echo "[finetune] cmd: train_jepa.py finetune ${FINETUNE_ARR[*]} --use-wandb ..."
               FINETUNE_BASE_STR="$("$MMBIN" run -n mjepa python - <<'PY'
-import yaml, os
-cfg = yaml.safe_load(open('scripts/train_jepa_ci.yml')).get('finetune', {})
-args = []
-for k, v in cfg.items():
-    flag = '--' + k.replace('_', '-')
-    if isinstance(v, bool):
-        if v:
-            args.append(flag)
-    elif isinstance(v, list):
-        args.append(flag)
-        args.extend([str(x) for x in v])
-    else:
-        args.extend([flag, os.path.expandvars(str(v))])
-print('\n'.join(args))
-PY
-              )"
-              readarray -t FINETUNE_BASE <<< "$FINETUNE_BASE_STR"
-              "$MMBIN" run -n mjepa python scripts/train_jepa.py finetune \
-                "${FINETUNE_BASE[@]}" \
-                "${FINETUNE_ARR[@]}" \
-                "${RESUME_ARGS[@]}" \
-                2>&1 | tee -a "$LOG_DIR/finetune_$(date +%F_%H-%M).log"
+              import yaml, os
+              cfg = yaml.safe_load(open('scripts/ci/train_jepa_ci.yml')).get('finetune', {})
+              args = []
+              for k, v in cfg.items():
+                  flag = '--' + k.replace('_', '-')
+                  if isinstance(v, bool):
+                      if v:
+                          args.append(flag)
+                  elif isinstance(v, list):
+                      args.append(flag)
+                      args.extend([str(x) for x in v])
+                  else:
+                      args.extend([flag, os.path.expandvars(str(v))])
+              print('\n'.join(args))
+              PY
+                            )"
+                            readarray -t FINETUNE_BASE <<< "$FINETUNE_BASE_STR"
+                            "$MMBIN" run -n mjepa python scripts/train_jepa.py finetune \
+                              "${FINETUNE_BASE[@]}" \
+                              "${FINETUNE_ARR[@]}" \
+                              "${RESUME_ARGS[@]}" \
+                              2>&1 | tee -a "$LOG_DIR/finetune_$(date +%F_%H-%M).log"
 
   vast_benchmark:
     name: Conduct Benchmarks
@@ -1243,28 +1243,28 @@ PY
 
               echo "[bench] cmd: train_jepa.py bench ${BENCH_ARR[*]} ${BENCH_MODEL_ARR[*]} --use-wandb ..."
               BENCH_BASE_STR="$("$MMBIN" run -n mjepa python - <<'PY'
-import yaml, os
-cfg = yaml.safe_load(open('scripts/train_jepa_ci.yml')).get('bench', {})
-args = []
-for k, v in cfg.items():
-    flag = '--' + k.replace('_', '-')
-    if isinstance(v, bool):
-        if v:
-            args.append(flag)
-    elif isinstance(v, list):
-        args.append(flag)
-        args.extend([str(x) for x in v])
-    else:
-        args.extend([flag, os.path.expandvars(str(v))])
-print('\n'.join(args))
-PY
-              )"
-              readarray -t BENCH_BASE <<< "$BENCH_BASE_STR"
-              "$MMBIN" run -n mjepa python scripts/train_jepa.py bench \
-                "${BENCH_BASE[@]}" \
-                "${BENCH_ARR[@]}" \
-                "${BENCH_MODEL_ARR[@]}" \
-                2>&1 | tee -a "$LOG_DIR/benchmark_$(date +%F_%H-%M).log"
+              import yaml, os
+              cfg = yaml.safe_load(open('scripts/ci/train_jepa_ci.yml')).get('bench', {})
+              args = []
+              for k, v in cfg.items():
+                  flag = '--' + k.replace('_', '-')
+                  if isinstance(v, bool):
+                      if v:
+                          args.append(flag)
+                  elif isinstance(v, list):
+                      args.append(flag)
+                      args.extend([str(x) for x in v])
+                  else:
+                      args.extend([flag, os.path.expandvars(str(v))])
+              print('\n'.join(args))
+              PY
+                            )"
+                            readarray -t BENCH_BASE <<< "$BENCH_BASE_STR"
+                            "$MMBIN" run -n mjepa python scripts/train_jepa.py bench \
+                              "${BENCH_BASE[@]}" \
+                              "${BENCH_ARR[@]}" \
+                              "${BENCH_MODEL_ARR[@]}" \
+                              2>&1 | tee -a "$LOG_DIR/benchmark_$(date +%F_%H-%M).log"
 
   vast_tox21:
     name: Execute Tox21 Study
@@ -1401,25 +1401,25 @@ PY
               # Case study stage (keep CSV/task explicit, merge the rest)
               echo "[tox21] cmd: train_jepa.py tox21 ${TOX21_ARR[*]} ${TOX_MODEL_ARR[*]} --use-wandb ..."
               TOX_BASE_STR="$("$MMBIN" run -n mjepa python - <<'PY'
-import yaml, os
-cfg = yaml.safe_load(open('scripts/train_jepa_ci.yml')).get('tox21', {})
-args = []
-for k, v in cfg.items():
-    flag = '--' + k.replace('_', '-')
-    if isinstance(v, bool):
-        if v:
-            args.append(flag)
-    elif isinstance(v, list):
-        args.append(flag)
-        args.extend([str(x) for x in v])
-    else:
-        args.extend([flag, os.path.expandvars(str(v))])
-print('\n'.join(args))
-PY
-              )"
-              readarray -t TOX_BASE <<< "$TOX_BASE_STR"
-              "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
-                "${TOX_BASE[@]}" \
-                "${TOX21_ARR[@]}" \
-                "${TOX_MODEL_ARR[@]}" \
-                2>&1 | tee -a "$LOG_DIR/tox21_$(date +%F_%H-%M).log"
+              import yaml, os
+              cfg = yaml.safe_load(open('scripts/ci/train_jepa_ci.yml')).get('tox21', {})
+              args = []
+              for k, v in cfg.items():
+                  flag = '--' + k.replace('_', '-')
+                  if isinstance(v, bool):
+                      if v:
+                          args.append(flag)
+                  elif isinstance(v, list):
+                      args.append(flag)
+                      args.extend([str(x) for x in v])
+                  else:
+                      args.extend([flag, os.path.expandvars(str(v))])
+              print('\n'.join(args))
+              PY
+                            )"
+                            readarray -t TOX_BASE <<< "$TOX_BASE_STR"
+                            "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
+                              "${TOX_BASE[@]}" \
+                              "${TOX21_ARR[@]}" \
+                              "${TOX_MODEL_ARR[@]}" \
+                              2>&1 | tee -a "$LOG_DIR/tox21_$(date +%F_%H-%M).log"
