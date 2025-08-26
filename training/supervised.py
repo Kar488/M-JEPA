@@ -267,6 +267,11 @@ def train_linear_head(
 
     def _time_left() -> bool:
         return (time_budget_mins <= 0) or ((_time.time() - _start_wall) < time_budget_mins * 60)
+
+    import contextlib
+    # default autocast context so evaluation code has a valid handle even if
+    # no training batches are processed (e.g. extremely small datasets)
+    _amp_ctx = contextlib.nullcontext()
     
     for epoch in range(epochs):
         encoder.eval()
@@ -294,9 +299,12 @@ def train_linear_head(
             batch_x = batch_x.to(device_t)
             batch_adj = batch_adj.to(device_t)
             
-            import contextlib
             # autocast for the forward path (bf16 on 4090; else full precision)
-            _amp_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if (bf16 and device_t.type=="cuda") else contextlib.nullcontext()
+            _amp_ctx = (
+                torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+                if (bf16 and device_t.type == "cuda")
+                else contextlib.nullcontext()
+            )
             with _amp_ctx:
                 node_emb = encoder(batch_x, batch_adj)
                 graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t))

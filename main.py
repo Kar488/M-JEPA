@@ -592,20 +592,32 @@ def run_full_mode(args: argparse.Namespace) -> None:
         )
 
     # Optional Tox21 case study
-    if _HAS_CASE_STUDY and args.tox21_csv and args.tox21_task:
+    tox21_csv = getattr(args, "tox21_csv", None)
+    tox21_task = getattr(args, "tox21_task", None)
+    if _HAS_CASE_STUDY and tox21_csv and tox21_task:
         tox_metrics = run_tox21_case_study(
-            tox21_csv=args.tox21_csv,
-            task=args.tox21_task,
+            tox21_csv=tox21_csv,
+            task=tox21_task,
             add_3d=args.add_3d,
-            pretrain_epochs=args.tox21_epochs,
-            finetune_epochs=args.tox21_epochs,
+            pretrain_epochs=getattr(args, "tox21_epochs", 10),
+            finetune_epochs=getattr(args, "tox21_epochs", 10),
             device=args.device,
-            top_fraction=args.tox21_topk,
+            top_fraction=getattr(args, "tox21_topk", 0.05),
         )
         logger.info(
             "Tox21 case study (mean_true, mean_random_after, mean_predicted_after): %s",
             tox_metrics,
         )
+
+
+def run_full(args: argparse.Namespace) -> None:
+    """Backward compatible wrapper for :func:`run_full_mode`.
+
+    Some tests and scripts expect a ``run_full`` entry point; this thin
+    wrapper simply delegates to :func:`run_full_mode` so existing callers
+    continue to work.
+    """
+    run_full_mode(args)
 
 
 # ----------------------------- Grid runner ----------------------------- #

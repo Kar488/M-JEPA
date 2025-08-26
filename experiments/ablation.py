@@ -57,6 +57,15 @@ def _safe_dataset(smiles_list, labels):
                 # non-empty to avoid edge-cases when code inspects len(graphs)
                 self.graphs = [None] * max(1, len(smiles_list))
 
+            def __len__(self):
+                """Return the number of pseudo graphs.
+
+                Some call sites may take ``len(dataset)``; providing this
+                guard keeps the dummy object compatible with those usages
+                without requiring a full dataset implementation.
+                """
+                return len(self.graphs)
+
         return _DummyDataset(smiles_list, labels), True
 
 
