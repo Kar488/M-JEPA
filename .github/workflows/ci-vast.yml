@@ -9,7 +9,7 @@ on:
       force_refresh:
         description: "Ignore cached grid search outputs and recompute"
         required: false
-        default: "true"
+        default: "false"
 
 concurrency:
   group: vast-${{ github.ref }}
@@ -665,14 +665,14 @@ jobs:
                   --seeds 1 2 3 \
                   --sample-unlabeled 50000 \
                   --sample-labeled 5000 \
-                  --n-rows-per-file 50 \
+                  --n-rows-per-file 1000 \
                   --max-pretrain-batches 200 \
                   --max-finetune-batches 50 \
                   --num-workers 8 \
                   --prefetch-factor 4 \
                   --persistent-workers \
                   --pin-memory \
-                  --time-budget-mins 60 \
+                  --time-budget-mins 120 \
                   --bf16 \
                   --force-tqdm \
                   --out-csv "$GRID_DIR/grid_results.csv" \
@@ -704,7 +704,7 @@ jobs:
     
     - name: Pretrain JEPA on Vast
       uses: appleboy/ssh-action@v1
-      timeout-minutes: 240            # GitHub step timeout
+      timeout-minutes: 30            # GitHub step timeout
       with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
@@ -716,7 +716,7 @@ jobs:
             RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
             WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX
             
-          command_timeout: 240m         # <-- default is 10m; bump this - keep in sync with run command below
+          command_timeout: 30m         # <-- default is 10m; bump this - keep in sync with run command below
           script: |
             set -euxo pipefail
             mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$LOG_DIR"
@@ -905,7 +905,7 @@ jobs:
               --force-tqdm \
               --bf16 \
               --sample-unlabeled 50000 \
-              --n-rows-per-file 50 \
+              --n-rows-per-file 1000 \
               --ckpt-dir "$CKPT_DIR" \
               --save-every 1 \
               --output "$PRETRAIN_DIR/encoder.pt" \
@@ -1041,11 +1041,9 @@ jobs:
                   args.extend([flag, str(val)])
 
               # Core hparams (prefer finetune_* keys; fall back to generic)
-              # TODO - CHECK IF WE NEED ALL PARAMS
               add("--epochs",     cfg.get("finetune_epochs", cfg.get("epochs")))
               add("--batch-size", cfg.get("finetune_bs", cfg.get("finetune_batch_size", cfg.get("batch_size"))))
               add("--lr",         cfg.get("finetune_lr", cfg.get("lr")))
-              add("--temperature", cfg.get("temperature", 0.1))
               if "seeds" in cfg and cfg.get("seeds") is not None:
                 add("--seeds", cfg["seeds"])
 
@@ -1241,7 +1239,6 @@ jobs:
               add("--batch-size", cfg.get("bench_bs", cfg.get("bench_batch_size", cfg.get("batch_size"))))
               add("--epochs",     cfg.get("bench_epochs", cfg.get("epochs")))  # if your bench subcommand supports it
               add("--lr",         cfg.get("bench_lr", cfg.get("lr")))
-              add("--temperature", cfg.get("temperature", 0.1))
               if "seeds" in cfg and cfg.get("seeds") is not None:
                 add("--seeds", cfg["seeds"])
 
