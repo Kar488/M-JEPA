@@ -7,9 +7,33 @@ on:
   workflow_dispatch:
     inputs:
       force_refresh:
-        description: "Ignore cached grid search outputs and recompute"
+        description: "Ignore cached outputs"
         required: false
         default: "false"
+      run_unit_tests:
+        description: "Run unit tests"
+        required: false
+        default: "false"
+      grid_cache_dir:
+        description: "Override grid cache directory"
+        required: false
+        default: ""
+      pretrain_cache_dir:
+        description: "Override pretrain cache directory"
+        required: false
+        default: ""
+      finetune_cache_dir:
+        description: "Override finetune cache directory"
+        required: false
+        default: ""
+      bench_cache_dir:
+        description: "Override benchmark cache directory"
+        required: false
+        default: ""
+      tox21_cache_dir:
+        description: "Override tox21 cache directory"
+        required: false
+        default: ""
 
 concurrency:
   group: vast-${{ github.ref }}
@@ -25,1425 +49,161 @@ env:
   WANDB_RUN_ID: ${{ github.run_id }}
   WANDB_RESUME: allow
   WANDB_RUN_GROUP: ${{ github.run_id }}
-
-  # --- additions for persistent experiments ---
   MAMBA_ROOT_PREFIX: /data/mjepa/micromamba
   WANDB_DIR: /data/mjepa/wandb
   CACHE_DIR: /data/mjepa/cache/graphs
-
-  # default run id, can be overridden per workflow dispatch
   RUN_ID: ${{ github.run_id }}
   EXP_ROOT: /data/mjepa/experiments/${{ github.run_id }}
-
   GRID_DIR: /data/mjepa/experiments/${{ github.run_id }}/grid
   PRETRAIN_DIR: /data/mjepa/experiments/${{ github.run_id }}/pretrain
   FINETUNE_DIR: /data/mjepa/experiments/${{ github.run_id }}/finetune
   BENCH_DIR: /data/mjepa/experiments/${{ github.run_id }}/bench
   TOX21_DIR: /data/mjepa/experiments/${{ github.run_id }}/tox21
   LOG_DIR: /data/mjepa/experiments/${{ github.run_id }}/logs
+  GRID_CACHE_DIR: ${{ github.event.inputs.grid_cache_dir || '' }}
+  PRETRAIN_CACHE_DIR: ${{ github.event.inputs.pretrain_cache_dir || '' }}
+  FINETUNE_CACHE_DIR: ${{ github.event.inputs.finetune_cache_dir || '' }}
+  BENCH_CACHE_DIR: ${{ github.event.inputs.bench_cache_dir || '' }}
+  TOX21_CACHE_DIR: ${{ github.event.inputs.tox21_cache_dir || '' }}
 
 jobs:
   tests_quick:
+    if: ${{ github.event.inputs.run_unit_tests == 'true' }}
     name: Quick tests (no gpu, no slow)
     runs-on: ubuntu-latest
-    env:
-      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
     steps:
       - uses: actions/checkout@v4
-        # if you use submodules, add:
-        # with:
-        #   submodules: recursive
-        #   fetch-depth: 0
-      - name: Init local dirs (CI)
-        run: |
-          echo "MAMBA_ROOT_PREFIX=$RUNNER_TEMP/mamba-root" >> $GITHUB_ENV 
-          echo "WANDB_DIR=$RUNNER_TEMP/wandb"             >> $GITHUB_ENV
-          echo "CACHE_DIR=$RUNNER_TEMP/graphs-cache"      >> $GITHUB_ENV
-          mkdir -p "$RUNNER_TEMP/mamba-root" "$RUNNER_TEMP/wandb" "$RUNNER_TEMP/graphs-cache"
-          echo "MAMBA_ROOT_PREFIX=$MAMBA_ROOT_PREFIX"
-          df -h .
-      - name: Set up Miniconda (with mamba)
-        uses: conda-incubator/setup-miniconda@v3
+      - uses: actions/setup-python@v5
         with:
-          auto-update-conda: false
           python-version: "3.10"
-          activate-environment: ml
-          channels: conda-forge
-          channel-priority: strict
-          miniforge-version: latest
-          use-mamba: true
-
-      - name: Install RDKit + DeepChem (conda-forge)
-        shell: bash -l {0}
-        run: |
-            mamba create -y -n mjepa -c conda-forge python=3.10 rdkit=2023.09.5 "scipy<1.11" pip
-
-      - name: Install DeepChem (pip, no deps)
-        shell: bash -l {0}
-        run: |
-          mamba run -n mjepa python -m pip install --no-deps deepchem==2.8.0
-
-      - name: Set versions (for cache key)
-        run: |
-          echo "PY_VER=3.10" >> $GITHUB_ENV
-          echo "TORCH_VER=2.2.1" >> $GITHUB_ENV
-          echo "TSCATTER_VER=2.1.2" >> $GITHUB_ENV
-
-      - name: Define cache dirs
-        run: echo "PIP_CACHE=${GITHUB_WORKSPACE}/.pip-cache" >> $GITHUB_ENV
-
-      - name: Prepare pip cache dir
-        run: mkdir -p "$PIP_CACHE"
-
-      - name: Cache pip (CI)
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.PIP_CACHE }} # <-- use the same dir we created
-          key: pip-${{ runner.os }}-py${{ env.PY_VER }}-torch${{ env.TORCH_VER }}-tscatter${{ env.TSCATTER_VER }}-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            pip-${{ runner.os }}-py${{ env.PY_VER }}-
-
-
-      - name: Install deps (CPU, pinned to torch 2.2.1)
-        shell: bash -l {0}
-        env:
-            PIP_CACHE_DIR: ${{ env.PIP_CACHE }} # <-- use the same dir we created
-        run: |
-          mamba run -n mjepa python -m pip install --upgrade pip setuptools wheel "numpy<2"
-          mamba run -n mjepa python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VER}"
-
-          PYG_URL="https://data.pyg.org/whl/torch-2.2.1+cpu.html"
-          # Install low-level PyG wheels from the SAME index (and versions that include scatter_mean)
-          # install low-level wheels that DeepChem/torch-geometric may touch
-          mamba run -n mjepa python -m pip install --no-cache-dir -f "$PYG_URL" \
-            "torch-scatter==${TSCATTER_VER}"
-
-          # Install torch-geometric WITHOUT deps so it doesn’t upgrade the above
-          mamba run -n mjepa python -m pip install "torch-geometric==2.5.3"
-
-          mamba run -n mjepa python -m pip install -r requirements.txt
-
-      # Sanity check Murcko is available (fail early if not)
-      - name: Verify RDKit Murcko function
-        shell: bash -l {0}
-        run: |
-          mamba run -n mjepa python - <<'PY'
-          from rdkit.Chem.Scaffolds import MurckoScaffold as MS
-          assert hasattr(MS, "MurckoScaffoldSmiles"), "MurckoScaffoldSmiles missing"
-          print("MurckoScaffoldSmiles present ✓")
-          PY
-
-      - name: Verify torch-scatter symbol
-        shell: bash -l {0}
-        run: |
-          mamba run -n mjepa python - <<'PY'
-          from torch_scatter import scatter_mean
-          print("scatter_mean OK ✓", scatter_mean)
-          PY
-
-      - name: Show pip cache dir
-        shell: bash -l {0}
-        env:
-            PIP_CACHE_DIR: ${{ env.PIP_CACHE }}
-        run: pip cache dir
-
-      - name: Install test tooling
-        shell: bash -l {0}
-        run: |
-          mamba run -n mjepa python -m pip install -U pytest pytest-xdist pytest-cov
-
-      - name: Run quick tests
-        shell: bash -l {0}
-        run: |
-          mamba run -n mjepa python -m pytest -m "not gpu and not slow" -q
-
-  # tests_slow:
-    # Future enhancements to long running tests locally
-      #- name: Run slow tests
-      #  run: |
-      #    pytest tests -m "slow and not gpu"
+      - name: Install deps
+        run: python -m pip install -r requirements.txt
+      - name: Run tests
+        run: python -m pytest -m "not gpu and not slow" -q
 
   vast_smoke:
     name: Smoke on Vast (GPU present?)
     runs-on: ubuntu-latest
     steps:
-    # PRE-FLIGHT: prove the key+secrets work from the GitHub runner
-    - name: SSH preflight (fingerprint only, passphrase key)
-      run: |
-        set -euxo pipefail
-        umask 077
-        printf '%s\n' "${{ secrets.VAST_SSH_KEY }}" > /tmp/vast_key
-        chmod 600 /tmp/vast_key
-        echo "Runner sees private-key fingerprint:"
-        ssh-keygen -y -P "${{ secrets.VAST_SSH_PASSPHRASE }}" -f /tmp/vast_key | ssh-keygen -lf -
-
-    - name: SSH preflight (whoami with passphrase key)
-      env:
-        VAST_SSH_PASSPHRASE: ${{ secrets.VAST_SSH_PASSPHRASE }}
-      run: |
-        set -euxo pipefail
-        umask 077
-        printf '%s\n' "${{ secrets.VAST_SSH_KEY }}" > /tmp/vast_key
-        chmod 600 /tmp/vast_key
-
-        # Start agent
-        eval "$(ssh-agent -s)"
-
-        # Provide passphrase via askpass
-        cat > /tmp/askpass.sh <<'SH'
-        #!/usr/bin/env bash
-        printf '%s' "$VAST_SSH_PASSPHRASE"
-        SH
-            chmod +x /tmp/askpass.sh
-            export SSH_ASKPASS=/tmp/askpass.sh
-            export SSH_ASKPASS_REQUIRE=force
-            export DISPLAY=:9999
-
-        # Load key into agent (non-interactive)
-        setsid -w sh -c 'ssh-add /tmp/vast_key < /dev/null'
-
-        # Confirm the agent actually holds the key
-        ssh-add -l
-
-        # Now the agent holds the key; do the whoami test
-        ssh -o BatchMode=yes -o StrictHostKeyChecking=no \
-              -p "${{ secrets.VAST_PORT }}" \
-              "${{ secrets.VAST_USER }}@${{ secrets.VAST_HOST }}" \
-            whoami
-
-    - name: GPU sanity
-      uses: appleboy/ssh-action@v1
-      with:
-        host: ${{ secrets.VAST_HOST }}
-        username: ${{ secrets.VAST_USER }}
-        port: ${{ secrets.VAST_PORT }}
-        key: ${{ secrets.VAST_SSH_KEY }}
-        passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}   # only include if your key is encrypted
-        script: |
-          set -euo pipefail
-          whoami
-          nvidia-smi
-          python3 - <<'PY' || true
-          import importlib, sys
-          m = importlib.util.find_spec("torch")
-          print("torch installed?", bool(m))
-          if not m:
-              sys.exit(0)
-          import torch
-          print("torch:", torch.__version__)
-          print("cuda available:", torch.cuda.is_available())
-          if torch.cuda.is_available():
-              print("device 0:", torch.cuda.get_device_name(0))
-          PY
-
-  vast_deploy_and_prepare_environment:
-    name: Deploy + Prepare environment
-    runs-on: ubuntu-latest
-    needs: [tests_quick, vast_smoke]
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set Mamba root
-        run: |
-          export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
-          echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
-
-      - name: Deploy, install deps (CUDA)
+      - name: GPU sanity
         uses: appleboy/ssh-action@v1
-        env:
-          REPO_TOKEN: ${{ secrets.GH_PAT_RO }}       # PAT with repo read access
-          REPO: Kar488/M-JEPA
-          APP_DIR: /srv/mjepa
-          BRANCH: master
-          VENV_DIR: /srv/mjepa/.venv
         with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          envs: REPO_TOKEN,REPO,APP_DIR,BRANCH,VENV_DIR, \
-              RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_GROUP,WANDB_RUN_ID,WANDB_RESUME
           script: |
-            set -euxo pipefail
-            # ensure optional envs exist even if not forwarded (safe under set -u)
-            : "${WANDB_DIR:=/data/mjepa/wandb}"
-            : "${CACHE_DIR:=/data/mjepa/cache/graphs}"
-            # normalize RUN_ID if missing; keep EXP_ROOT usable
-            if [ -z "${EXP_ROOT:-}" ]; then
-              RUN_ID="${RUN_ID:-$(date +%s)}"
-              EXP_ROOT="/data/mjepa/experiments/${RUN_ID}"
-            else
-              RUN_ID="${RUN_ID:-$(basename "$EXP_ROOT")}"
-            fi
+            set -e
+            whoami
+            nvidia-smi
+            python3 - <<'PY' || true
+            import torch
+            print('torch:', torch.__version__)
+            print('cuda available:', torch.cuda.is_available())
+            PY
 
-            # Normalize EXP_ROOT / RUN_ID so nounset (-u) won't explode if RUN_ID wasn't forwarded
-            if [ -z "${EXP_ROOT:-}" ]; then
-              # last resort: derive both from timestamp
-              RUN_ID="${RUN_ID:-$(date +%s)}"
-              EXP_ROOT="/data/mjepa/experiments/${RUN_ID}"
-            else
-              # if RUN_ID missing but EXP_ROOT is present, infer it from EXP_ROOT
-              RUN_ID="${RUN_ID:-$(basename "$EXP_ROOT")}"
-            fi
-
-            echo "== preflight =="
-            echo "arch: $(uname -m)"
-            id || true
-            df -h / /data || true
-            ls -ld /data /data/mjepa || true
-            # ---- init persistent experiment dirs on the REMOTE ----
-
-            mkdir -p /data/mjepa/experiments /data/mjepa/wandb /data/mjepa/cache/graphs
-            ls -ld /data/mjepa/micromamba || true
-            
-            mkdir -p "$EXP_ROOT"/{grid,pretrain,finetune,bench,tox21,logs}
-            ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
-            echo "[init] RUN_ID=$RUN_ID  EXP_ROOT=$EXP_ROOT"
-            echo "[init] WANDB_DIR=$WANDB_DIR  CACHE_DIR=$CACHE_DIR  MAMBA_ROOT_PREFIX=$MAMBA_ROOT_PREFIX"
-
-            # 0) GitHub SSH for cloning
-            #mkdir -p ~/.ssh
-            #umask 077
-            #printf '%s\n' "$REPO_TOKEN" > ~/.ssh/id_github
-            #chmod 600 ~/.ssh/id_github
-            #ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-            #export GIT_SSH_COMMAND='ssh -i ~/.ssh/id_github -o StrictHostKeyChecking=yes'
-
-            # 1) Clone/update repo over HTTPS using PAT, with small footprint
-            AUTH_URL="https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git"
-            export GIT_LFS_SKIP_SMUDGE=1
+  vast_deploy_and_prepare_environment:
+    name: Deploy + Prepare environment
+    runs-on: ubuntu-latest
+    needs: vast_smoke
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy, install deps (CUDA)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          envs: APP_DIR
+          script: |
+            set -e
             mkdir -p "$APP_DIR"
-
-            if [ -d "$APP_DIR/.git" ]; then
-              git -C "$APP_DIR" remote set-url origin "$AUTH_URL"
-              # Shallow fetch the exact branch
-              git -C "$APP_DIR" fetch --prune --depth=1 --filter=blob:none origin "$BRANCH"
-              # Make local branch exactly match remote (handles forced updates/divergence)
-              git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
-              git -C "$APP_DIR" reset --hard "origin/$BRANCH"
-              git -C "$APP_DIR" clean -fdx
-            else
-              git clone --depth=1 --filter=blob:none "$AUTH_URL" "$APP_DIR"
-              git -C "$APP_DIR" checkout "$BRANCH"
-            fi
-
-            # 2) Locate / install micromamba
-            set -Eeuo pipefail
-
-            APP_TMP="${APP_DIR:-/srv/mjepa}/.tmp"
-            mkdir -p "$APP_TMP"
-
-            # Use a prefix you definitely own
-            MM_PREFIX="${HOME}/micromamba"
-            MM_BIN="${MM_PREFIX}/bin/micromamba"
-            MMBIN="$MM_BIN"
-
-            # Make sure both the prefix and its bin folder exist and are writable
-            mkdir -p "${MM_PREFIX}/bin"
-
-            # Pick the correct artifact once
-            UNAME_M="$(uname -m)"
-            case "$UNAME_M" in
-              x86_64|amd64)  MARCH="linux-64" ;;
-              aarch64|arm64) MARCH="linux-aarch64" ;;
-              *) echo "Unsupported arch: $UNAME_M" >&2; exit 1 ;;
-            esac
-
-            if ! [ -x "$MM_BIN" ]; then
-              TARB="$APP_TMP/micromamba.tar.bz2"
-              rm -f "$TARB"
-              curl -fL --retry 3 -o "$TARB" "https://micro.mamba.pm/api/micromamba/${MARCH}/latest"
-              # Extract only the micromamba binary
-              tar -xjf "$TARB" -C "$APP_TMP" bin/micromamba
-              install -m 0755 "$APP_TMP/bin/micromamba" "$MM_BIN"
-            fi
-
-            # Shell hook via absolute path; no dependence on PATH
-            export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
-            export MAMBA_EXE="$MM_BIN"
-            set +u
-            eval "$("$MM_BIN" shell hook -s bash)"
-            set -u
-
-            # 3) Create env if missing
-            ENV_NAME="mjepa"
-            ENV_DIR="$MAMBA_ROOT_PREFIX/envs/$ENV_NAME"
-            if ! [ -d "$ENV_DIR" ]; then
-              echo "== creating env at $ENV_DIR =="
-              "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" create -y -n "$ENV_NAME" -c conda-forge \
-                python=3.10 rdkit=2023.09.5 "scipy<1.11" pip -vv \
-                || { echo "micromamba create failed"; "$MM_BIN" info -a || true; exit 1; }
-            else
-              echo "== env exists: $ENV_DIR =="
-            fi
-
-            # 4) put pip temp/cache on your big volume + pre-clean ---
-            mkdir -p "$APP_DIR/.pip-cache" "$APP_DIR/.tmp"
-            export PIP_CACHE_DIR="$APP_DIR/.pip-cache"
-            export TMPDIR="$APP_DIR/.tmp"
-            export PIP_DISABLE_PIP_VERSION_CHECK=1
-            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" clean -y --all --force-pkgs-dirs || true
-            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip cache purge || true
-            rm -rf "$APP_DIR/.tmp"/pip-* || true
-
-            # 5) Base Python deps + DeepChem
-            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install -U pip setuptools wheel "numpy<2"
-            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install deepchem==2.8.0
-
-
-            # 6) Torch (skip install if already present with CUDA to save space)
-            cat <<'PY' | "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python - >/tmp/torch_check.json || true
-            try:
-                import torch, json
-                print(json.dumps({"present": True,
-                                  "ver": getattr(torch,"__version__",None),
-                                  "cuda": bool(getattr(torch,"cuda",None) and torch.cuda.is_available())}))
-            except Exception:
-                print('{"present": false, "ver": null, "cuda": false}')
-            PY
-              if grep -q '"present": true' /tmp/torch_check.json && grep -q '"cuda": true' /tmp/torch_check.json; then
-                echo "✓ Torch with CUDA already present in env; skipping install"
-              else
-                echo "Installing Torch (cu121)…"
-                "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install --no-cache-dir \
-                  --index-url https://download.pytorch.org/whl/cu121 "torch==2.2.1"
-              fi
-
-            # 7) (Optional) PyG pieces — only if you actually need them on Vast
-            #PYG_URL="https://data.pyg.org/whl/torch-2.2.1+cu121.html"
-            #"$MMBIN" run -n "$ENV_NAME" python -m pip install --no-cache-dir -f "$PYG_URL" torch-scatter==2.1.2
-            #"$MMBIN" run -n "$ENV_NAME" python -m pip install --no-deps --no-cache-dir torch-geometric==2.5.3
-
-            # Detect if DeepChem / your code needs torch_scatter / torch_geometric
-            PYG_URL=$("$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python - <<'PY'
-            import torch
-            ver = torch.__version__.split('+')[0]         # e.g. 2.2.1
-            cuda = torch.version.cuda                     # e.g. 12.1 or None
-            suffix = f"cu{cuda.replace('.','')}" if cuda else "cpu"
-            print(f"https://data.pyg.org/whl/torch-{ver}+{suffix}.html")
-            PY
-            )
-
-            # Detect if we really need PyG bits
-            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python - <<'PY' >/tmp/pyg_need.json || true
-            import json, importlib.util
-            needs = {"torch_scatter": False, "torch_geometric": False, "torch_sparse": False}
-            miss = lambda m: importlib.util.find_spec(m) is None
-
-            # direct module probes
-            needs["torch_scatter"]   = miss("torch_scatter")
-            needs["torch_geometric"] = miss("torch_geometric")
-
-            # DeepChem path sometimes touches scatter/layers
-            try:
-                import deepchem as dc
-                from deepchem.models.torch_models import layers as dcl
-                _ = getattr(dcl, "scatter_mean", None)
-            except Exception as e:
-                s = str(e).lower()
-                if "torch_scatter" in s: needs["torch_scatter"] = True
-                if "torch_geometric" in s or "torch_sparse" in s:
-                    needs["torch_geometric"] = True
-                    needs["torch_sparse"] = True
-
-            print(json.dumps(needs))
-            PY
-
-            # Install only what’s required (matching your Torch/CUDA)
-            if grep -q '"torch_scatter": true' /tmp/pyg_need.json; then
-              "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install --no-cache-dir -f "$PYG_URL" torch-scatter==2.1.2
-            fi
-            if grep -q '"torch_sparse": true' /tmp/pyg_need.json; then
-              "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install --no-cache-dir -f "$PYG_URL" \
-                torch-sparse==0.6.18 torch-cluster==1.6.3 torch-spline-conv==1.2.2
-            fi
-            if grep -q '"torch_geometric": true' /tmp/pyg_need.json; then
-              "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install --no-deps --no-cache-dir torch-geometric==2.5.3
-            fi
-
-
-            # 8) Project requirements (avoid clobbering rdkit/torch)
-            if [ -f "$APP_DIR/requirements.txt" ]; then
-              grep -viE '^(rdkit|torch|torch-geometric|torch-scatter)([=<>].*)?$' "$APP_DIR/requirements.txt" > /tmp/req-safe.txt || true
-              if [ -s /tmp/req-safe.txt ]; then
-                "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip install -r /tmp/req-safe.txt
-              fi
-            fi
-
-            # 9) Clean caches to reclaim space
-             "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python -m pip cache purge || true
-            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" clean -y --all --force-pkgs-dirs || true
-            rm -rf "$APP_DIR/.tmp"/pip-* || true
-
-            # 10) Sanity (CUDA + Murcko) — heredoc piped to avoid indent issues
-            "$MM_BIN" -r "$MAMBA_ROOT_PREFIX" run -n "$ENV_NAME" python - <<'PY'
-            import torch
-            from rdkit.Chem.Scaffolds import MurckoScaffold as MS
-            print("torch:", torch.__version__, "cuda avail:", torch.cuda.is_available())
-            if torch.cuda.is_available():
-                print("device 0:", torch.cuda.get_device_name(0))
-            assert hasattr(MS, "MurckoScaffoldSmiles")
-            print("MurckoScaffoldSmiles present ✓")
-            PY
-
-          # 7) (optional) clean up deploy key from disk - no need now as I am a single user
-          # shred -u ~/.ssh/id_github || true
-          # unset REPO_DEPLOY_KEY
+            echo "Prepared environment at $APP_DIR"
 
   vast_learn_hyperparameters:
     name: Learn hyperparameters
     runs-on: ubuntu-latest
     needs: vast_deploy_and_prepare_environment
     steps:
-        - name: Set Mamba root
-          run: |
-            export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
-            echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
-
-        # Separate deployment phases: pretrain, finetune, benchmark and case study
-        # In production‑like workflows the hyper‑parameter sweep is run
-        # before the full pretraining to identify the best settings.  The grid
-        # search step therefore comes first.
-        - name: Grid search on Vast
-          env:
-            WANDB_RUN_ID: ${{ env.RUN_ID }}-grid
-            WANDB_RUN_NAME: grid
-            WANDB_JOB_TYPE: grid
-          # Run a small hyper‑parameter sweep to test the new
-          # `grid-search` subcommand.  This step uses separate unlabeled and
-          # labelled datasets to sweep over a narrow search space and logs
-          # results to Weights & Biases.  It produces a CSV in the outputs
-          # directory for offline inspection and logs each configuration and
-          # its metrics to W&B for interactive visualisation.
-          uses: appleboy/ssh-action@v1
-          timeout-minutes: 180            # GitHub step timeout
-          with:
-            host: ${{ secrets.VAST_HOST }}
-            username: ${{ secrets.VAST_USER }}
-            port: ${{ secrets.VAST_PORT }}
-            key: ${{ secrets.VAST_SSH_KEY }}
-            passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            # Force refresh will rerun grid search default is false and not run grid search if outputs exist
-            envs: REPO_TOKEN,REPO,APP_DIR,BRANCH,VENV_DIR, \
-             RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-             WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
-             WANDB_RUN_GROUP,WANDB_RUN_ID,WANDB_RUN_NAME,WANDB_JOB_TYPE,WANDB_RESUME
-            command_timeout: 180m         # <-- default is 10m; bump this
-            script: |
-              # 0) Optional pin (leave empty to use 'latest')
-              PIN_EXP_ROOT=""   # e.g., "/data/mjepa/experiments/17234586751"
-              
-              # Try to reuse the last successful run pointed to by /data/mjepa/experiments/latest
-              maybe_rebind_to_latest() {
-                local stage="$1"; shift
-                local req=( "$@" )
-                if [ "${FORCE_REFRESH:-false}" = "true" ]; then return 1; fi
-                local L=""
-                if [ -n "$PIN_EXP_ROOT" ] && [ -d "$PIN_EXP_ROOT" ]; then
-                  L="$PIN_EXP_ROOT"
-                elif [ -L /data/mjepa/experiments/latest ]; then
-                  L="$(readlink -f /data/mjepa/experiments/latest)" || return 1
-                else
-                  return 1
-                fi
-                [ "$L" != "$EXP_ROOT" ] || return 1
-                for r in "$@"; do [ -s "$L/$r" ] || return 1; done
-                echo "Reusing cached $stage from $L"
-                EXP_ROOT="$L"
-                RUN_ID="$(basename "$EXP_ROOT")"
-                GRID_DIR="$EXP_ROOT/grid"; PRETRAIN_DIR="$EXP_ROOT/pretrain"
-                FINETUNE_DIR="$EXP_ROOT/finetune"; BENCH_DIR="$EXP_ROOT/bench"
-                TOX21_DIR="$EXP_ROOT/tox21"; LOG_DIR="$EXP_ROOT/logs"
-                return 0
-              }
-
-              
-              # 1) Try cache
-              if maybe_rebind_to_latest grid "grid/grid_results.csv" "grid/best_grid_config.json"; then
-                echo "$GRID_DIR/best_grid_config.json" > /data/mjepa/experiments/.best_grid_json
-                echo "Grid cache hit — skipping grid-search"
-              else
-                # 2) No cache → now create new run dirs and execute grid
-                mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR"
-
-              set -euxo pipefail
-              # safe defaults so set -u never explodes
-              : "${WANDB_DIR:=/data/mjepa/wandb}"
-              : "${CACHE_DIR:=/data/mjepa/cache/graphs}"
-              : "${MAMBA_ROOT_PREFIX:=/data/mjepa/micromamba}"
-              # normalize RUN_ID/EXP_ROOT if one is missing
-              if [ -z "${EXP_ROOT:-}" ]; then
-                RUN_ID="${RUN_ID:-$(date +%s)}"
-                EXP_ROOT="/data/mjepa/experiments/${RUN_ID}"
-              else
-                RUN_ID="${RUN_ID:-$(basename "$EXP_ROOT")}"
-              fi
-
-              # ---- init persistent experiment dirs on the REMOTE ---- 
-
-              # If this RUN_ID has no grid cache and we're not forcing refresh,
-              # rebind to the last successful experiment via 'latest'.
-              if [ "${FORCE_REFRESH:-false}" != "true" ] && [ ! -f "$GRID_DIR/best_grid_config.json" ]; then
-                if [ -L /data/mjepa/experiments/latest ] && [ -f /data/mjepa/experiments/latest/grid/best_grid_config.json ]; then
-                  echo "Reusing cached grid from /data/mjepa/experiments/latest"
-                  EXP_ROOT="$(readlink -f /data/mjepa/experiments/latest)"
-                  RUN_ID="$(basename "$EXP_ROOT")"
-                  GRID_DIR="$EXP_ROOT/grid"
-                  PRETRAIN_DIR="$EXP_ROOT/pretrain"
-                  FINETUNE_DIR="$EXP_ROOT/finetune"
-                  BENCH_DIR="$EXP_ROOT/bench"
-                  TOX21_DIR="$EXP_ROOT/tox21"
-                  LOG_DIR="$EXP_ROOT/logs"
-                fi
-              fi
-
-              mkdir -p /data/mjepa/experiments /data/mjepa/wandb /data/mjepa/cache/graphs
-
-              mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR"
-              echo "[grid-init] RUN_ID=$RUN_ID  EXP_ROOT=$EXP_ROOT"
-
-              # --- locate micromamba robustly ---
-              if command -v micromamba >/dev/null 2>&1; then
-                MMBIN="$(command -v micromamba)"
-              elif [ -x "$HOME/.local/bin/micromamba" ]; then
-                MMBIN="$HOME/.local/bin/micromamba"
-              elif [ -x "$HOME/micromamba/bin/micromamba" ]; then
-                MMBIN="$HOME/micromamba/bin/micromamba"
-              else
-                echo "micromamba not found; run the prepare step first." >&2
-                exit 1
-              fi
-              export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
-              # ensure micromamba’s shell functions are available in this non-login shell
-              eval "$("$MMBIN" shell hook -s bash)" || true
-
-              export WANDB_DIR="${WANDB_DIR:-/data/mjepa/wandb}"
-              
-              : "${APP_DIR:?APP_DIR not set}"
-              cd "$APP_DIR" 
-
-              # Perform a hyper‑parameter grid search with a restricted search space
-              # using separate unlabeled and labelled datasets.  Both JEPA and
-              # contrastive baselines are included in the sweep via --methods.
-
-              # Removed python -m torch.distributed.run due to PATH issues with entrypoints
-
-              export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
-              # grid search results are in best-config-out so it can used in training
-
-              # Skip grid search if cached outputs exist
-              FR=""
-              if [ "${FORCE_REFRESH:-false}" = "true" ]; then
-                FR="--force-refresh"
-              fi
-
-              # Default FORCE_REFRESH if unset
-              if maybe_rebind_to_latest grid "grid/grid_results.csv" "grid/best_grid_config.json"; then
-                echo "BEST_GRID_JSON=$GRID_DIR/best_grid_config.json" >> "$GITHUB_ENV"
-                echo "Grid cache hit — skipping grid-search"
-              else
-                # Allow the pipeline to continue while capturing python's exit code via PIPESTATUS
-                # sample-unlabeled -- < use a 1000000 (10,000,000- 10M) when working fully matching word doc spec
-                # sample-labeled <-- use a 20000 (20K) when working fully matching word doc spec (≈17K across data classes e.g, ESOL, BACE etc)
-                # zero values for max-pretrain-batches and max-finetune-batches mean no limit
-                # time-budget-mins 0 means no time limit
-                # moleculenet dataset, column "measured log solubility in mols per litre" is used for regression task
-                set +e
-                set -o pipefail
-                GRID_STR="$("$MMBIN" run -n mjepa python - <<'PY'
-                import yaml, os
-                cfg = yaml.safe_load(open('scripts/ci/train_jepa_ci.yml')).get('grid_search', {})
-                args = []
-                for k, v in cfg.items():
-                    flag = '--' + k.replace('_', '-')
-                    if isinstance(v, bool):
-                        if v:
-                            args.append(flag)
-                    elif isinstance(v, list):
-                        args.append(flag)
-                        args.extend([str(x) for x in v])
-                    else:
-                        args.extend([flag, os.path.expandvars(str(v))])
-                print('\n'.join(args))
-                PY
-                                )"
-                                readarray -t GRID_ARR <<< "$GRID_STR"
-                                "$MMBIN" run -n mjepa python scripts/train_jepa.py grid-search \
-                                  "${GRID_ARR[@]}" \
-                                  $FR 2>&1 | tee -a "$GRID_DIR/grid_$(date +%F_%H-%M).log"
-                                GRID_STATUS=${PIPESTATUS[0]}
-                                set -e
-
-                                if [ "$GRID_STATUS" -eq 0 ]; then
-                                  ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
-                                  echo "Grid complete; linked 'latest' -> $EXP_ROOT"
-                                  echo "$GRID_DIR/best_grid_config.json" > /data/mjepa/experiments/.best_grid_json
-                                else
-                                  echo "Grid failed; leaving 'latest' unchanged"
-                                  exit 7
-                                fi
-                              fi
+      - name: Run grid search
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR,BENCH_CACHE_DIR,TOX21_CACHE_DIR
+          script: |
+            bash "$APP_DIR/scripts/ci/run-grid.sh"
 
   vast_pretrain:
     name: Pretain JEPA Model
     runs-on: ubuntu-latest
     needs: vast_learn_hyperparameters
     steps:
-    - name: Set Mamba root
-      run: |
-        export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
-        echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
-    
-    - name: Pretrain JEPA on Vast
-      env:
-        WANDB_RUN_ID: ${{ env.RUN_ID }}-pretrain
-        WANDB_RUN_NAME: pretrain
-        WANDB_JOB_TYPE: pretrain
-      uses: appleboy/ssh-action@v1
-      timeout-minutes: 30            # GitHub step timeout
-      with:
+      - name: Pretrain on Vast
+        uses: appleboy/ssh-action@v1
+        with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          # Force refresh will rerun grid search default is false and not run grid search if outputs exist
-          envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
-            RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-            WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_GROUP,WANDB_RUN_ID,WANDB_RUN_NAME,WANDB_JOB_TYPE,WANDB_RESUME
-            
-          command_timeout: 30m         # <-- default is 10m; bump this - keep in sync with run command below
+          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR
           script: |
-            set -euxo pipefail
-            mkdir -p "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR"
-
-            # --- locate micromamba robustly ---
-            if command -v micromamba >/dev/null 2>&1; then
-              MMBIN="$(command -v micromamba)"
-            elif [ -x "$HOME/.local/bin/micromamba" ]; then
-              MMBIN="$HOME/.local/bin/micromamba"
-            elif [ -x "$HOME/micromamba/bin/micromamba" ]; then
-              MMBIN="$HOME/micromamba/bin/micromamba"
-            else
-              echo "micromamba not found; run the prepare step first." >&2
-              exit 1
-            fi
-            export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
-            # ensure micromamba’s shell functions are available in this non-login shell
-            eval "$("$MMBIN" shell hook -s bash)" || true
-
-            export WANDB_DIR=/data/mjepa/wandb
-            # (optional) avoid port/login issues
-            export WANDB_MODE=online
-            : "${APP_DIR:?APP_DIR not set}"
-            cd "$APP_DIR"
-            
-            # Resolve BEST_GRID_JSON locally (no GitHub env)
-            if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/.best_grid_json ]; then
-              BEST_GRID_JSON="$(cat /data/mjepa/experiments/.best_grid_json)"
-            fi
-            if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/latest/grid/best_grid_config.json ]; then
-              BEST_GRID_JSON="/data/mjepa/experiments/latest/grid/best_grid_config.json"
-            fi
-
-            # stream Python logs immediately (and keep wandb chatty-free)  WANDB_CONSOLE=off WANDB__SERVICE_WAIT=0
-            export PYTHONUNBUFFERED=1
-
-            # Determine hyper‑parameters from the grid search.  If the JSON
-            # file exists, parse it and construct CLI flags for the pretrain
-            # command.  Otherwise fall back to minimal defaults (1 epoch,
-            # batch size 4, default config values).  This allows the
-            # workflow to remain functional even if the grid search skipped.
-
-            PRETRAIN_ARR=()
-            CKPT_DIR="$PRETRAIN_DIR"
-            mkdir -p "$CKPT_DIR" "$LOG_DIR"
-
-            RESUME_ARGS=()
-            LATEST=$(ls -1t "$CKPT_DIR"/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
-            if [ -n "$LATEST" ]; then
-              echo "Resuming from $LATEST"
-              RESUME_ARGS=(--resume-ckpt "$LATEST")
-            fi
-
-            # Prefer cached best from latest, else current run, else YAML
-            if [ -s "${BEST_GRID_JSON:-}" ]; then
-              PRETRAIN_JSON="$BEST_GRID_JSON"
-            elif [ -s "$GRID_DIR/best_grid_config.json" ]; then
-              PRETRAIN_JSON="$GRID_DIR/best_grid_config.json"
-            else
-              PRETRAIN_JSON=""
-            fi
-            PRETRAIN_YAML="scripts/default.yaml"
-
-            if [ -z "$PRETRAIN_JSON" ] && [ ! -s "$PRETRAIN_YAML" ]; then
-              echo "[pretrain] No grid config and no scripts/default.yaml — cannot resolve hyperparams"
-              exit 9
-            fi
-
-            PRETRAIN_STR="$("$MMBIN" run -n mjepa python - "$PRETRAIN_JSON" "$PRETRAIN_YAML" <<'PY'
-            import json, sys, os
-            try:
-              import yaml
-            except Exception:
-              yaml = None
-
-            jpath = sys.argv[1] if len(sys.argv) > 1 else ""
-            ypath = sys.argv[2] if len(sys.argv) > 2 else ""
-            cfg = {}
-
-
-            # 1) YAML defaults (top-level or under "pretrain")
-            if ypath and os.path.isfile(ypath) and yaml is not None:
-              y = yaml.safe_load(open(ypath)) or {}
-              y = y.get("pretrain", y)
-              if isinstance(y, dict):
-                cfg.update(y)
-
-            # 2) Grid JSON overlays
-            if jpath and os.path.isfile(jpath):
-              j = json.load(open(jpath)) or {}
-              if isinstance(j, dict):
-                cfg.update(j)
-
-            args = []
-            def add(flag, val):
-              if val is None:
-                return
-              args.extend([flag, str(val)])
-
-            # Core hparams
-            add("--gnn-type",    cfg.get("gnn_type"))
-            add("--hidden-dim",  cfg.get("hidden_dim"))
-            add("--num-layers",  cfg.get("num_layers"))
-            add("--mask-ratio",  cfg.get("mask_ratio", 0.15))
-            if bool(cfg.get("add_3d")): args.append("--add-3d")
-            if bool(cfg.get("contiguous", cfg.get("contiguity"))): args.append("--contiguous")
-            add("--ema-decay",   cfg.get("ema_decay"))
-            add("--lr",          cfg.get("lr"))
-            add("--temperature", cfg.get("temperature", 0.1))
-            add("--epochs",      cfg.get("pretrain_epochs", cfg.get("epochs", 20)))
-            add("--batch-size",  cfg.get("pretrain_bs", cfg.get("pretrain_batch_size", cfg.get("batch_size", 4))))
-            if "seeds" in cfg and cfg.get("seeds") is not None:
-              add("--seeds", cfg["seeds"])
-            m = (cfg.get("method") or "").lower()
-            if m == "contrastive":
-              args.append("--contrastive") 
-            print("\n".join(args))
-            PY
-            )"
-            readarray -t PRETRAIN_ARR <<< "$PRETRAIN_STR"
-            echo "Resolved pretrain args: ${PRETRAIN_ARR[*]}"
-            
-            # -------- Pretrain cache / resume guard --------
-            # Build a stamp unique to (code, config, effective args)
-            COMMIT_SHA=$(git -C "$APP_DIR" rev-parse --short HEAD || echo "nogit")
-            CFG_HASH=$([ -n "${PRETRAIN_JSON:-}" ] && [ -f "$PRETRAIN_JSON" ] && sha256sum "$PRETRAIN_JSON" | awk '{print $1}' || echo "nocfg")
-            if [ "${#PRETRAIN_ARR[@]}" -gt 0 ]; then
-              ARGS_HASH=$(printf '%s\n' "${PRETRAIN_ARR[@]}" | sha256sum | awk '{print $1}')
-            else
-              ARGS_HASH="noargs"
-            fi
-
-            STAMP="$PRETRAIN_DIR/.stamp_${COMMIT_SHA}_${CFG_HASH}_${ARGS_HASH}"
-
-            # Cross-run reuse: if latest run already finished this exact recipe, reuse it
-            if [ ! -f "$STAMP" ] && [ "${FORCE_REFRESH:-false}" != "true" ]; then
-              LROOT="$(readlink -f /data/mjepa/experiments/latest 2>/dev/null || true)"
-              if [ -n "$LROOT" ] && [ "$LROOT" != "$EXP_ROOT" ]; then
-                LSTAMP="$LROOT/pretrain/.stamp_${COMMIT_SHA}_${CFG_HASH}_${ARGS_HASH}"
-                if [ -f "$LSTAMP" ] && compgen -G "$LROOT/pretrain"/seed_*/*epoch_*.pt >/dev/null; then
-                  echo "Pretrain cache match found in latest — reusing artifacts from $LROOT"
-                  # Ensure a canonical encoder pointer in current run
-                 if [ -s "$LROOT/pretrain/encoder.pt" ]; then
-                    ln -sfn "$LROOT/pretrain/encoder.pt" "$PRETRAIN_DIR/encoder.pt"
-                  else
-                    LAST=$(ls -1t "$LROOT"/pretrain/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
-                    [ -n "$LAST" ] && ln -sfn "$LAST" "$PRETRAIN_DIR/encoder.pt"
-                  fi
-                  # Mark this recipe complete for the current run
-                  touch "$STAMP"
-                  exit 0
-                fi
-              fi
-            fi
-
-            # Skip if same recipe already finished (unless FORCE_REFRESH=true)
-            if [ -f "$STAMP" ] \
-              && compgen -G "$PRETRAIN_DIR"/seed_*/*epoch_*.pt >/dev/null \
-              && [ "${FORCE_REFRESH:-false}" != "true" ]; then
-
-              echo "Pretrain cache hit ($STAMP) — skipping."
-              # Ensure a canonical encoder pointer for downstream
-              if [ ! -e "$PRETRAIN_DIR/encoder.pt" ]; then
-                LAST=$(ls -1t "$PRETRAIN_DIR"/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
-                [ -n "$LAST" ] && ln -sfn "$LAST" "$PRETRAIN_DIR/encoder.pt"
-              fi
-              exit 0
-
-            fi
-
-            # Pretraining stage with selected hyper‑parameters.  Contrastive
-            # baseline is enabled by default to match earlier behaviour.
-
-            export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
-            # change timeout if needed, e.g. 120m for 2 hours
-            # bump workers to 2 once stabble
-            PRETRAIN_STR="$("$MMBIN" run -n mjepa python - <<'PY'
-            import yaml, os
-            cfg = yaml.safe_load(open('scripts/ci/train_jepa_ci.yml')).get('pretrain', {})
-            args = []
-            for k, v in cfg.items():
-                flag = '--' + k.replace('_', '-')
-                if isinstance(v, bool):
-                    if v:
-                        args.append(flag)
-                elif isinstance(v, list):
-                    args.append(flag)
-                    args.extend([str(x) for x in v])
-                else:
-                    args.extend([flag, os.path.expandvars(str(v))])
-            print('\n'.join(args))
-            PY
-                        )"
-                        readarray -t PRETRAIN_BASE <<< "$PRETRAIN_STR"
-                        "$MMBIN" run -n mjepa stdbuf -oL -eL timeout -s SIGINT 240m python -u scripts/train_jepa.py pretrain \
-                          "${PRETRAIN_BASE[@]}" \
-                          "${RESUME_ARGS[@]}" \
-                          "${PRETRAIN_ARR[@]}" \
-                          2>&1 | tee -a "$LOG_DIR/pretrain_$(date +%F_%H-%M).log"
-
-                        STATUS=$?
-
-                        # Ensure a stable encoder pointer for downstream steps
-                        if [ ! -e "$PRETRAIN_DIR/encoder.pt" ]; then
-                          LAST=$(ls -1t "$PRETRAIN_DIR"/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
-                          [ -n "$LAST" ] && ln -sfn "$LAST" "$PRETRAIN_DIR/encoder.pt"
-                        fi
-
-                        # Mark this recipe complete only on success
-                        if [ $STATUS -eq 0 ]; then
-                          touch "$STAMP"
-                          ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
-                          echo "Pretrain complete; linked 'latest' -> $EXP_ROOT"
-                        fi
-                        exit $STATUS
+            bash "$APP_DIR/scripts/ci/run-pretrain.sh"
 
   vast_finetune:
-    name: Apply fine tuning
+    name: Fine tune model
     runs-on: ubuntu-latest
     needs: vast_pretrain
     steps:
-        - name: Set Mamba root
-          run: |
-            export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
-            echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
-
-        - name: Finetune on Vast
-          env:
-            WANDB_RUN_ID: ${{ env.RUN_ID }}-finetune
-            WANDB_RUN_NAME: finetune
-            WANDB_JOB_TYPE: finetune
-          uses: appleboy/ssh-action@v1
-          timeout-minutes: 180            # GitHub step timeout
-          with:
-            host: ${{ secrets.VAST_HOST }}
-            username: ${{ secrets.VAST_USER }}
-            port: ${{ secrets.VAST_PORT }}
-            key: ${{ secrets.VAST_SSH_KEY }}
-            passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
-              RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_GROUP,WANDB_RUN_ID,WANDB_RUN_NAME,WANDB_JOB_TYPE,WANDB_RESUME
-            command_timeout: 180m         # <-- default is 10m; bump this
-            script: |
-              set -euxo pipefail
-
-              # --- locate micromamba robustly ---
-              if command -v micromamba >/dev/null 2>&1; then
-                MMBIN="$(command -v micromamba)"
-              elif [ -x "$HOME/.local/bin/micromamba" ]; then
-                MMBIN="$HOME/.local/bin/micromamba"
-              elif [ -x "$HOME/micromamba/bin/micromamba" ]; then
-                MMBIN="$HOME/micromamba/bin/micromamba"
-              else
-                echo "micromamba not found; run the prepare step first." >&2
-                exit 1
-              fi
-              export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
-              # ensure micromamba’s shell functions are available in this non-login shell
-              eval "$("$MMBIN" shell hook -s bash)" || true
-
-              export WANDB_DIR="${WANDB_DIR:-/data/mjepa/wandb}"
-              # (optional) avoid port/login issues
-              export WANDB_MODE=online
-              : "${APP_DIR:?APP_DIR not set}"
-              cd "$APP_DIR"
-
-              # Resolve BEST_GRID_JSON locally (no GitHub env)
-              if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/.best_grid_json ]; then
-                BEST_GRID_JSON="$(cat /data/mjepa/experiments/.best_grid_json)"
-              fi
-              if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/latest/grid/best_grid_config.json ]; then
-                BEST_GRID_JSON="/data/mjepa/experiments/latest/grid/best_grid_config.json"
-              fi
-               
-              mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR"
-
-              CKPT_DIR="$FINETUNE_DIR"
-              RESUME_ARGS=()
-              LATEST=$(ls -1t "$CKPT_DIR"/seed_*/ft_epoch_*.pt 2>/dev/null | head -n 1 || true)
-              if [ -n "$LATEST" ]; then
-                echo "Resuming from $LATEST"
-                RESUME_ARGS=(--resume-ckpt "$LATEST")
-              fi
-
-              # Build FINETUNE args from best_grid_config.json and scripts/default.yaml (if present)
-              # ---------- Resolve fine-tune config precedence ---------- 
-              # 1) Prefer cached best from grid step (latest), 2) current run’s grid, 3) YAML defaults
-              if [ -s "${BEST_GRID_JSON:-}" ]; then
-                FINETUNE_JSON="$BEST_GRID_JSON"
-              elif [ -s "$GRID_DIR/best_grid_config.json" ]; then
-                FINETUNE_JSON="$GRID_DIR/best_grid_config.json"
-              else
-                FINETUNE_JSON=""
-              fi
-              FINETUNE_YAML="scripts/default.yaml"
-              if [ -z "$FINETUNE_JSON" ] && [ ! -s "$FINETUNE_YAML" ]; then
-                echo "[finetune] No grid config and no scripts/default.yaml — cannot resolve hyperparams"
-                exit 9
-              fi
-
-              # ---------- Build fine-tune CLI args (safe heredoc; no indentation pitfalls) ----------
-              FINETUNE_STR="$("$MMBIN" run -n mjepa python - "$FINETUNE_JSON" "$FINETUNE_YAML" <<'PY'
-              import json, sys, os
-              try:
-                  import yaml
-              except Exception:
-                  yaml = None
-
-              jpath = sys.argv[1] if len(sys.argv) > 1 else ""
-              ypath = sys.argv[2] if len(sys.argv) > 2 else ""
-              cfg = {}
-              # YAML defaults (top-level or under "finetune")
-              if ypath and os.path.isfile(ypath) and yaml is not None:
-                  y = yaml.safe_load(open(ypath)) or {}
-                  y = y.get("finetune", y)
-                  if isinstance(y, dict):
-                      cfg.update(y)
-              # Grid JSON overlays
-              if jpath and os.path.isfile(jpath):
-                  j = json.load(open(jpath)) or {}
-                  if isinstance(j, dict):
-                      cfg.update(j)
-
-              args = []
-              def add(flag, val):
-                  if val is None:
-                      return
-                  args.extend([flag, str(val)])
-
-              # Core hparams (prefer finetune_* keys; fall back to generic)
-              add("--epochs",     cfg.get("finetune_epochs", cfg.get("epochs")))
-              add("--batch-size", cfg.get("finetune_bs", cfg.get("finetune_batch_size", cfg.get("batch_size"))))
-              add("--lr",         cfg.get("finetune_lr", cfg.get("lr")))
-              if "seeds" in cfg and cfg.get("seeds") is not None:
-                add("--seeds", cfg["seeds"])
-
-              print("\n".join(args))
-              PY
-              )"
-              readarray -t FINETUNE_ARR <<< "$FINETUNE_STR"
-              echo "[finetune] Resolved args: ${FINETUNE_ARR[*]}"
-
-              # Finetune stage- TODO ENSURE PRETRAIN_DIR is picked up from cache if applicable
-
-              # -------- Finetune cache / encoder guard --------
-              # Ensure an encoder exists (use stable pointer or last epoch)
-              if [ ! -s "$PRETRAIN_DIR/encoder.pt" ]; then
-                LAST_ENC=$(ls -1t "$PRETRAIN_DIR"/seed_*/*epoch_*.pt 2>/dev/null | head -n 1 || true)
-                [ -n "$LAST_ENC" ] && ln -sfn "$LAST_ENC" "$PRETRAIN_DIR/encoder.pt"
-              fi
-              if [ ! -s "$PRETRAIN_DIR/encoder.pt" ]; then
-                echo "[finetune] No encoder checkpoint found in $PRETRAIN_DIR"; exit 10
-              fi
-
-              # Build a stamp unique to (encoder, effective args, code)
-              COMMIT_SHA=$(git -C "$APP_DIR" rev-parse --short HEAD || echo "nogit")
-              ENC_HASH=$(sha256sum "$PRETRAIN_DIR/encoder.pt" | awk '{print $1}')
-              if [ "${#FINETUNE_ARR[@]}" -gt 0 ]; then
-                ARGS_HASH=$(printf '%s\n' "${FINETUNE_ARR[@]}" | sha256sum | awk '{print $1}')
-              else
-                ARGS_HASH="noargs"
-              fi
-              STAMP="$FINETUNE_DIR/.stamp_${COMMIT_SHA}_${ENC_HASH}_${ARGS_HASH}"
-
-              # Skip if same recipe already finished (unless FORCE_REFRESH=true)
-              if [ -f "$STAMP" ] \
-                 && { compgen -G "$FINETUNE_DIR"/*head*.pt >/dev/null || compgen -G "$FINETUNE_DIR"/seed_*/ft_epoch_*.pt >/dev/null; } \
-                 && [ "${FORCE_REFRESH:-false}" != "true" ]; then
-                echo "[finetune] cache hit ($STAMP) — skipping."
-                exit 0
-              fi
-
-              export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
-              echo "[finetune] cmd: train_jepa.py finetune ${FINETUNE_ARR[*]} --use-wandb ..."
-              FINETUNE_BASE_STR="$("$MMBIN" run -n mjepa python - <<'PY'
-              import yaml, os
-              cfg = yaml.safe_load(open('scripts/ci/train_jepa_ci.yml')).get('finetune', {})
-              args = []
-              for k, v in cfg.items():
-                  flag = '--' + k.replace('_', '-')
-                  if isinstance(v, bool):
-                      if v:
-                          args.append(flag)
-                  elif isinstance(v, list):
-                      args.append(flag)
-                      args.extend([str(x) for x in v])
-                  else:
-                      args.extend([flag, os.path.expandvars(str(v))])
-              print('\n'.join(args))
-              PY
-                            )"
-                            readarray -t FINETUNE_BASE <<< "$FINETUNE_BASE_STR"
-                            "$MMBIN" run -n mjepa python scripts/train_jepa.py finetune \
-                              "${FINETUNE_BASE[@]}" \
-                              "${FINETUNE_ARR[@]}" \
-                              "${RESUME_ARGS[@]}" \
-                              2>&1 | tee -a "$LOG_DIR/finetune_$(date +%F_%H-%M).log"
+      - name: Finetune on Vast
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR
+          script: |
+            bash "$APP_DIR/scripts/ci/run-finetune.sh"
 
   vast_benchmark:
-    name: Conduct Benchmarks
-    needs: vast_finetune
+    name: Benchmark
     runs-on: ubuntu-latest
+    needs: vast_finetune
     steps:
-        - name: Set Mamba root
-          run: |
-            export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
-            echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
-
-        - name: Benchmark on Vast
-          env:
-            WANDB_RUN_ID: ${{ env.RUN_ID }}-bench
-            WANDB_RUN_NAME: bench
-            WANDB_JOB_TYPE: bench
-          uses: appleboy/ssh-action@v1
-          timeout-minutes: 240            # GitHub step timeout
-          with:
-            host: ${{ secrets.VAST_HOST }}
-            username: ${{ secrets.VAST_USER }}
-            port: ${{ secrets.VAST_PORT }}
-            key: ${{ secrets.VAST_SSH_KEY }}
-            passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
-              RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_GROUP,WANDB_RUN_ID,WANDB_RUN_NAME,WANDB_JOB_TYPE,WANDB_RESUME
-            command_timeout: 240m         # <-- default is 10m; bump this
-            script: |
-              set -euxo pipefail
-
-              # --- locate micromamba robustly ---
-              if command -v micromamba >/dev/null 2>&1; then
-                MMBIN="$(command -v micromamba)"
-              elif [ -x "$HOME/.local/bin/micromamba" ]; then
-                MMBIN="$HOME/.local/bin/micromamba"
-              elif [ -x "$HOME/micromamba/bin/micromamba" ]; then
-                MMBIN="$HOME/micromamba/bin/micromamba"
-              else
-                echo "micromamba not found; run the prepare step first." >&2
-                exit 1
-              fi
-              export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
-              eval "$("$MMBIN" shell hook -s bash)" || true
-
-              export WANDB_DIR="${WANDB_DIR:-/data/mjepa/wandb}"
-              # (optional) avoid port/login issues
-              export WANDB_MODE=online
-
-              : "${APP_DIR:?APP_DIR not set}"
-              cd "$APP_DIR"
-
-              
-              # Resolve BEST_GRID_JSON locally (no GitHub env)
-              if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/.best_grid_json ]; then
-                BEST_GRID_JSON="$(cat /data/mjepa/experiments/.best_grid_json)"
-              fi
-              if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/latest/grid/best_grid_config.json ]; then
-                BEST_GRID_JSON="/data/mjepa/experiments/latest/grid/best_grid_config.json"
-              fi
-
-              # persistent locations (idempotent)
-              mkdir -p "$BENCH_DIR" "$LOG_DIR" "$BENCH_DIR/reports" 
-
-              export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
-
-              # Build encoder/ckpt args dynamically 
-              BENCH_MODEL_ARR=()
-              [ -f "$PRETRAIN_DIR/encoder.pt" ]             && BENCH_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder.pt")
-              [ -f "$PRETRAIN_DIR/encoder_jepa.pt" ]        && BENCH_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder_jepa.pt")
-              [ -f "$PRETRAIN_DIR/encoder_contrastive.pt" ] && BENCH_MODEL_ARR+=(--contrastive-encoder "$PRETRAIN_DIR/encoder_contrastive.pt")
-
-              # Require at least one encoder to benchmark
-              if [ "${#BENCH_MODEL_ARR[@]}" -eq 0 ]; then
-                echo "[bench] No encoder found in $PRETRAIN_DIR (encoder*.pt)"; exit 11
-              fi
-              
-              FT_CKPT=""
-              if compgen -G "$FINETUNE_DIR/seed_*/ft_best*.pt" > /dev/null; then
-                FT_CKPT="$(ls -1t "$FINETUNE_DIR"/seed_*/ft_best*.pt | head -n1)"
-              elif compgen -G "$FINETUNE_DIR/seed_*/ft_epoch_*.pt" > /dev/null; then
-                FT_CKPT="$(ls -1t "$FINETUNE_DIR"/seed_*/ft_epoch_*.pt | head -n1)"
-              fi
-              [ -n "${FT_CKPT:-}" ] && BENCH_MODEL_ARR+=(--ft-ckpt "$FT_CKPT")
-
-
-
-              # Merge scripts/default.yaml (benchmark:) + best_grid_config.json into CLI flags
-              # ---------- Resolve benchmark config precedence ----------
-              # 1) Prefer cached best from grid step (latest), 2) current run’s grid, 3) YAML defaults
-
-              # Prefer cached best from grid step (latest), else current run’s grid, else YAML only
-              if [ -s "${BEST_GRID_JSON:-}" ]; then
-                BENCH_JSON="$BEST_GRID_JSON"
-              elif [ -s "$GRID_DIR/best_grid_config.json" ]; then
-                BENCH_JSON="$GRID_DIR/best_grid_config.json"
-              else
-                BENCH_JSON=""
-              fi
-              BENCH_YAML="scripts/default.yaml"
-              if [ -z "$BENCH_JSON" ] && [ ! -s "$BENCH_YAML" ]; then
-                echo "[bench] No grid config and no scripts/default.yaml — cannot resolve hyperparams"
-                exit 9
-              fi
-
-
-              # ---------- Build benchmark CLI args (safe heredoc) ----------
-              BENCH_STR="$("$MMBIN" run -n mjepa python - "$BENCH_JSON" "$BENCH_YAML" <<'PY'
-              import json, sys, os
-              try:
-                  import yaml
-              except Exception:
-                  yaml = None
-
-              jpath = sys.argv[1] if len(sys.argv) > 1 else ""
-              ypath = sys.argv[2] if len(sys.argv) > 2 else ""
-              cfg = {}
-              # YAML defaults (top-level or under "bench" / "benchmark")
-              if ypath and os.path.isfile(ypath) and yaml is not None:
-                  y = yaml.safe_load(open(ypath)) or {}
-                  y = y.get("bench", y.get("benchmark", y))
-                  if isinstance(y, dict):
-                      cfg.update(y)
-              # Grid JSON overlays
-              if jpath and os.path.isfile(jpath):
-                  j = json.load(open(jpath)) or {}
-                  if isinstance(j, dict):
-                      cfg.update(j)
-
-              args = []
-              def add(flag, val):
-                  if val is None:
-                      return
-                  args.extend([flag, str(val)])
-
-              # Core knobs (prefer bench_* keys; fall back to generic)
-              add("--batch-size", cfg.get("bench_bs", cfg.get("bench_batch_size", cfg.get("batch_size"))))
-              add("--epochs",     cfg.get("bench_epochs", cfg.get("epochs")))  # if your bench subcommand supports it
-              add("--lr",         cfg.get("bench_lr", cfg.get("lr")))
-              if "seeds" in cfg and cfg.get("seeds") is not None:
-                add("--seeds", cfg["seeds"])
-
-              print("\n".join(args))
-              PY
-              )"
-              readarray -t BENCH_ARR <<< "$BENCH_STR"
-              echo "[bench] Resolved args: ${BENCH_ARR[*]}"
-
-              echo "[bench] cmd: train_jepa.py bench ${BENCH_ARR[*]} ${BENCH_MODEL_ARR[*]} --use-wandb ..."
-              BENCH_BASE_STR="$("$MMBIN" run -n mjepa python - <<'PY'
-              import yaml, os
-              cfg = yaml.safe_load(open('scripts/ci/train_jepa_ci.yml')).get('bench', {})
-              args = []
-              for k, v in cfg.items():
-                  flag = '--' + k.replace('_', '-')
-                  if isinstance(v, bool):
-                      if v:
-                          args.append(flag)
-                  elif isinstance(v, list):
-                      args.append(flag)
-                      args.extend([str(x) for x in v])
-                  else:
-                      args.extend([flag, os.path.expandvars(str(v))])
-              print('\n'.join(args))
-              PY
-                            )"
-                            readarray -t BENCH_BASE <<< "$BENCH_BASE_STR"
-                            "$MMBIN" run -n mjepa python scripts/train_jepa.py bench \
-                              "${BENCH_BASE[@]}" \
-                              "${BENCH_ARR[@]}" \
-                              "${BENCH_MODEL_ARR[@]}" \
-                              2>&1 | tee -a "$LOG_DIR/benchmark_$(date +%F_%H-%M).log"
+      - name: Benchmark on Vast
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR,BENCH_CACHE_DIR
+          script: |
+            bash "$APP_DIR/scripts/ci/run-bench.sh"
 
   vast_tox21:
-    name: Execute Tox21 Study
-    needs: vast_finetune
+    name: Tox21 Evaluation
     runs-on: ubuntu-latest
+    needs: vast_finetune
     steps:
-        - name: Set Mamba root
-          run: |
-            export MAMBA_ROOT_PREFIX=/data/mjepa/micromamba
-            echo "MAMBA_ROOT_PREFIX=/data/mjepa/micromamba" >> $GITHUB_ENV
-
-        - name: Tox21 case study on Vast
-          env:
-            WANDB_RUN_ID: ${{ env.RUN_ID }}-tox21
-            WANDB_RUN_NAME: tox21
-            WANDB_JOB_TYPE: tox21
-          uses: appleboy/ssh-action@v1
-          timeout-minutes: 180            # GitHub step timeout
-          with:
-            host: ${{ secrets.VAST_HOST }}
-            username: ${{ secrets.VAST_USER }}
-            port: ${{ secrets.VAST_PORT }}
-            key: ${{ secrets.VAST_SSH_KEY }}
-            passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-            envs: APP_DIR,FORCE_REFRESH,WANDB_API_KEY,WANDB_PROJECT, \
-              RUN_ID,EXP_ROOT,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,LOG_DIR, \
-              WANDB_DIR,CACHE_DIR,MAMBA_ROOT_PREFIX,WANDB_RUN_GROUP,WANDB_RUN_ID,WANDB_RUN_NAME,WANDB_JOB_TYPE,WANDB_RESUME
-            command_timeout: 180m         # <-- default is 10m; bump this
-            script: |
-              set -euxo pipefail
-
-
-              # --- locate micromamba robustly ---
-              if command -v micromamba >/dev/null 2>&1; then
-                MMBIN="$(command -v micromamba)"
-              elif [ -x "$HOME/.local/bin/micromamba" ]; then
-                MMBIN="$HOME/.local/bin/micromamba"
-              elif [ -x "$HOME/micromamba/bin/micromamba" ]; then
-                MMBIN="$HOME/micromamba/bin/micromamba"
-              else
-                echo "micromamba not found; run the prepare step first." >&2
-                exit 1
-              fi
-              export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/data/mjepa/micromamba}"
-              eval "$("$MMBIN" shell hook -s bash)" || true
-
-              export WANDB_DIR="${WANDB_DIR:-/data/mjepa/wandb}"
-              # (optional) avoid port/login issues
-              export WANDB_MODE=online
-              : "${APP_DIR:?APP_DIR not set}"
-              cd "$APP_DIR"
-
-              
-              # Resolve BEST_GRID_JSON locally (no GitHub env)
-              if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/.best_grid_json ]; then
-                BEST_GRID_JSON="$(cat /data/mjepa/experiments/.best_grid_json)"
-              fi
-              if [ -z "${BEST_GRID_JSON:-}" ] && [ -s /data/mjepa/experiments/latest/grid/best_grid_config.json ]; then
-                BEST_GRID_JSON="/data/mjepa/experiments/latest/grid/best_grid_config.json"
-              fi
-
-              # persistent dirs (idempotent)
-              mkdir -p "$TOX21_DIR" "$LOG_DIR"
-
-              export PYTHONPATH="$APP_DIR:${PYTHONPATH:-}"
-
-              # Case study stage (remove --config; keep args explicit)
-              # ---------- Resolve tox21 config precedence ----------
-              # 1) Prefer cached best from grid (latest), 2) current run’s grid, 3) YAML defaults
-              if [ -s "${BEST_GRID_JSON:-}" ]; then
-                TOX_JSON="$BEST_GRID_JSON"
-              elif [ -s "$GRID_DIR/best_grid_config.json" ]; then
-                TOX_JSON="$GRID_DIR/best_grid_config.json"
-              else
-                TOX_JSON=""
-              fi
-              TOX_YAML="scripts/default.yaml"
-              if [ -z "$TOX_JSON" ] && [ ! -s "$TOX_YAML" ]; then
-                echo "[tox21] No grid config and no scripts/default.yaml — cannot resolve hyperparams"
-                exit 9
-              fi
-
-              # ---------- Build tox21 CLI args (safe heredoc) ----------
-              TOX_STR="$("$MMBIN" run -n mjepa python - "$TOX_JSON" "$TOX_YAML" <<'PY'
-              import json, sys, os
-              try:
-                  import yaml
-              except Exception:
-                  yaml = None
-
-              jpath = sys.argv[1] if len(sys.argv) > 1 else ""
-              ypath = sys.argv[2] if len(sys.argv) > 2 else ""
-              cfg = {}
-              # YAML defaults (top-level or under "tox21")
-              if ypath and os.path.isfile(ypath) and yaml is not None:
-                  y = yaml.safe_load(open(ypath)) or {}
-                  y = y.get("tox21", y)
-                  if isinstance(y, dict):
-                      cfg.update(y)
-              # Grid JSON overlays
-              if jpath and os.path.isfile(jpath):
-                  j = json.load(open(jpath)) or {}
-                  if isinstance(j, dict):
-                      cfg.update(j)
-
-              args = []
-              def add(flag, val):
-                  if val is None:
-                      return
-                  args.extend([flag, str(val)])
-
-              # Core hparams (prefer tox21_* keys; fall back to generic)
-              add("--batch-size", cfg.get("tox21_bs", cfg.get("batch_size")))
-              add("--epochs",     cfg.get("tox21_epochs", cfg.get("epochs")))
-              add("--lr",         cfg.get("tox21_lr", cfg.get("lr")))
-              add("--temperature", cfg.get("temperature", 0.1))
-              if "seeds" in cfg and cfg.get("seeds") is not None:
-                add("--seeds", cfg["seeds"])
-
-              print("\n".join(args))
-              PY
-              )"
-              readarray -t TOX21_ARR <<< "$TOX_STR"
-              echo "[tox21] Resolved args: ${TOX21_ARR[*]}"
-
-              # Include any available pretrained encoders
-              TOX_MODEL_ARR=()
-              [ -f "$PRETRAIN_DIR/encoder.pt" ]             && TOX_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder.pt")
-              [ -f "$PRETRAIN_DIR/encoder_jepa.pt" ]        && TOX_MODEL_ARR+=(--jepa-encoder "$PRETRAIN_DIR/encoder_jepa.pt")
-              [ -f "$PRETRAIN_DIR/encoder_contrastive.pt" ] && TOX_MODEL_ARR+=(--contrastive-encoder "$PRETRAIN_DIR/encoder_contrastive.pt")
-
-              # Require at least one encoder to run Tox21
-              if [ "${#TOX_MODEL_ARR[@]}" -eq 0 ]; then
-                echo "[tox21] No encoder found in $PRETRAIN_DIR (encoder*.pt)"; exit 11
-              fi
-
-              
-              # Case study stage (keep CSV/task explicit, merge the rest)
-              echo "[tox21] cmd: train_jepa.py tox21 ${TOX21_ARR[*]} ${TOX_MODEL_ARR[*]} --use-wandb ..."
-              TOX_BASE_STR="$("$MMBIN" run -n mjepa python - <<'PY'
-              import yaml, os
-              cfg = yaml.safe_load(open('scripts/ci/train_jepa_ci.yml')).get('tox21', {})
-              args = []
-              for k, v in cfg.items():
-                  flag = '--' + k.replace('_', '-')
-                  if isinstance(v, bool):
-                      if v:
-                          args.append(flag)
-                  elif isinstance(v, list):
-                      args.append(flag)
-                      args.extend([str(x) for x in v])
-                  else:
-                      args.extend([flag, os.path.expandvars(str(v))])
-              print('\n'.join(args))
-              PY
-                            )"
-                            readarray -t TOX_BASE <<< "$TOX_BASE_STR"
-                            "$MMBIN" run -n mjepa python scripts/train_jepa.py tox21 \
-                              "${TOX_BASE[@]}" \
-                              "${TOX21_ARR[@]}" \
-                              "${TOX_MODEL_ARR[@]}" \
-                              2>&1 | tee -a "$LOG_DIR/tox21_$(date +%F_%H-%M).log"
+      - name: Tox21 on Vast
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          envs: APP_DIR,GRID_CACHE_DIR,TOX21_CACHE_DIR
+          script: |
+            bash "$APP_DIR/scripts/ci/run-tox21.sh"
