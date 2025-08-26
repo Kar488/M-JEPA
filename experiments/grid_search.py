@@ -1016,7 +1016,7 @@ def run_grid_search(
     import sys
 
     total_pairs = len(cfgs) * len(methods)
-    disable_bar = disable_tqdm or not sys.stdout.isatty()
+    disable_bar = disable_tqdm or (not sys.stdout.isatty())
     pbar = None if disable_bar else tqdm.tqdm(total=total_pairs, leave=False)
 
     processed = 0

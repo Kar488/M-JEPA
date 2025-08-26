@@ -687,8 +687,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     use_wandb=args.use_wandb,
                     wandb_project=args.wandb_project,
                     wandb_tags=args.wandb_tags,
-                    disable_tqdm=not getattr(args, "force_tqdm", False)
-                        and not sys.stdout.isatty(),  # suppress single‑epoch progress bars
+                    disable_tqdm=(not getattr(args, "force_tqdm", False)) and (not sys.stdout.isatty()),
                     # dataloader & AMP knobs
                     num_workers=getattr(args, "num_workers", 0),
                     pin_memory=getattr(args, "pin_memory", True),
@@ -754,8 +753,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     perturb_dihedral=aug_cfg.dihedral,
                     wandb_project=args.wandb_project,
                     wandb_tags=args.wandb_tags,
-                    disable_tqdm=not getattr(args, "force_tqdm", False)
-                        and not sys.stdout.isatty(),  # suppress single‑epoch progress bars
+                    disable_tqdm=(not getattr(args, "force_tqdm", False)) and (not sys.stdout.isatty()),
                     # dataloader & AMP knobs
                     num_workers=getattr(args, "num_workers", 0),
                     pin_memory=getattr(args, "pin_memory", True),
@@ -1675,8 +1673,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             max_pretrain_batches=getattr(args, "max_pretrain_batches", 0),
             max_finetune_batches=getattr(args, "max_finetune_batches", 0),
             time_budget_mins=getattr(args, "time_budget_mins", 0),
-            disable_tqdm=not getattr(args, "force_tqdm", False)
-            and not sys.stdout.isatty(),
+            disable_tqdm=(not getattr(args, "force_tqdm", False)) and (not sys.stdout.isatty()),
             
             # dataloader & AMP knobs
             num_workers=getattr(args, "num_workers", 0),
@@ -1932,7 +1929,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force-enable tqdm progress bars even when not attached to a TTY",
     )
-    pre.add_argument("--temperatures", type=float, default=0.1,
+    pre.add_argument("--temperature", type=float, default=0.1,
                      help="InfoNCE temperature (contrastive only)")
     pre.add_argument(
         "--sample-unlabeled",
@@ -2438,3 +2435,4 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         logger.exception("Unhandled exception: %s", e)
+        sys.exit(2)
