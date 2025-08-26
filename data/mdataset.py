@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
-import torch
+try:  # pragma: no cover - optional dependency
+    import torch
+except Exception:  # pragma: no cover
+    torch = None  # type: ignore
 
 _RUNNING_IN_CI = os.getenv("CI") == "true"  # run local vs remote
 
@@ -56,6 +59,9 @@ class GraphData:
             node_features: Tensor of shape (N, F).
             adjacency: Dense adjacency tensor of shape (N, N).
         """
+        if torch is None:  # pragma: no cover - optional dependency
+            raise ImportError("PyTorch is required for tensor operations")
+
         x = torch.as_tensor(self.x, dtype=torch.float32)
         n = x.shape[0]
         adj = torch.zeros((n, n), dtype=torch.float32)
@@ -76,7 +82,7 @@ class GraphDataset:
         smiles: Optional[List[str]] = None,
     ):
         self.graphs = graphs
-        self.labels = None if labels is None else np.asarray(labels)
+        self.labels = np.asarray(labels) if labels is not None else None
         if self.labels is not None:
             if self.labels.ndim != 1 or self.labels.shape[0] != len(self.graphs):
                 raise ValueError("labels must be 1D and the same length as graphs")
@@ -112,6 +118,8 @@ class GraphDataset:
             batch_ptr: Tensor marking graph boundaries within the batch.
             batch_labels: Labels tensor if dataset is labelled, else ``None``.
         """
+        if torch is None:  # pragma: no cover - optional dependency
+            raise ImportError("PyTorch is required for batching graphs")
 
         if not indices:
             logger.error("get_batch called with empty indices")
@@ -363,7 +371,7 @@ class GraphDataset:
                 logger.info("Loading graphs from cache %s", cache_path)
                 with open(cache_path, "rb") as f:
                     graphs, labels = pickle.load(f)
-                return cls(graphs, labels)
+                return cls(graphs, labels, None)
 
         cols = [smiles_col] + ([label_col] if label_col else [])
         df = pd.read_parquet(filepath, columns=cols) 
@@ -438,7 +446,7 @@ class GraphDataset:
                 logger.info("Loading graphs from cache %s", cache_path)
                 with open(cache_path, "rb") as f:
                     graphs, labels = pickle.load(f)
-                return cls(graphs, labels)
+                return cls(graphs, labels, None)
 
         df = pd.read_csv(filepath, sep=sep)
         if n_rows is not None:
