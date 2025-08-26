@@ -904,6 +904,8 @@ jobs:
               --pin-memory \
               --force-tqdm \
               --bf16 \
+              --sample-unlabeled 50000 \
+              --n-rows-per-file 50 \
               --ckpt-dir "$CKPT_DIR" \
               --save-every 1 \
               --output "$PRETRAIN_DIR/encoder.pt" \

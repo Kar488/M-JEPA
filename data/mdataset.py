@@ -52,7 +52,7 @@ class GraphData:
         """Return the number of nodes in the graph."""
         return int(self.x.shape[0])
 
-    def to_tensors(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def to_tensors(self) -> Tuple[torch.Tensor, torch.Tensor]: # type: ignore
         """Convert the graph to PyTorch tensors.
 
         Returns:
@@ -103,7 +103,7 @@ class GraphDataset:
     
     def get_batch(
         self, indices: List[int]
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]: # type: ignore
         """Construct a mini-batch of graphs.
 
         Graphs are combined by block-diagonal stacking of their adjacency
@@ -134,8 +134,8 @@ class GraphDataset:
                 f"Index out of bounds: max {max(indices)} vs {len(self.graphs)} graphs"
             )
 
-        node_features: List[torch.Tensor] = []
-        adj_blocks: List[torch.Tensor] = []
+        node_features: List[torch.Tensor] = [] # type: ignore
+        adj_blocks: List[torch.Tensor] = [] # type: ignore
         sizes: List[int] = []
         for idx in indices:
             x_i, adj_i = self.graphs[idx].to_tensors()

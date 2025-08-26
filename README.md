@@ -276,4 +276,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
       #thread dump on train jepa
       kill -USR1 <python-pid> 
+
+      # Kill pre train hangs
+      pkill -f "scripts/train_jepa.py pretrain" || true
       ```

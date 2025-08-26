@@ -587,15 +587,25 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             # Sample a subset of the unlabeled dataset if requested.  Use getattr to
             # avoid AttributeError when the caller hasn’t set sample_unlabeled.
             sample_ul = getattr(args, "sample_unlabeled", 0) or None
-            
+            rows_per_file = getattr(args, "n_rows_per_file", None)
+            logger.info(
+                "Loading unlabeled (cap=%s, rows_per_file=%s, workers=%s)…",
+                sample_ul, rows_per_file, getattr(args, "num_workers", 0),
+            )
+            t0 = time.time()
 
             unlabeled = load_directory_dataset(
                 args.unlabeled_dir,
                 add_3d=args.add_3d,
                 num_workers=getattr(args, "num_workers", 0),
                 cache_dir=getattr(args, "cache_dir", None),
+                n_rows_per_file=rows_per_file,
                 max_graphs=sample_ul,
             )  # type: ignore[arg-type]
+            logger.info("Loaded unlabeled dataset in %.2fs (%s graphs)",
+                         time.time() - t0, len(unlabeled))
+
+
 
             _wb_log(wb,{"phase": "data_load", "unlabeled_graphs": len(unlabeled)})
         except Exception:
@@ -1912,12 +1922,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fraction of nodes to mask in each view (JEPA/contrastive).",
     )
     pre.add_argument(
-        "--sample-unlabeled",
-        type=int,
-        default=0,
-        help="If >0, load at most N graphs from the unlabeled dataset.",
-    )
-    pre.add_argument(
         "--plot-dir",
         required=True,
         default=CONFIG.get("plot_dir", "plots"),
@@ -1930,6 +1934,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pre.add_argument("--temperatures", type=float, default=0.1,
                      help="InfoNCE temperature (contrastive only)")
+    pre.add_argument(
+        "--sample-unlabeled",
+        type=int,
+        default=0,
+        help="If >0, load at most N graphs from the unlabeled dataset.",
+    )
+    pre.add_argument(
+        "--n-rows-per-file",
+        type=int,
+        default=None,
+        help="If set, limit rows read per file when loading datasets.",
+    )
 
     _add_common_args(pre, "pretrain")
     pre.set_defaults(func=cmd_pretrain)
