@@ -1132,6 +1132,65 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     cmd_finetune(args)
 
 
+def evaluate_finetuned_head(
+    ckpt_path: str, dataset, args: argparse.Namespace, device
+) -> Dict[str, float]:
+    """Evaluate a fine‑tuned encoder+head on a labelled dataset.
+
+    This is used for the benchmark step when we want to avoid training a new
+    head on the test split. The checkpoint is expected to contain both an
+    ``encoder`` and ``head`` state dict. Metrics are computed on the entire
+    dataset.
+    """
+
+    from utils.checkpoint import load_checkpoint
+    from utils.metrics import (
+        compute_classification_metrics,
+        compute_regression_metrics,
+    )
+
+    state = load_checkpoint(ckpt_path)
+    if "encoder" not in state or "head" not in state:
+        logger.warning("Checkpoint missing encoder or head: %s", ckpt_path)
+        return {}
+
+    enc = build_encoder(
+        gnn_type=args.gnn_type,
+        input_dim=dataset.graphs[0].x.shape[1],
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        edge_dim=None
+        if dataset.graphs[0].edge_attr is None
+        else dataset.graphs[0].edge_attr.shape[1],
+    )
+    _load_state_dict_forgiving(enc, state["encoder"])
+    head = nn.Linear(enc.hidden_dim, 1)
+    _load_state_dict_forgiving(head, state["head"])
+    _maybe_to(enc, device)
+    _maybe_to(head, device)
+    enc.eval()
+    head.eval()
+
+    all_preds: List[np.ndarray] = []
+    all_targets: List[np.ndarray] = []
+    for start in range(0, len(dataset), args.batch_size):
+        batch_indices = list(range(start, min(start + args.batch_size, len(dataset))))
+        batch_x, batch_adj, batch_ptr, batch_labels = dataset.get_batch(batch_indices)
+        batch_x = batch_x.to(device)
+        batch_adj = batch_adj.to(device)
+        batch_ptr = batch_ptr.to(device)
+        with torch.no_grad():
+            emb = enc(batch_x, batch_adj, batch_ptr)
+            preds = head(emb).squeeze(1)
+        all_preds.append(preds.detach().to(torch.float32).cpu().numpy())
+        all_targets.append(batch_labels.to(torch.float32).cpu().numpy())
+    y_true = np.concatenate(all_targets)
+    y_pred = np.concatenate(all_preds)
+    if args.task_type == "classification":
+        return compute_classification_metrics(y_true, y_pred)
+    return compute_regression_metrics(y_true, y_pred)
+
+
 def cmd_benchmark(args: argparse.Namespace) -> None:
     """Compare JEPA and contrastive encoders on the same labelled dataset  with flexible loading + report.
 
@@ -1160,6 +1219,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         tags=args.wandb_tags,
         config={
             "labeled_dir": args.labeled_dir,
+            "test_dir": getattr(args, "test_dir", None),
             "task_type": args.task_type,
             "epochs": args.epochs,
             "batch_size": args.batch_size,
@@ -1185,9 +1245,11 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     report_json = os.path.join(args.report_dir, report_stem + ".json")
     report_csv = os.path.join(args.report_dir, report_stem + ".csv")
 
+    data_dir = getattr(args, "test_dir", None) or args.labeled_dir
+
     try:
         labeled = load_directory_dataset(
-            args.labeled_dir,
+            data_dir,
             label_col=args.label_col,
             add_3d=args.add_3d,
             num_workers=getattr(args, "num_workers", 0),
@@ -1210,6 +1272,37 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     # Prepare results dict
     all_results: Dict[str, Dict[str, float]] = {}
     from typing import Any, Dict
+
+    # If a separate test directory is provided, run in eval-only mode using the
+    # fine-tuned checkpoint and return early.
+    if getattr(args, "test_dir", None):
+        wb.log({"phase": "benchmark", "status": "start"})
+        agg_ft = evaluate_finetuned_head(args.ft_ckpt, labeled, args, device)
+        if agg_ft:
+            all_results["finetuned"] = agg_ft
+            for k, v in agg_ft.items():
+                wb.log({f"finetuned/{k}": v})
+        verdict = "finetuned"
+        wb.log({"phase": "benchmark", "status": "success", "best_method": verdict})
+        logger.info(f"Benchmark completed. Best method: {verdict}")
+
+        try:
+            payload = {"results": all_results, "best_method": verdict}
+            with open(report_json, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, sort_keys=True)
+            import csv
+
+            with open(report_csv, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["method", "metric", "value"])
+                for k, v in agg_ft.items():
+                    w.writerow(["finetuned", k, v])
+            logger.info("Wrote reports: %s , %s", report_json, report_csv)
+        except Exception:
+            logger.warning("Failed to write reports", exc_info=True)
+        finally:
+            wb.finish()
+        return
 
     def evaluate_state(
         state_obj: Dict[str, Any] | Any, method_name: str
@@ -2029,6 +2122,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bench.add_argument(
         "--labeled-dir", required=True, help="Directory of labelled graphs"
+    )
+    bench.add_argument(
+        "--test-dir",
+        required=False,
+        default=None,
+        help="Optional directory of test graphs for eval-only benchmarking",
     )
     bench.add_argument(
         "--label-col", type=str, default="label", help="Label column name"
