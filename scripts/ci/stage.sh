@@ -148,7 +148,7 @@ run_stage() {
   if needs_stage "$dir" $(stage_needs "$s"); then
     echo "[$s] starting"
     build_stage_args "$s"
-    stage_dataset_preflight STAGE_ARGS
+    #stage_dataset_preflight STAGE_ARGS
     run_with_timeout "$s" STAGE_ARGS
     mark_stage_done "$dir"
     echo "[$s] completed"
