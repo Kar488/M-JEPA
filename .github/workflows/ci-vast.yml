@@ -198,7 +198,6 @@ jobs:
     needs: [tests_quick,vast_deploy_and_prepare_environment]
     steps:
       - name: Run grid search
-        timeout-minutes: 280 # budget + cushion of 10, set in run-grisd.sh
         uses: appleboy/ssh-action@v1 
         with:
           host: ${{ secrets.VAST_HOST }}
@@ -208,9 +207,12 @@ jobs:
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR,BENCH_CACHE_DIR,TOX21_CACHE_DIR,MAMBA_ROOT_PREFIX,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS
           script: |
             bash "$APP_DIR/scripts/ci/run-grid.sh"
+        env:
+          HARD_WALL_MINS: 270
+          KILL_AFTER_SECS: 120
 
   vast_pretrain:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
@@ -228,9 +230,12 @@ jobs:
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,MAMBA_ROOT_PREFIX,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS
           script: |
             bash "$APP_DIR/scripts/ci/run-pretrain.sh"
+        env:
+          HARD_WALL_MINS: 30
+          KILL_AFTER_SECS: 60
 
   vast_finetune:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
@@ -248,9 +253,12 @@ jobs:
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR, MAMBA_ROOT_PREFIX,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS
           script: |
             bash "$APP_DIR/scripts/ci/run-finetune.sh"
+        env:
+          HARD_WALL_MINS: 60
+          KILL_AFTER_SECS: 600
 
   vast_benchmark:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
@@ -268,9 +276,12 @@ jobs:
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR, MAMBA_ROOT_PREFIX,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS
           script: |
             bash "$APP_DIR/scripts/ci/run-bench.sh"
+        env:
+          HARD_WALL_MINS: 60
+          KILL_AFTER_SECS: 60
 
   vast_tox21:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
@@ -288,6 +299,9 @@ jobs:
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           envs: APP_DIR,GRID_CACHE_DIR,TOX21_CACHE_DIR, MAMBA_ROOT_PREFIX,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS
           script: |
             bash "$APP_DIR/scripts/ci/run-tox21.sh"
+        env:
+          HARD_WALL_MINS: 60
+          KILL_AFTER_SECS: 60
