@@ -195,7 +195,7 @@ jobs:
 
   vast_learn_hyperparameters:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
-    name: Learn hyperparameters
+    name: tests_quick,Learn hyperparameters
     runs-on: ubuntu-latest
     needs: vast_deploy_and_prepare_environment
     steps:

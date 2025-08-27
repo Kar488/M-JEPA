@@ -5,10 +5,16 @@ source "$(dirname "$0")/common.sh"
 ensure_micromamba
 
 STAGE="grid"
-if needs_stage "$GRID_DIR" "$APP_DIR/scripts/train_jepa.py"; then
+if needs_stage "$GRID_DIR" \
+      "$APP_DIR/scripts/train_jepa.py" \
+      "$APP_DIR/scripts/ci/train_jepa_ci.yml" \
+      "$APP_DIR/scripts/ci/run-grid.sh" \
+      "$APP_DIR/scripts/ci/common.sh"; then
+
   echo "[grid] starting hyper-parameter search"
   export TRAIN_JEPA_CI="$APP_DIR/scripts/ci/train_jepa_ci.yml"
   build_argv_from_yaml grid_search
+  expand_array_vars ARGV
   # Build ARGV array from YAML and run grid-search with proper quoting
   # --- Dynamic discovery of supported flags from the tool itself ---
   # This keeps the shell thin and avoids duplicating CLI knowledge here.

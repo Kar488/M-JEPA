@@ -10,8 +10,24 @@ set -euo pipefail
 : "${RUN_ID:=$(date +%s)}"
 : "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
 
-# Ensure project modules are discoverable when running from subdirectories.
-export PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}"
+# --- locate repo root robustly (repo root must contain experiments/ and scripts/) ---
+_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"              # .../scripts/ci
+_guess_root="$(cd "${_here}/../.." && pwd)"                        # repo root guess
+if [ ! -d "${APP_DIR}/experiments" ] || [ ! -f "${APP_DIR}/scripts/train_jepa.py" ]; then
+  if [ -d "${_guess_root}/experiments" ] && [ -f "${_guess_root}/scripts/train_jepa.py" ]; then
+    APP_DIR="${_guess_root}"
+  else
+    # fallback: search one extra level (e.g., nested M-JEPA/)
+    _found="$(cd "${_here}/../.." && find . -maxdepth 2 -type d -name experiments -print -quit | sed 's|^\./||')"
+    if [ -n "${_found:-}" ]; then
+      APP_DIR="$(cd "${_here}/../.."; cd "${_found}/.."; pwd)"
+    fi
+  fi
+fi
+export APP_DIR
+# Ensure project modules are discoverable when running from subdirectories
+export PYTHONPATH="${APP_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+
 
 # Determine an available Python interpreter. Prefer 'python', fallback to 'python3'.
 python_bin() {
@@ -116,10 +132,6 @@ def emit(k, v):
     if v is None:
         return
     s = str(v)
-    if env_ref.match(s):
-        print(key); print(f"\"{s}\""); return
-    if " " in s or "\t" in s:
-        print(key); print(f"\"{s}\""); return
     print(key); print(s)
 
 for k, v in (node or {}).items():
@@ -134,6 +146,15 @@ build_argv_from_yaml() {
   # Read one token per line, preserve spaces via previous quoting
   mapfile -t tmp < <(yaml_args "$section")
   ARGV=("${tmp[@]}")
+}
+
+expand_array_vars() {
+  local -n _arr="$1"
+  local i
+  for i in "${!_arr[@]}"; do
+    [[ "${_arr[$i]}" == --* ]] && continue
+    _arr[$i]=$(eval "echo ${_arr[$i]}")
+  done
 }
 
 # --- inject best grid search configuration ---
