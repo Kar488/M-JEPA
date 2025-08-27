@@ -7,6 +7,7 @@ ensure_micromamba
 STAGE="grid"
 if needs_stage "$GRID_DIR" "$APP_DIR/scripts/train_jepa.py"; then
   echo "[grid] starting hyper-parameter search"
+  export TRAIN_JEPA_CI="$APP_DIR/scripts/ci/train_jepa_ci.yml"
   build_argv_from_yaml grid_search
   # Build ARGV array from YAML and run grid-search with proper quoting
   $MMBIN run -n mjepa python "$APP_DIR/scripts/train_jepa.py" grid-search "${ARGV[@]}" \
