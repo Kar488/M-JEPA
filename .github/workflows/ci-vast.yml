@@ -177,7 +177,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          envs: APP_DIR
+          envs: APP_DIR,REPO_TOKEN
           script: |
             set -euo pipefail
             AUTH_URL="https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git"
@@ -198,20 +198,20 @@ jobs:
               git lfs install --skip-repo
             fi
             git -C "$APP_DIR" lfs pull
-            - name: Setup micromamba environment
-              uses: appleboy/ssh-action@v1
-              with:
-                host: ${{ secrets.VAST_HOST }}
-                username: ${{ secrets.VAST_USER }}
-                port: ${{ secrets.VAST_PORT }}
-                key: ${{ secrets.VAST_SSH_KEY }}
-                passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-                request_pty: true
-                envs: APP_DIR,MAMBA_ROOT_PREFIX,PIP_CACHE_DIR,WANDB_DIR,CACHE_DIR,EXP_ROOT,RUN_ID
-                script: |
-                  set -e
-                  cd "$APP_DIR"
-                  bash scripts/ci/prepare_env.sh
+      - name: Setup micromamba environment
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          request_pty: true
+          envs: APP_DIR,MAMBA_ROOT_PREFIX,PIP_CACHE_DIR,WANDB_DIR,CACHE_DIR,EXP_ROOT,RUN_ID
+          script: |
+            set -e
+            cd "$APP_DIR"
+            bash scripts/ci/prepare_env.sh
 
   vast_learn_hyperparameters:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
