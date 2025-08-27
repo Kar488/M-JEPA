@@ -43,27 +43,25 @@ if needs_stage "$GRID_DIR" "$APP_DIR/scripts/train_jepa.py"; then
   # Preflight: ensure 'experiments' is importable; if not, try to install the extra
   set +e
   $MMBIN run -n mjepa python - <<'PY'
-  try:
-      import importlib
-      importlib.import_module("mjepa.experiments")
-      print("experiments: ok")
-  except Exception as e:
-      print("experiments: missing")
-      raise SystemExit(86)
-  PY
-    rc=$?
-    set -e
-    if [ "$rc" -eq 86 ]; then
-      # Try common layouts: editable project extra, or nested pkg
-      $MMBIN run -n mjepa python -m pip install -e "$APP_DIR[experiments]" || \
-      $MMBIN run -n mjepa python -m pip install -e "$APP_DIR/experiments"
-    fi
+try:
+    import importlib
+    importlib.import_module("mjepa.experiments")
+    print("experiments: ok")
+except Exception:
+    print("experiments: missing")
+    raise SystemExit(86)
+PY
+rc=$?
+set -e
+if [ "$rc" -eq 86 ]; then
+  # Try common layouts: editable project extra, or nested pkg
+  $MMBIN run -n mjepa python -m pip install -e "$APP_DIR[experiments]" || \
+  $MMBIN run -n mjepa python -m pip install -e "$APP_DIR/experiments"
+fi
 
   # Run the grid search inside the micromamba env
-  $MMBIN run -n mjepa python "$APP_DIR/scripts/train_jepa.py" grid-search "${FILTERED[@]}" \
+  $MMBIN run -n mjepa python "$APP_DIR/scripts/train_jepa.py" grid-search "${FILTERED[@]}" 2>&1 | tee "$LOG_DIR/grid.log"
 
-  python "$APP_DIR/scripts/train_jepa.py" grid-search "${FILTERED[@]}" \
-    2>&1 | tee "$LOG_DIR/grid.log"
   mark_stage_done "$GRID_DIR"
   echo "[grid] completed"
 else
