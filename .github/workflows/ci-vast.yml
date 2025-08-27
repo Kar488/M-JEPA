@@ -171,10 +171,7 @@ jobs:
           switches: >-
             -az --delete --info=stats2,progress2 -vv
             --exclude ".git/" --exclude ".github/" --exclude "__pycache__/" 
-            --include "data/"         # enter the data dir
-            --include "data/*"        # include only files at the top of data/
-            --exclude "data/**"       # exclude everything deeper (all subdirs)
-          path: .
+            --exclude "data/**"
           remote_path: ${{ env.APP_DIR }}/
           remote_host: ${{ secrets.VAST_HOST }}
           remote_user: ${{ secrets.VAST_USER }}
