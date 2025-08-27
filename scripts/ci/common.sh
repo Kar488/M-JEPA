@@ -112,8 +112,8 @@ yaml_args() {
 
   for k, v in (node or {}).items():
       emit(k, v)
-  PY
-}
+PY
+  }
 
 build_argv_from_yaml() {
   # Returns an array named ARGV built from yaml_args output (one token per line)
