@@ -92,7 +92,7 @@ build_stage_args() {
 # ---------- dataset preflight (harmless if flags absent) ----------
 # Trim CR and whitespace
 clean_path() {
-  echo "$1" | tr -d '\r'
+  echo "$1" | tr -d '\r\n' | xargs
 }
 
 stage_dataset_preflight() {
