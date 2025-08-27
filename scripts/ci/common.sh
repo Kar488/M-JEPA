@@ -10,24 +10,18 @@ set -euo pipefail
 : "${RUN_ID:=$(date +%s)}"
 : "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
 
-# --- locate repo root robustly (repo root must contain experiments/ and scripts/) ---
-_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"              # .../scripts/ci
-_guess_root="$(cd "${_here}/../.." && pwd)"                        # repo root guess
+# Auto-detect repo root from this script if APP_DIR is off
+_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"        # .../scripts/ci
+_root_guess="$(cd "${_here}/../.." && pwd)"                  # repo root
 if [ ! -d "${APP_DIR}/experiments" ] || [ ! -f "${APP_DIR}/scripts/train_jepa.py" ]; then
-  if [ -d "${_guess_root}/experiments" ] && [ -f "${_guess_root}/scripts/train_jepa.py" ]; then
-    APP_DIR="${_guess_root}"
-  else
-    # fallback: search one extra level (e.g., nested M-JEPA/)
-    _found="$(cd "${_here}/../.." && find . -maxdepth 2 -type d -name experiments -print -quit | sed 's|^\./||')"
-    if [ -n "${_found:-}" ]; then
-      APP_DIR="$(cd "${_here}/../.."; cd "${_found}/.."; pwd)"
-    fi
+  if [ -d "${_root_guess}/experiments" ] && [ -f "${_root_guess}/scripts/train_jepa.py" ]; then
+    APP_DIR="${_root_guess}"
   fi
 fi
 export APP_DIR
-# Ensure project modules are discoverable when running from subdirectories
-export PYTHONPATH="${APP_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
+# Ensure project modules are discoverable when running from subdirectories.
+export PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 # Determine an available Python interpreter. Prefer 'python', fallback to 'python3'.
 python_bin() {
@@ -107,7 +101,7 @@ yaml_args() {
   #  - Env refs like ${VAR} or $VAR => keep for shell to expand (double-quote)
   #  - Lists => repeat the flag
   #  - true => boolean flag present; false => omitted
-
+  # Determine a python interpreter (python, python3, etc.)
    local py; py=$(python_bin) || { echo "python not found" >&2; return 127; }
    "$py" - "$@" <<'PY'
 import sys, os, yaml, re
@@ -123,12 +117,26 @@ def emit(k, v):
         if v:
             print(key)
         return
+
     if isinstance(v, (int, float)):
         print(key); print(str(v)); return
-    if isinstance(v, list):
-        for item in v:
-            emit(k, item)
+    
+    if isinstance(v, (list, tuple)):
+        # keys that accept multiple values with a single flag (nargs='+')
+        multi = {
+            "methods","mask_ratios","contiguities","hidden_dims","num_layers_list",
+            "gnn_types","ema_decays","add_3d_options","pretrain_batch_sizes",
+            "finetune_batch_sizes","pretrain_epochs_options","finetune_epochs_options",
+            "learning_rates","seeds","aug_rotate_options","aug_mask_angle_options",
+            "aug_dihedral_options","temperatures"
+        }
+        if k in multi:
+            print(key)
+            for item in v: print(item)
+        else:
+            for item in v: emit(k, item)
         return
+
     if v is None:
         return
     s = str(v)

@@ -53,7 +53,7 @@ env:
   WANDB_RUN_ID: ${{ github.run_id }}
   WANDB_RESUME: allow
   WANDB_RUN_GROUP: ${{ github.run_id }}
-  MAMBA_ROOT_PREFIX: /data/mjepa/micromamba
+  MAMBA_ROOT_PREFIX: ~/micromamba
   WANDB_DIR: /data/mjepa/wandb
   CACHE_DIR: /data/mjepa/cache/graphs
   RUN_ID: ${{ github.run_id }}
@@ -195,9 +195,9 @@ jobs:
 
   vast_learn_hyperparameters:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
-    name: tests_quick,Learn hyperparameters
+    name: Learn hyperparameters
     runs-on: ubuntu-latest
-    needs: vast_deploy_and_prepare_environment
+    needs: [tests_quick,vast_deploy_and_prepare_environment]
     steps:
       - name: Run grid search
         uses: appleboy/ssh-action@v1
@@ -208,7 +208,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR,BENCH_CACHE_DIR,TOX21_CACHE_DIR
+          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR,BENCH_CACHE_DIR,TOX21_CACHE_DIR,MAMBA_ROOT_PREFIX
           script: |
             bash "$APP_DIR/scripts/ci/run-grid.sh"
 

@@ -12,6 +12,22 @@ if needs_stage "$GRID_DIR" \
       "$APP_DIR/scripts/ci/common.sh"; then
 
   echo "[grid] starting hyper-parameter search"
+
+if [[ "${DEBUG_IMPORTS:-0}" == "1" ]]; then
+  $MMBIN run -n mjepa python - <<'PY' 
+import os, sys, importlib
+print("APP_DIR:", os.environ.get("APP_DIR"))
+print("PYTHONPATH:", os.environ.get("PYTHONPATH"))
+print("sys.path[0:3]:", sys.path[0:3])
+for mod in ("experiments","mjepa.experiments"):
+    try:
+        m = importlib.import_module(mod)
+        print(f"import {mod}: OK @ {getattr(m,'__file__',m)}")
+    except Exception as e:
+        print(f"import {mod}: FAIL -> {e}")
+PY
+fi
+
   export TRAIN_JEPA_CI="$APP_DIR/scripts/ci/train_jepa_ci.yml"
   build_argv_from_yaml grid_search
   expand_array_vars ARGV
