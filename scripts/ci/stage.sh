@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -x   # bash prints each command before executing
+#set -x   # bash prints each command before executing
 set -euo pipefail
 
 # requires: common.sh (ensure_micromamba, build_argv_from_yaml, expand_array_vars, best_config_args)
@@ -55,7 +55,7 @@ build_stage_args() {
 
   build_argv_from_yaml "$section"
   expand_array_vars ARGV
-  echo "ARGV after expansion: ${ARGV[@]}"
+  #echo "ARGV after expansion: ${ARGV[@]}"
 
   # Best (from grid) → append last so it overrides YAML
   local -a BEST
@@ -127,6 +127,13 @@ run_with_timeout() {
   local s="$1"; shift
   local -n arr="$1"; shift
   local subcmd; subcmd="$(stage_subcmd "$s")"
+
+  #snake to kebab case  
+  if [ "$s" = "grid_search" ]; then
+    echo "where"
+    section="grid_search"   # YAML key
+    subcmd="grid-search"    # argparse subcommand
+  fi
 
   local getv; getv() { local k="$1" n=0; while (( n < ${#arr[@]} )); do [[ "${arr[$n]}" == "$k" ]] && { echo "${arr[$((n+1))]}"; return 0; }; ((n++)); done; return 1; }
   local BUDGET_MINS="$(getv --time-budget-mins || true)"
