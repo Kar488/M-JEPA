@@ -168,7 +168,7 @@ jobs:
       - name: Sync repository (incremental)
         uses: appleboy/ssh-action@v1
         env:
-          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}       # PAT with repo read access
+          REPO_TOKEN: ${{ secrets.GH_PAT_RO }}       # PAT with repo read access
           REPO: Kar488/M-JEPA
           BRANCH: master
         with:
@@ -181,7 +181,7 @@ jobs:
           envs: APP_DIR,REPO_TOKEN,REPO,BRANCH
           script: |
             set -euo pipefail
-            AUTH_URL="https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git"
+            AUTH_URL="https://deploy err${REPO_TOKEN}@github.com/${REPO}.git"
             mkdir -p "$APP_DIR"
             if [ -d "$APP_DIR/.git" ]; then
               git -C "$APP_DIR" remote set-url origin "$AUTH_URL"
