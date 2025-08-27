@@ -91,9 +91,7 @@ yaml_args() {
   #  - Env refs like ${VAR} or $VAR => keep for shell to expand (double-quote)
   #  - Lists => repeat the flag
   #  - true => boolean flag present; false => omitted
-  local py
-  py=$(python_bin) || { echo "python interpreter not found" >&2; return 127; }
-  # Determine a python interpreter (python, python3, etc.)
+
    local py; py=$(python_bin) || { echo "python not found" >&2; return 127; }
    "$py" - "$@" <<'PY'
 import sys, os, yaml, re
@@ -104,7 +102,7 @@ node = cfg.get(section, {})
 env_ref = re.compile(r'^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$')
 
 def emit(k, v):
-    key = "--" + k
+    key = "--" + k.replace("_","-")
     if isinstance(v, bool):
         if v:
             print(key)
