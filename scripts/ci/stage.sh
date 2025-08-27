@@ -112,6 +112,7 @@ stage_dataset_preflight() {
   [[ -n "$LBL" && ! -d "$LBL" ]] && echo "[warn] labeled-dir not found: $LBL"
   [[ -n "$DS" && ! -d "$DS" ]]   && echo "[warn] dataset-dir not found: $DS"
   [[ -n "$CSV" && ! -f "$CSV" ]] && echo "[warn] csv file not found: $CSV"
+}
 
 # ---------- timeout + SIGINT ----------
 run_with_timeout() {
