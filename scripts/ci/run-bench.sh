@@ -7,8 +7,8 @@ ensure_micromamba
 STAGE="bench"
 if needs_stage "$BENCH_DIR" "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR"; then
   echo "[bench] starting benchmarks"
-  simulate_progress
-  # Placeholder for actual benchmarking invocation
+  $MMBIN run -n mjepa python "$APP_DIR/scripts/train_jepa.py" benchmark $(yaml_args bench) \
+    2>&1 | tee "$LOG_DIR/bench.log"
   mark_stage_done "$BENCH_DIR"
   echo "[bench] completed"
 else
