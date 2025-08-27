@@ -72,34 +72,54 @@ simulate_progress() {
 
 # --- yaml argument helper ---
 yaml_args() {
-  local section="$1"
-  "$MMBIN" run -n mjepa python - "$section" <<'PY'
-import os, sys, yaml, shlex
-section = sys.argv[1]
-path = os.path.join(os.environ["APP_DIR"], "scripts/ci/train_jepa_ci.yml")
-with open(path, "r", encoding="utf-8") as f:
-    data = yaml.safe_load(f)
-cfg = data[section]
+  # Usage: yaml_args <section>
+  # Prints one argument per line: --key <value> OR --flag (for booleans)
+  # Rules:
+  #  - KEEP underscores in flag names (train_jepa.py uses underscores)
+  #  - Strings with spaces => wrap in double quotes
+  #  - Env refs like ${VAR} or $VAR => keep for shell to expand (double-quote)
+  #  - Lists => repeat the flag
+  #  - true => boolean flag present; false => omitted
+  python - "$@" <<'PY'
+  import sys, os, yaml, re
+  section = sys.argv[1] if len(sys.argv) > 1 else "grid_search"
+  with open(os.environ.get("TRAIN_JEPA_CI", "scripts/ci/train_jepa_ci.yml"), "r") as f:
+      cfg = yaml.safe_load(f) or {}
+  node = cfg.get(section, {})
+  env_ref = re.compile(r'^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$')
 
-def expand(val):
-    if isinstance(val, str):
-        return os.path.expandvars(val)
-    if isinstance(val, list):
-        return [expand(v) for v in val]
-    return val
+  def emit(k, v):
+      key = "--" + k  # KEEP underscores
+      if isinstance(v, bool):
+          if v: print(key)
+          return
+      if isinstance(v, (int, float)):
+          print(key); print(str(v)); return
+      if isinstance(v, list):
+          for item in v:
+              emit(k, item)
+          return
+      if v is None:
+          return
+      # string
+      s = str(v)
+      if env_ref.match(s):
+          # leave $VAR / ${VAR} for shell expansion; double-quote to keep spaces
+          print(key); print(f"\"{s}\""); return
+      if " " in s or "\t" in s:
+          print(key); print(f"\"{s}\""); return
+      print(key); print(s)
 
-cfg = {k: expand(v) for k, v in cfg.items()}
-args = []
-for k, v in cfg.items():
-    key = "--" + k
-    if isinstance(v, bool):
-        if v:
-            args.append(key)
-    elif isinstance(v, list):
-        for item in v:
-            args.extend([key, str(item)])
-    else:
-        args.extend([key, str(v)])
-print(" ".join(shlex.quote(a) for a in args))
-PY
+  for k, v in (node or {}).items():
+      emit(k, v)
+  PY
+}
+
+build_argv_from_yaml() {
+  # Returns an array named ARGV built from yaml_args output (one token per line)
+  local section="${1:-grid_search}"
+  local -a tmp
+  # Read one token per line, preserve spaces via previous quoting
+  mapfile -t tmp < <(yaml_args "$section")
+  ARGV=("${tmp[@]}")
 }
