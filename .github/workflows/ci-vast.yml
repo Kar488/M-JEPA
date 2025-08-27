@@ -173,7 +173,6 @@ jobs:
           source: "."
           target: "${{ env.APP_DIR }}"
           strip_components: 0
-          rm_target: true
       - name: Setup micromamba environment
         uses: appleboy/ssh-action@v1
         with:

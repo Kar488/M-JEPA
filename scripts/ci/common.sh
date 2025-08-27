@@ -85,8 +85,8 @@ simulate_progress() {
 yaml_args() {
   # Usage: yaml_args <section>
   # Prints one argument per line: --key <value> OR --flag (for booleans)
-  # Rules:
-  #  - KEEP underscores in flag names (train_jepa.py uses underscores)
+  # Rules: 
+  #  - Convert underscores to kebab-case flags (cache_dir -> --cache-dir)
   #  - Strings with spaces => wrap in double quotes
   #  - Env refs like ${VAR} or $VAR => keep for shell to expand (double-quote)
   #  - Lists => repeat the flag
@@ -149,32 +149,127 @@ import json, sys
 path, stage = sys.argv[1], sys.argv[2]
 cfg = json.load(open(path))
 
-common = {
-    "gnn_type": "--gnn-type",
-    "hidden_dim": "--hidden-dim",
-    "num_layers": "--num-layers",
-    "ema_decay": "--ema-decay",
-    "contiguous": "--contiguous",
-    "add_3d": "--add-3d",
-    "lr": "--lr",
+# --- Unified, refactor-safe mappings (kebab-case) ---
+# 1) Dataset / loader / device knobs that multiple stages accept
+dataset_loader = {
+    "dataset_dir": "--dataset-dir",
+    "unlabeled_dir": "--unlabeled-dir",
+    "labeled_dir": "--labeled-dir",
+    "csv": "--csv",
+    "label_col": "--label-col",
+    "smiles_col": "--smiles-col",
+    "task_type": "--task-type",
+    "cache_dir": "--cache-dir",
+    "no_cache": "--no-cache",
+    "num_workers": "--num-workers",
+    "prefetch_factor": "--prefetch-factor",
+    "persistent_workers": "--persistent-workers",
+    "pin_memory": "--pin-memory",
+    "bf16": "--bf16",
+    "devices": "--devices",
+    "device": "--device",
 }
-pre = {
-    "mask_ratio": "--mask-ratio",
-    "pretrain_batch_size": "--batch-size",
-    "pretrain_epochs": "--epochs",
+
+# 2) Model architecture & training hyperparams (shared)
+model_common = {
+    "gnn_types": "--gnn-types",
+    "hidden_dims": "--hidden-dims",
+    "num_layers_list": "--num-layers",
+    "ema_decays": "--ema-decays",
+    "contiguities": "--contiguities",
+    "add_3d_options": "--add-3d-options",
+    "lr": "--lr",
+    "learning_rates": "--learning-rates",
+    "use_scheduler": "--use-scheduler",
+    "warmup_steps": "--warmup-steps",
     "temperature": "--temperature",
     "contrastive": "--contrastive",
 }
-ft = {
+
+# 3) Augmentations (JEPA vs. contrastive study toggles)
+augment = {
+    "aug_rotate_options": "--aug-rotate-options",
+    "aug_mask_angle_options": "--aug-mask-angle-options",
+    "aug_dihedral_options": "--aug-dihedral-options",
+}
+
+# 4) Logging / outputs
+logging_io = {
+    "out_csv": "--out-csv",
+    "best_config_out": "--best-config-out",
+    "ckpt_dir": "--ckpt-dir",
+    "ckpt_every": "--ckpt-every",
+    "output": "--output",
+    "force_tqdm": "--force-tqdm",
+    "use_wandb": "--use-wandb",
+    "wandb_project": "--wandb-project",
+    "wandb_tags": "--wandb-tags",
+    "report_dir": "--report-dir",
+}
+
+# 5) Stage-specific knobs
+grid_only = {
+    "methods": "--methods",
+    "mask_ratios": "--mask-ratios",
+    "pretrain_batch_sizes": "--pretrain-batch-sizes",
+    "finetune_batch_sizes": "--finetune-batch-sizes",
+    "pretrain_epochs_options": "--pretrain-epochs-options",
+    "finetune_epochs_options": "--finetune-epochs-options",
+    "seeds": "--seeds",
+    "sample_unlabeled": "--sample-unlabeled",
+    "sample_labeled": "--sample-labeled",
+    "n_rows_per_file": "--n-rows-per-file",
+    "max_pretrain_batches": "--max-pretrain-batches",
+    "target_pretrain_samples": "--target-pretrain-samples",
+    "max_finetune_batches": "--max-finetune-batches",
+    "time_budget_mins": "--time-budget-mins",
+    "temperatures": "--temperatures",
+    "force_refresh": "--force-refresh",
+}
+
+pretrain_only = {
+    "mask_ratio": "--mask-ratio",
+    "pretrain_batch_size": "--batch-size",
+    "pretrain_epochs": "--epochs",
+    "save_every": "--save-every",
+}
+
+finetune_only = {
     "finetune_batch_size": "--batch-size",
     "finetune_epochs": "--epochs",
+    "metric": "--metric",
+    "patience": "--patience",
+    "jepa_encoder": "--jepa-encoder",
 }
+
+benchmark_only = {
+    "jepa_encoder": "--jepa-encoder",
+    "ft_ckpt": "--ft-ckpt",
+}
+
+tox21_only = {
+    "task": "--task",
+}
+
+# 6) Final per-stage maps (compose without duplication)
 maps = {
-    "pretrain": {**common, **pre},
-    "finetune": {**common, **ft},
-    "bench": {**common, **ft},
-    "tox21": {**common, **ft},
+    "grid": {
+        **dataset_loader, **model_common, **augment, **logging_io, **grid_only
+    },
+    "pretrain": {
+        **dataset_loader, **model_common, **augment, **logging_io, **pretrain_only
+    },
+    "finetune": {
+        **dataset_loader, **model_common, **augment, **logging_io, **finetune_only
+    },
+    "bench": {
+        **dataset_loader, **model_common, **augment, **logging_io, **benchmark_only
+    },
+    "tox21": {
+        **dataset_loader, **model_common, **augment, **logging_io, **tox21_only
+    },
 }
+
 mapping = maps.get(stage, {})
 for key, flag in mapping.items():
     if key not in cfg:
