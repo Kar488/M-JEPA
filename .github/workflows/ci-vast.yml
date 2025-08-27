@@ -168,7 +168,7 @@ jobs:
       - name: Sync repository (incremental)
         uses: appleboy/ssh-action@v1
         env:
-          REPO_TOKEN: ${{ secrets.GH_PAT_RO }}       # PAT with repo read access
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}       # PAT with repo read access
           REPO: Kar488/M-JEPA
           BRANCH: master
         with:
