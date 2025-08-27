@@ -9,21 +9,17 @@ set -euo pipefail
 : "${CACHE_DIR:=/data/mjepa/cache/graphs}"
 : "${RUN_ID:=$(date +%s)}"
 : "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
-: "${WANDB_DIR: /data/mjepa/wandb}"
+: "${WANDB_DIR:=/data/mjepa/wandb}"
 
-# Auto-detect repo root from this script if APP_DIR is off
-_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"        # .../scripts/ci
-_root_guess="$(cd "${_here}/../.." && pwd)"                  # repo root
-if [ ! -d "${APP_DIR}/experiments" ] || [ ! -f "${APP_DIR}/scripts/train_jepa.py" ]; then
-  if [ -d "${_root_guess}/experiments" ] && [ -f "${_root_guess}/scripts/train_jepa.py" ]; then
-    APP_DIR="${_root_guess}"
+if [[ -z "${APP_DIR:-}" ]]; then
+  _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"      # .../scripts/ci
+  _root="$(cd "${_here}/../.." && pwd)"                      # repo root guess
+  if [[ -f "$_root/scripts/train_jepa.py" ]]; then
+    APP_DIR="$_root"
   fi
 fi
 export APP_DIR
-
-# Ensure project modules are discoverable when running from subdirectories.
-export PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}"
-
+export PYTHONPATH="${APP_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
 # Determine an available Python interpreter. Prefer 'python', fallback to 'python3'.
 python_bin() {
@@ -43,7 +39,9 @@ FINETUNE_DIR="${FINETUNE_CACHE_DIR:-$EXP_ROOT/finetune}"
 BENCH_DIR="${BENCH_CACHE_DIR:-$EXP_ROOT/bench}"
 TOX21_DIR="${TOX21_CACHE_DIR:-$EXP_ROOT/tox21}"
 LOG_DIR="$EXP_ROOT/logs"
-mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR"
+
+mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR" "$WANDB_DIR"
+export GRID_DIR PRETRAIN_DIR FINETUNE_DIR BENCH_DIR TOX21_DIR LOG_DIR
 
 # --- micromamba bootstrap ---
 ensure_micromamba() {

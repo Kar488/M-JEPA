@@ -144,6 +144,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 1
       - name: Bootstrap environment
         uses: appleboy/ssh-action@v1
         with:
