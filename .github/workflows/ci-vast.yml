@@ -169,7 +169,7 @@ jobs:
         uses: Burnett01/rsync-deployments@7.0.1
         with:
           switches: >-
-            -az --delete --info=stats2,progress2 -vv
+            -aznv --delete --info=stats2,progress2 -vv
             --exclude ".git/" --exclude ".github/" --exclude "__pycache__/" 
             --exclude "data/**"
           remote_path: ${{ env.APP_DIR }}/
