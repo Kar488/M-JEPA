@@ -46,13 +46,21 @@ build_stage_args() {
   export TRAIN_JEPA_CI="$APP_DIR/scripts/ci/train_jepa_ci.yml"
 
   # YAML args
-  build_argv_from_yaml "$s"
+  #snake to kebab case 
+  local section="$s"
+  local subcmd="$s"
+  if [ "$s" = "grid" ]; then
+    section="grid_search"   # YAML key
+    subcmd="grid-search"    # argparse subcommand
+  fi
+
+  build_argv_from_yaml "$section"
   expand_array_vars ARGV
   echo "ARGV after expansion: ${ARGV[@]}"
 
   # Best (from grid) → append last so it overrides YAML
   local -a BEST
-  mapfile -t BEST < <(best_config_args "$s")
+  mapfile -t BEST < <(best_config_args "$section")
   expand_array_vars BEST
 
   local -a COMBINED=( "${ARGV[@]}" "${BEST[@]}" )
