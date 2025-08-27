@@ -47,8 +47,8 @@ export GRID_DIR PRETRAIN_DIR FINETUNE_DIR BENCH_DIR TOX21_DIR LOG_DIR
 ensure_micromamba() {
   if command -v micromamba >/dev/null 2>&1; then
     MMBIN="$(command -v micromamba)"
-  elif [ -x "$HOME/micromamba/bin/micromamba" ]; then
-    MMBIN="$HOME/micromamba/bin/micromamba"
+  elif [ -x "$MAMBA_ROOT_PREFIX/bin/micromamba" ]; then
+    MMBIN="$MAMBA_ROOT_PREFIX/bin/micromamba"
   else
     echo "micromamba not found" >&2
     return 1

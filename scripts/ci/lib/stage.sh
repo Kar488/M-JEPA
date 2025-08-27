@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -x   # bash prints each command before executing
 set -euo pipefail
 
 # requires: common.sh (ensure_micromamba, build_argv_from_yaml, expand_array_vars, best_config_args)
