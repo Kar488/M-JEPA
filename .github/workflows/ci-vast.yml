@@ -225,7 +225,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 280
+          command_timeout: 280m
           envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR,BENCH_CACHE_DIR,TOX21_CACHE_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS
           script: |
@@ -249,7 +249,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 40
+          command_timeout: 40m
           envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS
           script: |
@@ -273,7 +273,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 190
+          command_timeout: 190m
           envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS
           script: |
@@ -297,7 +297,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 70
+          command_timeout: 70m
           envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS
           script: |
@@ -321,7 +321,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 70
+          command_timeout: 70m
           envs: APP_DIR,GRID_CACHE_DIR,TOX21_CACHE_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS
           script: |
