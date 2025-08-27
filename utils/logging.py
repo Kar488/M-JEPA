@@ -101,7 +101,7 @@ def maybe_init_wandb(
         run = getattr(wandb, "run", None)
         if run is None:
             kw = dict(
-                run_id   = env.get("WANDB_RUN_ID"),         # same id reused across stages
+                id   = env.get("WANDB_RUN_ID"),         # same id reused across stages
                 resume   = env.get("WANDB_RESUME", "allow"),# allow/auto/never/… (allow is safe)
                 name     = env.get("WANDB_NAME"),           # "grid", "pretrain", "finetune", …
                 group    = env.get("WANDB_RUN_GROUP"),       # optional

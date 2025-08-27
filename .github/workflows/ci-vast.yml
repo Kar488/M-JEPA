@@ -218,6 +218,7 @@ jobs:
     steps:
       - name: Run grid search
         uses: appleboy/ssh-action@v1 
+        timeout-minutes: 270
         with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
@@ -241,6 +242,7 @@ jobs:
     steps:
       - name: Pretrain on Vast
         uses: appleboy/ssh-action@v1
+        timeout-minutes: 30
         with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
@@ -264,6 +266,7 @@ jobs:
     steps:
       - name: Finetune on Vast
         uses: appleboy/ssh-action@v1
+        timeout-minutes: 180
         with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
@@ -276,7 +279,7 @@ jobs:
           script: |
             bash "$APP_DIR/scripts/ci/run-finetune.sh"
         env:
-          HARD_WALL_MINS: 60
+          HARD_WALL_MINS: 180
           KILL_AFTER_SECS: 600
 
   vast_benchmark:
@@ -287,6 +290,7 @@ jobs:
     steps:
       - name: Benchmark on Vast
         uses: appleboy/ssh-action@v1
+        timeout-minutes: 60
         with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
@@ -310,6 +314,7 @@ jobs:
     steps:
       - name: Tox21 on Vast
         uses: appleboy/ssh-action@v1
+        timeout-minutes: 60
         with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}

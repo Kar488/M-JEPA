@@ -130,7 +130,6 @@ run_with_timeout() {
 
   #snake to kebab case  
   if [ "$s" = "grid_search" ]; then
-    echo "where"
     section="grid_search"   # YAML key
     subcmd="grid-search"    # argparse subcommand
   fi
