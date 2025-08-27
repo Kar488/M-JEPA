@@ -165,17 +165,21 @@ jobs:
               curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj -C "$HOME/micromamba" bin/micromamba
             fi
             echo "Prepared environment at $APP_DIR"
-      - name: Sync repository
-        uses: appleboy/scp-action@v0.1.7
+      - name: Sync repository (incremental)
+        uses: Burnett01/rsync-deployments@7.0.1
         with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          source: "."
-          target: "${{ env.APP_DIR }}"
-          strip_components: 0
+          switches: >-
+            -az --delete --info=stats2,progress2
+            --exclude ".git/" --exclude ".github/" --exclude "__pycache__/" 
+            --include "data/"         # enter the data dir
+            --include "data/*"        # include only files at the top of data/
+            --exclude "data/**"       # exclude everything deeper (all subdirs)
+          path: .
+          remote_path: ${{ env.APP_DIR }}/
+          remote_host: ${{ secrets.VAST_HOST }}
+          remote_user: ${{ secrets.VAST_USER }}
+          remote_port: ${{ secrets.VAST_PORT }}
+          remote_key: ${{ secrets.VAST_SSH_KEY }}
       - name: Setup micromamba environment
         uses: appleboy/ssh-action@v1
         with:
