@@ -108,11 +108,19 @@ stage_dataset_preflight() {
   CSV=$(clean_path "$CSV")
   DS=$(clean_path "$DS")
 
-  [[ -n "$UL" && ! -d "$UL" ]] && echo "[warn] unlabeled-dir not found: $UL"
-  [[ -n "$LBL" && ! -d "$LBL" ]] && echo "[warn] labeled-dir not found: $LBL"
-  [[ -n "$DS" && ! -d "$DS" ]]   && echo "[warn] dataset-dir not found: $DS"
-  [[ -n "$CSV" && ! -f "$CSV" ]] && echo "[warn] csv file not found: $CSV"
-}
+  if [[ -n "$UL" && ! -d "$UL" ]]; then
+    echo "[warn] unlabeled-dir not found: $UL"
+  fi
+  if [[ -n "$LBL" && ! -d "$LBL" ]]; then
+    echo "[warn] labeled-dir not found: $LBL"
+  fi
+  if [[ -n "$DS" && ! -d "$DS" ]]; then
+    echo "[warn] dataset-dir not found: $DS"
+  fi
+  if [[ -n "$CSV" && ! -f "$CSV" ]]; then
+    echo "[warn] csv file not found: $CSV"
+  fi
+  }
 
 # ---------- timeout + SIGINT ----------
 run_with_timeout() {
@@ -131,7 +139,7 @@ run_with_timeout() {
   mkdir -p "$LOG_DIR"
 
   timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
-    PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+    env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
     "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
     python -u "$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}" \
     2>&1 | tee "$LOG_DIR/${s}.log"
@@ -148,7 +156,7 @@ run_stage() {
   if needs_stage "$dir" $(stage_needs "$s"); then
     echo "[$s] starting"
     build_stage_args "$s"
-    #stage_dataset_preflight STAGE_ARGS
+    stage_dataset_preflight STAGE_ARGS
     run_with_timeout "$s" STAGE_ARGS
     mark_stage_done "$dir"
     echo "[$s] completed"
