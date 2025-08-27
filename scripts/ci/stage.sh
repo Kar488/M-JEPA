@@ -48,7 +48,7 @@ build_stage_args() {
 
   # YAML args
   #snake to kebab case  
-  if [ "$s" = "grid" ]; then
+  if [ "$s" = "grid_search" ]; then
     section="grid_search"   # YAML key
     subcmd="grid-search"    # argparse subcommand
   fi

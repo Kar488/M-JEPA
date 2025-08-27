@@ -9,7 +9,7 @@ common: &common
   pin_memory: true
   bf16: true
 
-grid-search:
+grid_search:
   <<: *common
   unlabeled_dir: ${APP_DIR}/data/ZINC-canonicalized
   labeled_dir: ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
