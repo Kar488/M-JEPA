@@ -36,10 +36,12 @@ import numpy as np
 import torch
 import yaml
 
-#TODO remove later
+# TODO remove later
 # Optional: enable stack dumps on SIGUSR1 (POSIX). Skip gracefully elsewhere e.g, local desktop on windows
 try:
-    import faulthandler, signal
+    import faulthandler
+    import signal
+
     _sig = getattr(signal, "SIGUSR1", None)
     if _sig is not None and hasattr(faulthandler, "register"):
         faulthandler.register(_sig, all_threads=True)
@@ -48,7 +50,7 @@ try:
         faulthandler.enable()
 except Exception:
     pass
-#kill -USR1 <python-pid>   # stacks will print into log/console
+# kill -USR1 <python-pid>   # stacks will print into log/console
 
 try:
     from data.augment import iter_augmentation_options  # type: ignore
@@ -230,16 +232,19 @@ except Exception:
 
         return DummyWB()
 
+
 try:
     from utils.plotting import plot_training_curves  # type: ignore[assignment]
 except Exception:
+
     def plot_training_curves(*args, **kwargs):  # type: ignore[assignment]
         class _DummyFig:
             def savefig(self, *a, **k):
                 pass
 
         return _DummyFig()
-    
+
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -364,7 +369,7 @@ def load_directory_dataset(
     n_rows_per_file: Optional[int] = None,
     max_graphs: Optional[int] = None,
     num_workers: int = 0,
-) -> "GraphDataset": # type: ignore
+) -> "GraphDataset":  # type: ignore
     if GraphDataset is None:
         raise ImportError(
             "GraphDataset is unavailable. Ensure `data.mdataset.GraphDataset`"
@@ -393,7 +398,7 @@ def load_parquet_dataset(
     add_3d: bool = False,
     random_seed: Optional[int] = None,
     n_rows: Optional[int] = None,
-) -> "GraphDataset": # type: ignore
+) -> "GraphDataset":  # type: ignore
     if GraphDataset is None:
         raise ImportError(
             "GraphDataset is unavailable. Ensure `data.mdataset.GraphDataset`"
@@ -547,11 +552,14 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
     def _wb_finish(wb):
         if _wb_run_ok(wb):
-            try: wb.finish()
-            except Exception: pass
+            try:
+                wb.finish()
+            except Exception:
+                pass
+
+    import random
 
     from utils.checkpoint import load_checkpoint, save_checkpoint
-    import random
 
     # Resume state
     args.ckpt_dir = getattr(args, "ckpt_dir", "ckpts/pretrain")
@@ -560,7 +568,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
     start_epoch = 0
 
     if getattr(args, "resume_ckpt", None):
-        _wb_log(wb,{"phase": "pretrain", "status": "resume", "ckpt": args.resume_ckpt})
+        _wb_log(wb, {"phase": "pretrain", "status": "resume", "ckpt": args.resume_ckpt})
         ckpt_state = load_checkpoint(args.resume_ckpt)
     else:
         ckpt_state = {}
@@ -577,20 +585,21 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
             seed = int(seeds[0]) if seeds else 0
 
-
             torch.manual_seed(seed)
             np.random.seed(seed)
             random.seed(seed)
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
-            
+
             # Sample a subset of the unlabeled dataset if requested.  Use getattr to
             # avoid AttributeError when the caller hasn’t set sample_unlabeled.
             sample_ul = getattr(args, "sample_unlabeled", 0) or None
             rows_per_file = getattr(args, "n_rows_per_file", None)
             logger.info(
                 "Loading unlabeled (cap=%s, rows_per_file=%s, workers=%s)…",
-                sample_ul, rows_per_file, getattr(args, "num_workers", 0),
+                sample_ul,
+                rows_per_file,
+                getattr(args, "num_workers", 0),
             )
             t0 = time.time()
 
@@ -602,15 +611,16 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 n_rows_per_file=rows_per_file,
                 max_graphs=sample_ul,
             )  # type: ignore[arg-type]
-            logger.info("Loaded unlabeled dataset in %.2fs (%s graphs)",
-                         time.time() - t0, len(unlabeled))
+            logger.info(
+                "Loaded unlabeled dataset in %.2fs (%s graphs)",
+                time.time() - t0,
+                len(unlabeled),
+            )
 
-
-
-            _wb_log(wb,{"phase": "data_load", "unlabeled_graphs": len(unlabeled)})
+            _wb_log(wb, {"phase": "data_load", "unlabeled_graphs": len(unlabeled)})
         except Exception:
             logger.exception("Failed to load unlabeled dataset")
-            _wb_log(wb,{"phase": "data_load", "status": "error"})
+            _wb_log(wb, {"phase": "data_load", "status": "error"})
             sys.exit(1)
 
         input_dim = unlabeled.graphs[0].x.shape[1]
@@ -663,7 +673,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         # Pretrain JEPA
         pretrain_losses: List[float] = []
         try:
-            _wb_log(wb,{"phase": "pretrain", "status": "start"})
+            _wb_log(wb, {"phase": "pretrain", "status": "start"})
             for epoch in range(start_epoch, args.epochs):
                 ep_loss = train_jepa(
                     dataset=unlabeled,
@@ -687,7 +697,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     use_wandb=args.use_wandb,
                     wandb_project=args.wandb_project,
                     wandb_tags=args.wandb_tags,
-                    disable_tqdm=(not getattr(args, "force_tqdm", False)) and (not sys.stdout.isatty()),
+                    disable_tqdm=(not getattr(args, "force_tqdm", False))
+                    and (not sys.stdout.isatty()),
                     # dataloader & AMP knobs
                     num_workers=getattr(args, "num_workers", 0),
                     pin_memory=getattr(args, "pin_memory", True),
@@ -714,10 +725,10 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                         if hasattr(ema_helper, "state_dict")
                         else None,
                     )
-            _wb_log(wb,{"phase": "pretrain", "status": "success"})
+            _wb_log(wb, {"phase": "pretrain", "status": "success"})
         except Exception:
             logger.exception("JEPA pretraining failed")
-            _wb_log(wb,{"phase": "pretrain", "status": "error"})
+            _wb_log(wb, {"phase": "pretrain", "status": "error"})
             sys.exit(2)
 
         aug_cfg = AugmentationConfig(
@@ -737,7 +748,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 edge_dim=edge_dim,
             )
             try:
-                _wb_log(wb,{"phase": "pretrain_contrastive", "status": "start"})
+                _wb_log(wb, {"phase": "pretrain_contrastive", "status": "start"})
                 cont_losses = train_contrastive(  # type: ignore[call-arg]
                     dataset=unlabeled,
                     encoder=cont_encoder,
@@ -753,7 +764,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     perturb_dihedral=aug_cfg.dihedral,
                     wandb_project=args.wandb_project,
                     wandb_tags=args.wandb_tags,
-                    disable_tqdm=(not getattr(args, "force_tqdm", False)) and (not sys.stdout.isatty()),
+                    disable_tqdm=(not getattr(args, "force_tqdm", False))
+                    and (not sys.stdout.isatty()),
                     # dataloader & AMP knobs
                     num_workers=getattr(args, "num_workers", 0),
                     pin_memory=getattr(args, "pin_memory", True),
@@ -761,24 +773,24 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     prefetch_factor=getattr(args, "prefetch_factor", 4),
                     bf16=getattr(args, "bf16", False),
                 )
-                
-                _wb_log(wb,{"phase": "pretrain_contrastive", "status": "success"})
+
+                _wb_log(wb, {"phase": "pretrain_contrastive", "status": "success"})
             except Exception:
                 logger.exception("Contrastive pretraining failed")
-                _wb_log(wb,{"phase": "pretrain_contrastive", "status": "error"})
+                _wb_log(wb, {"phase": "pretrain_contrastive", "status": "error"})
                 sys.exit(2)
 
         # Save checkpoints
         ckpt_base = args.output
         os.makedirs(os.path.dirname(ckpt_base) or ".", exist_ok=True)
         torch.save({"encoder": encoder.state_dict()}, ckpt_base)
-        _wb_log(wb,{"jepa_checkpoint": ckpt_base})
+        _wb_log(wb, {"jepa_checkpoint": ckpt_base})
         if args.contrastive:
             cont_path = f"{os.path.splitext(ckpt_base)[0]}_contrastive.pt"
             torch.save({"encoder": cont_encoder.state_dict()}, cont_path)
-            _wb_log(wb,{"contrastive_checkpoint": cont_path})
-        
-        #keep a stable pointer the FT step can always find
+            _wb_log(wb, {"contrastive_checkpoint": cont_path})
+
+        # keep a stable pointer the FT step can always find
         try:
             link = os.path.join(args.ckpt_dir, "encoder.pt")
             if os.path.realpath(link) != os.path.realpath(ckpt_base):
@@ -796,7 +808,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             fig = plot_training_curves(curves, wb=wb)
 
             # Respect --plot-dir if provided; otherwise default to <ckpt_dir>/plots
-            plot_dir = getattr(args, "plot_dir", None) or os.path.join(args.ckpt_dir, "plots")
+            plot_dir = getattr(args, "plot_dir", None) or os.path.join(
+                args.ckpt_dir, "plots"
+            )
             os.makedirs(plot_dir, exist_ok=True)
             out_png = os.path.join(plot_dir, "pretrain_loss.png")
             fig.savefig(out_png, dpi=200)
@@ -804,6 +818,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             # Log to W&B only if a run exists (avoid preinit errors)
             try:
                 import wandb as _wandb
+
                 if (wb is not None) and (getattr(wb, "run", None) is not None):
                     wb.log({"pretrain/loss_plot": _wandb.Image(out_png)})
             except Exception:
@@ -819,12 +834,12 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             # Free the figure
             try:
                 import matplotlib.pyplot as _plt
+
                 _plt.close(fig)
             except Exception:
                 pass
         except Exception:
             logger.exception("Failed to plot training curves")
-
 
     except Exception as e:
         _wb_log(wb, {"phase": "pretrain", "status": "error", "msg": str(e)})
@@ -965,7 +980,6 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             logger.info("Overriding encoder from resume checkpoint")
             _load_state_dict_forgiving(encoder, resume_state["encoder"])
 
-
         # Build linear head for fine-tuning
         # compute num_classes robustly for classification; for regression we won’t use it
         _in_dim = getattr(encoder, "hidden_dim", getattr(args, "hidden_dim", None))
@@ -1004,7 +1018,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
 
         if "head" in resume_state and hasattr(head, "load_state_dict"):
             _load_state_dict_forgiving(head, resume_state["head"])
-        
+
         _maybe_to(head, device)
 
         # Optimizer & scheduler
@@ -1093,7 +1107,9 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                             os.remove(link)
                         os.symlink(best_path, link)
                     except Exception:
-                        logger.warning("Could not create head.pt symlink", exc_info=True)
+                        logger.warning(
+                            "Could not create head.pt symlink", exc_info=True
+                        )
 
                 # periodic (and last-epoch) snapshot
                 if ((epoch + 1) % save_every == 0) or ((epoch + 1) == args.epochs):
@@ -1144,10 +1160,7 @@ def evaluate_finetuned_head(
     """
 
     from utils.checkpoint import load_checkpoint
-    from utils.metrics import (
-        compute_classification_metrics,
-        compute_regression_metrics,
-    )
+    from utils.metrics import compute_classification_metrics, compute_regression_metrics
 
     state = load_checkpoint(ckpt_path)
     if "encoder" not in state or "head" not in state:
@@ -1767,8 +1780,8 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             max_pretrain_batches=getattr(args, "max_pretrain_batches", 0),
             max_finetune_batches=getattr(args, "max_finetune_batches", 0),
             time_budget_mins=getattr(args, "time_budget_mins", 0),
-            disable_tqdm=(not getattr(args, "force_tqdm", False)) and (not sys.stdout.isatty()),
-            
+            disable_tqdm=(not getattr(args, "force_tqdm", False))
+            and (not sys.stdout.isatty()),
             # dataloader & AMP knobs
             num_workers=getattr(args, "num_workers", 0),
             pin_memory=getattr(args, "pin_memory", True),
@@ -1937,14 +1950,27 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
         help="Device",
     )
     # Optimisation for GPU
-    p.add_argument("--prefetch-factor", type=int, default=4,
-                    help="Dataloader prefetch factor (workers>0 only).")
-    p.add_argument("--pin-memory", action="store_true", default=True,
-                        help="Pin CUDA host memory in DataLoader.")
-    p.add_argument("--persistent-workers", action="store_true", default=True,
-                        help="Keep worker processes alive across epochs (workers>0).")
-    p.add_argument("--bf16", action="store_true",
-                        help="Enable bfloat16 autocast on GPU.")
+    p.add_argument(
+        "--prefetch-factor",
+        type=int,
+        default=4,
+        help="Dataloader prefetch factor (workers>0 only).",
+    )
+    p.add_argument(
+        "--pin-memory",
+        action="store_true",
+        default=True,
+        help="Pin CUDA host memory in DataLoader.",
+    )
+    p.add_argument(
+        "--persistent-workers",
+        action="store_true",
+        default=True,
+        help="Keep worker processes alive across epochs (workers>0).",
+    )
+    p.add_argument(
+        "--bf16", action="store_true", help="Enable bfloat16 autocast on GPU."
+    )
     p.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP")
     # W&B
     wandb_cfg = CONFIG.get("wandb", {})
@@ -2023,8 +2049,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force-enable tqdm progress bars even when not attached to a TTY",
     )
-    pre.add_argument("--temperature", type=float, default=0.1,
-                     help="InfoNCE temperature (contrastive only)")
+    pre.add_argument(
+        "--temperature",
+        type=float,
+        default=0.1,
+        help="InfoNCE temperature (contrastive only)",
+    )
     pre.add_argument(
         "--sample-unlabeled",
         type=int,
@@ -2510,17 +2540,35 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Ignore cached grid search outputs and recompute",
     )
-    grid.add_argument("--temperatures", type=float, nargs="+", default=[0.1],
-                      help="List of InfoNCE temperatures to try (contrastive only)")
+    grid.add_argument(
+        "--temperatures",
+        type=float,
+        nargs="+",
+        default=[0.1],
+        help="List of InfoNCE temperatures to try (contrastive only)",
+    )
     # Optimisation for GPU
-    grid.add_argument("--prefetch-factor", type=int, default=4,
-                    help="Dataloader prefetch factor (workers>0 only).")
-    grid.add_argument("--pin-memory", action="store_true", default=True,
-                        help="Pin CUDA host memory in DataLoader.")
-    grid.add_argument("--persistent-workers", action="store_true", default=True,
-                        help="Keep worker processes alive across epochs (workers>0).")
-    grid.add_argument("--bf16", action="store_true",
-                        help="Enable bfloat16 autocast on GPU.")
+    grid.add_argument(
+        "--prefetch-factor",
+        type=int,
+        default=4,
+        help="Dataloader prefetch factor (workers>0 only).",
+    )
+    grid.add_argument(
+        "--pin-memory",
+        action="store_true",
+        default=True,
+        help="Pin CUDA host memory in DataLoader.",
+    )
+    grid.add_argument(
+        "--persistent-workers",
+        action="store_true",
+        default=True,
+        help="Keep worker processes alive across epochs (workers>0).",
+    )
+    grid.add_argument(
+        "--bf16", action="store_true", help="Enable bfloat16 autocast on GPU."
+    )
     grid.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP")
     grid.set_defaults(func=cmd_grid_search)
 
