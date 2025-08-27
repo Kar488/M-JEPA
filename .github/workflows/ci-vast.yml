@@ -168,21 +168,21 @@ jobs:
       - name: Sync repository (incremental)
         uses: appleboy/ssh-action@v1
         env:
-          REPO_TOKEN: ${{ secrets.GH_PAT_RO }}       # PAT with repo read access
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: Kar488/M-JEPA
-          BRANCH: master
+          BRANCH: ${{ github.ref_name }}
         with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           envs: APP_DIR,REPO_TOKEN,REPO,BRANCH
           script: |
             set -euo pipefail
-            AUTH_URL="https://deploy err${REPO_TOKEN}@github.com/${REPO}.git"
+            AUTH_URL="https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git"
             mkdir -p "$APP_DIR"
+            git config --global --add safe.directory "$APP_DIR"
             if [ -d "$APP_DIR/.git" ]; then
               git -C "$APP_DIR" remote set-url origin "$AUTH_URL"
               git -C "$APP_DIR" fetch --prune --depth=1 --filter=blob:none origin "$BRANCH"
@@ -190,13 +190,6 @@ jobs:
             else
               git clone --depth=1 --filter=blob:none "$AUTH_URL" "$APP_DIR"
               git -C "$APP_DIR" checkout "$BRANCH"
-            fi
-            # LFS (incremental): install once & pull only the needed objects
-            if ! command -v git-lfs >/dev/null 2>&1; then
-              curl -sL https://github.com/git-lfs/git-lfs/releases/download/v3.5.1/git-lfs-linux-amd64-v3.5.1.tar.gz \
-                | tar -xz -C "$HOME"
-              "$HOME/git-lfs-3.5.1/install.sh"
-              git lfs install --skip-repo
             fi
             git -C "$APP_DIR" lfs pull
       - name: Setup micromamba environment
