@@ -98,7 +98,7 @@ yaml_args() {
    "$py" - "$@" <<'PY'
 import sys, os, yaml, re
 section = sys.argv[1] if len(sys.argv) > 1 else "grid_search"
-with open(os.environ.get("TRAIN_JEPA_CI", "scripts/ci/train_jepa_ci.yml"), "r") as f:
+with open(os.environ.get("TRAIN_JEPA_CI"), "r") as f:
     cfg = yaml.safe_load(f) or {}
 node = cfg.get(section, {})
 env_ref = re.compile(r'^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$')
