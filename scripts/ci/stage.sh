@@ -76,7 +76,7 @@ build_stage_args() {
   local i=0 j=0
   while (( i < ${#COMBINED[@]} )); do
     local f="${COMBINED[$i]}"
-    if [[ "$f" == --* ]] && printf '%s\n' "${ALLOWED[@]}" | grep -qx "$f"; then
+    if [[ "$f" == --* ]] && printf '%s\n' "${ALLOWED[@]}" | grep -qx -- "$f"; then
       OUT+=("$f")
       j=$((i+1))
       while (( j < ${#COMBINED[@]} )) && [[ "${COMBINED[$j]}" != --* ]]; do
