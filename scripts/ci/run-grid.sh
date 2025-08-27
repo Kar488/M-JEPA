@@ -7,8 +7,8 @@ ensure_micromamba
 STAGE="grid"
 if needs_stage "$GRID_DIR" "$APP_DIR/scripts/train_jepa.py"; then
   echo "[grid] starting hyper-parameter search"
-  simulate_progress
-  # Placeholder for actual grid search invocation
+  $MMBIN run -n mjepa python "$APP_DIR/scripts/train_jepa.py" grid-search $(yaml_args grid_search) \
+    2>&1 | tee "$LOG_DIR/grid.log"
   mark_stage_done "$GRID_DIR"
   echo "[grid] completed"
 else

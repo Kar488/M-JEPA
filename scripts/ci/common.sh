@@ -66,3 +66,37 @@ simulate_progress() {
   done
   printf '\n'
 }
+
+# --- yaml argument helper ---
+yaml_args() {
+  local section="$1"
+  "$MMBIN" run -n mjepa python - "$section" <<'PY'
+import os, sys, yaml, shlex
+section = sys.argv[1]
+path = os.path.join(os.environ["APP_DIR"], "scripts/ci/train_jepa_ci.yml")
+with open(path, "r", encoding="utf-8") as f:
+    data = yaml.safe_load(f)
+cfg = data[section]
+
+def expand(val):
+    if isinstance(val, str):
+        return os.path.expandvars(val)
+    if isinstance(val, list):
+        return [expand(v) for v in val]
+    return val
+
+cfg = {k: expand(v) for k, v in cfg.items()}
+args = []
+for k, v in cfg.items():
+    key = "--" + k.replace("_", "-")
+    if isinstance(v, bool):
+        if v:
+            args.append(key)
+    elif isinstance(v, list):
+        for item in v:
+            args.extend([key, str(item)])
+    else:
+        args.extend([key, str(v)])
+print(" ".join(shlex.quote(a) for a in args))
+PY
+}
