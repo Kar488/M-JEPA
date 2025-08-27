@@ -90,6 +90,11 @@ build_stage_args() {
 }
 
 # ---------- dataset preflight (harmless if flags absent) ----------
+# Trim CR and whitespace
+clean_path() {
+  echo "$1" | tr -d '\r'
+}
+
 stage_dataset_preflight() {
   local -n arr="$1"
   local getv; getv() { local k="$1" n=0; while (( n < ${#arr[@]} )); do [[ "${arr[$n]}" == "$k" ]] && { echo "${arr[$((n+1))]}"; return 0; }; ((n++)); done; return 1; }
@@ -97,6 +102,12 @@ stage_dataset_preflight() {
   local LBL="$(getv --labeled-dir  || true)"
   local DS="$(getv --dataset-dir   || true)"
   local CSV="$(getv --csv          || true)"
+
+  UL=$(clean_path "$UL")
+  LBL=$(clean_path "$LBL")
+  CSV=$(clean_path "$CSV")
+  DS=$(clean_path "$DS")
+
   [[ -n "$UL"  && ! -d "$UL"  ]] && { echo "missing --unlabeled-dir $UL"; return 66; }
   [[ -n "$LBL" && ! -d "$LBL" ]] && { echo "missing --labeled-dir $LBL"; return 66; }
   [[ -n "$DS"  && ! -d "$DS"  ]] && { echo "missing --dataset-dir $DS"; return 66; }
