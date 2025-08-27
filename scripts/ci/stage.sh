@@ -111,6 +111,7 @@ run_with_timeout() {
   mkdir -p "$LOG_DIR"
 
   timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
+    PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
     "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
     python -u "$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}" \
     2>&1 | tee "$LOG_DIR/${s}.log"
