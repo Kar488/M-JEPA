@@ -10,7 +10,7 @@ if needs_stage "$GRID_DIR" "$APP_DIR/scripts/train_jepa.py"; then
   export TRAIN_JEPA_CI="$APP_DIR/scripts/ci/train_jepa_ci.yml"
   build_argv_from_yaml grid_search
   # Build ARGV array from YAML and run grid-search with proper quoting
-  $MMBIN run -n mjepa 
+  $MMBIN run -n mjepa python "$APP_DIR/scripts/train_jepa.py" grid-search "${FILTERED[@]}" \
   # Whitelist flags that the "grid-search" subcommand actually accepts
   WHITELIST=(
     --mask-ratios --hidden-dims --num-layers-list --gnn-types --ema-decays --add-3d-options
