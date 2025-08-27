@@ -42,12 +42,12 @@ stage_needs() {
 # ---------- build & filter args ----------
 build_stage_args() {
   local s="${1:?stage}"
-  local subcmd; subcmd="$(stage_subcmd "$s")"
+  local section="$s"
+  local subcmd="$s"
   export TRAIN_JEPA_CI="$APP_DIR/scripts/ci/train_jepa_ci.yml"
 
   # YAML args
-  #snake to kebab case 
-  local section="$s"
+  #snake to kebab case  
   if [ "$s" = "grid" ]; then
     section="grid_search"   # YAML key
     subcmd="grid-search"    # argparse subcommand
