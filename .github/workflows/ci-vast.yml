@@ -176,6 +176,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           envs: APP_DIR,REPO_TOKEN,REPO,BRANCH
           script: |
