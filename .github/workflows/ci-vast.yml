@@ -189,7 +189,7 @@ jobs:
               git -C "$APP_DIR" fetch --progress --verbose --prune --depth=1 --filter=blob:none origin "$BRANCH"
               git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
             else
-              git clone --depth=1 --filter=blob:none "$AUTH_URL" "$APP_DIR"
+              git clone --depth=1 --progress --verbose --filter=blob:none "$AUTH_URL" "$APP_DIR"
               git -C "$APP_DIR" checkout "$BRANCH"
             fi
             git -C "$APP_DIR" lfs pull
