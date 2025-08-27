@@ -6,31 +6,15 @@ ensure_micromamba
 
 STAGE="grid"
 
+if needs_stage "$GRID_DIR" \
+      "$APP_DIR/scripts/train_jepa.py" \
+      "$APP_DIR/scripts/ci/train_jepa_ci.yml" \
+      "$APP_DIR/scripts/ci/run-grid.sh" \
+      "$APP_DIR/scripts/ci/common.sh"; then
   export TRAIN_JEPA_CI="$APP_DIR/scripts/ci/train_jepa_ci.yml"
   build_argv_from_yaml grid_search
   expand_array_vars ARGV
-  echo "[debug] APP_DIR=$APP_DIR"
-    echo "[debug] PYTHONPATH=$PYTHONPATH"
-
-    # Optional one-off debug (set DEBUG_IMPORTS=1 in the job to enable)
-  if [[ "${DEBUG_IMPORTS:-0}" == "1" ]]; then
-    echo "[debug] APP_DIR=$APP_DIR"
-    echo "[debug] PYTHONPATH=$PYTHONPATH"
-    $MMBIN run -n mjepa python - <<'PY' || true
-import os, sys, importlib, traceback
-print("APP_DIR:", os.environ.get("APP_DIR"))
-print("PYTHONPATH:", os.environ.get("PYTHONPATH"))
-print("sys.path[:5]:", sys.path[:5])
-for mod in ("experiments.grid_search","experiments","mjepa.experiments"):
-    try:
-        m = importlib.import_module(mod)
-        print(f"OK import {mod} @ {getattr(m,'__file__',m)}")
-    except Exception as e:
-        print(f"FAIL import {mod}: {e}"); traceback.print_exc()
-PY
-  fi
-
-
+  
   # Build ARGV array from YAML and run grid-search with proper quoting
   # --- Dynamic discovery of supported flags from the tool itself ---
   # This keeps the shell thin and avoids duplicating CLI knowledge here.

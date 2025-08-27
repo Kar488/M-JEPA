@@ -9,6 +9,7 @@ set -euo pipefail
 : "${CACHE_DIR:=/data/mjepa/cache/graphs}"
 : "${RUN_ID:=$(date +%s)}"
 : "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
+: "${WANDB_DIR: /data/mjepa/wandb}"
 
 # Auto-detect repo root from this script if APP_DIR is off
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"        # .../scripts/ci
@@ -22,6 +23,7 @@ export APP_DIR
 
 # Ensure project modules are discoverable when running from subdirectories.
 export PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
 
 # Determine an available Python interpreter. Prefer 'python', fallback to 'python3'.
 python_bin() {

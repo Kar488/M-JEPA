@@ -58,7 +58,7 @@ then
   TORCH_VER=$(micromamba run -n "$ENV_NAME" python -c "import torch; print(torch.__version__.split('+')[0])")
   CUDA_SUFFIX=$(micromamba run -n "$ENV_NAME" python -c "import torch; print('cu'+torch.version.cuda.replace('.','') if torch.version.cuda else 'cpu')")
   micromamba run -n "$ENV_NAME" python -m pip install -f "https://data.pyg.org/whl/torch-${TORCH_VER}+${CUDA_SUFFIX}.html" torch-scatter==2.1.2 || true
-  micromamba run -n "$ENV_NAME" python -m pip install --no-deps torch-geometric==2.5.3 || true
+  micromamba run -n "$ENV_NAME" python -m pip install torch-geometric==2.5.3 || true
 fi
 
 # ----------- project requirements (safe filter) -----------
