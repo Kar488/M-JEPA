@@ -10,6 +10,9 @@ set -euo pipefail
 : "${RUN_ID:=$(date +%s)}"
 : "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
 
+# Ensure project modules are discoverable when running from subdirectories.
+export PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
 # Allow cache directories to be overridden by env vars supplied by the workflow
 GRID_DIR="${GRID_CACHE_DIR:-$EXP_ROOT/grid}"
 PRETRAIN_DIR="${PRETRAIN_CACHE_DIR:-$EXP_ROOT/pretrain}"
