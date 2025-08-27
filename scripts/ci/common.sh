@@ -93,38 +93,39 @@ yaml_args() {
   #  - true => boolean flag present; false => omitted
   local py
   py=$(python_bin) || { echo "python interpreter not found" >&2; return 127; }
-  "$py" - "$@" <<'PY'
-  import sys, os, yaml, re
-  section = sys.argv[1] if len(sys.argv) > 1 else "grid_search"
-  with open(os.environ.get("TRAIN_JEPA_CI", "scripts/ci/train_jepa_ci.yml"), "r") as f:
-      cfg = yaml.safe_load(f) or {}
-  node = cfg.get(section, {})
-  env_ref = re.compile(r'^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$')
+  # Determine a python interpreter (python, python3, etc.)
+   local py; py=$(python_bin) || { echo "python not found" >&2; return 127; }
+   "$py" - "$@" <<'PY'
+import sys, os, yaml, re
+section = sys.argv[1] if len(sys.argv) > 1 else "grid_search"
+with open(os.environ.get("TRAIN_JEPA_CI", "scripts/ci/train_jepa_ci.yml"), "r") as f:
+    cfg = yaml.safe_load(f) or {}
+node = cfg.get(section, {})
+env_ref = re.compile(r'^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$')
 
-  def emit(k, v):
-      key = "--" + k  # KEEP underscores
-      if isinstance(v, bool):
-          if v: print(key)
-          return
-      if isinstance(v, (int, float)):
-          print(key); print(str(v)); return
-      if isinstance(v, list):
-          for item in v:
-              emit(k, item)
-          return
-      if v is None:
-          return
-      # string
-      s = str(v)
-      if env_ref.match(s):
-          # leave $VAR / ${VAR} for shell expansion; double-quote to keep spaces
-          print(key); print(f"\"{s}\""); return
-      if " " in s or "\t" in s:
-          print(key); print(f"\"{s}\""); return
-      print(key); print(s)
+def emit(k, v):
+    key = "--" + k
+    if isinstance(v, bool):
+        if v:
+            print(key)
+        return
+    if isinstance(v, (int, float)):
+        print(key); print(str(v)); return
+    if isinstance(v, list):
+        for item in v:
+            emit(k, item)
+        return
+    if v is None:
+        return
+    s = str(v)
+    if env_ref.match(s):
+        print(key); print(f"\"{s}\""); return
+    if " " in s or "\t" in s:
+        print(key); print(f"\"{s}\""); return
+    print(key); print(s)
 
-  for k, v in (node or {}).items():
-      emit(k, v)
+for k, v in (node or {}).items():
+    emit(k, v)
 PY
   }
 
@@ -144,8 +145,7 @@ best_config_args() {
   local stage="$1"
   local cfg="$GRID_DIR/best_grid_config.json"
   [ -f "$cfg" ] || return 0
-  local py
-  py=$(python_bin) || { echo "python interpreter not found" >&2; return 127; }
+  local py; py=$(python_bin) || { echo "python not found" >&2; return 127; }
   "$py" - "$cfg" "$stage" <<'PY'
 import json, sys
 path, stage = sys.argv[1], sys.argv[2]
