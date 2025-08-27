@@ -15,6 +15,9 @@ if needs_stage "$BENCH_DIR" \
   echo "[bench] starting benchmarks"
   build_argv_from_yaml bench
   expand_array_vars ARGV
+
+  export WANDB_NAME="benchmark"
+  export WANDB_JOB_TYPE="benchmark"
   mapfile -t BEST < <(best_config_args bench)
   expand_array_vars BEST
   

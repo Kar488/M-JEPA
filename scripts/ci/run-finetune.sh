@@ -17,6 +17,10 @@ if needs_stage "$FINETUNE_DIR" \
   export CKPT_DIR="$FINETUNE_DIR"
   build_argv_from_yaml finetune
   expand_array_vars ARGV
+
+  export WANDB_NAME="finetune"
+  export WANDB_JOB_TYPE="finetune"
+
   mapfile -t BEST < <(best_config_args finetune))
   expand_array_vars BEST
   

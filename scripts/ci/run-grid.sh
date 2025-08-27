@@ -11,9 +11,13 @@ if needs_stage "$GRID_DIR" \
       "$APP_DIR/scripts/ci/train_jepa_ci.yml" \
       "$APP_DIR/scripts/ci/run-grid.sh" \
       "$APP_DIR/scripts/ci/common.sh"; then
+
   export TRAIN_JEPA_CI="$APP_DIR/scripts/ci/train_jepa_ci.yml"
   build_argv_from_yaml grid_search
   expand_array_vars ARGV
+
+  export WANDB_NAME="grid"
+  export WANDB_JOB_TYPE="grid"
   
   # Build ARGV array from YAML and run grid-search with proper quoting
   # --- Dynamic discovery of supported flags from the tool itself ---
@@ -47,8 +51,19 @@ if needs_stage "$GRID_DIR" \
     ((i+=1))
   done
 
-  # Run the grid search inside the micromamba env
-  $MMBIN run -n mjepa \
+
+  # derive budget from CLI if present; else fall back to env or 270
+  get_val() { local i=0; while (( i < ${#FILTERED[@]} )); do [[ "${FILTERED[$i]}" == "$1" ]] && { echo "${FILTERED[$((i+1))]}"; return 0; }; ((i++)); done; return 1; }
+  BUDGET_MINS="$(get_val --time-budget-mins || true)"
+  [[ -z "$BUDGET_MINS" || ! "$BUDGET_MINS" =~ ^[0-9]+$ || "$BUDGET_MINS" -eq 0 ]] && BUDGET_MINS="${HARD_WALL_MINS:-270}"
+  SOFT="${BUDGET_MINS}m"
+  GRACE="${KILL_AFTER_SECS:-60}s"
+
+
+  # timeout must wrap the whole micromamba run; use python -u instead of stdbuf
+  timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
+    # Run the grid search inside the micromamba env
+    $MMBIN run -n mjepa env PYTHONUNBUFFERED=1 \
     python "$APP_DIR/scripts/train_jepa.py" grid-search "${FILTERED[@]}" \
     2>&1 | tee "$LOG_DIR/grid.log"
 

@@ -198,7 +198,8 @@ jobs:
     needs: [tests_quick,vast_deploy_and_prepare_environment]
     steps:
       - name: Run grid search
-        uses: appleboy/ssh-action@v1
+        timeout-minutes: 280 # budget + cushion of 10, set in run-grisd.sh
+        uses: appleboy/ssh-action@v1 
         with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
@@ -206,7 +207,8 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR,BENCH_CACHE_DIR,TOX21_CACHE_DIR,WANDB_API_KEY,WANDB_PROJECT,WANDB_RUN_ID,WANDB_RESUME,WANDB_DIR, MAMBA_ROOT_PREFIX
+          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR,BENCH_CACHE_DIR,TOX21_CACHE_DIR,MAMBA_ROOT_PREFIX,
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE
           script: |
             bash "$APP_DIR/scripts/ci/run-grid.sh"
 
@@ -225,7 +227,8 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,WANDB_API_KEY,WANDB_API_KEY,WANDB_PROJECT,WANDB_RUN_ID,WANDB_RESUME,WANDB_DIR, MAMBA_ROOT_PREFIX
+          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,MAMBA_ROOT_PREFIX,
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE
           script: |
             bash "$APP_DIR/scripts/ci/run-pretrain.sh"
 
@@ -244,7 +247,8 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR,WANDB_API_KEY,WANDB_PROJECT,WANDB_RUN_ID,WANDB_RESUME,WANDB_DIR, MAMBA_ROOT_PREFIX
+          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR, MAMBA_ROOT_PREFIX,
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE
           script: |
             bash "$APP_DIR/scripts/ci/run-finetune.sh"
 
@@ -263,7 +267,8 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR,WANDB_API_KEY,WANDB_PROJECT,WANDB_RUN_ID,WANDB_RESUME,WANDB_DIR, MAMBA_ROOT_PREFIX
+          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR, MAMBA_ROOT_PREFIX,
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE
           script: |
             bash "$APP_DIR/scripts/ci/run-bench.sh"
 
@@ -282,6 +287,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          envs: APP_DIR,GRID_CACHE_DIR,TOX21_CACHE_DIR,WANDB_API_KEY,WANDB_PROJECT,WANDB_RUN_ID,WANDB_RESUME,WANDB_DIR, MAMBA_ROOT_PREFIX
+          envs: APP_DIR,GRID_CACHE_DIR,TOX21_CACHE_DIR, MAMBA_ROOT_PREFIX,
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE
           script: |
             bash "$APP_DIR/scripts/ci/run-tox21.sh"

@@ -17,6 +17,10 @@ if needs_stage "$PRETRAIN_DIR" \
   export CKPT_DIR="$PRETRAIN_DIR"
   build_argv_from_yaml pretrain # YAML → ARGV (stage config)
   expand_array_vars ARGV
+
+  export WANDB_NAME="pretrain"
+  export WANDB_JOB_TYPE="pretrain"
+
   mapfile -t BEST < <(best_config_args pretrain) # grid → tuned args
   expand_array_vars BEST
   

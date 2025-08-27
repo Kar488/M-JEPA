@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Optional, Sequence
+import os
 
 
 class DummyWandb:
@@ -87,34 +88,43 @@ def maybe_init_wandb(
     try:
         import wandb
 
-        if api_key:
-            # If login fails, we still fall through to init and handle errors uniformly
+        # ---- env-driven config (lets CI control id/name/resume etc.) ----
+        env = os.environ
+        # Allow login from either explicit arg or env
+        key = api_key or os.getenv("WANDB_API_KEY")
+        if key:
             try:
-                wandb.login(key=api_key)
+                wandb.login(key=key)
             except Exception as e:
                 logging.warning("Failed to login to wandb: %s", e)
 
-        run = getattr(wandb, "run", None)  # <- handle fakes without a .run attribute
-        
+        run = getattr(wandb, "run", None)
         if run is None:
-            # Single consolidated run: init once
-            wandb.init(
-                project=project,
+            kw = dict(
+                run_id   = env.get("WANDB_RUN_ID"),         # same id reused across stages
+                resume   = env.get("WANDB_RESUME", "allow"),# allow/auto/never/… (allow is safe)
+                name     = env.get("WANDB_NAME"),           # "grid", "pretrain", "finetune", …
+                group    = env.get("WANDB_RUN_GROUP"),       # optional
+                job_type = env.get("WANDB_JOB_TYPE"),        # optional
+                run_dir  = env.get("WANDB_DIR"),             # e.g., /data/mjepa/wandb
+                mode     = env.get("WANDB_MODE"),            # online/offline/disabled
+                project  = env.get("WANDB_PROJECT", project), 
                 config=config or {},
                 tags=list(tags) if tags else None,
-                reinit=False,
-                resume="never",
             )
+            kw = {k: v for k, v in kw.items() if v is not None}
+            wandb.init(**kw)
         else:
-            # Optional: merge later config safely if .config exists
+            # update name/config on resume (optional)
+            new_name = os.getenv("WANDB_NAME")
+            if new_name and getattr(run, "name", None) != new_name:
+                run.name = new_name
+                run.save()
             if config and getattr(wandb, "config", None) is not None:
-                try:
-                    wandb.config.update(config, allow_val_change=True)
-                except Exception:
-                    # Be tolerant; config merging is best-effort
-                    pass
-        
+                try: wandb.config.update(config, allow_val_change=True)
+                except Exception: pass
         return wandb
+
     except Exception as exc:
         logging.warning("Failed to initialise wandb: %s", exc)
         return DummyWandb()

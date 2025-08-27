@@ -35,7 +35,7 @@ grid_search:
   n_rows_per_file: 1000
   max_pretrain_batches: 200
   max_finetune_batches: 50
-  time_budget_mins: 120
+  time_budget_mins: 300
   force_tqdm: true
   out_csv: ${GRID_DIR}/grid_results.csv
   best_config_out: ${GRID_DIR}/best_grid_config.json

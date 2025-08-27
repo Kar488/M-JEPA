@@ -16,6 +16,10 @@ if needs_stage "$TOX21_DIR" \
   echo "[tox21] starting tox21 evaluation"
   build_argv_from_yaml tox21
   expand_array_vars ARGV
+    
+  export WANDB_NAME="tox21"
+  export WANDB_JOB_TYPE="tox21"
+
   mapfile -t BEST < <(best_config_args tox21)
   expand_array_vars BEST
   
