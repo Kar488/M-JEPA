@@ -123,3 +123,55 @@ build_argv_from_yaml() {
   mapfile -t tmp < <(yaml_args "$section")
   ARGV=("${tmp[@]}")
 }
+
+# --- inject best grid search configuration ---
+best_config_args() {
+  # Usage: best_config_args <stage>
+  # Reads best_grid_config.json and prints CLI args for the given stage
+  local stage="$1"
+  local cfg="$GRID_DIR/best_grid_config.json"
+  [ -f "$cfg" ] || return 0
+  python - "$cfg" "$stage" <<'PY'
+import json, sys
+path, stage = sys.argv[1], sys.argv[2]
+cfg = json.load(open(path))
+
+common = {
+    "gnn_type": "--gnn-type",
+    "hidden_dim": "--hidden-dim",
+    "num_layers": "--num-layers",
+    "ema_decay": "--ema-decay",
+    "contiguous": "--contiguous",
+    "add_3d": "--add-3d",
+    "lr": "--lr",
+}
+pre = {
+    "mask_ratio": "--mask-ratio",
+    "pretrain_batch_size": "--batch-size",
+    "pretrain_epochs": "--epochs",
+    "temperature": "--temperature",
+    "contrastive": "--contrastive",
+}
+ft = {
+    "finetune_batch_size": "--batch-size",
+    "finetune_epochs": "--epochs",
+}
+maps = {
+    "pretrain": {**common, **pre},
+    "finetune": {**common, **ft},
+    "bench": {**common, **ft},
+    "tox21": {**common, **ft},
+}
+mapping = maps.get(stage, {})
+for key, flag in mapping.items():
+    if key not in cfg:
+        continue
+    val = cfg[key]
+    if isinstance(val, bool):
+        if val:
+            print(flag)
+    else:
+        print(flag)
+        print(val)
+PY
+}
