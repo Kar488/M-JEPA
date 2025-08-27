@@ -1554,7 +1554,6 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     search completes, the best configuration and its metric are reported.
     """
     # Skip grid search if results already exist
-    exp = _import_experiments()
     if (
         not getattr(args, "force_refresh", False)
         and args.out_csv
