@@ -169,6 +169,7 @@ jobs:
         uses: appleboy/ssh-action@v1
         env:
           REPO_TOKEN: ${{ secrets.GH_PAT_RO }}
+          DEFAULT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: Kar488/M-JEPA
           BRANCH: master
         with:
@@ -178,18 +179,18 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          envs: APP_DIR,REPO_TOKEN,REPO,BRANCH
+          envs: APP_DIR,REPO_TOKEN,REPO,BRANCH,DEFAULT_TOKEN
           script: |
             set -euo pipefail
-            AUTH_URL="https://${REPO_TOKEN}@github.com/${REPO}.git"
+            AUTH_URL="https:///x-access-token:${DEFAULT_TOKEN}@github.com/${REPO}.git"
             mkdir -p "$APP_DIR"
             git config --global --add safe.directory "$APP_DIR"
             if [ -d "$APP_DIR/.git" ]; then
               git -C "$APP_DIR" remote set-url origin "$AUTH_URL"
-              git -C "$APP_DIR" fetch --progress --verbose --prune --depth=1 --filter=blob:none origin "$BRANCH"
+              timeout 300 git -C "$APP_DIR" fetch --progress --verbose --prune --depth=1 --filter=blob:none origin "$BRANCH"
               git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
             else
-              git clone --depth=1 --progress --verbose --filter=blob:none "$AUTH_URL" "$APP_DIR"
+              timeout 300 git clone --depth=1 --progress --verbose --filter=blob:none "$AUTH_URL" "$APP_DIR"
               git -C "$APP_DIR" checkout "$BRANCH"
             fi
             git -C "$APP_DIR" lfs pull
