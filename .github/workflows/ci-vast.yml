@@ -182,16 +182,11 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          envs: APP_DIR,MAMBA_ROOT_PREFIX,PIP_CACHE_DIR
+          envs: APP_DIR,MAMBA_ROOT_PREFIX,PIP_CACHE_DIR,WANDB_DIR,CACHE_DIR,EXP_ROOT,RUN_ID
           script: |
             set -e
             cd "$APP_DIR"
-            export MAMBA_ROOT_PREFIX
-            eval "$("$HOME/micromamba/bin/micromamba" shell hook -s bash)"
-            if ! micromamba env list | grep -q '^mjepa'; then
-              micromamba create -y -n mjepa python=3.10
-            fi
-            micromamba run -n mjepa bash scripts/setup_gpu.sh
+            bash scripts/ci/prepare_env.sh
 
   vast_learn_hyperparameters:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
