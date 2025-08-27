@@ -115,6 +115,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
       a) On local windows powershell do this - 
       
+      use -N for no pass phrase
       ```bash
       ssh-keygen -t ed25519 -C "vast-deploy" -f $env:USERPROFILE\.ssh\vast_deploy
       ```
