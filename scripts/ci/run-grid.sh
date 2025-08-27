@@ -58,10 +58,6 @@ if [ "$rc" -eq 86 ]; then
   $MMBIN run -n mjepa python -m pip install -e "$APP_DIR[experiments]" || \
   $MMBIN run -n mjepa python -m pip install -e "$APP_DIR/experiments"
 fi
-
-  # Run the grid search inside the micromamba env
-  $MMBIN run -n mjepa python "$APP_DIR/scripts/train_jepa.py" grid-search "${FILTERED[@]}" 2>&1 | tee "$LOG_DIR/grid.log"
-
   mark_stage_done "$GRID_DIR"
   echo "[grid] completed"
 else
