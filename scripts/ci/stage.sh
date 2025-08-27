@@ -48,6 +48,7 @@ build_stage_args() {
   # YAML args
   build_argv_from_yaml "$s"
   expand_array_vars ARGV
+  echo "ARGV after expansion: ${ARGV[@]}"
 
   # Best (from grid) → append last so it overrides YAML
   local -a BEST
@@ -59,8 +60,9 @@ build_stage_args() {
   # Dynamic allowlist from tool help (supports nargs='+')
   local -a ALLOWED
   mapfile -t ALLOWED < <(
-    "$MMBIN" run -n mjepa python "$APP_DIR/scripts/train_jepa.py" "$subcmd" --help |
-      sed -n 's/.*\(--[a-z0-9-]\+\).*/\1/p' | sort -u
+    PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+      "$MMBIN" run -n mjepa python "$APP_DIR/scripts/train_jepa.py" "$subcmd" --help |
+        sed -n 's/.*\(--[a-z0-9-]\+\).*/\1/p' | sort -u
   )
 
   local -a OUT=()
@@ -88,10 +90,10 @@ stage_dataset_preflight() {
   local LBL="$(getv --labeled-dir  || true)"
   local DS="$(getv --dataset-dir   || true)"
   local CSV="$(getv --csv          || true)"
-  [[ -n "$UL"  && ! -d "$UL"  ]] && { echo "[stage] missing --unlabeled-dir: $UL" >&2; return 66; }
-  [[ -n "$LBL" && ! -d "$LBL" ]] && { echo "[stage] missing --labeled-dir:   $LBL" >&2; return 66; }
-  [[ -n "$DS"  && ! -d "$DS"  ]] && { echo "[stage] missing --dataset-dir:   $DS" >&2; return 66; }
-  [[ -n "$CSV" && ! -f "$CSV" ]] && { echo "[stage] missing --csv file:      $CSV" >&2; return 66; }
+  [[ -n "$UL"  && ! -d "$UL"  ]] && { echo "missing --unlabeled-dir $UL"; return 66; }
+  [[ -n "$LBL" && ! -d "$LBL" ]] && { echo "missing --labeled-dir $LBL"; return 66; }
+  [[ -n "$DS"  && ! -d "$DS"  ]] && { echo "missing --dataset-dir $DS"; return 66; }
+  [[ -n "$CSV" && ! -f "$CSV" ]] && { echo "missing --csv file $CSV"; return 66; }
 }
 
 # ---------- timeout + SIGINT ----------
