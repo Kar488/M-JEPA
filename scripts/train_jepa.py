@@ -32,8 +32,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+# Ensure project root is on ``sys.path`` when executed from the ``scripts`` directory.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import numpy as np
-import torch
+try:  # pragma: no cover - torch is optional for parsing/tests
+    import torch  # type: ignore
+except Exception:  # pragma: no cover - gracefully handle missing torch
+    torch = None  # type: ignore[assignment]
 import yaml
 
 # TODO remove later
