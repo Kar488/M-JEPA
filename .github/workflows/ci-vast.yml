@@ -181,7 +181,7 @@ jobs:
           envs: APP_DIR,REPO_TOKEN,REPO,BRANCH
           script: |
             set -euo pipefail
-            AUTH_URL="https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git"
+            AUTH_URL="https://${REPO_TOKEN}@github.com/${REPO}.git"
             mkdir -p "$APP_DIR"
             git config --global --add safe.directory "$APP_DIR"
             if [ -d "$APP_DIR/.git" ]; then
