@@ -196,6 +196,8 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
         tmux attach || true # attach to one running already
         #Now Git hub action runner will show this as running and idle
         mkdir ~/actions-runner && cd ~/actions-runner # Recreate the actions‑runner directory in this user’s home and rerun the steps
+
+        git config --global --add safe.directory /srv/mjepa # listed reposistory as allowed in vast
         ```
     g) setup git pro account for increased action minutes and set budget limit to some $ and disallow block on expiry
         

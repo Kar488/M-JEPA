@@ -170,6 +170,7 @@ jobs:
         env:
           REPO_TOKEN: ${{ secrets.GH_PAT_RO }}       # PAT with repo read access
           REPO: Kar488/M-JEPA
+          BRANCH: master
         with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
@@ -177,7 +178,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          envs: APP_DIR,REPO_TOKEN,REPO
+          envs: APP_DIR,REPO_TOKEN,REPO,BRANCH
           script: |
             set -euo pipefail
             AUTH_URL="https://x-access-token:${REPO_TOKEN}@github.com/${REPO}.git"
