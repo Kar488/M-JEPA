@@ -106,7 +106,7 @@ def maybe_init_wandb(
                 name     = env.get("WANDB_NAME"),           # "grid", "pretrain", "finetune", …
                 group    = env.get("WANDB_RUN_GROUP"),       # optional
                 job_type = env.get("WANDB_JOB_TYPE"),        # optional
-                run_dir  = env.get("WANDB_DIR"),             # e.g., /data/mjepa/wandb
+                dir  = env.get("WANDB_DIR"),             # e.g., /data/mjepa/wandb
                 mode     = env.get("WANDB_MODE"),            # online/offline/disabled
                 project  = env.get("WANDB_PROJECT", project), 
                 config=config or {},
