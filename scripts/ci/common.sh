@@ -88,7 +88,7 @@ def expand(val):
 cfg = {k: expand(v) for k, v in cfg.items()}
 args = []
 for k, v in cfg.items():
-    key = "--" + k.replace("_", "-")
+    key = "--" + k
     if isinstance(v, bool):
         if v:
             args.append(key)
