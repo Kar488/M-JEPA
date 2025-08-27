@@ -108,11 +108,10 @@ stage_dataset_preflight() {
   CSV=$(clean_path "$CSV")
   DS=$(clean_path "$DS")
 
-  [[ -n "$UL"  && ! -d "$UL"  ]] && { echo "missing --unlabeled-dir $UL"; return 66; }
-  [[ -n "$LBL" && ! -d "$LBL" ]] && { echo "missing --labeled-dir $LBL"; return 66; }
-  [[ -n "$DS"  && ! -d "$DS"  ]] && { echo "missing --dataset-dir $DS"; return 66; }
-  [[ -n "$CSV" && ! -f "$CSV" ]] && { echo "missing --csv file $CSV"; return 66; }
-}
+  [[ -n "$UL"  && ! -d "$UL"  ]] && { echo "missing --unlabeled-dir: [$UL]"; ls -ld "$UL" "$(dirname "$UL")"; return 66; }
+  [[ -n "$LBL" && ! -d "$LBL" ]] && { echo "missing --labeled-dir: [$LBL]"; ls -ld "$LBL" "$(dirname "$LBL")"; return 66; }
+  [[ -n "$DS"  && ! -d "$DS"  ]] && { echo "missing --dataset-dir: [$DS]"; return 66; }
+  [[ -n "$CSV" && ! -f "$CSV" ]] && { echo "missing --csv file: [$CSV]"; return 66; }
 
 # ---------- timeout + SIGINT ----------
 run_with_timeout() {
