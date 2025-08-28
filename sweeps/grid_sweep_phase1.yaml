@@ -1,10 +1,11 @@
-program: scripts/train_jepa.py   # entrypoint
+program: scripts/train_jepa.py
 command:
   - ${env}
   - python
   - ${program}
   - sweep-run
-method: bayes                # or random / bayes
+
+method: random
 metric:
   name: val_loss
   goal: minimize
@@ -20,41 +21,40 @@ parameters:
   task_type:
     value: regression
 
-  # model hyperparameters (taken from your grid_search)
+  gnn_type:
+    values: [gcn, gat, mpnn]
   training_method:
-    values: ["jepa", "contrastive"]  # choose which pre‑training to run
+    values: [jepa, contrastive]
   mask_ratio:
     values: [0.15, 0.3, 0.5]
   contiguity:
     values: [0, 1]
   hidden_dim:
-    values: [256]
+    value: 256
   num_layers:
-    values: [3]
-  gnn_type:
-    values: [mpnn]
+    value: 3
   ema_decay:
     values: [0.996, 0.998, 0.999]
   add_3d:
-    values: [1]
+    value: 1
   pretrain_batch_size:
-    values: [128, 256]
+    values: [64, 128, 256]
   finetune_batch_size:
-    values: 256
+    value: 256
   temperature:
     values: [0.07, 0.1, 0.2]
   pretrain_epochs:
-    values: [30, 50]
+    value: 30
   finetune_epochs:
-    values: [1]
+    value: 1
   learning_rate:
-    values: [3e-4, 1e-4]
+    values: [0.0003, 0.0001]
   seed:
     values: [1, 2, 3]
   sample_unlabeled: 
-    value: 50000
+    value: 10000
   sample_labeled: 
-    value: 5000
+    value: 1000
 
 early_terminate:
   type: hyperband

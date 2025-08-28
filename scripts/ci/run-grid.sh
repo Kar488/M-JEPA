@@ -13,9 +13,9 @@ export WANDB_JOB_TYPE="grid"
 if [ "$GRID_MODE" = "wandb" ]; then
     echo "[grid] running wandb sweep agent"
     # Replace with your actual sweep ID
-    SWEEP_ID="karthik-iyer-la-trobe-university/mjepa/ufcnx6kq"
+    SWEEP_ID="$WANDB_ENTITY/$WANDB_PROJECT/$WANDB_SWEEP_ID1"
     # Run N configs on this machine
-    wandb agent --count 200 "$SWEEP_ID"
+    wandb agent --count ${WANDB_COUNT:-50} "$SWEEP_ID"
 
 else
     echo "[grid] running custom grid-search"

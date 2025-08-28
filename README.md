@@ -292,7 +292,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
   ```bash
   export APP_DIR=/srv/mjepa
-  wandb sweep --project mjepa grid_sweeps.yaml
+  wandb sweep --project mjepa grid_sweeps.yaml #or whatever name
   # paste wandb key whn asked and then copy the generated url to project code
 
   d. fix hyper‑parameters for grid we know do not strongly affect performance (e.g., maybe fix hidden_dim=256 and num_layers=3 if we know deeper networks give no benefit) or run cap (300-500)

@@ -38,6 +38,14 @@ on:
         description: "Override tox21 cache directory"
         required: false
         default: ""
+      hyperparam_mode:
+        description: "Which hyperparameter search strategy to use"
+        required: false
+        default: "custom"
+        type: choice
+        options:
+          - custom
+          - wandb
 
 concurrency:
   group: vast-${{ github.ref }}
@@ -49,12 +57,15 @@ env:
   PIP_CACHE_DIR: /data/mjepa/.pip-cache
   FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}
   WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+  WANDB_ENTITY: karthik-iyer-la-trobe-university
   WANDB_PROJECT: m-jepa
   WANDB_RUN_ID: ${{ github.run_id }}
   WANDB_RESUME: allow
   WANDB_RUN_GROUP: ${{ github.run_id }}
   MAMBA_ROOT_PREFIX: /data/mjepa/micromamba
   WANDB_DIR: /data/mjepa/wandb
+  WANDB_SWEEP_ID1: jnx2hxkj
+  WANDB_SWEEP_ID2: 0sx3pu41
   CACHE_DIR: /data/mjepa/cache/graphs
   RUN_ID: ${{ github.run_id }}
   EXP_ROOT: /data/mjepa/experiments/${{ github.run_id }}
@@ -220,7 +231,7 @@ jobs:
 
   vast_learn_hyperparameters:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
-    name: Learn hyperparameters
+    name: Learn hyperparameters (Custom or WandB)
     runs-on: ubuntu-latest
     needs: [tests_quick,vast_deploy_and_prepare_environment]
     steps:
@@ -235,19 +246,68 @@ jobs:
           request_pty: true
           command_timeout: 280m
           envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,FINETUNE_CACHE_DIR,BENCH_CACHE_DIR,TOX21_CACHE_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,WANDB_ENTITY,WANDB_SWEEP_ID1
           script: |
             bash "$APP_DIR/scripts/ci/run-grid.sh"
         env:
           HARD_WALL_MINS: 270
           KILL_AFTER_SECS: 120
+          WANDB_COUNT: 30
           GRID_MODE: wandb   # or "custom"
 
-  vast_pretrain:
-    if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
-    name: Pretain JEPA Model
+  
+  wandb_retrieve_best_hyperparameters:
+    if: ${{ github.event.inputs.hyperparam_mode == 'wandb' }}
+    name: Export best config from Phase 1 W&B sweep
     runs-on: ubuntu-latest
     needs: vast_learn_hyperparameters
+    steps:
+      - name: Export best config from W&B Phase 1
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          request_pty: true
+          envs: APP_DIR,GRID_DIR,WANDB_API_KEY,
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,WANDB_ENTITY,WANDB_SWEEP_ID,GRID_DIR
+          script: |
+            cd $APP_DIR
+            python scripts/ci/export_best_from_wandb.py \
+              --metric val_loss \
+              --out ${GRID_DIR}/best_grid_config.json
+
+  vast_sweep_phase2:
+    if: ${{ github.event.inputs.hyperparam_mode == 'wandb' }}
+    name: Sweep Phase 2 (Bayes refinement)
+    runs-on: ubuntu-latest
+    needs: wandb_retrieve_best_hyperparameters
+    steps:
+      - name: Launch W&B Sweep (Phase 2)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          request_pty: true
+          envs: APP_DIR,GRID_DIR,WANDB_API_KEY,
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,WANDB_ENTITY,WANDB_SWEEP_ID2
+          script: |
+            cd $APP_DIR
+            wandb agent --count 100 ${WANDB_ENTITY}/${WANDB_PROJECT}/${WANDB_SWEEP_ID}
+
+  vast_pretrain:
+    name: Pretain JEPA Model
+    runs-on: ubuntu-latest
+    needs: [vast_learn_hyperparameters, vast_sweep_phase2]
+    if: |
+      ${{ github.event.inputs.run_vast_jobs != 'false' }} ||
+      (github.event.inputs.param_type != 'wandb' && always() && needs.vast_learn_hyperparameters.result == 'success') ||
+      (github.event.inputs.param_type == 'custom' && always() && needs.vast_sweep_phase2.result == 'success')
     steps:
       - name: Pretrain on Vast
         uses: appleboy/ssh-action@v1
