@@ -11,7 +11,7 @@ export WANDB_JOB_TYPE="grid"
 # allowed values: custom | wandb
 
 # Normalize GRID_MODE (strip spaces and quotes)
-GRID_MODE_CLEAN=$(echo "$GRID_MODE" | tr -d '[:space:]' | tr -d '"'\'')
+GRID_MODE_CLEAN=$(echo "$GRID_MODE" | tr -d '[:space:]' | tr -d '"\'')
 
 echo "DEBUG: GRID_MODE='$GRID_MODE' -> CLEAN='$GRID_MODE_CLEAN'"
 
