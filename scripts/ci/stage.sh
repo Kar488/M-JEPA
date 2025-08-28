@@ -125,34 +125,60 @@ stage_dataset_preflight() {
 # ---------- timeout + SIGINT ----------
 run_with_timeout() {
   local s="$1"; shift
-  local -n arr="$1"; shift
-  local subcmd; subcmd="$(stage_subcmd "$s")"
 
-  #snake to kebab case  
-  if [ "$s" = "grid_search" ]; then
-    section="grid_search"   # YAML key
-    subcmd="grid-search"    # argparse subcommand
-  fi
+    # --- JEPA mode: run_stage passes an array name ---
+  if [[ "$s" != "wandb_agent" ]]; then
+    local -n arr="$1"; shift
+    local subcmd; subcmd="$(stage_subcmd "$s")"
 
-  local getv; getv() { local k="$1" n=0; while (( n < ${#arr[@]} )); do [[ "${arr[$n]}" == "$k" ]] && { echo "${arr[$((n+1))]}"; return 0; }; ((n++)); done; return 1; }
-  local BUDGET_MINS="$(getv --time-budget-mins || true)"
-  case "$s" in
-    grid) : "${BUDGET_MINS:=${HARD_WALL_MINS:-240}}" ;;
-    pretrain|finetune) : "${BUDGET_MINS:=${HARD_WALL_MINS:-120}}" ;;
-    *) : "${BUDGET_MINS:=${HARD_WALL_MINS:-60}}" ;;
-  esac
-  mkdir -p "$LOG_DIR"
+    #snake to kebab case  
+    if [ "$s" = "grid_search" ]; then
+      section="grid_search"   # YAML key
+      subcmd="grid-search"    # argparse subcommand
+    fi
 
-  local SOFT="$((BUDGET_MINS*60))"   # convert minutes → seconds
-  local GRACE="${KILL_AFTER_SECS:-60}"
+    # parsing flags from arr[@] inside stage.sh (e.g. --epochs 50, --batch-size 128),
+    local getv; getv() {
+      local k="$1" n=0
+      while (( n < ${#arr[@]} )); do
+        [[ "${arr[$n]}" == "$k" ]] && { echo "${arr[$((n+1))]}"; return 0; }
+        ((n++))
+      done
+      return 1
+    }
 
-  echo "[stage] wall budget=${BUDGET_MINS}m (${SOFT}s), grace=${GRACE}s"
+    # handle default timeouts differently
+    local BUDGET_MINS="$(getv --time-budget-mins || true)"
+    case "$s" in
+      grid) : "${BUDGET_MINS:=${HARD_WALL_MINS:-240}}" ;;
+      pretrain|finetune) : "${BUDGET_MINS:=${HARD_WALL_MINS:-120}}" ;;
+      *) : "${BUDGET_MINS:=${HARD_WALL_MINS:-60}}" ;;
+    esac
+    local SOFT="$((BUDGET_MINS*60))"   # convert minutes → seconds
+    local GRACE="${KILL_AFTER_SECS:-60}"
+    echo "[stage] wall budget=${BUDGET_MINS}m (${SOFT}s), grace=${GRACE}s"
 
+  mkdir -p "$LOG_DIR" 
   timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
     env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
     "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
     python -u "$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}" \
     2>&1 | tee "$LOG_DIR/${s}.log"
+  
+  # --- WandB mode: run-grid passes a full cmd array --
+  else
+    local -a cmd=("$@")
+    local SOFT=$(( (${HARD_WALL_MINS:-240})*60 ))
+    local GRACE="${KILL_AFTER_SECS:-60}"
+    echo "[wandb_agent] wall budget=${SOFT}s, grace=${GRACE}s"
+
+    mkdir -p "$LOG_DIR"
+    timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
+      env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+      "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
+      "${cmd[@]}" \
+      2>&1 | tee "$LOG_DIR/${s}.log"
+  fi
 }
 
 # ---------- one-call entry ----------
