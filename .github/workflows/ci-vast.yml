@@ -253,7 +253,7 @@ jobs:
           HARD_WALL_MINS: 270
           KILL_AFTER_SECS: 120
           WANDB_COUNT: 30
-          GRID_MODE: wandb   # or "custom"
+          GRID_MODE: "wandb"   # or "custom"
 
   
   wandb_retrieve_best_hyperparameters:
