@@ -167,6 +167,7 @@ run_with_timeout() {
   
   # --- WandB mode: run-grid passes a full cmd array --
   else
+    ensure_micromamba
     local -a cmd=("$@")
     local SOFT=$(( (${HARD_WALL_MINS:-240})*60 ))
     local GRACE="${KILL_AFTER_SECS:-60}"
