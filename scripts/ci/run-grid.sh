@@ -10,13 +10,16 @@ export WANDB_JOB_TYPE="grid"
 : "${GRID_MODE:=custom}"   # default is custom grid-search
 # allowed values: custom | wandb
 
-if [ "$GRID_MODE" = "wandb" ]; then
-    echo "[grid] running wandb sweep agent"
-    # Replace with your actual sweep ID
-    SWEEP_ID="$WANDB_ENTITY/$WANDB_PROJECT/$WANDB_SWEEP_ID1"
-    # Run N configs on this machine
-    wandb agent --count ${WANDB_COUNT:-50} "$SWEEP_ID"
+# Normalize GRID_MODE (strip spaces and quotes)
+GRID_MODE_CLEAN=$(echo "$GRID_MODE" | tr -d '[:space:]' | tr -d '"'\'')
 
+echo "DEBUG: GRID_MODE='$GRID_MODE' -> CLEAN='$GRID_MODE_CLEAN'"
+
+if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
+    echo "[grid] running wandb sweep agent"
+    SWEEP_ID="$WANDB_ENTITY/$WANDB_PROJECT/$WANDB_SWEEP_ID1"
+    echo "DEBUG: Using sweep ID: $SWEEP_ID"
+    wandb agent --count ${WANDB_COUNT:-50} "$SWEEP_ID"
 else
     echo "[grid] running custom grid-search"
     #ensure the parm matches train_jepa_ci.yml
