@@ -7,8 +7,7 @@ export WANDB_NAME="grid"
 export WANDB_JOB_TYPE="grid"
 
 # Decide which mode to use
-DEBUG: GRID_MODE='custom' -> CLEAN='custom'
-: "${GRID_MODE:?GRID_MODE must be set to 'wandb' or 'custom'}"
+: "${GRID_MODE:?GRID_MODE must be set to 'wandb' or 'custom'}"  # error if unset
 # allowed values: custom | wandb
 
 # Normalize GRID_MODE (strip spaces and quotes)
