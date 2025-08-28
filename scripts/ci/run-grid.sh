@@ -25,6 +25,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     SWEEP_ID="$WANDB_ENTITY/$WANDB_PROJECT/$WANDB_SWEEP_ID1"
     echo "DEBUG: Using sweep ID: $SWEEP_ID"
     
+    cd "$APP_DIR"
     run_with_timeout "wandb_agent" python -m wandb agent --count ${WANDB_COUNT:-50} "$SWEEP_ID"
         
 else

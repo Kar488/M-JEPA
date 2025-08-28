@@ -158,12 +158,12 @@ run_with_timeout() {
     local GRACE="${KILL_AFTER_SECS:-60}"
     echo "[stage] wall budget=${BUDGET_MINS}m (${SOFT}s), grace=${GRACE}s"
 
-  mkdir -p "$LOG_DIR" 
-  timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
-    env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-    "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-    python -u "$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}" \
-    2>&1 | tee "$LOG_DIR/${s}.log"
+    mkdir -p "$LOG_DIR" 
+    timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
+      env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+      "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
+      python -u "$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}" \
+      2>&1 | tee "$LOG_DIR/${s}.log"
   
   # --- WandB mode: run-grid passes a full cmd array --
   else
@@ -175,8 +175,6 @@ run_with_timeout() {
 
     mkdir -p "$LOG_DIR"
     timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
-      env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-      "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
       "${cmd[@]}" \
       2>&1 | tee "$LOG_DIR/${s}.log"
   fi
