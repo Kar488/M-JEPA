@@ -23,7 +23,10 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     echo "[grid] running wandb sweep agent"
     SWEEP_ID="$WANDB_ENTITY/$WANDB_PROJECT/$WANDB_SWEEP_ID1"
     echo "DEBUG: Using sweep ID: $SWEEP_ID"
-    wandb agent --count ${WANDB_COUNT:-50} "$SWEEP_ID"
+    timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
+        python -m wandb agent --count ${WANDB_COUNT:-50} "$SWEEP_ID" \
+            2>&1 | tee "$LOG_DIR/wandb_agent.log"
+        
 else
     echo "[grid] running custom grid-search"
     #ensure the parm matches train_jepa_ci.yml
