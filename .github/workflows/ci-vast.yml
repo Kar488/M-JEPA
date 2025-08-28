@@ -68,7 +68,8 @@ env:
   WANDB_SWEEP_ID2: 0sx3pu41
   WANDB_COUNT: 30
   HARD_WALL_MINS: 120
-  KILL_AFTER_SECS: 120        
+  KILL_AFTER_SECS: 120
+  GRID_MODE: wandb
   CACHE_DIR: /data/mjepa/cache/graphs
   RUN_ID: ${{ github.run_id }}
   EXP_ROOT: /data/mjepa/experiments/${{ github.run_id }}
