@@ -1,0 +1,57 @@
+program: scripts/train_jepa.py   # entrypoint
+command:
+  - ${env}
+  - python
+  - ${program}
+  - sweep-run
+method: bayes                # or random / bayes
+metric:
+  name: val_loss
+  goal: minimize
+
+parameters:
+  # dataset + task config
+  unlabeled_dir:
+    value: ${APP_DIR}/data/ZINC-canonicalized
+  labeled_dir:
+    value: ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
+  label_col:
+    value: "measured log solubility in mols per litre"
+  task_type:
+    value: regression
+
+  # model hyperparameters (taken from your grid_search)
+  training_method:
+    values: ["jepa", "contrastive"]  # choose which pre‑training to run
+  mask_ratio:
+    values: [0.15, 0.3, 0.5]
+  contiguity:
+    values: [0, 1]
+  hidden_dim:
+    values: [256]
+  num_layers:
+    values: [3]
+  gnn_type:
+    values: [mpnn]
+  ema_decay:
+    values: [0.996, 0.998, 0.999]
+  add_3d:
+    values: [1]
+  pretrain_batch_size:
+    values: [128, 256]
+  finetune_batch_size:
+    values: 256
+  temperature:
+    values: [0.07, 0.1, 0.2]
+  pretrain_epochs:
+    values: [30, 50]
+  finetune_epochs:
+    values: [1]
+  learning_rate:
+    values: [3e-4, 1e-4]
+  seed:
+    values: [1, 2, 3]
+
+early_terminate:
+  type: hyperband
+  min_iter: 10

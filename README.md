@@ -283,3 +283,16 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
       # Kill pre train hangs
       pkill -f "scripts/train_jepa.py pretrain" || true
       ```
+  
+  8) Other todos
+
+  a. Break up train jepa and grid search to be more modular, they suffer from bloat because of procedural writes (evolving needs)
+  b. Train subsequent steps with not just ESOL but larger corpus
+  c. explore random and Bayesian search over grid search to optimise for timing of runs. Wire into pipeline of custom grid and then handover to bayesian
+
+  ```bash
+  export APP_DIR=/srv/mjepa
+  wandb sweep --project mjepa grid_sweeps.yaml
+  # paste wandb key whn asked and then copy the generated url to project code
+
+  d. fix hyper‑parameters for grid we know do not strongly affect performance (e.g., maybe fix hidden_dim=256 and num_layers=3 if we know deeper networks give no benefit) or run cap (300-500)

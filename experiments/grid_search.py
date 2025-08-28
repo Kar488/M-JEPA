@@ -1101,6 +1101,9 @@ def run_grid_search(
             row.setdefault("method", method)
             rows.append(row)
 
+            if out_csv is not None and len(rows) % 5 == 0:  # every 5 configs, or even every 1
+                pd.DataFrame(rows).to_csv(out_csv, index=False)
+
             processed += 1
             if pbar is not None:
                 pbar.update(1)

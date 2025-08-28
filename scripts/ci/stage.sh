@@ -141,8 +141,12 @@ run_with_timeout() {
     pretrain|finetune) : "${BUDGET_MINS:=${HARD_WALL_MINS:-120}}" ;;
     *) : "${BUDGET_MINS:=${HARD_WALL_MINS:-60}}" ;;
   esac
-  local SOFT="${BUDGET_MINS}m"; local GRACE="${KILL_AFTER_SECS:-60}s"
   mkdir -p "$LOG_DIR"
+
+  local SOFT="$((BUDGET_MINS*60))"   # convert minutes → seconds
+  local GRACE="${KILL_AFTER_SECS:-60}"
+
+  echo "[stage] wall budget=${BUDGET_MINS}m (${SOFT}s), grace=${GRACE}s"
 
   timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
     env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
@@ -157,6 +161,7 @@ run_stage() {
   ensure_micromamba
   : "${WANDB_NAME:=$s}"; export WANDB_NAME
   : "${WANDB_JOB_TYPE:=$s}"; export WANDB_JOB_TYPE
+  export WANDB_RUN_GROUP="$GITHUB_RUN_ID"
 
   local dir; dir="$(stage_dir "$s")"
   if needs_stage "$dir" $(stage_needs "$s"); then
