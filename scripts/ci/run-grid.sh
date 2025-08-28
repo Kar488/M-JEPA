@@ -19,6 +19,11 @@ GRID_MODE_CLEAN="${GRID_MODE_CLEAN//\'/}"
 
 echo "DEBUG: GRID_MODE='$GRID_MODE' -> CLEAN='$GRID_MODE_CLEAN'"
 
+local SOFT="$((HARD_WALL_MINS*60))"   # convert minutes → seconds
+local GRACE="${KILL_AFTER_SECS:-60}"
+
+echo "[stage] wall budget=${HARD_WALL_MINS}m (${SOFT}s), grace=${GRACE}s"
+
 if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     echo "[grid] running wandb sweep agent"
     SWEEP_ID="$WANDB_ENTITY/$WANDB_PROJECT/$WANDB_SWEEP_ID1"
