@@ -19,7 +19,10 @@ GRID_MODE_CLEAN="${GRID_MODE_CLEAN//\'/}"
 
 echo "DEBUG: GRID_MODE='$GRID_MODE' -> CLEAN='$GRID_MODE_CLEAN'"
 
-local SOFT="$((HARD_WALL_MINS*60))"   # convert minutes → seconds
+: "${HARD_WALL_MINS:=240}"
+: "${KILL_AFTER_SECS:=60}"
+
+local SOFT=$((HARD_WALL_MINS*60))
 local GRACE="${KILL_AFTER_SECS:-60}"
 
 echo "[stage] wall budget=${HARD_WALL_MINS}m (${SOFT}s), grace=${GRACE}s"
