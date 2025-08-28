@@ -164,7 +164,11 @@ run_with_timeout() {
       "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
       python -u "$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}" \
       2>&1 | tee "$LOG_DIR/${s}.log"
-  
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+      echo "[ERROR][$s] train_jepa.py failed with exit code $rc" >&2
+      exit $rc
+    fi
   # --- WandB mode: run-grid passes a full cmd array --
   else
     ensure_micromamba
@@ -174,9 +178,17 @@ run_with_timeout() {
     echo "[wandb_agent] wall budget=${SOFT}s, grace=${GRACE}s"
 
     mkdir -p "$LOG_DIR"
+
     timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
-      "${cmd[@]}" \
+      "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
+      python -m wandb agent --count ${WANDB_COUNT:-50} "$SWEEP_ID" \
       2>&1 | tee "$LOG_DIR/${s}.log"
+      
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+      echo "[ERROR][$s] train_jepa.py failed with exit code $rc" >&2
+      exit $rc
+    fi
   fi
 }
 
