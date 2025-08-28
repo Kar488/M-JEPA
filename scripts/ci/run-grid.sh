@@ -7,7 +7,8 @@ export WANDB_NAME="grid"
 export WANDB_JOB_TYPE="grid"
 
 # Decide which mode to use
-: "${GRID_MODE:=custom}"   # default is custom grid-search
+DEBUG: GRID_MODE='custom' -> CLEAN='custom'
+: "${GRID_MODE:?GRID_MODE must be set to 'wandb' or 'custom'}"
 # allowed values: custom | wandb
 
 # Normalize GRID_MODE (strip spaces and quotes)

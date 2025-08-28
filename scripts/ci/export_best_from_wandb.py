@@ -16,7 +16,7 @@ def main():
 
     
 
-    sweep_id = args.sweep_id or f"{os.environ['WANDB_ENTITY']}/{os.environ['WANDB_PROJECT']}/{os.environ['WANDB_SWEEP_ID2']}"
+    sweep_id = args.sweep_id or f"{os.environ['WANDB_ENTITY']}/{os.environ['WANDB_PROJECT']}/{os.environ['WANDB_SWEEP_ID1']}"
 
     api = wandb.Api()
     sweep = api.sweep(sweep_id)
