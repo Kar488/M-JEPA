@@ -27,6 +27,11 @@ GRACE="${KILL_AFTER_SECS:-60}"
 
 echo "[stage] wall budget=${HARD_WALL_MINS}m (${SOFT}s), grace=${GRACE}s"
 
+  ensure_micromamba
+  : "${WANDB_NAME:=$s}"; export WANDB_NAME
+  : "${WANDB_JOB_TYPE:=$s}"; export WANDB_JOB_TYPE
+  export WANDB_RUN_GROUP="$GITHUB_RUN_ID"
+  
 if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     echo "[grid] running wandb sweep agent"
     SWEEP_ID="$WANDB_ENTITY/$WANDB_PROJECT/$WANDB_SWEEP_ID1"
