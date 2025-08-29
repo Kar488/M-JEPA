@@ -2067,7 +2067,7 @@ def build_parser() -> argparse.ArgumentParser:
     sweep.add_argument("--aug-atom-masking", action="store_true", help="Mask atom/node features (contrastive only)")
     sweep.add_argument("--aug-subgraph-removal", action="store_true", help="Remove a random subgraph (contrastive only)")
     sweep.add_argument("--sample-unlabeled", type=int, default=0, help="If >0, load at most N graphs from the unlabeled dataset.")
-    sweep.add_argument("--sample-labeled", type=int, default=0, help="If >0, load at most N graphs from the labeled dataset.")
+    sweep.add_argument("--sample-labeled", "--sample_labeled", type=int, default=0, help="If >0, load at most N graphs from the labeled dataset.")
     _add_common_args(sweep, "case_study")
     sweep.set_defaults(func=cmd_sweep_run)
 
