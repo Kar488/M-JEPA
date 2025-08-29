@@ -1544,6 +1544,15 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     Run one hyperparameter config (JEPA or contrastive) for W&B sweeps.
     Mirrors one row of grid-search, but logs directly to W&B.
     """
+    to_bool = lambda v: bool(int(v)) if isinstance(v, (str,int)) else bool(v)
+    add_3d               = to_bool(getattr(args, "add_3d", 0))
+    aug_atom_masking     = to_bool(getattr(args, "aug_atom_masking", 0))
+    aug_bond_deletion    = to_bool(getattr(args, "aug_bond_deletion", 0))
+    aug_dihedral         = to_bool(getattr(args, "aug_dihedral", 0))
+    aug_mask_angle       = to_bool(getattr(args, "aug_mask_angle", 0))
+    aug_rotate           = to_bool(getattr(args, "aug_rotate", 0))
+    aug_subgraph_removal = to_bool(getattr(args, "aug_subgraph_removal", 0))
+
     # Build config object
     cfg = Config(
         mask_ratio=args.mask_ratio,
@@ -1552,7 +1561,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         num_layers=args.num_layers,
         gnn_type=args.gnn_type,
         ema_decay=args.ema_decay,
-        add_3d=args.add_3d,
+        add_3d=add_3d,
         pretrain_bs=args.pretrain_batch_size,
         finetune_bs=args.finetune_batch_size,
         pretrain_epochs=args.pretrain_epochs,
@@ -1561,12 +1570,12 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         temperature=args.temperature,
         method=args.training_method,
         augmentations=AugmentationConfig(
-            random_rotate=args.aug_rotate,
-            mask_angle=args.aug_mask_angle,
-            perturb_dihedral=args.aug_dihedral,
-            bond_deletion=getattr(args, "aug_bond_deletion", False),
-            atom_masking=getattr(args, "aug_atom_masking", False),
-            subgraph_removal=getattr(args, "aug_subgraph_removal", False),
+            random_rotate=aug_rotate,
+            mask_angle=aug_mask_angle,
+            perturb_dihedral=aug_dihedral,
+            bond_deletion=aug_bond_deletion,
+            atom_masking=aug_atom_masking,
+            subgraph_removal=aug_subgraph_removal),
         )
     )
 
@@ -2044,30 +2053,51 @@ def build_parser() -> argparse.ArgumentParser:
 
     # pointing to wandb hyberband
     sweep = sub.add_parser("sweep-run")
-    sweep.add_argument("--mask-ratio", type=float, default=0.15)
-    sweep.add_argument("--contiguity", type=int, default=1)
-    sweep.add_argument("--pretrain-batch-size", type=int, default=64)
-    sweep.add_argument("--finetune-batch-size", type=int, default=64)
-    sweep.add_argument("--pretrain-epochs", type=int, default=50)
-    sweep.add_argument("--finetune-epochs", type=int, default=5)
-    sweep.add_argument("--learning-rate", type=float, default=0.001)
-    sweep.add_argument("--temperature", type=float, default=0.1)
-    sweep.add_argument("--training-method", choices=["jepa","contrastive"], default="jepa")
-    sweep.add_argument("--labeled-dir", required=True)
-    sweep.add_argument("--label-col", type=str, default="label")
-    sweep.add_argument("--task-type", choices=["classification","regression"], default="classification")
-    sweep.add_argument("--seed", type=int, default=0)
-    sweep.add_argument("--max-pretrain-batches", type=int, default=0, help="If >0, stop each pretrain epoch after this many batches.")
-    sweep.add_argument("--max-finetune-batches",type=int,default=0,help="If >0, stop each finetune epoch after this many batches.")
-    sweep.add_argument("--add-3d-options", type=int, nargs="+", default=[0, 1], help="Whether to include 3D features (0 for False, 1 for True)")
-    sweep.add_argument("--aug-rotate-options", type=int, nargs="+", default=[int(DEFAULT_AUG.rotate)], help="Apply random rotation augmentation (0 for False, 1 for True)")
-    sweep.add_argument("--aug-mask-angle-options", type=int, nargs="+", default=[int(DEFAULT_AUG.mask_angle)], help="Apply angle masking augmentation (0 for False, 1 for True)")
-    sweep.add_argument("--aug-dihedral-options", type=int, nargs="+", default=[int(DEFAULT_AUG.dihedral)], help="Apply dihedral perturbation augmentation (0 for False, 1 for True)") 
-    sweep.add_argument("--aug-bond-deletion", action="store_true", help="Randomly delete bonds (contrastive only)")
-    sweep.add_argument("--aug-atom-masking", action="store_true", help="Mask atom/node features (contrastive only)")
-    sweep.add_argument("--aug-subgraph-removal", action="store_true", help="Remove a random subgraph (contrastive only)")
-    sweep.add_argument("--sample-unlabeled","--sample_unlabeled", type=int, default=0, help="If >0, load at most N graphs from the unlabeled dataset.")
-    sweep.add_argument("--sample-labeled", "--sample_labeled", type=int, default=0, help="If >0, load at most N graphs from the labeled dataset.")
+   # --- sweep-run (W&B will pass --key=value with underscores) ---
+
+    # paths
+    sweep.add_argument("--labeled-dir",   "--labeled_dir",   dest="labeled_dir",   type=str, required=True)
+    sweep.add_argument("--unlabeled-dir", "--unlabeled_dir", dest="unlabeled_dir", type=str, required=True)
+
+    # core task/config
+    sweep.add_argument("--training-method", "--training_method",
+                    dest="training_method", choices=["jepa","contrastive"], default="jepa")
+    sweep.add_argument("--task-type", "--task_type",
+                    dest="task_type", choices=["classification","regression"], default="classification")
+    sweep.add_argument("--label-col", "--label_col", dest="label_col", type=str, default="label")
+    sweep.add_argument("--seed", dest="seed", type=int, default=0)
+    sweep.add_argument("--temperature", dest="temperature", type=float, default=0.1)
+    sweep.add_argument("--ema-decay", "--ema_decay", dest="ema_decay", type=float, default=0.999)
+
+    # model/hparams
+    sweep.add_argument("--mask-ratio", "--mask_ratio", dest="mask_ratio", type=float, default=0.15)
+    sweep.add_argument("--contiguity", dest="contiguity", type=int, default=1)
+    sweep.add_argument("--learning-rate", "--learning_rate", dest="learning_rate", type=float, default=1e-3)
+    sweep.add_argument("--gnn-type", "--gnn_type", dest="gnn_type", type=str, default="gcn")
+    sweep.add_argument("--hidden-dim", "--hidden_dim", dest="hidden_dim", type=int, default=256)
+    sweep.add_argument("--num-layers", "--num_layers", dest="num_layers", type=int, default=3)
+
+    # training config
+    sweep.add_argument("--pretrain-batch-size", "--pretrain_batch_size", dest="pretrain_batch_size", type=int, default=64)
+    sweep.add_argument("--finetune-batch-size", "--finetune_batch_size", dest="finetune_batch_size", type=int, default=64)
+    sweep.add_argument("--pretrain-epochs", "--pretrain_epochs", dest="pretrain_epochs", type=int, default=50)
+    sweep.add_argument("--finetune-epochs", "--finetune_epochs", dest="finetune_epochs", type=int, default=5)
+    sweep.add_argument("--max-pretrain-batches", "--max_pretrain_batches", dest="max_pretrain_batches", type=int, default=0)
+    sweep.add_argument("--max-finetune-batches", "--max_finetune_batches", dest="max_finetune_batches", type=int, default=0)
+    sweep.add_argument("--sample-unlabeled", "--sample_unlabeled", dest="sample_unlabeled", type=int, default=0)
+    sweep.add_argument("--sample-labeled", "--sample_labeled", dest="sample_labeled", type=int, default=0)
+
+    # augmentations (accept 0/1 values from sweep)
+    sweep.add_argument("--add-3d",               "--add_3d",               dest="add_3d",               type=int, choices=[0,1], default=0)
+    sweep.add_argument("--aug-rotate",           "--aug_rotate",           dest="aug_rotate",           type=int, choices=[0,1], default=0)
+    sweep.add_argument("--aug-mask-angle",       "--aug_mask_angle",       dest="aug_mask_angle",       type=int, choices=[0,1], default=0)
+    sweep.add_argument("--aug-dihedral",         "--aug_dihedral",         dest="aug_dihedral",         type=int, choices=[0,1], default=0)
+    sweep.add_argument("--aug-bond-deletion",    "--aug_bond_deletion",    dest="aug_bond_deletion",    type=int, choices=[0,1], default=0)
+    sweep.add_argument("--aug-atom-masking",     "--aug_atom_masking",     dest="aug_atom_masking",     type=int, choices=[0,1], default=0)
+    sweep.add_argument("--aug-subgraph-removal", "--aug_subgraph_removal", dest="aug_subgraph_removal", type=int, choices=[0,1], default=0)
+
+    sweep.set_defaults(func=cmd_sweep_run)
+
     _add_common_args(sweep, "case_study")
     sweep.set_defaults(func=cmd_sweep_run)
 
