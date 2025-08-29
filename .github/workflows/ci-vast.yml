@@ -64,8 +64,8 @@ env:
   WANDB_RUN_GROUP: ${{ github.run_id }}
   MAMBA_ROOT_PREFIX: /data/mjepa/micromamba
   WANDB_DIR: /data/mjepa/wandb
-  WANDB_SWEEP_ID1: yzrvwwvg
-  WANDB_SWEEP_ID2: k4vyid0e
+  WANDB_SWEEP_ID1: 9e5krumw
+  WANDB_SWEEP_ID2: 78qwtfe0
   WANDB_COUNT: 30
   HARD_WALL_MINS: 120
   KILL_AFTER_SECS: 120
