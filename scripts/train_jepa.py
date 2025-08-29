@@ -1688,7 +1688,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         max_finetune_batches=args.max_finetune_batches,
         time_left=lambda: float("inf"),
         num_workers=int(getattr(args, "num_workers", 4)),
-        pin_memory=bool(int(getattr(args, "pin_memory", 0))),
+        pin_memory=bool(int(getattr(args, "pin_memory", 1))),
         persistent_workers=bool(int(getattr(args, "persistent_workers", 0))),
         prefetch_factor=int(getattr(args, "prefetch_factor", 2)),
         bf16=bool(int(getattr(args, "bf16", 0))),

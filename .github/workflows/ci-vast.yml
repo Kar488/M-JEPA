@@ -237,6 +237,7 @@ jobs:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
     name: Learn hyperparameters (Custom or WandB)
     runs-on: ubuntu-latest
+    #timeout-minutes: 740
     needs: [tests_quick,vast_deploy_and_prepare_environment]
     steps:
       - name: Run grid search
@@ -255,7 +256,7 @@ jobs:
           script: |
             bash "$APP_DIR/scripts/ci/run-grid.sh"
         env:
-          HARD_WALL_MINS: 270
+          HARD_WALL_MINS: 300
           KILL_AFTER_SECS: 120
           WANDB_COUNT: 30
           GRID_MODE: "wandb"   # or "custom"
@@ -290,6 +291,7 @@ jobs:
     if: ${{ github.event.inputs.hyperparam_mode == 'wandb' }}
     name: Sweep Phase 2 (Bayes refinement)
     runs-on: ubuntu-latest
+    #timeout-minutes: 1860
     needs: wandb_retrieve_best_hyperparameters
     steps:
       - name: Launch W&B Sweep (Phase 2)

@@ -54,54 +54,68 @@ def _encode_graph(encoder: torch.nn.Module, g: Any):
     signature: it may accept the whole graph object, ``(x, adj)``,
     ``(x, adj, edge_attr)``, or just ``x``.
     """
+    if isinstance(g, (tuple, list)) and len(g) > 0:
+        g = g[0]
+    if not hasattr(g, "x") and not hasattr(g, "edge_index") and not hasattr(g, "adj"):
+        raise TypeError(f"Expected graph-like object with .x/.edge_index/.adj, got {type(g)}")
+
     device = _ref_device(encoder)
 
     # Node features
     x = getattr(g, "x", None)
     x_t = _to_tensor(x, dtype=torch.float32, device=device)
 
-    # Graph structure
+    # Prepare BOTH representations when possible
+    adj_t = None
+    ei_t  = None
+    edge_t = _to_tensor(getattr(g, "edge_attr", None), dtype=torch.float32, device=device)
+
+    if hasattr(g, "edge_index") and getattr(g, "edge_index") is not None:
+        ei_t = _to_tensor(getattr(g, "edge_index"), dtype=torch.long, device=device)
+
     if hasattr(g, "adj") and getattr(g, "adj") is not None:
         adj = getattr(g, "adj")
         if torch.is_tensor(adj):
-            if adj.ndim == 2:
-                adj_t = adj.to(device=device, dtype=torch.float32)
-            else:
-                adj_t = adj.to(device=device, dtype=torch.float32).squeeze()
+            adj_t = adj.to(device=device, dtype=torch.float32)
+            if adj_t.ndim > 2:
+                adj_t = adj_t.squeeze()
         else:
             adj_t = _to_tensor(adj, dtype=torch.float32, device=device)
         if adj_t.shape[0] == adj_t.shape[1]:
-            adj_t = adj_t.clone()
-            adj_t.fill_diagonal_(1.0)
-        edge_t = _to_tensor(getattr(g, "edge_attr", None), dtype=torch.float32, device=device)
-    else:
-        edge_index = getattr(g, "edge_index", None)
-        if edge_index is None:
-            raise ValueError("Graph has neither 'adj' nor 'edge_index'.")
-        ei_t = _to_tensor(edge_index, dtype=torch.long, device=device)
-        num_nodes = int(x_t.shape[0]) if x_t is not None else int(edge_index.max().item() + 1)
-        adj_t = _edge_index_to_dense(ei_t, num_nodes, device=device, add_self_loops=True)
-        edge_t = _to_tensor(getattr(g, "edge_attr", None), dtype=torch.float32, device=device)
+            adj_t = adj_t.clone(); adj_t.fill_diagonal_(1.0)
 
+    # If we still don't have ei_t but we have adj_t, derive it
+    if ei_t is None and adj_t is not None:
+        idx = (adj_t > 0).nonzero(as_tuple=False).T
+        if idx.numel() > 0:
+            ei_t = idx.to(dtype=torch.long, device=device)
+
+    # If we still don't have adj_t but we have ei_t, build dense with self-loops
+    if adj_t is None and ei_t is not None:
+        num_nodes = int(x_t.shape[0]) if x_t is not None else int(ei_t.max().item() + 1)
+        adj_t = _edge_index_to_dense(ei_t, num_nodes, device=device, add_self_loops=True)
+
+    # Decide how to call the encoder based on its signature
     mod = encoder.module if hasattr(encoder, "module") else encoder
     sig = inspect.signature(mod.forward)
-    params = [
-        p.name
-        for p in sig.parameters.values()
-        if p.kind in (
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        )
-    ]
+    params = [p.name for p in sig.parameters.values()
+              if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD)]
 
     if params and params[0] in {"g", "graph", "data"}:
         return encoder(g)
 
-    if {"x", "adj"}.issubset(params) or {"x", "edge_index"}.issubset(params) or len(params) >= 2:
+    if {"x", "edge_index"}.issubset(params) and ei_t is not None:
+        if "edge_attr" in params and edge_t is not None:
+            return encoder(x_t, ei_t, edge_t)
+        return encoder(x_t, ei_t)
+
+    if {"x", "adj"}.issubset(params) and adj_t is not None:
         if "edge_attr" in params and edge_t is not None:
             return encoder(x_t, adj_t, edge_t)
         return encoder(x_t, adj_t)
 
+    # Fallback: encoder expects just features
     return encoder(x_t)
 
 

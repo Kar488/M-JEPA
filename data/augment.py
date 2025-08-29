@@ -149,43 +149,63 @@ def mask_random_angle(mol: Chem.Mol, conf_id: int = 0) -> Chem.Mol:
     try:
         MT.SetAngleDeg(mol.GetConformer(conf_id), int(i), int(j), int(k), 0.0)
     except Exception:
+       try:
+        Chem.GetSymmSSSR(mol); mol.UpdatePropertyCache(False)
+        MT.SetAngleDeg(mol.GetConformer(conf_id), int(i), int(j), int(k), 0.0)
+       except Exception:
         pass
     return mol
 
 
-def perturb_dihedral(
-    mol: Chem.Mol, conf_id: int = 0, max_deg: float = 20.0
-) -> Chem.Mol:
-    """Give the molecule a tiny twist at one bond.
+# expects: from rdkit import Chem
+#          from rdkit.Chem import rdMolTransforms as MT
+#          import numpy as np
 
-    Randomly perturb a dihedral angle by up to ``max_deg`` degrees in
-    the selected conformer to add small structural noise.
-    """
-    if Chem is None or np is None or mol.GetNumConformers() == 0:
+def perturb_dihedral(mol: Chem.Mol, conf_id: int = 0, max_deg: float = 20.0) -> Chem.Mol:
+    """Randomly perturb a dihedral by up to `max_deg` degrees.
+    Safe if RingInfo wasn't initialized (handles it and retries once)."""
+    if mol is None or mol.GetNumConformers() == 0:
         return mol
+
+    # Ensure ring info is initialized before MolTransforms calls
+    try:
+        Chem.GetSymmSSSR(mol)
+        mol.UpdatePropertyCache(False)
+        _ = mol.GetRingInfo()
+    except Exception:
+        pass
+
+    # Build candidate (i, j, k, l) quadruples from bonds
     quadruples = []
     for b in mol.GetBonds():
         j, k = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
-        js = [
-            n.GetIdx() for n in mol.GetAtomWithIdx(j).GetNeighbors() if n.GetIdx() != k
-        ]
-        ks = [
-            n.GetIdx() for n in mol.GetAtomWithIdx(k).GetNeighbors() if n.GetIdx() != j
-        ]
+        js = [n.GetIdx() for n in mol.GetAtomWithIdx(j).GetNeighbors() if n.GetIdx() != k]
+        ks = [n.GetIdx() for n in mol.GetAtomWithIdx(k).GetNeighbors() if n.GetIdx() != j]
         for i in js:
             for ell in ks:
                 quadruples.append((i, j, k, ell))
     if not quadruples:
         return mol
+
     i, j, k, ell = quadruples[np.random.randint(len(quadruples))]
     conf = mol.GetConformer(conf_id)
-    try:
-        current = MT.GetDihedralDeg(conf, int(i), int(j), int(k), int(ell))
+
+    def _try_set():
+        cur = MT.GetDihedralDeg(conf, int(i), int(j), int(k), int(ell))
         delta = float(np.random.uniform(-max_deg, max_deg))
-        MT.SetDihedralDeg(conf, int(i), int(j), int(k), int(ell), current + delta)
+        MT.SetDihedralDeg(conf, int(i), int(j), int(k), int(ell), cur + delta)
+
+    try:
+        _try_set()
     except Exception:
-        pass
+        try:
+            Chem.GetSymmSSSR(mol); mol.UpdatePropertyCache(False); mol.GetRingInfo()
+            _try_set()
+        except Exception:
+            pass
+
     return mol
+
 
 
 def _pick_neighbor(mol: Chem.Mol, center: int, exclude: int) -> Optional[int]:
@@ -408,6 +428,14 @@ def apply_graph_augmentations(
             conf.SetAtomPosition(i, tuple(map(float, coords[i])))
         mol.AddConformer(conf, assignId=True)
 
+        # initialize RingInfo once (prevents RDKit invariant crash)
+        try:
+            Chem.GetSymmSSSR(mol)         # compute ring info without full sanitize
+            mol.UpdatePropertyCache(False) # avoid strict valence checks
+            _ = mol.GetRingInfo()          # touch to ensure initialized
+        except Exception:
+            pass
+
         # Normalise alias flags
         do_rotate = bool(random_rotate or rotate)
         do_dihedral = bool(perturb_dihedral or dihedral)
@@ -416,9 +444,24 @@ def apply_graph_augmentations(
         if do_rotate:
             random_rotation(mol)
         if mask_angle:
-            mask_random_angle(mol)
+            try:
+                mask_random_angle(mol)
+            except Exception:
+                # belt-and-braces retry
+                try:
+                    Chem.GetSymmSSSR(mol); mol.UpdatePropertyCache(False); mol.GetRingInfo()
+                    mask_random_angle(mol)
+                except Exception:
+                    pass
         if do_dihedral:
-            globals()["perturb_dihedral"](mol)
+            try:
+                perturb_dihedral(mol)   # use your safe version if you added it
+            except Exception:
+                try:
+                    Chem.GetSymmSSSR(mol); mol.UpdatePropertyCache(False); mol.GetRingInfo()
+                    perturb_dihedral(mol)
+                except Exception:
+                    pass
 
         # Write back coords + last 10 geom features (if present)
         conf = mol.GetConformer()
