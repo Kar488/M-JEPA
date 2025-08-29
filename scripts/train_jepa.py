@@ -1576,7 +1576,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             bond_deletion=aug_bond_deletion,
             atom_masking=aug_atom_masking,
             subgraph_removal=aug_subgraph_removal),
-        )
     )
 
     # One-config run
