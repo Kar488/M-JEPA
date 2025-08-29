@@ -1562,13 +1562,59 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     to_bool = lambda v: bool(int(v)) if isinstance(v, (str,int)) else bool(v)
     add_3d               = to_bool(getattr(args, "add_3d", 0))
-    aug_atom_masking     = to_bool(getattr(args, "aug_atom_masking", 0))
-    aug_bond_deletion    = to_bool(getattr(args, "aug_bond_deletion", 0))
-    aug_dihedral         = to_bool(getattr(args, "aug_dihedral", 0))
-    aug_mask_angle       = to_bool(getattr(args, "aug_mask_angle", 0))
-    aug_rotate           = to_bool(getattr(args, "aug_rotate", 0))
-    aug_subgraph_removal = to_bool(getattr(args, "aug_subgraph_removal", 0))
     aug_contiguity       = to_bool(getattr(args, "contiguity", 0))
+
+    import json
+
+    def _b(x):
+        # robust 0/1/True/False/"0"/"1" → bool
+        if isinstance(x, bool): return x
+        try: return bool(int(str(x)))
+        except Exception: return bool(x)
+
+    G = lambda k, d=None: getattr(args, k, d)
+
+    aug_kwargs = {
+        "random_rotate":     _b(G("aug_rotate", 0)),
+        "mask_angle":        _b(G("aug_mask_angle", 0)),
+        "perturb_dihedral":  _b(G("aug_dihedral", 0)),
+        "bond_deletion":     _b(G("aug_bond_deletion", 0)),
+        "atom_masking":      _b(G("aug_atom_masking", 0)),
+        "subgraph_removal":  _b(G("aug_subgraph_removal", 0)),
+    }
+
+    cfg_preview = {
+        # paths
+        "labeled_dir":        G("labeled_dir"),
+        "unlabeled_dir":      G("unlabeled_dir"),
+
+        # core task/config
+        "training_method":    G("training_method"),
+        "task_type":          G("task_type"),
+        "label_col":          G("label_col"),
+        "seed":               G("seed"),
+
+        # hparams
+        "mask_ratio":         G("mask_ratio"),
+        "contiguity":         G("contiguity"),
+        "learning_rate":      G("learning_rate"),
+        "temperature":        G("temperature"),
+        "gnn_type":           G("gnn_type"),
+        "hidden_dim":         G("hidden_dim"),
+        "num_layers":         G("num_layers"),
+        "pretrain_batch_size":G("pretrain_batch_size"),
+        "finetune_batch_size":G("finetune_batch_size"),
+        "pretrain_epochs":    G("pretrain_epochs"),
+        "finetune_epochs":    G("finetune_epochs"),
+        "ema_decay":          G("ema_decay"),
+        "sample_unlabeled":   G("sample_unlabeled"),
+        "sample_labeled":     G("sample_labeled"),
+
+        # augs (normalized)
+        "augmentations":      aug_kwargs,
+    }
+
+    print("[sweep-run] args: " + json.dumps(vars(args), sort_keys=True, default=str))
 
     # Build config object
     cfg = Config(
@@ -1585,15 +1631,9 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         finetune_epochs=args.finetune_epochs,
         lr=args.learning_rate,
         temperature=args.temperature,
-        augmentations=AugmentationConfig(
-            random_rotate=aug_rotate,
-            mask_angle=aug_mask_angle,
-            perturb_dihedral=aug_dihedral,
-            bond_deletion=aug_bond_deletion,
-            atom_masking=aug_atom_masking,
-            subgraph_removal=aug_subgraph_removal),
+        augmentations=AugmentationConfig(**aug_kwargs),
     )
-
+ 
     # One-config run
     row = _run_one_config_method(
         cfg=cfg,
@@ -1635,11 +1675,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         max_pretrain_batches=args.max_pretrain_batches,
         max_finetune_batches=args.max_finetune_batches,
         time_left=lambda: float("inf"),
-        num_workers=args.num_workers,
-        pin_memory=args.pin_memory,
-        persistent_workers=args.persistent_workers,
-        prefetch_factor=args.prefetch_factor,
-        bf16=args.bf16,
+        num_workers=int(getattr(args, "num_workers", 4)),
+        pin_memory=bool(int(getattr(args, "pin_memory", 0))),
+        persistent_workers=bool(int(getattr(args, "persistent_workers", 0))),
+        prefetch_factor=int(getattr(args, "prefetch_factor", 2)),
+        bf16=bool(int(getattr(args, "bf16", 0))),
     )
 
     # Log metrics to W&B
