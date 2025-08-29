@@ -1616,11 +1616,15 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     per_trial_cfg = {k: v for k, v in vars(args).items() if k != "func"}
 
+    use_wandb = bool(int(getattr(args, "use_wandb", 1)))   # default: on
+    project   = getattr(args, "wandb_project", None) or os.getenv("WANDB_PROJECT", "mjepa")
+    tags      = getattr(args, "wandb_tags", None)
+
     wb = maybe_init_wandb(
-    args.use_wandb,
-    project=args.wandb_project,
-    tags=args.wandb_tags,
-    config=per_trial_cfg,
+        use_wandb,
+        project=project,
+        tags=tags,
+        config=per_trial_cfg,
     )
 
     # One-config run
