@@ -129,6 +129,20 @@ except Exception:
         mask_angle: bool = False
         dihedral: bool = False
 
+
+        def __init__(self, rotate: bool = False, mask_angle: bool = False,
+                     dihedral: bool = False, **kw):
+            # map common aliases if sweeps pass them; ignore the rest
+            if "random_rotate" in kw:
+                rv = kw["random_rotate"]
+                rotate = rotate or (bool(int(rv)) if isinstance(rv, (int, str)) else bool(rv))
+            if "perturb_dihedral" in kw:
+                dv = kw["perturb_dihedral"]
+                dihedral = dihedral or (bool(int(dv)) if isinstance(dv, (int, str)) else bool(dv))
+            object.__setattr__(self, "rotate", bool(rotate))
+            object.__setattr__(self, "mask_angle", bool(mask_angle))
+            object.__setattr__(self, "dihedral", bool(dihedral))
+
         @classmethod
         def from_dict(cls, cfg: Optional[dict] = None) -> "AugmentationConfig":
             cfg = cfg or {}
@@ -1537,13 +1551,15 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     finally:
         wb.finish()
 
-from experiments.grid_search import Config, _run_one_config_method 
-import wandb
+
 def cmd_sweep_run(args: argparse.Namespace) -> None:
     """
     Run one hyperparameter config (JEPA or contrastive) for W&B sweeps.
     Mirrors one row of grid-search, but logs directly to W&B.
     """
+    from experiments.grid_search import Config, _run_one_config_method 
+    import wandb
+
     to_bool = lambda v: bool(int(v)) if isinstance(v, (str,int)) else bool(v)
     add_3d               = to_bool(getattr(args, "add_3d", 0))
     aug_atom_masking     = to_bool(getattr(args, "aug_atom_masking", 0))
@@ -1583,12 +1599,24 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     row = _run_one_config_method(
         cfg=cfg,
         method=args.training_method,  # "jepa" or "contrastive"
+
         unlabeled_dataset_fn=lambda add3d: load_directory_dataset(
-            args.unlabeled_dir, args.label_col, split="train", add_3d=add3d,max_graphs=args.sample_unlabeled
+            dirpath=args.unlabeled_dir,
+            label_col=None,                  # unlabeled set
+            add_3d=add3d,
+            max_graphs=args.sample_unlabeled,
+            num_workers=args.num_workers,
+            cache_dir=args.cache_dir,
         ),
         eval_dataset_fn=lambda add3d: load_directory_dataset(
-            args.labeled_dir, args.label_col, split="val", add_3d=add3d,max_graphs=args.sample_labeled
+            dirpath=args.labeled_dir,
+            label_col=args.label_col,        # labeled set
+            add_3d=add3d,
+            max_graphs=args.sample_labeled,
+            num_workers=args.num_workers,
+            cache_dir=args.cache_dir,
         ),
+
         task_type=args.task_type,
         seeds=[args.seed],
         device="cuda",

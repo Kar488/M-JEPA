@@ -41,26 +41,34 @@ __all__ = [
 class AugmentationConfig:
     """Configuration flags for optional geometric augmentations."""
 
+    # geometric
     random_rotate: bool = False
     mask_angle: bool = False
     perturb_dihedral: bool = False
+    # graph-level (NEW)
+    bond_deletion: bool = False
+    atom_masking: bool = False
+    subgraph_removal: bool = False
 
     def __init__(
         self,
         random_rotate: bool = False,
         mask_angle: bool = False,
         perturb_dihedral: bool = False,
+        bond_deletion: bool = False,
+        atom_masking: bool = False,
+        subgraph_removal: bool = False,
+
         *,
         rotate: Optional[bool] = None,
         dihedral: Optional[bool] = None,
     ) -> None:
-        object.__setattr__(
-            self, "random_rotate", random_rotate or bool(rotate)
-        )
-        object.__setattr__(self, "mask_angle", mask_angle)
-        object.__setattr__(
-            self, "perturb_dihedral", perturb_dihedral or bool(dihedral)
-        )
+        object.__setattr__(self, "random_rotate", random_rotate or bool(rotate))
+        object.__setattr__(self, "mask_angle", bool(mask_angle))
+        object.__setattr__(self, "perturb_dihedral", perturb_dihedral or bool(dihedral))
+        object.__setattr__(self, "bond_deletion", bool(bond_deletion))
+        object.__setattr__(self, "atom_masking", bool(atom_masking))
+        object.__setattr__(self, "subgraph_removal", bool(subgraph_removal))
 
     @property
     def rotate(self) -> bool:
@@ -76,9 +84,10 @@ class AugmentationConfig:
         return cls(
             random_rotate=bool(cfg.get("random_rotate", cfg.get("rotate", False))),
             mask_angle=bool(cfg.get("mask_angle", False)),
-            perturb_dihedral=bool(
-                cfg.get("perturb_dihedral", cfg.get("dihedral", False))
-            ),
+            perturb_dihedral=bool(cfg.get("perturb_dihedral", cfg.get("dihedral", False))),
+            bond_deletion=bool(cfg.get("bond_deletion", False)),
+            atom_masking=bool(cfg.get("atom_masking", False)),
+            subgraph_removal=bool(cfg.get("subgraph_removal", False)),
         )
 
 
@@ -365,6 +374,9 @@ def apply_graph_augmentations(
     mask_angle: bool = False,
     perturb_dihedral: bool = False,
     dihedral: bool = False,
+    bond_deletion: bool = False,
+    atom_masking: bool = False,
+    subgraph_removal: bool = False,
 ):
     """Play with the molecule's shape using optional tricks.
 
@@ -372,42 +384,67 @@ def apply_graph_augmentations(
     :class:`GraphData` instance and update coordinates and geometric edge
     attributes accordingly.
     """
-    if Chem is None or np is None or g.x.shape[1] < 7:
-        return g
-    num_nodes = g.x.shape[0]
-    coords = g.x[:, -3:].copy()
-    mol = Chem.RWMol()
-    for i in range(num_nodes):
-        z = int(g.x[i, 0])
-        mol.AddAtom(Chem.Atom(z))
-    added = set()
-    for u, v in g.edge_index.T:
-        tup = tuple(sorted((int(u), int(v))))
-        if tup in added:
-            continue
-        mol.AddBond(tup[0], tup[1], Chem.BondType.SINGLE)
-        added.add(tup)
-    conf = Chem.Conformer(num_nodes)
-    for i in range(num_nodes):
-        conf.SetAtomPosition(i, tuple(map(float, coords[i])))
-    mol.AddConformer(conf, assignId=True)
-    random_rotate = random_rotate or rotate
-    perturb_dihedral_flag = perturb_dihedral or dihedral
-    if random_rotate:
-        random_rotation(mol)
-    if mask_angle:
-        mask_random_angle(mol)
-    if perturb_dihedral_flag:
-        globals()["perturb_dihedral"](mol)
-    conf = mol.GetConformer()
-    for i in range(num_nodes):
-        p = conf.GetAtomPosition(i)
-        g.x[i, -3:] = [p.x, p.y, p.z]
-    if g.edge_attr is not None and g.edge_attr.shape[1] >= 10:
-        geom = [_geom_features_for_bond(mol, int(i), int(j)) for i, j in g.edge_index.T]
-        geom = np.stack(geom, axis=0)
-        g.edge_attr[:, -10:] = geom
+    # --- Geometric transforms (coords) ---
+    have_geom = (Chem is not None) and (np is not None) and (g.x.shape[1] >= 7)
+    if have_geom:
+        num_nodes = g.x.shape[0]
+        coords = g.x[:, -3:].copy()
+
+        # Build a temporary RDKit molecule from GraphData
+        mol = Chem.RWMol()
+        for i in range(num_nodes):
+            z = int(g.x[i, 0])
+            mol.AddAtom(Chem.Atom(z))
+        added = set()
+        for u, v in g.edge_index.T:
+            tup = tuple(sorted((int(u), int(v))))
+            if tup in added:
+                continue
+            mol.AddBond(tup[0], tup[1], Chem.BondType.SINGLE)
+            added.add(tup)
+
+        conf = Chem.Conformer(num_nodes)
+        for i in range(num_nodes):
+            conf.SetAtomPosition(i, tuple(map(float, coords[i])))
+        mol.AddConformer(conf, assignId=True)
+
+        # Normalise alias flags
+        do_rotate = bool(random_rotate or rotate)
+        do_dihedral = bool(perturb_dihedral or dihedral)
+
+        # Geometric ops
+        if do_rotate:
+            random_rotation(mol)
+        if mask_angle:
+            mask_random_angle(mol)
+        if do_dihedral:
+            globals()["perturb_dihedral"](mol)
+
+        # Write back coords + last 10 geom features (if present)
+        conf = mol.GetConformer()
+        for i in range(num_nodes):
+            p = conf.GetAtomPosition(i)
+            g.x[i, -3:] = [p.x, p.y, p.z]
+        if g.edge_attr is not None and g.edge_attr.shape[1] >= 10:
+            geom = [_geom_features_for_bond(mol, int(i), int(j)) for i, j in g.edge_index.T]
+            geom = np.stack(geom, axis=0)
+            g.edge_attr[:, -10:] = geom
+
+    # --- Graph-structure transforms (always available) ---
+    def b(x):  # robust 0/1/True/False → bool
+        return bool(int(x)) if isinstance(x, (int, str)) else bool(x)
+
+    if b(bond_deletion):
+        g = delete_random_bond(g)
+    if b(atom_masking):
+        g = mask_random_atom(g)
+    if b(subgraph_removal):
+        g = remove_random_subgraph(g)
+
     return g
+    
+
+        
 
 
 def _clone_graph(g: GraphData) -> GraphData:
