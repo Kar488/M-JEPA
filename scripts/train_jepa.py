@@ -1585,7 +1585,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         finetune_epochs=args.finetune_epochs,
         lr=args.learning_rate,
         temperature=args.temperature,
-        method=args.training_method,
         augmentations=AugmentationConfig(
             random_rotate=aug_rotate,
             mask_angle=aug_mask_angle,
