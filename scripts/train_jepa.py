@@ -1633,14 +1633,26 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         temperature=args.temperature,
         augmentations=AugmentationConfig(**aug_kwargs),
     )
- 
+    
+    import os, re
+
+    def _resolve_env_path(p: str) -> str:
+        # turn ${env:VAR} -> ${VAR} then expand env/user/abspath
+        p = re.sub(r"\$\{env:([^}]+)\}", r"${\1}", p)
+        return os.path.abspath(os.path.expanduser(os.path.expandvars(p)))
+
+    _labeled_dir   = _resolve_env_path(args.labeled_dir)
+    _unlabeled_dir = _resolve_env_path(args.unlabeled_dir)
+    print(f"[sweep-run] resolved labeled_dir={_labeled_dir}")
+    print(f"[sweep-run] resolved unlabeled_dir={_unlabeled_dir}")
+
     # One-config run
     row = _run_one_config_method(
         cfg=cfg,
         method=args.training_method,  # "jepa" or "contrastive"
 
         unlabeled_dataset_fn=lambda add3d: load_directory_dataset(
-            dirpath=args.unlabeled_dir,
+            dirpath=_unlabeled_dir,
             label_col=None,                  # unlabeled set
             add_3d=add3d,
             max_graphs=args.sample_unlabeled,
@@ -1648,7 +1660,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             cache_dir=args.cache_dir,
         ),
         eval_dataset_fn=lambda add3d: load_directory_dataset(
-            dirpath=args.labeled_dir,
+            dirpath=_labeled_dir,
             label_col=args.label_col,        # labeled set
             add_3d=add3d,
             max_graphs=args.sample_labeled,
