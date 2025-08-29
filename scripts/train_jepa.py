@@ -1552,11 +1552,12 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     aug_mask_angle       = to_bool(getattr(args, "aug_mask_angle", 0))
     aug_rotate           = to_bool(getattr(args, "aug_rotate", 0))
     aug_subgraph_removal = to_bool(getattr(args, "aug_subgraph_removal", 0))
+    aug_contiguity       = to_bool(getattr(args, "contiguity", 0))
 
     # Build config object
     cfg = Config(
         mask_ratio=args.mask_ratio,
-        contiguous=args.contiguity,
+        contiguous=aug_contiguity,
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
         gnn_type=args.gnn_type,
@@ -2085,6 +2086,7 @@ def build_parser() -> argparse.ArgumentParser:
     sweep.add_argument("--max-finetune-batches", "--max_finetune_batches", dest="max_finetune_batches", type=int, default=0)
     sweep.add_argument("--sample-unlabeled", "--sample_unlabeled", dest="sample_unlabeled", type=int, default=0)
     sweep.add_argument("--sample-labeled", "--sample_labeled", dest="sample_labeled", type=int, default=0)
+    sweep.add_argument("--cache-dir", type=str, default=None)
 
     # augmentations (accept 0/1 values from sweep)
     sweep.add_argument("--add-3d",               "--add_3d",               dest="add_3d",               type=int, choices=[0,1], default=0)
@@ -2095,9 +2097,8 @@ def build_parser() -> argparse.ArgumentParser:
     sweep.add_argument("--aug-atom-masking",     "--aug_atom_masking",     dest="aug_atom_masking",     type=int, choices=[0,1], default=0)
     sweep.add_argument("--aug-subgraph-removal", "--aug_subgraph_removal", dest="aug_subgraph_removal", type=int, choices=[0,1], default=0)
 
-    sweep.set_defaults(func=cmd_sweep_run)
-
-    _add_common_args(sweep, "case_study")
+    sweep.add_argument("--num-workers", type=int, default=0, help="Process pool workers for SMILES conversion (0=serial)") 
+   
     sweep.set_defaults(func=cmd_sweep_run)
 
     # ------------------------------------------------------------------
