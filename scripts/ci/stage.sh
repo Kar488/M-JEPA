@@ -198,7 +198,12 @@ run_with_timeout() {
       python -m wandb agent --count ${WANDB_COUNT:-50} "$SWEEP_ID" \
       2>&1 | tee "$LOG_DIR/${s}.log"
 
-    rc=${PIPESTATUS[0]}
+    rc=$?
+    # If the agent “gracefully” exited 0 but clearly failed runs, force non-zero
+    if grep -qE 'Detected [0-9]+ failed runs|error: the following arguments are required' "$LOG"; then
+      echo "[ERROR][wandb_agent] runs failed; forcing non-zero exit"
+      rc=1
+    fi
     if [[ $rc -eq 0 ]]; then
       :
     elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then

@@ -3,10 +3,6 @@ command:
   - ${interpreter}
   - ${program}
   - sweep-run
-  - --unlabeled-dir
-  - ${env:APP_DIR}/data/ZINC-canonicalized
-  - --labeled-dir
-  - ${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train
   - ${args}
 
 method: bayes
