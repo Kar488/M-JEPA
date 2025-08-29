@@ -43,41 +43,6 @@ parameters:
   aug_atom_masking:       {values: [0, 1]}
   aug_subgraph_removal:   {values: [0, 1]}
 
-  sample_unlabeled:       {values: [50000]}
-  sample_labeled:         {values: [5000]}
-  n_rows_per_file:        {values: [10000]}
-
-
-
-  # dataset + task config
-  unlabeled_dir:
-    value: ${APP_DIR}/data/ZINC-canonicalized
-  labeled_dir:
-    value: ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
-  label_col:
-    value: "measured log solubility in mols per litre"
-  task_type:
-    value: regression
-
-  gnn_type:
-    value: mpnn           # from Phase 1 results
-  training_method:
-    value: jepa           # from Phase 1 results
-  mask_ratio:
-    values: [0.15, 0.3, 0.5]
-  contiguity:
-    values: [0, 1]
-  ema_decay:
-    values: [0.998, 0.999]
-  pretrain_batch_size:
-    values: [128, 256]
-  temperature:
-    values: [0.07, 0.1, 0.2]
-  learning_rate:
-    values: [0.0003, 0.0001]
-  seed:
-    values: [1, 2, 3]
-  sample_unlabeled: 
-    value: 50000
-  sample_labeled: 
-    value: 5000
+  sample_unlabeled:       {value: 50000}
+  sample_labeled:         {value: 5000}
+  n_rows_per_file:        {value: 10000}

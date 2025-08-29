@@ -163,6 +163,8 @@ run_with_timeout() {
     echo "[stage] wall budget=${BUDGET_MINS}m (${SOFT}s), grace=${GRACE}s"
 
     mkdir -p "$LOG_DIR" 
+    LOG="${LOG_DIR}/${s}.log"
+    
     timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
       env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
       "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
@@ -192,6 +194,7 @@ run_with_timeout() {
     echo "[wandb_agent] wall budget=${SOFT}s, grace=${GRACE}s"
 
     mkdir -p "$LOG_DIR"
+    LOG="${LOG_DIR}/${s}.log"
 
     timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
       "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
