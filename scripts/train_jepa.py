@@ -1669,7 +1669,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         persistent_workers=bool(int(getattr(args, "persistent_workers", 0))),
         prefetch_factor=int(getattr(args, "prefetch_factor", 2)),
         bf16=bool(int(getattr(args, "bf16", 0))),
-        use_wandb=True,
     )
 
     # Log metrics to W&B
