@@ -164,13 +164,37 @@ run_with_timeout() {
 
     mkdir -p "$LOG_DIR" 
     LOG="${LOG_DIR}/${s}.log"
-    
+     
+    # create a tiny hook so Python expands ${env:VAR} in argv (W&B doesn't for params)
+    HOOK_DIR="$(mktemp -d)"
+    {
+      printf '%s\n' 'import os, re, sys'
+      printf '%s\n' '_pat = re.compile(r"\$\{env:([^}]+)\}")'
+      printf '%s\n' 'def _expand(token: str) -> str:'
+      printf '%s\n' '    return _pat.sub(lambda m: os.environ.get(m.group(1), m.group(0)), token)'
+      printf '%s\n' '# rewrite argv before the script sees it'
+      printf '%s\n' 'sys.argv[1:] = [_expand(a) for a in sys.argv[1:]]'
+    } > "$HOOK_DIR/sitecustomize.py"
+
+    export PYTHONPATH="${HOOK_DIR}${PYTHONPATH:+:$PYTHONPATH}"
+
     timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
-      env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+      env PYTHONPATH="${HOOK_DIR}${PYTHONPATH:+:$PYTHONPATH}" \
       "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-      python -u "$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}" \
+      python -m wandb agent --count "${WANDB_COUNT:-50}" "$SWEEP_ID" \
       2>&1 | tee "$LOG_DIR/${s}.log"
+
     rc=${PIPESTATUS[0]}
+
+
+    # timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
+    #   env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+    #   "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
+    #   python -u "$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}" \
+    #   2>&1 | tee "$LOG_DIR/${s}.log"
+    # rc=${PIPESTATUS[0]}
+    
+    
     # 0   = success
     # 124 = 'timeout' exceeded (we later sent SIGTERM/SIGKILL)
     # 143 = terminated by SIGTERM (128+15)
