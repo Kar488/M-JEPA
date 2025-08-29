@@ -188,7 +188,8 @@ run_with_timeout() {
   # --- WandB mode: run-grid passes a full cmd array --
   else
     ensure_micromamba
-    : "${WANDB_NAME:=$s}"; export WANDB_NAME
+    
+    unset WANDB_NAME
     : "${WANDB_JOB_TYPE:=$s}"; export WANDB_JOB_TYPE
     export WANDB_RUN_GROUP="$GITHUB_RUN_ID"
 

@@ -14,6 +14,7 @@ Notes:
 
 import argparse, json, math, os
 from typing import Any, Dict, List, Optional, Tuple
+from utils.logging import maybe_init_wandb
 
 import numpy as np
 import wandb
@@ -31,12 +32,11 @@ def need_env(name: str) -> str:
 
 # ---------- metric helpers ----------
 
-def metric(run, name: str):
+def metric(run, name: str, default=None):
     v = run.summary.get(name, None)
     if v is None:
         v = run.config.get(name, None)
-    return v
-
+    return v if v is not None else default
 
 def detect_task(runs) -> str:
     have_auc = any(metric(r, "val_auc") is not None for r in runs)
@@ -255,6 +255,23 @@ def main():
         phase2_metric_name = args.phase2_metric or primary
         phase2_goal        = "maximize" if maximize else "minimize"
 
+        # Initialise optional W&B run for grid search
+        wb = maybe_init_wandb(
+            use=True,
+            project=os.environ.get("WANDB_PROJECT", PROJECT),
+            group=os.environ.get("WANDB_RUN_GROUP"),      # ← your PIPELINE_ID from stage.sh
+            tags=["export_best"],
+            config={
+                "sweep_id": sweep_id,
+                "task": "auto",
+                "tie_eps": args.tie_eps,
+                "phase2_emit_bounds": bool(args.emit_bounds),
+                "phase2_method": args.phase2_method,
+                "phase2_metric": args.phase2_metric or "",
+                # anything else you want as metadata…
+            },
+        )
+
         spec = {
             "program": "${env:APP_DIR}/scripts/train_jepa.py",
             "command": [
@@ -271,9 +288,18 @@ def main():
             }
         }
 
+        # log the winner to the run’s summary (one-shot; no step noise)
+        wb and wb.summary.update({
+            "best_run_name": best.name,
+            "best_run_id":   best.id,
+            primary:         float(metric(best, primary)),
+            **{n: metric(best, n) for (n, _mx) in tiebreakers if metric(best, n) is not None},
+        })
+
         os.makedirs(os.path.dirname(args.phase2_yaml) or ".", exist_ok=True)
         with open(args.phase2_yaml, "w", encoding="utf-8") as f:
             yaml.safe_dump(spec, f, sort_keys=False)
+            
         print(f"[export_best] Wrote Phase-2 sweep YAML to {args.phase2_yaml}")
 
 

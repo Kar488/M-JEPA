@@ -468,10 +468,31 @@ def apply_graph_augmentations(
         for i in range(num_nodes):
             p = conf.GetAtomPosition(i)
             g.x[i, -3:] = [p.x, p.y, p.z]
-        if g.edge_attr is not None and g.edge_attr.shape[1] >= 10:
-            geom = [_geom_features_for_bond(mol, int(i), int(j)) for i, j in g.edge_index.T]
-            geom = np.stack(geom, axis=0)
-            g.edge_attr[:, -10:] = geom
+            if g.edge_attr is not None and g.edge_attr.shape[1] >= 10:
+                # number of edges (E); handle E == 0 safely
+                try:
+                    E = int(getattr(g.edge_index, "shape", [None, 0])[1] or 0)
+                except Exception:
+                    E = 0
+
+                if E == 0:
+                    # nothing to compute; keep as-is or zero out slice if you prefer
+                    # g.edge_attr[:, -10:] = 0.0
+                    pass
+                else:
+                    ei = g.edge_index.T
+                    if hasattr(ei, "tolist"):
+                        ei = ei.tolist()
+                    geom_list = [_geom_features_for_bond(mol, int(i), int(j)) for (i, j) in ei]
+                    if geom_list:
+                        geom = np.stack(geom_list, axis=0).astype(np.float32, copy=False)
+                        # be defensive if edge_attr rows don’t match E
+                        if g.edge_attr.shape[0] == geom.shape[0]:
+                            g.edge_attr[:, -10:] = geom
+                        else:
+                            m = min(g.edge_attr.shape[0], geom.shape[0])
+                            if m > 0:
+                                g.edge_attr[:m, -10:] = geom[:m]
 
     # --- Graph-structure transforms (always available) ---
     def b(x):  # robust 0/1/True/False → bool

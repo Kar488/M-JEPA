@@ -1558,7 +1558,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     Mirrors one row of grid-search, but logs directly to W&B.
     """
     from experiments.grid_search import Config, _run_one_config_method 
-    import wandb
+    from utils.logging import maybe_init_wandb
 
     to_bool = lambda v: bool(int(v)) if isinstance(v, (str,int)) else bool(v)
     add_3d               = to_bool(getattr(args, "add_3d", 0))
@@ -1582,38 +1582,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         "atom_masking":      _b(G("aug_atom_masking", 0)),
         "subgraph_removal":  _b(G("aug_subgraph_removal", 0)),
     }
-
-    cfg_preview = {
-        # paths
-        "labeled_dir":        G("labeled_dir"),
-        "unlabeled_dir":      G("unlabeled_dir"),
-
-        # core task/config
-        "training_method":    G("training_method"),
-        "task_type":          G("task_type"),
-        "label_col":          G("label_col"),
-        "seed":               G("seed"),
-
-        # hparams
-        "mask_ratio":         G("mask_ratio"),
-        "contiguity":         G("contiguity"),
-        "learning_rate":      G("learning_rate"),
-        "temperature":        G("temperature"),
-        "gnn_type":           G("gnn_type"),
-        "hidden_dim":         G("hidden_dim"),
-        "num_layers":         G("num_layers"),
-        "pretrain_batch_size":G("pretrain_batch_size"),
-        "finetune_batch_size":G("finetune_batch_size"),
-        "pretrain_epochs":    G("pretrain_epochs"),
-        "finetune_epochs":    G("finetune_epochs"),
-        "ema_decay":          G("ema_decay"),
-        "sample_unlabeled":   G("sample_unlabeled"),
-        "sample_labeled":     G("sample_labeled"),
-
-        # augs (normalized)
-        "augmentations":      aug_kwargs,
-    }
-
     print("[sweep-run] args: " + json.dumps(vars(args), sort_keys=True, default=str))
 
     # Build config object
@@ -1645,6 +1613,15 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _unlabeled_dir = _resolve_env_path(args.unlabeled_dir)
     print(f"[sweep-run] resolved labeled_dir={_labeled_dir}")
     print(f"[sweep-run] resolved unlabeled_dir={_unlabeled_dir}")
+
+    per_trial_cfg = {k: v for k, v in vars(args).items() if k != "func"}
+
+    wb = maybe_init_wandb(
+    args.use_wandb,
+    project=args.wandb_project,
+    tags=args.wandb_tags,
+    config=per_trial_cfg,
+    )
 
     # One-config run
     row = _run_one_config_method(
@@ -1692,10 +1669,17 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         persistent_workers=bool(int(getattr(args, "persistent_workers", 0))),
         prefetch_factor=int(getattr(args, "prefetch_factor", 2)),
         bf16=bool(int(getattr(args, "bf16", 0))),
+        use_wandb=True,
     )
 
     # Log metrics to W&B
-    wandb.log(row)
+    import wandb
+    run = wb or getattr(wandb, "run", None)  # robust fallback
+    if run:
+        run.summary.update(row)   # final metrics go on the SAME run
+        run.finish()
+    else:
+        print("[sweep-run] summary:", row)
 
 
 def cmd_grid_search(args: argparse.Namespace) -> None:
