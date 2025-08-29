@@ -168,14 +168,14 @@ run_with_timeout() {
       "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
       python -u "$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}" \
       2>&1 | tee "$LOG_DIR/${s}.log"
-    rc=$?
+    rc=${PIPESTATUS[0]}
     # 0   = success
     # 124 = 'timeout' exceeded (we later sent SIGTERM/SIGKILL)
     # 143 = terminated by SIGTERM (128+15)
     # 137 = killed by SIGKILL   (128+9)
     if [[ $rc -eq 0 ]]; then
       :
-    elif [[ $rc -eq 124 || $rc -eq 143 || $rc -eq 137 ]]; then
+    elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
       echo "[INFO][$s] graceful stop (rc=$rc); not marking stage done; outputs should be flushed."
       mark_graceful_stop "$s"
       return 0
@@ -198,10 +198,10 @@ run_with_timeout() {
       python -m wandb agent --count ${WANDB_COUNT:-50} "$SWEEP_ID" \
       2>&1 | tee "$LOG_DIR/${s}.log"
 
-    rc=$?
+    rc=${PIPESTATUS[0]}
     if [[ $rc -eq 0 ]]; then
       :
-    elif [[ $rc -eq 124 || $rc -eq 143 || $rc -eq 137 ]]; then
+    elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
       echo "[INFO][wandb_agent] graceful stop (rc=$rc); letting agent flush."
       mark_graceful_stop "$s"
       return 0

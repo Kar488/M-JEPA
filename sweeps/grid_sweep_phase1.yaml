@@ -15,6 +15,10 @@ metric:
   goal: minimize
 
 parameters:
+
+  labeled-dir:   {value: "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train"}
+  unlabeled-dir: {value: "${env:APP_DIR}/data/ZINC-canonicalized"}
+
   # Broad random sweep (smaller data, wider space)
   training_method:
     values: [jepa, contrastive]

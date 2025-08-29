@@ -16,6 +16,9 @@ metric:
 
 parameters:
 
+  labeled-dir:   {value: "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train"}
+  unlabeled-dir: {value: "${env:APP_DIR}/data/ZINC-canonicalized'}
+
   training_method:        {values: [jepa, contrastive]}
   mask_ratio:             {min: 0.10, max: 0.35}
   contiguity:             {values: [0, 1]}
