@@ -282,8 +282,9 @@ jobs:
           script: |
             cd $APP_DIR
             python scripts/ci/export_best_from_wandb.py \
-              --metric val_loss \
-              --out ${GRID_DIR}/best_grid_config.json
+            --emit_bounds \
+            --out "$GRID_DIR/best_grid_config.json" \
+            --phase2_yaml "$APP_DIR/sweeps/grid_sweep_phase2.yaml"
 
   vast_sweep_phase2:
     if: ${{ github.event.inputs.hyperparam_mode == 'wandb' }}
@@ -333,7 +334,7 @@ jobs:
             bash "$APP_DIR/scripts/ci/run-pretrain.sh"
         env:
           HARD_WALL_MINS: 30
-          KILL_AFTER_SECS: 60
+          KILL_AFTER_SECS: 120
 
   vast_finetune:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
@@ -357,7 +358,7 @@ jobs:
             bash "$APP_DIR/scripts/ci/run-finetune.sh"
         env:
           HARD_WALL_MINS: 180
-          KILL_AFTER_SECS: 600
+          KILL_AFTER_SECS: 120
 
   vast_benchmark:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
@@ -381,7 +382,7 @@ jobs:
             bash "$APP_DIR/scripts/ci/run-bench.sh"
         env:
           HARD_WALL_MINS: 60
-          KILL_AFTER_SECS: 60
+          KILL_AFTER_SECS: 120
 
   vast_tox21:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
@@ -405,4 +406,4 @@ jobs:
             bash "$APP_DIR/scripts/ci/run-tox21.sh"
         env:
           HARD_WALL_MINS: 60
-          KILL_AFTER_SECS: 60
+          KILL_AFTER_SECS: 120

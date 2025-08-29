@@ -1,16 +1,55 @@
 program: scripts/train_jepa.py
 command:
-  - ${env}
-  - python
+  - ${interpreter}
   - ${program}
   - sweep-run
+  - --unlabeled-dir
+  - ${env:APP_DIR}/data/ZINC-canonicalized
+  - --labeled-dir
+  - ${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train
+  - ${args}
 
 method: bayes
 metric:
-  name: val_loss
+  name: val_rmse
   goal: minimize
 
 parameters:
+
+  training_method:        {values: [jepa, contrastive]}
+  mask_ratio:             {min: 0.10, max: 0.35}
+  contiguity:             {values: [0, 1]}
+  hidden_dim:             {values: [256, 384]}
+  num_layers:             {values: [2, 3]}
+  gnn_type:               {values: [mpnn, edge_mpnn]}
+  ema_decay:              {min: 0.994, max: 0.999}
+  add_3d:                 {values: [0, 1]}
+
+
+  pretrain_batch_size:    {values: [256]}
+  finetune_batch_size:    {values: [256]}
+  pretrain_epochs:        {values: [30, 40, 50]}     # longer than phase 1
+  finetune_epochs:        {values: [3, 5]}
+  learning_rate:          {min: 0.00008, max: 0.0004}
+  temperature:            {values: [0.1]}           # fix if phase 1 showed low sensitivity
+  seed:                   {values: [1, 2, 3]}
+
+  task_type:              {values: [regression]}
+  label_col:              {value: measured log solubility in mols per litre}
+
+  aug_rotate:             {values: [0, 1]}
+  aug_mask_angle:         {values: [0, 1]}
+  aug_dihedral:           {values: [0, 1]}
+  aug_bond_deletion:      {values: [0, 1]}
+  aug_atom_masking:       {values: [0, 1]}
+  aug_subgraph_removal:   {values: [0, 1]}
+
+  sample_unlabeled:       {values: [50000]}
+  sample_labeled:         {values: [5000]}
+  n_rows_per_file:        {values: [10000]}
+
+
+
   # dataset + task config
   unlabeled_dir:
     value: ${APP_DIR}/data/ZINC-canonicalized
@@ -43,7 +82,3 @@ parameters:
     value: 50000
   sample_labeled: 
     value: 5000
-
-early_terminate:
-  type: hyperband
-  min_iter: 10

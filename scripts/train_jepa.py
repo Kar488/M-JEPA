@@ -1559,6 +1559,15 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         finetune_epochs=args.finetune_epochs,
         lr=args.learning_rate,
         temperature=args.temperature,
+        method=args.training_method,
+        augmentations=AugmentationConfig(
+            random_rotate=args.aug_rotate,
+            mask_angle=args.aug_mask_angle,
+            perturb_dihedral=args.aug_dihedral,
+            bond_deletion=getattr(args, "aug_bond_deletion", False),
+            atom_masking=getattr(args, "aug_atom_masking", False),
+            subgraph_removal=getattr(args, "aug_subgraph_removal", False),
+        )
     )
 
     # One-config run
@@ -1566,10 +1575,10 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         cfg=cfg,
         method=args.training_method,  # "jepa" or "contrastive"
         unlabeled_dataset_fn=lambda add3d: load_directory_dataset(
-            args.unlabeled_dir, args.label_col, split="train", add_3d=add3d
+            args.unlabeled_dir, args.label_col, split="train", add_3d=add3d,max_graphs=args.sample_unlabeled
         ),
         eval_dataset_fn=lambda add3d: load_directory_dataset(
-            args.labeled_dir, args.label_col, split="val", add_3d=add3d
+            args.labeled_dir, args.label_col, split="val", add_3d=add3d,max_graphs=args.sample_labeled
         ),
         task_type=args.task_type,
         seeds=[args.seed],
@@ -1919,142 +1928,38 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     """
     # Model hyperparameters
     model_cfg = CONFIG.get("model", {})
-    p.add_argument(
-        "--gnn-type",
-        type=str,
-        default=model_cfg.get("gnn_type", "mpnn"),
-        help="GNN encoder type",
-    )
-    p.add_argument(
-        "--hidden-dim",
-        type=int,
-        default=model_cfg.get("hidden_dim", 64),
-        help="Hidden dimension size",
-    )
-    p.add_argument(
-        "--num-layers",
-        type=int,
-        default=model_cfg.get("num_layers", 2),
-        help="Number of GNN layers",
-    )
-    p.add_argument(
-        "--ema-decay",
-        type=float,
-        default=model_cfg.get("ema_decay", 0.99),
-        help="EMA decay rate",
-    )
-    # Data augmentations and options
-    p.add_argument(
-        "--add-3d", action="store_true", help="Augment with 3D coordinate featurisation"
-    )
-    p.add_argument(
-        "--num-workers",
-        type=int,
-        default=0,
-        help="Process pool workers for SMILES conversion (0=serial)",
-    )
-    p.add_argument(
-        "--cache-dir",
-        type=str,
-        default=None,
-        help="Directory to cache processed graphs",
-    )
-    p.add_argument(
-        "--contiguous",
-        action="store_true",
-        help="Use contiguous subgraph masking (JEPA)",
-    )
-    p.add_argument(
-        "--aug-rotate",
-        action="store_true",
-        default=DEFAULT_AUG.rotate,
-        help="Randomly rotate coordinates during pretraining",
-    )
-    p.add_argument(
-        "--aug-mask-angle",
-        action="store_true",
-        default=DEFAULT_AUG.mask_angle,
-        help="Mask bond angles during pretraining",
-    )
-    p.add_argument(
-        "--aug-dihedral",
-        action="store_true",
-        default=DEFAULT_AUG.dihedral,
-        help="Perturb dihedral angles during pretraining",
-    )
+    # Model hyperparameters
+    model_cfg = CONFIG.get("model", {})
+    p.add_argument("--gnn-type", type=str, default=model_cfg.get("gnn_type", "mpnn"), help="GNN encoder type")
+    p.add_argument("--hidden-dim", type=int, default=model_cfg.get("hidden_dim", 64), help="Hidden dimension size")
+    p.add_argument("--num-layers", type=int, default=model_cfg.get("num_layers", 2), help="Number of GNN layers")
+    p.add_argument("--ema-decay", type=float, default=model_cfg.get("ema_decay", 0.99), help="EMA decay rate")
+    p.add_argument("--add-3d", action="store_true", help="Augment with 3D coordinate featurisation")
+    p.add_argument("--num-workers", type=int, default=0, help="Process pool workers for SMILES conversion (0=serial)")
+    p.add_argument("--cache-dir", type=str, default=None, help="Directory to cache processed graphs")
+    p.add_argument("--contiguous", action="store_true", help="Use contiguous subgraph masking (JEPA)")
+    p.add_argument("--aug-rotate", action="store_true", default=DEFAULT_AUG.rotate, help="Randomly rotate coordinates during pretraining")
+    p.add_argument("--aug-mask-angle", action="store_true", default=DEFAULT_AUG.mask_angle, help="Mask bond angles during pretraining")
+    p.add_argument("--aug-dihedral", action="store_true", default=DEFAULT_AUG.dihedral, help="Perturb dihedral angles during pretraining")
 
-    # Optimisation
     sec_cfg = CONFIG.get(section, {})
-    p.add_argument(
-        "--epochs",
-        type=int,
-        default=sec_cfg.get("epochs", 1),
-        help="Number of training epochs",
-    )
-    p.add_argument(
-        "--batch-size",
-        type=int,
-        default=sec_cfg.get("batch_size", 32),
-        help="Batch size",
-    )
-    p.add_argument(
-        "--lr", type=float, default=sec_cfg.get("lr", 1e-3), help="Learning rate"
-    )
-    # Seeds for downstream evaluation
-    p.add_argument(
-        "--seeds",
-        type=int,
-        nargs="*",
-        default=None,
-        help="Random seeds for averaging results",
-    )
-    # Device & DDP
-    p.add_argument(
-        "--device",
-        type=str,
-        default="cuda" if torch.cuda.is_available() else "cpu",
-        help="Device",
-    )
-    # Optimisation for GPU
-    p.add_argument(
-        "--prefetch-factor",
-        type=int,
-        default=4,
-        help="Dataloader prefetch factor (workers>0 only).",
-    )
-    p.add_argument(
-        "--pin-memory",
-        action="store_true",
-        default=True,
-        help="Pin CUDA host memory in DataLoader.",
-    )
-    p.add_argument(
-        "--persistent-workers",
-        action="store_true",
-        default=True,
-        help="Keep worker processes alive across epochs (workers>0).",
-    )
-    p.add_argument(
-        "--bf16", action="store_true", help="Enable bfloat16 autocast on GPU."
-    )
+
+    p.add_argument("--epochs", type=int, default=sec_cfg.get("epochs", 1), help="Number of training epochs")
+    p.add_argument("--batch-size", type=int, default=sec_cfg.get("batch_size", 32), help="Batch size")
+    p.add_argument("--lr", type=float, default=sec_cfg.get("lr", 1e-3), help="Learning rate")
+    p.add_argument("--seeds", type=int, nargs="*", default=None, help="Random seeds for averaging results")
+    p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device")
+    p.add_argument("--prefetch-factor", type=int, default=4, help="Dataloader prefetch factor (workers>0 only).")
+    p.add_argument("--pin-memory", action="store_true", default=True, help="Pin CUDA host memory in DataLoader.")
+    p.add_argument("--persistent-workers", action="store_true", default=True, help="Keep worker processes alive across epochs (workers>0).")
+    p.add_argument("--bf16", action="store_true", help="Enable bfloat16 autocast on GPU.")
     p.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP")
-    # W&B
+
     wandb_cfg = CONFIG.get("wandb", {})
-    p.add_argument(
-        "--use-wandb", action="store_true", help="Enable Weights & Biases logging"
-    )
-    p.add_argument(
-        "--wandb-project",
-        type=str,
-        default=wandb_cfg.get("project", "m-jepa"),
-        help="W&B project name",
-    )
-    p.add_argument(
-        "--wandb-tags",
-        nargs="*",
-        default=wandb_cfg.get("tags", []),
-        help="Tags for W&B run",
-    )
+
+    p.add_argument("--use-wandb", action="store_true", help="Enable Weights & Biases logging")
+    p.add_argument("--wandb-project", type=str, default=wandb_cfg.get("project", "m-jepa"), help="W&B project name")
+    p.add_argument("--wandb-tags", nargs="*", default=wandb_cfg.get("tags", []), help="Tags for W&B run")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2068,127 +1973,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Pretrain subcommand
     pre = sub.add_parser("pretrain", help="Self‑supervised pretraining")
-    pre.add_argument(
-        "--unlabeled-dir",
-        required=True,
-        help="Directory of unlabeled graphs (.parquet or .csv)",
-    )
-    pre.add_argument(
-        "--output",
-        type=str,
-        default="encoder.pt",
-        help="Where to save the JEPA encoder checkpoint",
-    )
-    pre.add_argument(
-        "--contrastive", action="store_true", help="Also run a contrastive baseline"
-    )
-    pre.add_argument(
-        "--ckpt-dir",
-        type=str,
-        default="ckpts/pretrain",
-        help="Directory to save pretrain checkpoints",
-    )
-    pre.add_argument(
-        "--resume-ckpt",
-        type=str,
-        default="",
-        help="Resume pretraining from a checkpoint",
-    )
-    pre.add_argument(
-        "--save-every",
-        type=int,
-        default=1,
-        help="Save a pretrain checkpoint every N epochs",
-    )
-    pre.add_argument(
-        "--mask-ratio",
-        type=float,
-        default=0.15,
-        help="Fraction of nodes to mask in each view (JEPA/contrastive).",
-    )
-    pre.add_argument(
-        "--plot-dir",
-        required=True,
-        default=CONFIG.get("plot_dir", "plots"),
-        help="Directory to save training plots",
-    )
-    pre.add_argument(
-        "--force-tqdm",
-        action="store_true",
-        help="Force-enable tqdm progress bars even when not attached to a TTY",
-    )
-    pre.add_argument(
-        "--temperature",
-        type=float,
-        default=0.1,
-        help="InfoNCE temperature (contrastive only)",
-    )
-    pre.add_argument(
-        "--sample-unlabeled",
-        type=int,
-        default=0,
-        help="If >0, load at most N graphs from the unlabeled dataset.",
-    )
-    pre.add_argument(
-        "--n-rows-per-file",
-        type=int,
-        default=None,
-        help="If set, limit rows read per file when loading datasets.",
-    )
+    pre.add_argument("--unlabeled-dir", required=True, help="Directory of unlabeled graphs (.parquet or .csv)")
+    pre.add_argument("--output", type=str, default="encoder.pt", help="Where to save the JEPA encoder checkpoint")
+    pre.add_argument("--contrastive", action="store_true", help="Also run a contrastive baseline")
+    pre.add_argument("--ckpt-dir", type=str, default="ckpts/pretrain", help="Directory to save pretrain checkpoints")
+    pre.add_argument("--resume-ckpt", type=str, default="", help="Resume pretraining from a checkpoint")
+    pre.add_argument("--save-every", type=int, default=1, help="Save a pretrain checkpoint every N epochs")
+    pre.add_argument("--mask-ratio", type=float, default=0.15, help="Fraction of nodes to mask in each view (JEPA/contrastive).")
+    pre.add_argument("--plot-dir", type=str, default=CONFIG.get("plot_dir", "plots"), help="Directory to save training plots")
+    pre.add_argument("--force-tqdm", action="store_true", help="Force-enable tqdm progress bars even when not attached to a TTY")
+    pre.add_argument("--temperature", type=float, default=0.1, help="InfoNCE temperature (contrastive only)")
+    pre.add_argument("--sample-unlabeled", type=int, default=0, help="If >0, load at most N graphs from the unlabeled dataset.")
+    pre.add_argument("--n-rows-per-file", type=int, default=None, help="If set, limit rows read per file when loading datasets.")
 
     _add_common_args(pre, "pretrain")
     pre.set_defaults(func=cmd_pretrain)
 
     # Fine‑tune subcommand
     ft = sub.add_parser("finetune", help="Fine‑tune a linear head on labelled data")
-    ft.add_argument(
-        "--labeled-dir",
-        required=True,
-        help="Directory of labelled graphs (.parquet or .csv)",
-    )
-    ft.add_argument(
-        "--label-col",
-        type=str,
-        default="label",
-        help="Label column name in input files",
-    )
-    ft.add_argument(
-        "--encoder", required=True, help="Path to a pretrained encoder checkpoint (.pt)"
-    )
-
-    ft.add_argument(
-        "--ckpt-dir",
-        type=str,
-        default="ckpts/finetune",
-        help="dir to write fine-tune checkpoints",
-    )
-    ft.add_argument(
-        "--resume-ckpt",
-        type=str,
-        default="",
-        help="resume fine-tune from this checkpoint",
-    )
-    ft.add_argument(
-        "--save-every", type=int, default=1, help="save checkpoint every N epochs"
-    )
-    ft.add_argument(
-        "--save-final", action="store_true", help="also save ft_last.pt at the end"
-    )
-    ft.add_argument(
-        "--metric", type=str, default="val_loss", choices=["val_loss", "acc", "auroc"]
-    )
-
-    ft.add_argument(
-        "--task-type",
-        choices=["classification", "regression"],
-        default="classification",
-    )
-    ft.add_argument(
-        "--patience",
-        type=int,
-        default=CONFIG.get("finetune", {}).get("patience", 10),
-        help="Early stopping patience",
-    )
+    ft.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs (.parquet or .csv)")
+    ft.add_argument("--label-col", type=str, default="label", help="Label column name in input files")
+    ft.add_argument("--encoder", required=True, help="Path to a pretrained encoder checkpoint (.pt)")
+    ft.add_argument("--ckpt-dir", type=str, default="ckpts/finetune", help="dir to write fine-tune checkpoints")
+    ft.add_argument("--resume-ckpt", type=str, default="", help="resume fine-tune from this checkpoint")
+    ft.add_argument("--save-every", type=int, default=1, help="save checkpoint every N epochs")
+    ft.add_argument("--save-final", action="store_true", help="also save ft_last.pt at the end")
+    ft.add_argument("--metric", type=str, default="val_loss", choices=["val_loss", "acc", "auroc"])
+    ft.add_argument("--task-type", choices=["classification", "regression"], default="classification")
+    ft.add_argument("--patience", type=int, default=CONFIG.get("finetune", {}).get("patience", 10), help="Early stopping patience")
     _add_common_args(ft, "finetune")
     ft.set_defaults(func=cmd_finetune)
 
@@ -2201,109 +2013,62 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument(
         "--encoder", required=True, help="Path to a pretrained encoder checkpoint (.pt)"
     )
-    ev.add_argument(
-        "--task-type",
-        choices=["classification", "regression"],
-        default="classification",
-    )
-    ev.add_argument(
-        "--patience",
-        type=int,
-        default=CONFIG.get("evaluate", {}).get("patience", 10),
-        help="Early stopping patience",
-    )
+    ev.add_argument("--task-type", choices=["classification", "regression"], default="classification")
+    ev.add_argument("--patience", type=int, default=CONFIG.get("evaluate", {}).get("patience", 10), help="Early stopping patience")
     _add_common_args(ev, "evaluate")
     ev.set_defaults(func=cmd_evaluate)
-
     # Benchmark subcommand
-    bench = sub.add_parser(
-        "benchmark", help="Compare JEPA and contrastive encoders on labelled data"
-    )
-    bench.add_argument(
-        "--labeled-dir", required=True, help="Directory of labelled graphs"
-    )
-    bench.add_argument(
-        "--test-dir",
-        required=False,
-        default=None,
-        help="Optional directory of test graphs for eval-only benchmarking",
-    )
-    bench.add_argument(
-        "--label-col", type=str, default="label", help="Label column name"
-    )
-    bench.add_argument(
-        "--jepa-encoder", required=True, help="Path to a JEPA encoder checkpoint (.pt)"
-    )
-    bench.add_argument(
-        "--contrastive-encoder",
-        required=False,
-        help="Path to a contrastive encoder checkpoint (.pt)",
-    )
-    bench.add_argument(
-        "--task-type",
-        choices=["classification", "regression"],
-        default="classification",
-    )
-    bench.add_argument(
-        "--patience",
-        type=int,
-        default=CONFIG.get("benchmark", {}).get("patience", 10),
-        help="Early stopping patience",
-    )
-
-    bench.add_argument(
-        "--ft-ckpt",
-        type=str,
-        default="",
-        help="fine-tuned checkpoint (expects encoder and optionally head)",
-    )  # ?
-    bench.add_argument(
-        "--report-dir", type=str, default="reports", help="where to write JSON/CSV"
-    )
-    bench.add_argument(
-        "--report-stem",
-        type=str,
-        default="",
-        help="filename stem; defaults to timestamped benchmark_*",
-    )
-
+    bench = sub.add_parser("benchmark", help="Compare JEPA and contrastive encoders on labelled data"); 
+    bench.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs"); 
+    bench.add_argument("--test-dir", required=False, default=None, help="Optional directory of test graphs for eval-only benchmarking"); 
+    bench.add_argument("--label-col", type=str, default="label", help="Label column name"); 
+    bench.add_argument("--jepa-encoder", required=True, help="Path to a JEPA encoder checkpoint (.pt)"); 
+    bench.add_argument("--contrastive-encoder", required=False, help="Path to a contrastive encoder checkpoint (.pt)"); 
+    bench.add_argument("--task-type", choices=["classification", "regression"], default="classification"); 
+    bench.add_argument("--patience", type=int, default=CONFIG.get("benchmark", {}).get("patience", 10), help="Early stopping patience"); 
+    bench.add_argument("--ft-ckpt", type=str, default="", help="fine-tuned checkpoint (expects encoder and optionally head)"); 
+    bench.add_argument("--report-dir", type=str, default="reports", help="where to write JSON/CSV"); 
+    bench.add_argument("--report-stem", type=str, default="", help="filename stem; defaults to timestamped benchmark_*")
     _add_common_args(bench, "benchmark")
     bench.set_defaults(func=cmd_benchmark)
-
     # Tox21 case study
     tox = sub.add_parser("tox21", help="Run the Tox21 case study experiment")
-    tox.add_argument(
-        "--csv",
-        required=True,
-        help="Path to the Tox21 CSV containing SMILES and labels",
-    )
-    tox.add_argument(
-        "--task", required=True, help="Name of the toxicity column to predict"
-    )
-    case_cfg = CONFIG.get("case_study", {})
-    tox.add_argument(
-        "--pretrain-epochs",
-        type=int,
-        default=case_cfg.get("pretrain_epochs", 5),
-        help="JEPA pretrain epochs for case study",
-    )
-    tox.add_argument(
-        "--finetune-epochs",
-        type=int,
-        default=case_cfg.get("finetune_epochs", 20),
-        help="Epochs to train regression head in case study",
-    )
-    tox.add_argument(
-        "--num-top-exclude",
-        type=int,
-        default=case_cfg.get("num_top_exclude", 10),
-        help="Top‑k toxic compounds to exclude when ranking",
-    )
+    tox.add_argument("--csv", required=True, help="Path to the Tox21 CSV containing SMILES and labels"); 
+    tox.add_argument("--task", required=True, help="Name of the toxicity column to predict"); 
+    case_cfg = CONFIG.get("case_study", {}); 
+    tox.add_argument("--pretrain-epochs", type=int, default=case_cfg.get("pretrain_epochs", 5), help="JEPA pretrain epochs for case study"); 
+    tox.add_argument("--finetune-epochs", type=int, default=case_cfg.get("finetune_epochs", 20), help="Epochs to train regression head in case study"); 
+    tox.add_argument("--num-top-exclude", type=int, default=case_cfg.get("num_top_exclude", 10), help="Top‑k toxic compounds to exclude when ranking")
     _add_common_args(tox, "case_study")
     tox.set_defaults(func=cmd_tox21)
 
     # pointing to wandb hyberband
     sweep = sub.add_parser("sweep-run")
+    sweep.add_argument("--mask-ratio", type=float, default=0.15)
+    sweep.add_argument("--contiguity", type=int, default=1)
+    sweep.add_argument("--pretrain-batch-size", type=int, default=64)
+    sweep.add_argument("--finetune-batch-size", type=int, default=64)
+    sweep.add_argument("--pretrain-epochs", type=int, default=50)
+    sweep.add_argument("--finetune-epochs", type=int, default=5)
+    sweep.add_argument("--learning-rate", type=float, default=0.001)
+    sweep.add_argument("--temperature", type=float, default=0.1)
+    sweep.add_argument("--training-method", choices=["jepa","contrastive"], default="jepa")
+    sweep.add_argument("--labeled-dir", required=True)
+    sweep.add_argument("--label-col", type=str, default="label")
+    sweep.add_argument("--task-type", choices=["classification","regression"], default="classification")
+    sweep.add_argument("--seed", type=int, default=0)
+    sweep.add_argument("--max-pretrain-batches", type=int, default=0, help="If >0, stop each pretrain epoch after this many batches.")
+    sweep.add_argument("--max-finetune-batches",type=int,default=0,help="If >0, stop each finetune epoch after this many batches.")
+    sweep.add_argument("--add-3d-options", type=int, nargs="+", default=[0, 1], help="Whether to include 3D features (0 for False, 1 for True)")
+    sweep.add_argument("--aug-rotate-options", type=int, nargs="+", default=[int(DEFAULT_AUG.rotate)], help="Apply random rotation augmentation (0 for False, 1 for True)")
+    sweep.add_argument("--aug-mask-angle-options", type=int, nargs="+", default=[int(DEFAULT_AUG.mask_angle)], help="Apply angle masking augmentation (0 for False, 1 for True)")
+    sweep.add_argument("--aug-dihedral-options", type=int, nargs="+", default=[int(DEFAULT_AUG.dihedral)], help="Apply dihedral perturbation augmentation (0 for False, 1 for True)") 
+    sweep.add_argument("--aug-bond-deletion", action="store_true", help="Randomly delete bonds (contrastive only)")
+    sweep.add_argument("--aug-atom-masking", action="store_true", help="Mask atom/node features (contrastive only)")
+    sweep.add_argument("--aug-subgraph-removal", action="store_true", help="Remove a random subgraph (contrastive only)")
+    sweep.add_argument("--sample-unlabeled", type=int, default=0, help="If >0, load at most N graphs from the unlabeled dataset.")
+    sweep.add_argument("--sample-labeled", type=int, default=0, help="If >0, load at most N graphs from the labeled dataset.")
+    _add_common_args(sweep, "case_study")
     sweep.set_defaults(func=cmd_sweep_run)
 
     # ------------------------------------------------------------------
@@ -2316,331 +2081,57 @@ def build_parser() -> argparse.ArgumentParser:
     # can be overridden on the CLI.  The dataset is specified via
     # ``--dataset-dir`` and will be loaded with the same loader used in
     # other stages.  Seeds and search ranges can also be customised.
-    grid = sub.add_parser(
-        "grid-search",
-        help="Perform hyper‑parameter grid search for JEPA using run_grid_search",
-    )
-    grid.add_argument(
-        "--smiles-col",
-        type=str,
-        default="smiles",
-        help="Column name that contains molecule SMILES.",
-    )
-    grid.add_argument(
-        "--dataset-dir",
-        required=False,
-        default=None,
-        help="Path to a graph dataset used for both pretraining and evaluation. "
-        "If omitted, you must specify --unlabeled-dir and/or --labeled-dir.",
-    )
-    grid.add_argument(
-        "--unlabeled-dir",
-        type=str,
-        default=None,
-        help=(
-            "Directory of an unlabeled graph dataset for JEPA pretraining "
-            "(e.g. ZINC/PubChem)."
-        ),
-    )
-    grid.add_argument(
-        "--labeled-dir",
-        type=str,
-        default=None,
-        help=(
-            "Directory of a labeled graph dataset for downstream evaluation "
-            "(e.g. MoleculeNet)."
-        ),
-    )
-    grid.add_argument(
-        "--label-col",
-        type=str,
-        default="label",
-        help="Name of the label column in the dataset (ignored for unlabeled data)",
-    )
-    grid.add_argument(
-        "--cache-dir",
-        type=str,
-        default=None,
-        help="Directory for cached graph data (defaults to cache/graphs)",
-    )
-    grid.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Disable graph caching during grid search",
-    )
-    grid.add_argument(
-        "--num-workers",
-        type=int,
-        default=0,
-        help="Number of worker processes for SMILES featurization",
-    )
-    grid.add_argument(
-        "--task-type",
-        choices=["classification", "regression"],
-        default="classification",
-        help="Task type for downstream evaluation",
-    )
-    grid.add_argument(
-        "--methods",
-        nargs="+",
-        default=["jepa"],
-        help="Names of methods to include in the sweep (e.g. jepa contrastive)",
-    )
-    grid.add_argument(
-        "--mask-ratios",
-        type=float,
-        nargs="+",
-        default=[0.10, 0.15, 0.25],
-        help="List of mask ratios to sweep over",
-    )
-    grid.add_argument(
-        "--contiguities",
-        type=int,
-        nargs="+",
-        default=[0, 1],
-        help="Contiguity flags (0 for False, 1 for True) to sweep over",
-    )
-    grid.add_argument(
-        "--hidden-dims",
-        type=int,
-        nargs="+",
-        default=[128, 256],
-        help="Hidden dimensions to sweep over",
-    )
-    grid.add_argument(
-        "--num-layers-list",
-        type=int,
-        nargs="+",
-        default=[2, 3],
-        help="Number of GNN layers to sweep over",
-    )
-    grid.add_argument(
-        "--gnn-types",
-        nargs="+",
-        default=["mpnn", "gcn", "gat", "edge_mpnn"],
-        help="GNN architectures to sweep over",
-    )
-    grid.add_argument(
-        "--ema-decays",
-        type=float,
-        nargs="+",
-        default=[0.95, 0.99],
-        help="EMA decay rates to sweep over",
-    )
-    grid.add_argument(
-        "--add-3d-options",
-        type=int,
-        nargs="+",
-        default=[0, 1],
-        help="Whether to include 3D features (0 for False, 1 for True)",
-    )
-    grid.add_argument(
-        "--aug-rotate-options",
-        type=int,
-        nargs="+",
-        default=[int(DEFAULT_AUG.rotate)],
-        help="Apply random rotation augmentation (0 for False, 1 for True)",
-    )
-    grid.add_argument(
-        "--aug-mask-angle-options",
-        type=int,
-        nargs="+",
-        default=[int(DEFAULT_AUG.mask_angle)],
-        help="Apply angle masking augmentation (0 for False, 1 for True)",
-    )
-    grid.add_argument(
-        "--aug-dihedral-options",
-        type=int,
-        nargs="+",
-        default=[int(DEFAULT_AUG.dihedral)],
-        help="Apply dihedral perturbation augmentation (0 for False, 1 for True)",
-    )
-    grid.add_argument(
-        "--pretrain-batch-sizes",
-        type=int,
-        nargs="+",
-        default=[256],
-        help="Batch sizes for JEPA pretraining",
-    )
-    grid.add_argument(
-        "--finetune-batch-sizes",
-        type=int,
-        nargs="+",
-        default=[64],
-        help="Batch sizes for downstream fine‑tuning",
-    )
-    grid.add_argument(
-        "--pretrain-epochs-options",
-        type=int,
-        nargs="+",
-        default=[50],
-        help="Number of epochs for JEPA pretraining",
-    )
-    grid.add_argument(
-        "--finetune-epochs-options",
-        type=int,
-        nargs="+",
-        default=[30],
-        help="Number of epochs for downstream training",
-    )
-    grid.add_argument(
-        "--learning-rates",
-        type=float,
-        nargs="+",
-        default=[1e-4],
-        help="Learning rates to sweep over",
-    )
-    grid.add_argument(
-        "--seeds",
-        type=int,
-        nargs="*",
-        default=None,
-        help="Random seeds for averaging results (overrides config)",
-    )
-    grid.add_argument(
-        "--device",
-        type=str,
-        default="cuda" if torch.cuda.is_available() else "cpu",
-        help="Device for training (cuda or cpu)",
-    )
-    grid.add_argument(
-        "--out-csv",
-        type=str,
-        default=None,
-        help="Path to output CSV file for grid search results",
-    )
-    grid.add_argument(
-        "--ckpt-dir",
-        type=str,
-        default="outputs/grid_ckpts",
-        help="Directory in which to save intermediate checkpoints during the sweep",
-    )
-    grid.add_argument(
-        "--ckpt-every",
-        type=int,
-        default=25,
-        help="Checkpoint every N epochs during pretraining in the sweep",
-    )
-    grid.add_argument(
-        "--use-scheduler",
-        action="store_true",
-        help="Enable learning‑rate warmup and cosine scheduler during grid search",
-    )
-    grid.add_argument(
-        "--warmup-steps",
-        type=int,
-        default=1000,
-        help="Number of warmup steps for the scheduler during grid search",
-    )
-    grid.add_argument(
-        "--best-config-out",
-        type=str,
-        default=None,
-        help=(
-            "Optional path to write the best hyper‑parameter configuration "
-            "as a JSON file. This file can be parsed later to drive a "
-            "production pretraining run."
-        ),
-    )
-    grid.add_argument(
-        "--use-wandb",
-        action="store_true",
-        help="Enable Weights & Biases logging for the grid search",
-    )
-    grid.add_argument(
-        "--wandb-project",
-        type=str,
-        default=CONFIG.get("wandb", {}).get("project", "m-jepa"),
-        help="W&B project name for grid search runs",
-    )
-    grid.add_argument(
-        "--wandb-tags",
-        nargs="*",
-        default=CONFIG.get("wandb", {}).get("tags", []),
-        help="W&B tags for grid search runs",
-    )
-    grid.add_argument(
-        "--force-tqdm",
-        action="store_true",
-        help="Force-enable tqdm progress bars even when not attached to a TTY",
-    )
-    grid.add_argument(
-        "--sample-unlabeled",
-        type=int,
-        default=0,
-        help="If >0, load at most N graphs from the unlabeled dataset.",
-    )
-    grid.add_argument(
-        "--sample-labeled",
-        type=int,
-        default=0,
-        help="If >0, load at most N graphs from the labeled dataset.",
-    )
-    grid.add_argument(
-        "--n-rows-per-file",
-        type=int,
-        default=None,
-        help="If set, limit rows read per file when loading datasets.",
-    )
-    grid.add_argument(
-        "--max-pretrain-batches",
-        type=int,
-        default=0,
-        help="If >0, stop each pretrain epoch after this many batches.",
-    )
-    grid.add_argument(
-        "--target-pretrain-samples",
-        type=int,
-        default=0,
-        help="If >0, cap each trial to roughly this many pretrain samples",
-    )
-    grid.add_argument(
-        "--max-finetune-batches",
-        type=int,
-        default=0,
-        help="If >0, stop each finetune epoch after this many batches.",
-    )
-    grid.add_argument(
-        "--time-budget-mins",
-        type=int,
-        default=0,
-        help="Optional wallclock budget; stop early when exceeded.",
-    )
-    grid.add_argument(
-        "--force-refresh",
-        action="store_true",
-        default=False,
-        help="Ignore cached grid search outputs and recompute",
-    )
-    grid.add_argument(
-        "--temperatures",
-        type=float,
-        nargs="+",
-        default=[0.1],
-        help="List of InfoNCE temperatures to try (contrastive only)",
-    )
-    # Optimisation for GPU
-    grid.add_argument(
-        "--prefetch-factor",
-        type=int,
-        default=4,
-        help="Dataloader prefetch factor (workers>0 only).",
-    )
-    grid.add_argument(
-        "--pin-memory",
-        action="store_true",
-        default=True,
-        help="Pin CUDA host memory in DataLoader.",
-    )
-    grid.add_argument(
-        "--persistent-workers",
-        action="store_true",
-        default=True,
-        help="Keep worker processes alive across epochs (workers>0).",
-    )
-    grid.add_argument(
-        "--bf16", action="store_true", help="Enable bfloat16 autocast on GPU."
-    )
+    grid = sub.add_parser("grid-search", help="Perform hyper‑parameter grid search for JEPA using run_grid_search")
+    grid.add_argument("--smiles-col", type=str, default="smiles", help="Column name that contains molecule SMILES.")
+    grid.add_argument("--dataset-dir", required=False, default=None, help="Path to a graph dataset used for both pretraining and evaluation. If omitted, you must specify --unlabeled-dir and/or --labeled-dir.")
+    grid.add_argument("--unlabeled-dir", type=str, default=None, help="Directory of an unlabeled graph dataset for JEPA pretraining (e.g. ZINC/PubChem).")
+    grid.add_argument("--labeled-dir", type=str, default=None, help="Directory of a labeled graph dataset for downstream evaluation (e.g. MoleculeNet).")
+    grid.add_argument("--label-col", type=str, default="label", help="Name of the label column in the dataset (ignored for unlabeled data)")
+    grid.add_argument("--cache-dir", type=str, default=None, help="Directory for cached graph data (defaults to cache/graphs)")
+    grid.add_argument("--no-cache", action="store_true", help="Disable graph caching during grid search")
+    grid.add_argument("--num-workers", type=int, default=0, help="Number of worker processes for SMILES featurization")
+    grid.add_argument("--task-type", choices=["classification", "regression"], default="classification", help="Task type for downstream evaluation")
+    grid.add_argument("--methods", nargs="+", default=["jepa"], help="Names of methods to include in the sweep (e.g. jepa contrastive)")
+    grid.add_argument("--mask-ratios", type=float, nargs="+", default=[0.10, 0.15, 0.25], help="List of mask ratios to sweep over")
+    grid.add_argument("--contiguities", type=int, nargs="+", default=[0, 1], help="Contiguity flags (0 for False, 1 for True) to sweep over")
+    grid.add_argument("--hidden-dims", type=int, nargs="+", default=[128, 256], help="Hidden dimensions to sweep over")
+    grid.add_argument("--num-layers-list", type=int, nargs="+", default=[2, 3], help="Number of GNN layers to sweep over")
+    grid.add_argument("--gnn-types", nargs="+", default=["mpnn", "gcn", "gat", "edge_mpnn"], help="GNN architectures to sweep over")
+    grid.add_argument("--ema-decays", type=float, nargs="+", default=[0.95, 0.99], help="EMA decay rates to sweep over")
+    grid.add_argument("--add-3d-options", type=int, nargs="+", default=[0, 1], help="Whether to include 3D features (0 for False, 1 for True)")
+    grid.add_argument("--aug-rotate-options", type=int, nargs="+", default=[int(DEFAULT_AUG.rotate)], help="Apply random rotation augmentation (0 for False, 1 for True)")
+    grid.add_argument("--aug-mask-angle-options", type=int, nargs="+", default=[int(DEFAULT_AUG.mask_angle)], help="Apply angle masking augmentation (0 for False, 1 for True)")
+    grid.add_argument("--aug-dihedral-options", type=int, nargs="+", default=[int(DEFAULT_AUG.dihedral)], help="Apply dihedral perturbation augmentation (0 for False, 1 for True)")
+    grid.add_argument("--pretrain-batch-sizes", type=int, nargs="+", default=[256], help="Batch sizes for JEPA pretraining")
+    grid.add_argument("--finetune-batch-sizes", type=int, nargs="+", default=[64], help="Batch sizes for downstream fine‑tuning")
+    grid.add_argument("--pretrain-epochs-options", type=int, nargs="+", default=[50], help="Number of epochs for JEPA pretraining")
+    grid.add_argument("--finetune-epochs-options", type=int, nargs="+", default=[30], help="Number of epochs for downstream training")
+    grid.add_argument("--learning-rates", type=float, nargs="+", default=[1e-4], help="Learning rates to sweep over")
+    grid.add_argument("--seeds", type=int, nargs="*", default=None, help="Random seeds for averaging results (overrides config)")
+    grid.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device for training (cuda or cpu)")
+    grid.add_argument("--out-csv", type=str, default=None, help="Path to output CSV file for grid search results")
+    grid.add_argument("--ckpt-dir", type=str, default="outputs/grid_ckpts", help="Directory in which to save intermediate checkpoints during the sweep")
+    grid.add_argument("--ckpt-every", type=int, default=25, help="Checkpoint every N epochs during pretraining in the sweep")
+    grid.add_argument("--use-scheduler", action="store_true", help="Enable learning‑rate warmup and cosine scheduler during grid search")
+    grid.add_argument("--warmup-steps", type=int, default=1000, help="Number of warmup steps for the scheduler during grid search")
+    grid.add_argument("--best-config-out", type=str, default=None, help="Optional path to write the best hyper‑parameter configuration as a JSON file. This file can be parsed later to drive a production pretraining run.")
+    grid.add_argument("--use-wandb", action="store_true", help="Enable Weights & Biases logging for the grid search")
+    grid.add_argument("--wandb-project", type=str, default=CONFIG.get("wandb", {}).get("project", "m-jepa"), help="W&B project name for grid search runs")
+    grid.add_argument("--wandb-tags", nargs="*", default=CONFIG.get("wandb", {}).get("tags", []), help="W&B tags for grid search runs")
+    grid.add_argument("--force-tqdm", action="store_true", help="Force-enable tqdm progress bars even when not attached to a TTY")
+    grid.add_argument("--sample-unlabeled", type=int, default=0, help="If >0, load at most N graphs from the unlabeled dataset.")
+    grid.add_argument("--sample-labeled", type=int, default=0, help="If >0, load at most N graphs from the labeled dataset.")
+    grid.add_argument("--n-rows-per-file", type=int, default=None, help="If set, limit rows read per file when loading datasets.")
+    grid.add_argument("--max-pretrain-batches", type=int, default=0, help="If >0, stop each pretrain epoch after this many batches.")
+    grid.add_argument("--target-pretrain-samples", type=int, default=0, help="If >0, cap each trial to roughly this many pretrain samples")
+    grid.add_argument("--max-finetune-batches", type=int, default=0, help="If >0, stop each finetune epoch after this many batches.")
+    grid.add_argument("--time-budget-mins", type=int, default=0, help="Optional wallclock budget; stop early when exceeded.")
+    grid.add_argument("--force-refresh", action="store_true", default=False, help="Ignore cached grid search outputs and recompute")
+    grid.add_argument("--temperatures", type=float, nargs="+", default=[0.1], help="List of InfoNCE temperatures to try (contrastive only)")
+    grid.add_argument("--prefetch-factor", type=int, default=4, help="Dataloader prefetch factor (workers>0 only).")
+    grid.add_argument("--pin-memory", action="store_true", default=True, help="Pin CUDA host memory in DataLoader.")
+    grid.add_argument("--persistent-workers", action="store_true", default=True, help="Keep worker processes alive across epochs (workers>0).")
+    grid.add_argument("--bf16", action="store_true", help="Enable bfloat16 autocast on GPU.")
     grid.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP")
     grid.set_defaults(func=cmd_grid_search)
 

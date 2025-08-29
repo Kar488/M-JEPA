@@ -1,61 +1,57 @@
 program: scripts/train_jepa.py
 command:
-  - ${env}
-  - python
+  - ${interpreter}
   - ${program}
   - sweep-run
+  - --unlabeled-dir
+  - ${env:APP_DIR}/data/ZINC-canonicalized
+  - --labeled-dir
+  - ${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train
+  - ${args}
 
 method: random
 metric:
-  name: val_loss
+  name: val_rmse
   goal: minimize
 
 parameters:
-  # dataset + task config
-  unlabeled_dir:
-    value: ${APP_DIR}/data/ZINC-canonicalized
-  labeled_dir:
-    value: ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
-  label_col:
-    value: "measured log solubility in mols per litre"
-  task_type:
-    value: regression
-
-  gnn_type:
-    values: [gcn, gat, mpnn]
+  # Broad random sweep (smaller data, wider space)
   training_method:
     values: [jepa, contrastive]
-  mask_ratio:
-    values: [0.15, 0.3, 0.5]
-  contiguity:
-    values: [0, 1]
-  hidden_dim:
-    value: 256
-  num_layers:
-    value: 3
-  ema_decay:
-    values: [0.996, 0.998, 0.999]
-  add_3d:
-    value: 1
-  pretrain_batch_size:
-    values: [64, 128, 256]
-  finetune_batch_size:
-    value: 256
-  temperature:
-    values: [0.07, 0.1, 0.2]
-  pretrain_epochs:
-    value: 30
-  finetune_epochs:
-    value: 1
-  learning_rate:
-    values: [0.0003, 0.0001]
-  seed:
-    values: [1, 2, 3]
-  sample_unlabeled: 
-    value: 10000
-  sample_labeled: 
-    value: 1000
+
+  # core hparams
+  mask_ratio:           {values: [0.15, 0.30, 0.50]}
+  contiguity:           {values: [0, 1]}
+  hidden_dim:           {values: [128, 256]}
+  num_layers:           {values: [2, 3]}
+  gnn_type:             {values: [gcn, gat, mpnn, edge_mpnn]}
+  ema_decay:            {values: [0.99, 0.996, 0.998]}
+  add_3d:               {values: [0, 1]}
+
+  pretrain_batch_size:  {values: [64, 128, 256]}
+  finetune_batch_size:  {values: [256]}
+  pretrain_epochs:      {values: [10, 20, 30]}
+  finetune_epochs:      {values: [1]}
+  learning_rate:        {values: [0.0003, 0.0001]}
+  temperature:          {values: [0.07, 0.1, 0.2]}
+  seed:                 {values: [1, 2, 3]}
+
+  task_type:            {values: [regression]}
+  label_col:            {value: measured log solubility in mols per litre}
+
+  # geometric augs (already supported; JEPA ignores them)
+  aug_rotate:           {values: [0, 1]}
+  aug_mask_angle:       {values: [0, 1]}
+  aug_dihedral:         {values: [0, 1]}
+
+  # structural augs (contrastive only; JEPA ignores gracefully)
+  aug_bond_deletion:    {values: [0, 1]}
+  aug_atom_masking:     {values: [0, 1]}
+  aug_subgraph_removal: {values: [0, 1]}
+
+  sample_unlabeled:     {value: [10000]}
+  sample_labeled:       {value: [1000]}
 
 early_terminate:
   type: hyperband
-  min_iter: 10
+  min_iter: 3

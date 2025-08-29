@@ -755,6 +755,9 @@ def _run_one_config_method(
             _rot = getattr(cfg.augmentations, "random_rotate", getattr(cfg.augmentations, "rotate", False))
             _dih = getattr(cfg.augmentations, "perturb_dihedral", getattr(cfg.augmentations, "dihedral", False))
             _ang = getattr(cfg.augmentations, "mask_angle", False)
+            _bond = getattr(cfg.augmentations, "bond_deletion", False)
+            _atom = getattr(cfg.augmentations, "atom_masking", False)
+            _subg = getattr(cfg.augmentations, "subgraph_removal", False)
             try:
                 train_contrastive(
                     dataset=ds_pre,
@@ -774,6 +777,7 @@ def _run_one_config_method(
                     random_rotate=_rot,
                     mask_angle=_ang,
                     perturb_dihedral=_dih,
+                    bond_deletion=_bond, atom_masking=_atom, subgraph_removal=_subg,
                     max_batches=max_batches_for_trial,
                     time_budget_mins=_tb,
                     # perf knobs

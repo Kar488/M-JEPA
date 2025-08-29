@@ -2,6 +2,10 @@
 #set -x   # bash prints each command before executing
 set -euo pipefail
 
+grace_marker() { echo "$LOG_DIR/${1}.graceful_stop"; }
+mark_graceful_stop() { mkdir -p "$LOG_DIR"; : >"$(grace_marker "$1")"; }
+was_graceful_stop() { [[ -f "$(grace_marker "$1")" ]]; }
+
 # requires: common.sh (ensure_micromamba, build_argv_from_yaml, expand_array_vars, best_config_args)
 # ---------- stage → dirs / subcommands / dependencies ----------
 stage_dir() {
@@ -159,13 +163,23 @@ run_with_timeout() {
     echo "[stage] wall budget=${BUDGET_MINS}m (${SOFT}s), grace=${GRACE}s"
 
     mkdir -p "$LOG_DIR" 
-    timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
+    timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
       env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
       "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
       python -u "$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}" \
       2>&1 | tee "$LOG_DIR/${s}.log"
     rc=$?
-    if [[ $rc -ne 0 ]]; then
+    # 0   = success
+    # 124 = 'timeout' exceeded (we later sent SIGTERM/SIGKILL)
+    # 143 = terminated by SIGTERM (128+15)
+    # 137 = killed by SIGKILL   (128+9)
+    if [[ $rc -eq 0 ]]; then
+      :
+    elif [[ $rc -eq 124 || $rc -eq 143 || $rc -eq 137 ]]; then
+      echo "[INFO][$s] graceful stop (rc=$rc); not marking stage done; outputs should be flushed."
+      mark_graceful_stop "$s"
+      return 0
+    else
       echo "[ERROR][$s] train_jepa.py failed with exit code $rc" >&2
       exit $rc
     fi
@@ -179,14 +193,20 @@ run_with_timeout() {
 
     mkdir -p "$LOG_DIR"
 
-    timeout --signal=SIGINT --kill-after="$GRACE" "$SOFT" \
+    timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
       "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
       python -m wandb agent --count ${WANDB_COUNT:-50} "$SWEEP_ID" \
       2>&1 | tee "$LOG_DIR/${s}.log"
-      
+
     rc=$?
-    if [[ $rc -ne 0 ]]; then
-      echo "[ERROR][$s] train_jepa.py failed with exit code $rc" >&2
+    if [[ $rc -eq 0 ]]; then
+      :
+    elif [[ $rc -eq 124 || $rc -eq 143 || $rc -eq 137 ]]; then
+      echo "[INFO][wandb_agent] graceful stop (rc=$rc); letting agent flush."
+      mark_graceful_stop "$s"
+      return 0
+    else
+      echo "[ERROR][wandb_agent] wandb agent failed with exit code $rc" >&2
       exit $rc
     fi
   fi
@@ -205,7 +225,14 @@ run_stage() {
     echo "[$s] starting"
     build_stage_args "$s"
     stage_dataset_preflight STAGE_ARGS
+
     run_with_timeout "$s" STAGE_ARGS
+    if was_graceful_stop "$s"; then
+      echo "[$s] stopped gracefully; leaving cache unstamped so it can resume."
+      return 0
+    fi
+
+
     mark_stage_done "$dir"
     echo "[$s] completed"
   else

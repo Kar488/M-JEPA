@@ -395,9 +395,14 @@ def train_contrastive(
     warmup_steps: int = 1000,
     use_amp: bool = True,
     random_rotate: bool = False,
+    # gemoetric augmentations (contrastive-only)
     mask_angle: bool = False,
     perturb_dihedral: bool = False,
     resume_from: Optional[str] = None,
+    # structural augmentations (contrastive-only)
+    bond_deletion: bool = False,
+    atom_masking: bool = False,
+    subgraph_removal: bool = False,
     *,
     max_batches: int = 0,
     time_budget_mins: int = 0,
@@ -521,12 +526,19 @@ def train_contrastive(
 
             z1_list, z2_list = [], []
             for g in batch:
-                struct_ops = [
-                    delete_random_bond,
-                    mask_random_atom,
-                    remove_random_subgraph,
-                    lambda x, mr=mask_ratio: mask_subgraph(x, mr, contiguous=False)[0],
-                ]
+                struct_ops = [] 
+                if bond_deletion:
+                    struct_ops.append(delete_random_bond)
+                if atom_masking:
+                    struct_ops.append(mask_random_atom)
+                if subgraph_removal:
+                    struct_ops.append(remove_random_subgraph)
+                # keep subgraph masking as a function of mask_ratio (contrastive view)
+                if mask_ratio and mask_ratio > 0:
+                    struct_ops.append(
+                        lambda x, mr=mask_ratio: mask_subgraph(x, mr, contiguous=False)[0]
+                    )
+               
                 geom_ops = []
                 if random_rotate or mask_angle or perturb_dihedral:
                     geom_ops.append(

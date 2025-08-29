@@ -358,7 +358,7 @@ def mask_subgraph(
 
 
 def apply_graph_augmentations(
-    g: GraphData,
+    g: GraphData, # type: ignore
     *,
     random_rotate: bool = False,
     rotate: bool = False,
@@ -421,10 +421,10 @@ def _clone_graph(g: GraphData) -> GraphData:
 def generate_views(
     graph: GraphData,
     structural_ops: Sequence[
-        Callable[[GraphData], GraphData | tuple[GraphData, ...]]
+        Callable[[GraphData], GraphData | tuple[GraphData, ...]] # type: ignore
     ] = (),
     geometric_ops: Sequence[Callable[[GraphData], GraphData]] = (),
-) -> List[GraphData]:
+) -> List[GraphData]: # type: ignore
     """Apply structural and geometric operations to produce graph views."""
 
     views: List[GraphData] = [_clone_graph(graph)]
