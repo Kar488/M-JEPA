@@ -35,16 +35,37 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     # (pass project/entity explicitly so it doesn't rely on local config)
     echo "[phase1] creating sweeps…jepa"
     JEPA_SPEC="${JEPA_SWEEP_SPEC:-$APP_DIR/sweep/phase1_jepa.yaml}"
-    JEPA_ID=$("$MMBIN" run -n mjepa \
-        python -m wandb sweep -q --project "$WANDB_PROJECT" --entity "$WANDB_ENTITY" "$JEPA_SPEC")
+    JEPA_ID=$(
+        "$MMBIN" run -n mjepa env JEPA_SPEC="$JEPA_SPEC" WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
+  python - <<'PY'
+import os, yaml, wandb
+spec_path = os.environ["JEPA_SPEC"]
+with open(spec_path, "r") as f:
+    spec = yaml.safe_load(f)
+sid = wandb.sweep(spec, project=os.environ.get("WANDB_PROJECT"), entity=os.environ.get("WANDB_ENTITY"))
+print(sid)
+PY
+)
+
     echo "$JEPA_ID" > "${GRID_DIR:-$APP_DIR/grid}/sweep_jepa.id"
 
     echo "[phase1] creating sweeps…contrastive"
     CONTRAST_SPEC="${CONTRAST_SWEEP_SPEC:-$APP_DIR/sweep/phase1_contrastive.yaml}"
-    CONTRAST_ID=$("$MMBIN" run -n mjepa \
-        python -m wandb sweep -q --project "$WANDB_PROJECT" --entity "$WANDB_ENTITY" "$CONTRAST_SPEC")
-    echo "$CONTRAST_ID" > "${GRID_DIR:-$APP_DIR/grid}/sweep_contrast.id"
-
+    CONTRAST_ID=$(
+  "$MMBIN" run -n mjepa env CONTRAST_SPEC="$CONTRAST_SPEC" WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
+  python - <<'PY'
+import os, yaml, wandb
+spec_path = os.environ["CONTRAST_SPEC"]
+with open(spec_path, "r") as f:
+    spec = yaml.safe_load(f)
+sid = wandb.sweep(spec, project=os.environ.get("WANDB_PROJECT"), entity=os.environ.get("WANDB_ENTITY"))
+print(sid)
+PY
+)
+    if [[ -z "$JEPA_ID" || -z "$CONTRAST_ID" ]]; then
+        echo "[phase1][fatal] failed to create sweeps (JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID')" >&2
+        exit 1
+    fi
     
     echo "[phase1] JEPA=$JEPA_ID  CONTRAST=$CONTRAST_ID"
 
