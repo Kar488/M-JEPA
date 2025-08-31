@@ -260,8 +260,8 @@ jobs:
           KILL_AFTER_SECS: 120
           WANDB_COUNT: 5
           GRID_MODE: "wandb"   # or "custom"
-          JEPA_SWEEP_SPEC: "${{ env.APP_DIR }}/sweeps/grid_sweep_phase1_jepa.yaml"
-          CONTRAST_SWEEP_SPEC: "${{ env.APP_DIR }}/sweep/grid_sweep_phase1_contrastive.yaml"
+          JEPA_SWEEP_SPEC: "${{ env.APP_DIR }}/sweeps/sweep_phase1_jepa.yaml"
+          CONTRAST_SWEEP_SPEC: "${{ env.APP_DIR }}/sweep/sweep_phase1_contrastive.yaml"
           EXPORT_OUT_PATH: "${{ env.GRID_DIR }}/best_grid_config.json"
           EXPORT_PHASE2_PATH: "${{ env.APP_DIR }}/sweeps/grid_sweep_phase2.yaml"
           PHASE2_UNLABELED_DIR: "${{ env.APP_DIR }}/data/ZINC-canonicalized"
