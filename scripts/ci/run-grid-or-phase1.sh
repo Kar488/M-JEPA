@@ -19,6 +19,13 @@ GRID_MODE_CLEAN="${GRID_MODE_CLEAN//\'/}"
 
 echo "DEBUG: GRID_MODE='$GRID_MODE' -> CLEAN='$GRID_MODE_CLEAN'"
 
+sanitize_yaml() {
+        local f="$1"
+        perl -0777 -i -pe 's/command:\s*\[[^\]]*\]/command:\n  - "${interpreter}"\n  - "${program}"\n  - "sweep-run"\n  - "${args}"/s' "$f"
+        sed -i -E 's/\blabeled[_-]dir\b/labeled-dir/g; s/\bunlabeled[_-]dir\b/unlabeled-dir/g' "$f"
+        dos2unix "$f" 2>/dev/null || true
+    }
+
 if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     echo "[grid] running wandb sweep agent"
 
@@ -34,6 +41,10 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     # Create sweeps via the Python module inside the env that has wandb installed
     # (pass project/entity explicitly so it doesn't rely on local config)
     echo "[phase1] creating sweeps…jepa"
+
+    sanitize_yaml "$JEPA_SPEC"
+    sanitize_yaml "$CONTRAST_SPEC"
+
     JEPA_SPEC="${JEPA_SWEEP_SPEC:-$APP_DIR/sweep/phase1_jepa.yaml}"
     JEPA_ID=$(
         "$MMBIN" run -n mjepa env JEPA_SPEC="$JEPA_SPEC" WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
