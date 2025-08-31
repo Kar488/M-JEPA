@@ -17,7 +17,7 @@ parameters:
 
   # Broad random sweep (smaller data, wider space)
   training_method:
-    values: [jepa, contrastive]
+    value: jepa
 
   # core hparams
   mask_ratio:
@@ -39,30 +39,16 @@ parameters:
     min: 1.0e-4
     max: 1.0e-2
     distribution: log_uniform
-  temperature:          {values: [0.07, 0.1, 0.2]}
-  seed:                 {values: [1, 2, 3]}
 
   task_type:            {values: [regression]}
   label_col:            {value: measured log solubility in mols per litre}
-
-  # geometric augs (already supported; JEPA ignores them)
-  aug_rotate:           {values: [0, 1]}
-  aug_mask_angle:       {values: [0, 1]}
-  aug_dihedral:         {values: [0, 1]}
-
-  # structural augs (contrastive only; JEPA ignores gracefully)
-  aug_bond_deletion:    {values: [0, 1]}
-  aug_atom_masking:     {values: [0, 1]}
-  aug_subgraph_removal: {values: [0, 1]}
 
   sample_unlabeled:     {value: 10000}
   sample_labeled:       {value: 1000}
 
   # ---- pairing guarantee (same lists in both sweeps) ----
-  pair_id:
-    values: [0,1,2,3,4,5,6,7,8,9]
-  seed:
-    values: [0,1]
+  pair_id: {values: [0,1,2,3,4,5,6,7,8,9]}
+  seed:    {values: [0,1]}
 
 early_terminate:
   type: hyperband

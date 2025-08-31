@@ -15,23 +15,26 @@ parameters:
   labeled-dir:   {value: "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train"}
   unlabeled-dir: {value: "${env:APP_DIR}/data/ZINC-canonicalized"}
 
-  training_method:        {values: [jepa, contrastive]}
-  mask_ratio:             {min: 0.10, max: 0.35}
+  training_method:
+    value: contrastive
+ 
   contiguity:             {values: [0, 1]}
   hidden_dim:             {values: [256, 384]}
   num_layers:             {values: [2, 3]}
-  gnn_type:               {values: [mpnn, edge_mpnn]}
+  gnn_type:               {values: [gcn, gat, mpnn, edge_mpnn]}
   ema_decay:              {min: 0.994, max: 0.999}
   add_3d:                 {values: [0, 1]}
 
 
-  pretrain_batch_size:    {values: [256]}
+  pretrain_batch_size:    {values: [64, 128, 256]}
   finetune_batch_size:    {values: [256]}
-  pretrain_epochs:        {values: [30, 40, 50]}     # longer than phase 1
-  finetune_epochs:        {values: [3, 5]}
-  learning_rate:          {min: 0.00008, max: 0.0004}
-  temperature:            {values: [0.1]}           # fix if phase 1 showed low sensitivity
-  seed:                   {values: [1, 2, 3]}
+  pretrain_epochs:        {values: [10, 20, 30]}     # longer than phase 1
+  finetune_epochs:        {values: [1]}
+  learning_rate:
+    min: 1.0e-4
+    max: 1.0e-2
+    distribution: log_uniform
+  temperature:             {values: [0.07, 0.1, 0.2]} 
 
   task_type:              {values: [regression]}
   label_col:              {value: measured log solubility in mols per litre}
@@ -43,12 +46,14 @@ parameters:
   aug_atom_masking:       {values: [0, 1]}
   aug_subgraph_removal:   {values: [0, 1]}
 
-  sample_unlabeled:       {value: 30000}
-  sample_labeled:         {value: 3000}
+  sample_unlabeled:       {value: 10000}
+  sample_labeled:         {value: 1000}
   n_rows_per_file:        {value: 10000}
 
   # ---- pairing guarantee (same lists in both sweeps) ----
-  pair_id:
-    values: [0,1,2,3,4,5,6,7,8,9]
-  seed:
-    values: [0,1]
+  pair_id: {values: [0,1,2,3,4,5,6,7,8,9]}
+  seed:    {values: [0,1]}
+
+  early_terminate:
+    type: hyperband
+    min_iter: 3
