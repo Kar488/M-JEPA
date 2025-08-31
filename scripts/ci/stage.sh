@@ -189,6 +189,17 @@ run_with_timeout() {
   else
     ensure_micromamba
 
+   # --- ensure logging + ids are sane ---
+    mkdir -p "$LOG_DIR"
+    LOG="${LOG_DIR}/${s}.log"
+
+    # build a full sweep path if only an id was provided
+    SID="${SWEEP_ID}"
+    if [[ "$SID" != */* ]]; then
+      [[ -n "${WANDB_PROJECT:-}" ]] && SID="${WANDB_PROJECT}/${SID}"
+      [[ -n "${WANDB_ENTITY:-}"  ]] && SID="${WANDB_ENTITY}/${SID}"
+    fi
+
     local -a cmd=("$@")
     local SOFT=$(( (${HARD_WALL_MINS:-240})*60 ))
     local GRACE="${KILL_AFTER_SECS:-60}"
