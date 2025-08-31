@@ -57,13 +57,12 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     JEPA_SPEC="${JEPA_SWEEP_SPEC:-$APP_DIR/sweeps/sweep_phase1_jepa.yaml}"
     sanitize_yaml "$JEPA_SPEC"
     JEPA_ID=$(
-        "$MMBIN" run -n mjepa env JEPA_SPEC="$JEPA_SPEC" WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
-  python - <<'PY'
-import os, yaml, wandb
-spec_path = os.environ["JEPA_SPEC"]
-with open(spec_path, "r") as f:
+    "$MMBIN" run -n mjepa env WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
+python - <<'PY' | tail -n1 | tr -d '\r\n '
+import os, yaml, wandb, sys
+with open(os.environ["JEPA_SPEC"], "r") as f:
     spec = yaml.safe_load(f)
-sid = wandb.sweep(spec, project=os.environ.get("WANDB_PROJECT"), entity=os.environ.get("WANDB_ENTITY"))
+sid = wandb.sweep(spec, project=os.environ["WANDB_PROJECT"], entity=os.environ["WANDB_ENTITY"])
 print(sid)
 PY
 )
@@ -74,20 +73,21 @@ PY
     CONTRAST_SPEC="${CONTRAST_SWEEP_SPEC:-$APP_DIR/sweeps/sweep_phase1_contrastive.yaml}"
     sanitize_yaml "$CONTRAST_SPEC"
     CONTRAST_ID=$(
-  "$MMBIN" run -n mjepa env CONTRAST_SPEC="$CONTRAST_SPEC" WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
-  python - <<'PY'
-import os, yaml, wandb
-spec_path = os.environ["CONTRAST_SPEC"]
-with open(spec_path, "r") as f:
+  "$MMBIN" run -n mjepa env WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
+  python - <<'PY' | tail -n1 | tr -d '\r\n '
+import os, yaml, wandb, sys
+with open(os.environ["CONTRAST_SPEC"], "r") as f:
     spec = yaml.safe_load(f)
-sid = wandb.sweep(spec, project=os.environ.get("WANDB_PROJECT"), entity=os.environ.get("WANDB_ENTITY"))
+sid = wandb.sweep(spec, project=os.environ["WANDB_PROJECT"], entity=os.environ["WANDB_ENTITY"])
 print(sid)
 PY
 )
-    if [[ -z "$JEPA_ID" || -z "$CONTRAST_ID" ]]; then
-        echo "[phase1][fatal] failed to create sweeps (JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID')" >&2
+    # hard-validate: must be exactly 8 lowercase letters/digits
+    if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
+        echo "[phase1][fatal] bad sweep ids: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
         exit 1
     fi
+
     
     echo "[phase1] JEPA=$JEPA_ID  CONTRAST=$CONTRAST_ID"
 
@@ -97,15 +97,15 @@ PY
     SWEEP_ID="$JEPA_ID"
     echo "[phase1] JEPA → $SWEEP_ID"
     export WANDB_COUNT=${WANDB_COUNT:-30}
-    export SWEEP_ID
-    run_with_timeout wandb_agent
+    export SWEEP_ID="${WANDB_ENTITY}/${WANDB_PROJECT}/${JEPA_ID}"
+    run_with_timeout wandb_agent || exit 1
 
     # run Contrastive agents
     SWEEP_ID="$CONTRAST_ID"
     echo "[phase1] Contrastive → $SWEEP_ID"
     export WANDB_COUNT=${WANDB_COUNT:-30}
-    export SWEEP_ID
-    run_with_timeout wandb_agent
+    export SWEEP_ID="${WANDB_ENTITY}/${WANDB_PROJECT}/${CONTRAST_ID}"
+    run_with_timeout wandb_agent || exit 1
     
     # paired-effect report
     echo "[phase1] paired-effect"
@@ -143,12 +143,14 @@ PY
 
     # export best + write Phase-2 (Bayes) sweep YAML (explicit args; no ARGV dependency)
     WINNER="${METHOD_WINNER:-jepa}"
-    BEST_SWEEP="$JEPA_ID"; [[ "$WINNER" == "contrastive" ]] && BEST_SWEEP="$CONTRAST_ID"
-    echo "[phase1] export best (winner=$WINNER) from sweep=$BEST_SWEEP"
+    BEST_ID="$JEPA_ID"; [[ "$WINNER" == "contrastive" ]] && BEST_ID="$CONTRAST_ID"
+    echo "[phase1] export best (winner=$WINNER) from sweep=$BEST_ID"
+    BEST_SWEEP="${WANDB_ENTITY}/${WANDB_PROJECT}/${BEST_ID}"
 
     OUT_PATH="${EXPORT_OUT_PATH:-${GRID_DIR:-$APP_DIR/grid}/best_grid_config.json}"
     PHASE2_PATH="${EXPORT_PHASE2_PATH:-$APP_DIR/sweeps/grid_sweep_phase2.yaml}"
 
+    PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
     "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
       python -u "$APP_DIR/scripts/ci/export_best_from_wandb.py" \
         --sweep-id "$BEST_SWEEP" \
