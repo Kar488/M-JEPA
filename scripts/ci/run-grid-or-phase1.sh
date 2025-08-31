@@ -22,6 +22,8 @@ echo "DEBUG: GRID_MODE='$GRID_MODE' -> CLEAN='$GRID_MODE_CLEAN'"
 if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     echo "[grid] running wandb sweep agent"
 
+    ensure_micromamba
+
     # keep one umbrella group; never force a run id for agent trials
     unset WANDB_NAME WANDB_RUN_ID
     : "${WANDB_RUN_GROUP:=${GITHUB_RUN_ID:-pipeline-$(date -u +%Y%m%dT%H%M%SZ)}}"
