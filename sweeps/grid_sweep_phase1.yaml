@@ -1,9 +1,5 @@
 program: "${env:APP_DIR}/scripts/train_jepa.py"
-command:
-  - "${interpreter}"
-  - "${program}"
-  - "sweep-run"
-  - "${args}"
+command: ["${interpreter}", "${program}", "sweep-run", "${args}"]
 method: random
 metric:
   name: val_rmse
