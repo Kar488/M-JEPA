@@ -42,10 +42,11 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     # (pass project/entity explicitly so it doesn't rely on local config)
     echo "[phase1] creating sweeps…jepa"
 
-    sanitize_yaml "$JEPA_SPEC"
-    sanitize_yaml "$CONTRAST_SPEC"
+    
+    
 
     JEPA_SPEC="${JEPA_SWEEP_SPEC:-$APP_DIR/sweep/phase1_jepa.yaml}"
+    sanitize_yaml "$JEPA_SPEC"
     JEPA_ID=$(
         "$MMBIN" run -n mjepa env JEPA_SPEC="$JEPA_SPEC" WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
   python - <<'PY'
@@ -62,6 +63,7 @@ PY
 
     echo "[phase1] creating sweeps…contrastive"
     CONTRAST_SPEC="${CONTRAST_SWEEP_SPEC:-$APP_DIR/sweep/phase1_contrastive.yaml}"
+    sanitize_yaml "$CONTRAST_SPEC"
     CONTRAST_ID=$(
   "$MMBIN" run -n mjepa env CONTRAST_SPEC="$CONTRAST_SPEC" WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
   python - <<'PY'
