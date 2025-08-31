@@ -110,7 +110,7 @@ PY
     # paired-effect report
     echo "[phase1] paired-effect"
     "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-    python -u "$APP_DIR/scripts/paired_effect_from_wandb.py" \
+    python -u "$APP_DIR/scripts/ci/paired_effect_from_wandb.py" \
         --project "${WANDB_PROJECT}" --group "${WANDB_RUN_GROUP}" \
     2>&1 | tee "${LOG_DIR:-$APP_DIR/logs}/paired_effect.log"
 
@@ -150,7 +150,7 @@ PY
     PHASE2_PATH="${EXPORT_PHASE2_PATH:-$APP_DIR/sweeps/grid_sweep_phase2.yaml}"
 
     "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-      python -u "$APP_DIR/scripts/export_best_from_wandb.py" \
+      python -u "$APP_DIR/scripts/ci/export_best_from_wandb.py" \
         --sweep-id "$BEST_SWEEP" \
         --task "$TASK_FROM_PE" \
         --phase2-method bayes \

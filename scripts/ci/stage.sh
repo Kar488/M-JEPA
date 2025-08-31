@@ -195,10 +195,18 @@ run_with_timeout() {
 
     # build a full sweep path if only an id was provided
     SID="${SWEEP_ID}"
-    if [[ "$SID" != */* ]]; then
-      [[ -n "${WANDB_PROJECT:-}" ]] && SID="${WANDB_PROJECT}/${SID}"
-      [[ -n "${WANDB_ENTITY:-}"  ]] && SID="${WANDB_ENTITY}/${SID}"
+    if [[ -z "$SID" ]]; then
+      echo "[wandb_agent][fatal] SWEEP_ID is empty" >&2
+      exit 1
     fi
+    if [[ "$SID" != */* ]]; then
+      if [[ -z "${WANDB_ENTITY:-}" || -z "${WANDB_PROJECT:-}" ]]; then
+        echo "[wandb_agent][fatal] SWEEP_ID is not fully-qualified and WANDB_ENTITY/WANDB_PROJECT are unset" >&2
+        exit 1
+      fi
+      SID="${WANDB_ENTITY}/${WANDB_PROJECT}/${SID}"
+    fi
+    echo "[wandb_agent] using sweep: $SID"
 
     local -a cmd=("$@")
     local SOFT=$(( (${HARD_WALL_MINS:-240})*60 ))
