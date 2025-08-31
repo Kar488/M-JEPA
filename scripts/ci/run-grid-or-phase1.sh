@@ -30,12 +30,22 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     export WANDB_RUN_GROUP WANDB_RESUME=allow
 
     # -------- Phase 1 orchestration (two sweeps) --------
-    echo "[phase1] creating sweeps…"
-    JEPA_ID=$(wandb sweep -q "${JEPA_SWEEP_SPEC:-$APP_DIR/sweep/phase1_jepa.yaml}")
+
+    # Create sweeps via the Python module inside the env that has wandb installed
+    # (pass project/entity explicitly so it doesn't rely on local config)
+    echo "[phase1] creating sweeps…jepa"
+    JEPA_SPEC="${JEPA_SWEEP_SPEC:-$APP_DIR/sweep/phase1_jepa.yaml}"
+    JEPA_ID=$("$MMBIN" run -n mjepa \
+        python -m wandb sweep -q --project "$WANDB_PROJECT" --entity "$WANDB_ENTITY" "$JEPA_SPEC")
     echo "$JEPA_ID" > "${GRID_DIR:-$APP_DIR/grid}/sweep_jepa.id"
 
-    CONTRAST_ID=$(wandb sweep -q "${CONTRAST_SWEEP_SPEC:-$APP_DIR/sweep/phase1_contrastive.yaml}")
+    echo "[phase1] creating sweeps…contrastive"
+    CONTRAST_SPEC="${CONTRAST_SWEEP_SPEC:-$APP_DIR/sweep/phase1_contrastive.yaml}"
+    CONTRAST_ID=$("$MMBIN" run -n mjepa \
+        python -m wandb sweep -q --project "$WANDB_PROJECT" --entity "$WANDB_ENTITY" "$CONTRAST_SPEC")
     echo "$CONTRAST_ID" > "${GRID_DIR:-$APP_DIR/grid}/sweep_contrast.id"
+
+    
     echo "[phase1] JEPA=$JEPA_ID  CONTRAST=$CONTRAST_ID"
 
     cd "$APP_DIR"
