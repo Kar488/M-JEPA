@@ -31,6 +31,18 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
     ensure_micromamba
 
+    # make sure micromamba is reachable here (this subshell may not inherit PATH)
+    export PATH="${MAMBA_ROOT_PREFIX}/bin:${PATH}"
+    # normalize to absolute path if 'command -v' returned just 'micromamba'
+    : "${MMBIN:=${MAMBA_ROOT_PREFIX}/bin/micromamba}"
+    if [[ "$(basename "$MMBIN")" = "micromamba" && ! "$MMBIN" = /* ]]; then
+        MMBIN="${MAMBA_ROOT_PREFIX}/bin/micromamba"
+    fi
+    if [[ ! -x "$MMBIN" ]]; then
+        echo "[wandb_agent][fatal] micromamba not found at $MMBIN" >&2
+        exit 1
+    fi
+
     # keep one umbrella group; never force a run id for agent trials
     unset WANDB_NAME WANDB_RUN_ID
     : "${WANDB_RUN_GROUP:=${GITHUB_RUN_ID:-pipeline-$(date -u +%Y%m%dT%H%M%SZ)}}"
