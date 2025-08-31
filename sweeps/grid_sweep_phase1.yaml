@@ -1,9 +1,9 @@
-program: scripts/train_jepa.py
+program: "${env:APP_DIR}/scripts/train_jepa.py"
 command:
-  - ${interpreter}
-  - ${program}
-  - sweep-run
-  - ${args}
+  - "${interpreter}"
+  - "${program}"
+  - "sweep-run"
+  - "${args}"
 
 method: random
 metric:
@@ -11,44 +11,47 @@ metric:
   goal: minimize
 
 parameters:
+  # dataset roots
+  unlabeled-dir: { value: "${env:APP_DIR}/data/ZINC-canonicalized" }
+  labeled-dir:   { value: "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train" }
 
-  labeled-dir:   {value: "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train"}
-  unlabeled-dir: {value: "${env:APP_DIR}/data/ZINC-canonicalized"}
+  # JEPA only in this sweep
+  training_method: { value: jepa }
 
-  # Broad random sweep (smaller data, wider space)
-  training_method:
-    value: jepa
+  # ---- pairing guarantee (same lists in BOTH sweeps) ----
+  pair_id: { values: [0,1,2,3,4,5,6,7,8,9] }
+  seed:    { values: [0,1] }
 
-  # core hparams
+  # core hparams (JEPA)
   mask_ratio:
     min: 0.10
     max: 0.40
+  contiguity:  { values: [0, 1] }
+  hidden_dim:  { values: [128, 256] }
+  num_layers:  { values: [2, 3] }
+  gnn_type:    { values: [gcn, gat, mpnn, edge_mpnn] }
+  ema_decay:   { values: [0.99, 0.996, 0.998] }
+  add_3d:      { values: [0, 1] }
 
-  contiguity:           {values: [0, 1]}
-  hidden_dim:           {values: [128, 256]}
-  num_layers:           {values: [2, 3]}
-  gnn_type:             {values: [gcn, gat, mpnn, edge_mpnn]}
-  ema_decay:            {values: [0.99, 0.996, 0.998]}
-  add_3d:               {values: [0, 1]}
-
-  pretrain_batch_size:  {values: [64, 128, 256]}
-  finetune_batch_size:  {values: [256]}
-  pretrain_epochs:      {values: [10, 20, 30]}
-  finetune_epochs:      {values: [1]}
+  pretrain_batch_size: { values: [64, 128, 256] }
+  finetune_batch_size: { values: [256] }
+  pretrain_epochs:     { values: [10, 20, 30] }
+  finetune_epochs:     { values: [1] }
   learning_rate:
     min: 1.0e-4
     max: 1.0e-2
     distribution: log_uniform
 
-  task_type:            {values: [regression]}
-  label_col:            {value: measured log solubility in mols per litre}
+  task_type: { value: regression }
+  label_col: { value: "measured log solubility in mols per litre" }
 
-  sample_unlabeled:     {value: 10000}
-  sample_labeled:       {value: 1000}
+  # harmless (JEPA ignores)
+  aug_rotate:     { values: [0, 1] }
+  aug_mask_angle: { values: [0, 1] }
+  aug_dihedral:   { values: [0, 1] }
 
-  # ---- pairing guarantee (same lists in both sweeps) ----
-  pair_id: {values: [0,1,2,3,4,5,6,7,8,9]}
-  seed:    {values: [0,1]}
+  sample_unlabeled: { value: 10000 }
+  sample_labeled:   { value: 1000 }
 
 early_terminate:
   type: hyperband
