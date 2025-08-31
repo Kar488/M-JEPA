@@ -57,9 +57,11 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     JEPA_SPEC="${JEPA_SWEEP_SPEC:-$APP_DIR/sweeps/sweep_phase1_jepa.yaml}"
     sanitize_yaml "$JEPA_SPEC"
     JEPA_ID=$(
-    "$MMBIN" run -n mjepa env WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
-python - <<'PY' | tail -n1 | tr -d '\r\n '
-import os, yaml, wandb, sys
+  "$MMBIN" run -n mjepa env \
+    JEPA_SPEC="$JEPA_SPEC" \
+    WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
+    python - <<'PY' | tail -n1 | tr -d '\r\n '
+import os, yaml, wandb
 with open(os.environ["JEPA_SPEC"], "r") as f:
     spec = yaml.safe_load(f)
 sid = wandb.sweep(spec, project=os.environ["WANDB_PROJECT"], entity=os.environ["WANDB_ENTITY"])
@@ -73,9 +75,11 @@ PY
     CONTRAST_SPEC="${CONTRAST_SWEEP_SPEC:-$APP_DIR/sweeps/sweep_phase1_contrastive.yaml}"
     sanitize_yaml "$CONTRAST_SPEC"
     CONTRAST_ID=$(
-  "$MMBIN" run -n mjepa env WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
-  python - <<'PY' | tail -n1 | tr -d '\r\n '
-import os, yaml, wandb, sys
+  "$MMBIN" run -n mjepa env \
+    CONTRAST_SPEC="$CONTRAST_SPEC" \
+    WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
+    python - <<'PY' | tail -n1 | tr -d '\r\n '
+import os, yaml, wandb
 with open(os.environ["CONTRAST_SPEC"], "r") as f:
     spec = yaml.safe_load(f)
 sid = wandb.sweep(spec, project=os.environ["WANDB_PROJECT"], entity=os.environ["WANDB_ENTITY"])
