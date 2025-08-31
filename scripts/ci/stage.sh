@@ -188,18 +188,11 @@ run_with_timeout() {
   # --- WandB mode: run-grid passes a full cmd array --
   else
     ensure_micromamba
-    
-    unset WANDB_NAME
-    : "${WANDB_JOB_TYPE:=$s}"; export WANDB_JOB_TYPE
-    export WANDB_RUN_GROUP="$GITHUB_RUN_ID"
 
     local -a cmd=("$@")
     local SOFT=$(( (${HARD_WALL_MINS:-240})*60 ))
     local GRACE="${KILL_AFTER_SECS:-60}"
     echo "[wandb_agent] wall budget=${SOFT}s, grace=${GRACE}s"
-
-    mkdir -p "$LOG_DIR"
-    LOG="${LOG_DIR}/${s}.log"
 
     timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
       "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \

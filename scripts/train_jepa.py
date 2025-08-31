@@ -1679,8 +1679,15 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     import wandb
     run = wb or getattr(wandb, "run", None)  # robust fallback
     if run:
-        run.summary.update(row)   # final metrics go on the SAME run
-        run.finish()
+        val = row.get("val_rmse") or row.get("rmse_mean") or row.get("probe_rmse_mean")
+        if val is not None:
+            run.summary["val_rmse"] = float(val)
+        # populate other aliases if present
+        if "val_mae" not in row and "mae_mean" in row:
+            run.summary["val_mae"] = float(row["mae_mean"])
+
+        run.summary.update(row)   # put the whole result dict on this run
+        wandb.finish()
     else:
         print("[sweep-run] summary:", row)
 

@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""
+Pull top-k configs from a Phase-2 sweep, re-run each on extra seeds,
+and save a summary JSON with averaged metrics and 95% CI per config.
+
+Usage:
+  python recheck_topk_from_wandb.py \
+    --sweep "entity/project/abcdef" \
+    --project mjepa --group "${WANDB_RUN_GROUP}" \
+    --metric val_rmse --direction min \
+    --topk 5 --extra_seeds 3 \
+    --program "${env:APP_DIR}/scripts/train_jepa.py" \
+    --subcmd "sweep-run" \
+    --unlabeled "${env:APP_DIR}/data/ZINC-canonicalized" \
+    --labeled   "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train" \
+    --out "${GRID_DIR}/recheck_summary.json"
+"""
+import argparse, json, os, math, time
+from typing import List, Dict, Any, Tuple
+import numpy as np
+import wandb
+import subprocess
+import shlex
+
+def metric_of(run, name, default=None):
+    v = run.summary.get(name, None)
+    if v is None: v = run.config.get(name, None)
+    return v if v is not None else default
+
+def pick_topk(sweep, metric: str, maximize: bool, k: int):
+    runs = list(sweep.runs)
+    have = [r for r in runs if metric_of(r, metric) is not None]
+    have.sort(key=(lambda r: -float(metric_of(r, metric, -math.inf))) if maximize
+                    else (lambda r:  float(metric_of(r, metric,  math.inf))))
+    return have[:max(1, k)]
+
+def run_once(mm, program, subcmd, cfg: Dict[str, Any], seed: int,
+             unlabeled: str, labeled: str, log_dir: str,
+             project: str, group: str) -> int:
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    # ensure recheck runs land in the same project/group
+    if "WANDB_PROJECT" not in env and project:
+        env["WANDB_PROJECT"] = project
+    if "WANDB_RUN_GROUP" not in env and group:
+        env["WANDB_RUN_GROUP"] = group
+    env.setdefault("WANDB_JOB_TYPE", "recheck")
+    # Build CLI from winner config + seed
+    args = [mm, "run", "-n", "mjepa", "env", "PYTHONUNBUFFERED=1",
+            "python", "-u", program, subcmd,
+            "--unlabeled-dir", unlabeled,
+            "--labeled-dir",   labeled]
+    for k, v in cfg.items():
+        if isinstance(v, bool):
+            if v: args += [f"--{k.replace('_','-')}"]
+        else:
+            args += [f"--{k.replace('_','-')}", str(v)]
+    args += ["--seed", str(seed)]
+    log = os.path.join(log_dir, f"recheck_{cfg.get('training_method','jepa')}_seed{seed}.log")
+    with open(log, "w", encoding="utf-8") as f:
+        p = subprocess.Popen(args, stdout=f, stderr=subprocess.STDOUT, env=env)
+    return p.wait()
+
+def ci95(xs: List[float]) -> Tuple[float, float]:
+    bs = [np.mean(np.random.choice(xs, size=len(xs), replace=True)) for _ in range(4000)]
+    return float(np.percentile(bs, 2.5)), float(np.percentile(bs, 97.5))
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--sweep", required=True)
+    ap.add_argument("--project", default=os.getenv("WANDB_PROJECT"))
+    ap.add_argument("--group",   default=os.getenv("WANDB_RUN_GROUP"))
+    ap.add_argument("--metric", default=os.getenv("PHASE2_METRIC","val_rmse"))
+    ap.add_argument("--direction", choices=["min","max"], default="min")
+    ap.add_argument("--topk", type=int, default=5)
+    ap.add_argument("--extra_seeds", type=int, default=3)
+    ap.add_argument("--program", required=True)
+    ap.add_argument("--subcmd", default="sweep-run")
+    ap.add_argument("--unlabeled", required=True)
+    ap.add_argument("--labeled",   required=True)
+    ap.add_argument("--mm", default=os.environ.get("MMBIN","micromamba"))
+    ap.add_argument("--log_dir", default=os.environ.get("LOG_DIR","./logs"))
+    ap.add_argument("--out", default=os.path.join(os.environ.get("GRID_DIR","."), "recheck_summary.json"))
+    args = ap.parse_args()
+
+    api = wandb.Api()
+    sweep = api.sweep(args.sweep)
+    maximize = (args.direction == "max")
+    top = pick_topk(sweep, args.metric, maximize, args.topk)
+
+    # Extract the raw config dict for each top run
+    tops: List[Dict[str, Any]] = []
+    for r in top:
+        cfg = {}
+        for k, v in r.config.items():
+            if k.startswith("_"):   # skip internal
+                continue
+            cfg[k] = v
+        # Drop seed so we can override
+        cfg.pop("seed", None)
+        tops.append(cfg)
+
+    os.makedirs(args.log_dir, exist_ok=True)
+
+    results = []
+    for i, cfg in enumerate(tops):
+        seeds = [1000 + i*10 + s for s in range(args.extra_seeds)]
+        vals = []
+        for s in seeds:
+            rc = run_once(args.mm, args.program, args.subcmd, cfg, s,
+                          args.unlabeled, args.labeled, args.log_dir,
+                          args.project, args.group)
+            # after the run, you could read the metric from W&B; here we assume train_jepa.py writes best val to a file or W&B;
+            # to keep this self-contained, we re-fetch the last matching run (same group + tags would be best).
+            # Minimal: refetch on metric for runs in the same project/group with matching cfg+seed.
+            time.sleep(1)
+
+        # Fetch metrics again
+        # fetch from project+group (includes recheck runs; sweeps would miss them)
+        entity = os.getenv("WANDB_ENTITY")
+        proj_path = f"{entity}/{args.project}" if entity and args.project else None
+        runs = []
+        if proj_path:
+            runs = list(api.runs(proj_path, filters={"group": args.group}))
+        for r in runs:
+            ok = True
+            for k,v in cfg.items():
+                if r.config.get(k) != v:
+                    ok=False; break
+            if ok and (r.config.get("seed") in seeds):
+                mv = metric_of(r, args.metric)
+                if mv is not None:
+                    vals.append(float(mv))
+
+        if vals:
+            mu = float(np.mean(vals)); lo, hi = ci95(vals)
+            results.append({"index": i, "mean": mu, "ci95": [lo,hi], "n": len(vals), "config": cfg})
+        else:
+            results.append({"index": i, "mean": None, "ci95": [None,None], "n": 0, "config": cfg})
+
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump({"metric": args.metric, "direction": args.direction,
+                   "topk": args.topk, "extra_seeds": args.extra_seeds,
+                   "results": results}, f, indent=2)
+
+if __name__ == "__main__":
+    main()

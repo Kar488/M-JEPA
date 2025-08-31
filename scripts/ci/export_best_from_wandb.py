@@ -143,31 +143,40 @@ def main():
     PROJECT  = need_env("WANDB_PROJECT")
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--sweep_id",
+    ap.add_argument("--sweep_id", "--sweep-id", dest="sweep_id",
                     help="entity/project/sweepid to read from; "
                          "defaults to $WANDB_ENTITY/$WANDB_PROJECT/$WANDB_SWEEP_ID1")
-    ap.add_argument("--out", default=os.path.join(GRID_DIR, "best_grid_config.json"),
-                    help="Write best run CONFIG to this JSON (default: $GRID_DIR/best_grid_config.json)")
-    ap.add_argument("--phase2_yaml", default=os.path.join(APP_DIR, "sweeps", "grid_sweep_phase2.yaml"),
+    ap.add_argument("--out", "--out-csv", dest="out",
+                default=os.path.join(GRID_DIR, "best_grid_config.json"),
+                help="Write best run CONFIG to this JSON")
+    ap.add_argument("--phase2_yaml", "--phase2-yaml", dest="phase2_yaml",
+                    default=os.path.join(APP_DIR, "sweeps", "grid_sweep_phase2.yaml"),
                     help="Emit/overwrite Phase-2 sweep YAML here (default: $APP_DIR/sweeps/grid_sweep_phase2.yaml)")
+    # phase-2 data roots (externalizable via CI YAML/env)
+    ap.add_argument("--phase2_unlabeled_dir", "--phase2-unlabeled-dir",
+                    dest="phase2_unlabeled_dir",
+                    default=os.path.join(APP_DIR, "data", "ZINC-canonicalized"))
+    ap.add_argument("--phase2_labeled_dir", "--phase2-labeled-dir",
+                    dest="phase2_labeled_dir",
+                    default=os.path.join(APP_DIR, "data", "katielinkmoleculenet_benchmark", "train"))
 
     # selection behavior
-    ap.add_argument("--task", choices=["auto","regression","classification"], default="auto")
-    ap.add_argument("--tie_eps", type=float, default=0.01)
+    ap.add_argument("--task", "--task-type", dest="task", choices=["auto","regression","classification"], default="auto")
+    ap.add_argument("--tie_eps", "--tie-eps", dest="tie_eps", type=float, default=0.01)
 
     # metric names (override if logs differ)
-    ap.add_argument("--reg_primary", default="val_rmse")
-    ap.add_argument("--reg_tb1",     default="val_mae")
-    ap.add_argument("--clf_primary", default="val_auc")
-    ap.add_argument("--clf_tb1",     default="val_brier")
-    ap.add_argument("--clf_tb2",     default="val_pr_auc")
+    ap.add_argument("--reg_primary", "--reg-primary", dest="reg_primary", default="val_rmse")
+    ap.add_argument("--reg_tb1", "--reg-tb1",  dest="reg_tb1", default="val_mae")
+    ap.add_argument("--clf_primary", "--clf-primary", dest="clf_primary", default="val_auc")
+    ap.add_argument("--clf_tb1", "--clf-tb1", dest="clf_tb1", default="val_brier")
+    ap.add_argument("--clf_tb2", "--clf-tb2", dest="clf_tb2", default="val_pr_auc")
 
     # Phase-2 derivation
-    ap.add_argument("--emit_bounds", action="store_true",
+    ap.add_argument("--emit_bounds", "--emit-bounds", dest="emit_bounds", action="store_true",
                     help="Also derive top-K bounds and update Phase-2 YAML")
-    ap.add_argument("--topk", type=int, default=20)
-    ap.add_argument("--phase2_method", default="bayes", choices=["bayes","random"])
-    ap.add_argument("--phase2_metric", default=None,
+    ap.add_argument("--topk", "--top-k", dest="topk", type=int, default=20)
+    ap.add_argument("--phase2_method", "--phase2-method", dest="phase2_method", default="bayes", choices=["bayes","random"])
+    ap.add_argument("--phase2_metric", "--phase2-metric", dest="phase2_metric", default=None,
                     help="Override Phase-2 metric name; defaults to task primary")
 
     args = ap.parse_args()
@@ -255,11 +264,37 @@ def main():
         phase2_metric_name = args.phase2_metric or primary
         phase2_goal        = "maximize" if maximize else "minimize"
 
+        # Clean Phase-2 space to match JEPA-only Bayes with ranges
+
+        # --- Phase-2 policy tweaks to match JEPA-only Bayes with ranges ---
+        # --- Winner-aware Phase-2 policy (JEPA or Contrastive) with ranges ---
+        # Winner comes from env (set by run-grid after paired-effect); default to JEPA.
+        winner = os.environ.get("METHOD_WINNER", "jepa")
+
+        # If JEPA won, drop contrastive-only knobs (aug_* and temperature).
+        # If Contrastive won, keep them (and optionally drop JEPA-only knobs if you add any later).
+        if winner == "jepa":
+            for k in list(params.keys()):
+                if k.startswith("aug_") or k in ("temperature", "seed", "seeds"):
+                    params.pop(k, None)
+
+        # Suggest distributions for continuous ranges so Bayes can interpolate well.
+        if isinstance(params.get("mask_ratio"), dict) and "min" in params["mask_ratio"]:
+            params["mask_ratio"].setdefault("distribution", "uniform")
+        if isinstance(params.get("learning_rate"), dict) and "min" in params["learning_rate"]:
+            params["learning_rate"].setdefault("distribution", "log_uniform")
+
+        # JEPA or Contrastive per Phase-1 winner
+        training_method_param = {"value": winner}
+
+        # Early termination to speed up Bayes search
+        early_terminate_cfg = {"type": "hyperband", "min_iter": 3}
+
         # Initialise optional W&B run for grid search
         wb = maybe_init_wandb(
             use=True,
             project=os.environ.get("WANDB_PROJECT", PROJECT),
-            group=os.environ.get("WANDB_RUN_GROUP"),      # ← your PIPELINE_ID from stage.sh
+            group=os.environ.get("WANDB_RUN_GROUP"),
             tags=["export_best"],
             config={
                 "sweep_id": sweep_id,
@@ -276,25 +311,38 @@ def main():
             "program": "${env:APP_DIR}/scripts/train_jepa.py",
             "command": [
                 "${interpreter}", "${program}", "sweep-run",
-                "--unlabeled-dir", "${env:APP_DIR}/data/ZINC-canonicalized",
-                "--labeled-dir",  "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train",
+                "--unlabeled-dir", args.phase2_unlabeled_dir,
+                 "--labeled-dir",   args.phase2_labeled_dir,
                 "${args}"
             ],
-            "method": args.phase2_method,
+            "method": args.phase2_method,                 # expect "bayes"
             "metric": {"name": phase2_metric_name, "goal": phase2_goal},
+            "early_terminate": early_terminate_cfg,       # optional (matches pic)
             "parameters": {
-                "training_method": {"values": ["jepa","contrastive"]},
+                "training_method": training_method_param, # JEPA or Contrastive (winner)
                 **params
             }
         }
 
         # log the winner to the run’s summary (one-shot; no step noise)
-        wb and wb.summary.update({
-            "best_run_name": best.name,
-            "best_run_id":   best.id,
-            primary:         float(metric(best, primary)),
-            **{n: metric(best, n) for (n, _mx) in tiebreakers if metric(best, n) is not None},
-        })
+        # one-shot summary on this export step's run
+        if wb:
+            s = {
+                "best_run_name": best.name,
+                "best_run_id":   best.id,
+            }
+            pv = metric(best, primary)
+            if pv is not None:
+                s[primary] = float(pv)
+            for n, _mx in tiebreakers:
+                v = metric(best, n)
+                if v is not None:
+                    # try float; fall back to str for non-numeric types
+                    try: s[n] = float(v)
+                    except Exception: s[n] = str(v)
+
+            wb.summary.update(s)
+            wb.finish()
 
         os.makedirs(os.path.dirname(args.phase2_yaml) or ".", exist_ok=True)
         with open(args.phase2_yaml, "w", encoding="utf-8") as f:

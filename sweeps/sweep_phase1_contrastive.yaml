@@ -1,0 +1,39 @@
+program: scripts/train_jepa.py
+command: [${interpreter}, ${program}, sweep-run, ${args}]
+
+method: random
+metric: {name: val_rmse, goal: minimize}
+early_terminate: {type: hyperband, min_iter: 3}
+
+parameters:
+  labeled_dir:   {value: "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train"}
+  unlabeled_dir: {value: "${env:APP_DIR}/data/ZINC-canonicalized"}
+
+  training_method: {value: contrastive}
+
+  # shared hparams
+  hidden_dim:           {values: [128, 256]}
+  num_layers:           {values: [2, 3]}
+  gnn_type:             {values: [gcn, gat, mpnn, edge_mpnn]}
+  ema_decay:            {values: [0.99, 0.996, 0.998]}
+  add_3d:               {values: [0, 1]}
+  pretrain_batch_size:  {values: [64, 128, 256]}
+  pretrain_epochs:      {values: [10, 20, 30]}
+  learning_rate:        {values: [0.0003, 0.0001]}
+  mask_ratio:           {values: [0.15, 0.30, 0.50]}
+  contiguity:           {values: [0, 1]}
+
+  # contrastive-only knobs
+  temperature:          {values: [0.07, 0.1, 0.2]}
+  aug_rotate:           {values: [0, 1]}
+  aug_mask_angle:       {values: [0, 1]}
+  aug_dihedral:         {values: [0, 1]}
+  aug_bond_deletion:    {values: [0, 1]}
+  aug_atom_masking:     {values: [0, 1]}
+  aug_subgraph_removal: {values: [0, 1]}
+
+  seed:                 {values: [1, 2, 3]}
+  task_type:            {value: regression}
+  label_col:            {value: "measured log solubility in mols per litre"}
+  sample_unlabeled:     {value: 10000}
+  sample_labeled:       {value: 1000}
