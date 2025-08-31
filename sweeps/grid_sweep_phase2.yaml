@@ -1,6 +1,6 @@
 program: "${env:APP_DIR}/scripts/train_jepa.py"
 command:
-  - "${interpreter}"
+  - "python"
   - "${program}"
   - "sweep-run"
   - "${args}"
