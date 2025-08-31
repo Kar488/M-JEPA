@@ -4,7 +4,7 @@ command:
   - "${program}"
   - "sweep-run"
   - "${args}"
-  
+
 method: random
 metric:
   name: val_rmse
@@ -13,26 +13,27 @@ metric:
 parameters:
   # dataset roots
   unlabeled-dir: { value: "${env:APP_DIR}/data/ZINC-canonicalized" }
-  labeled-dir:   { value: "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train" }
+  labeled-dir:
+    { value: "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train" }
 
   # Contrastive only in this sweep
   training_method: { value: contrastive }
 
   # ---- pairing guarantee (identical to JEPA file) ----
-  pair_id: { values: [0,1,2,3,4,5,6,7,8,9] }
-  seed:    { values: [0,1] }
+  pair_id: { values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] }
+  seed: { values: [0, 1] }
 
   # core hparams (contrastive)
-  contiguity:  { values: [0, 1] }
-  hidden_dim:  { values: [128, 256] }
-  num_layers:  { values: [2, 3] }
-  gnn_type:    { values: [gcn, gat, mpnn, edge_mpnn] }
-  add_3d:      { values: [0, 1] }
+  contiguity: { values: [0, 1] }
+  hidden_dim: { values: [128, 256] }
+  num_layers: { values: [2, 3] }
+  gnn_type: { values: [gcn, gat, mpnn, edge_mpnn] }
+  add_3d: { values: [0, 1] }
 
   pretrain_batch_size: { values: [64, 128, 256] }
   finetune_batch_size: { values: [256] }
-  pretrain_epochs:     { values: [10, 20, 30] }
-  finetune_epochs:     { values: [1] }
+  pretrain_epochs: { values: [10, 20, 30] }
+  finetune_epochs: { values: [1] }
   learning_rate:
     min: 1.0e-4
     max: 1.0e-2
@@ -43,15 +44,15 @@ parameters:
   label_col: { value: "measured log solubility in mols per litre" }
 
   # geometric + structural augs (contrastive)
-  aug_rotate:           { values: [0, 1] }
-  aug_mask_angle:       { values: [0, 1] }
-  aug_dihedral:         { values: [0, 1] }
-  aug_bond_deletion:    { values: [0, 1] }
-  aug_atom_masking:     { values: [0, 1] }
+  aug_rotate: { values: [0, 1] }
+  aug_mask_angle: { values: [0, 1] }
+  aug_dihedral: { values: [0, 1] }
+  aug_bond_deletion: { values: [0, 1] }
+  aug_atom_masking: { values: [0, 1] }
   aug_subgraph_removal: { values: [0, 1] }
 
   sample_unlabeled: { value: 10000 }
-  sample_labeled:   { value: 1000 }
+  sample_labeled: { value: 1000 }
 
 early_terminate:
   type: hyperband
