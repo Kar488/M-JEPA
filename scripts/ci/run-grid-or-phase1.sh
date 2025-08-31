@@ -58,12 +58,19 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     sanitize_yaml "$JEPA_SPEC"
     JEPA_ID=$(
   "$MMBIN" run -n mjepa env \
-    JEPA_SPEC="$JEPA_SPEC" \
+    APP_DIR="$APP_DIR" JEPA_SPEC="$JEPA_SPEC" \
     WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
     python - <<'PY' | tail -n1 | tr -d '\r\n '
 import os, yaml, wandb
+app = os.environ["APP_DIR"]
 with open(os.environ["JEPA_SPEC"], "r") as f:
     spec = yaml.safe_load(f)
+
+# Force absolute program + explicit command
+spec["program"] = os.path.join(app, "scripts", "train_jepa.py")
+spec["command"] = ["python", spec["program"], "sweep-run", "${args}"]
+
+print("[JEPA command]", " ".join(spec["command"]))
 sid = wandb.sweep(spec, project=os.environ["WANDB_PROJECT"], entity=os.environ["WANDB_ENTITY"])
 print(sid)
 PY
@@ -76,12 +83,18 @@ PY
     sanitize_yaml "$CONTRAST_SPEC"
     CONTRAST_ID=$(
   "$MMBIN" run -n mjepa env \
-    CONTRAST_SPEC="$CONTRAST_SPEC" \
+    APP_DIR="$APP_DIR" CONTRAST_SPEC="$CONTRAST_SPEC" \
     WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
     python - <<'PY' | tail -n1 | tr -d '\r\n '
 import os, yaml, wandb
+app = os.environ["APP_DIR"]
 with open(os.environ["CONTRAST_SPEC"], "r") as f:
     spec = yaml.safe_load(f)
+
+spec["program"] = os.path.join(app, "scripts", "train_jepa.py")
+spec["command"] = ["python", spec["program"], "sweep-run", "${args}"]
+
+print("[CTR command]", " ".join(spec["command"]))
 sid = wandb.sweep(spec, project=os.environ["WANDB_PROJECT"], entity=os.environ["WANDB_ENTITY"])
 print(sid)
 PY
