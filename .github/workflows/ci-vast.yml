@@ -260,12 +260,12 @@ jobs:
           KILL_AFTER_SECS: 120
           WANDB_COUNT: 5
           GRID_MODE: "wandb"   # or "custom"
-          JEPA_SWEEP_SPEC: "${{ env.APP_DIR }}/sweeps/sweep_phase1_jepa.yaml"
-          CONTRAST_SWEEP_SPEC: "${{ env.APP_DIR }}/sweep/sweep_phase1_contrastive.yaml"
-          EXPORT_OUT_PATH: "${{ env.GRID_DIR }}/best_grid_config.json"
-          EXPORT_PHASE2_PATH: "${{ env.APP_DIR }}/sweeps/grid_sweep_phase2.yaml"
-          PHASE2_UNLABELED_DIR: "${{ env.APP_DIR }}/data/ZINC-canonicalized"
-          PHASE2_LABELED_DIR:  "${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train"
+          JEPA_SWEEP_SPEC: /srv/mjepa/sweeps/sweep_phase1_jepa.yaml
+          CONTRAST_SWEEP_SPEC: /srv/mjepa/sweeps/sweep_phase1_contrastive.yaml
+          EXPORT_OUT_PATH: /data/mjepa/experiments/${{ env.GRID_DIR }}/best_grid_config.json
+          EXPORT_PHASE2_PATH: /srv/mjepa/sweeps/grid_sweep_phase2.yaml
+          PHASE2_UNLABELED_DIR: /srv/mjepa/data/ZINC-canonicalized
+          PHASE2_LABELED_DIR:  /srv/mjepa/data/katielinkmoleculenet_benchmark/train
         
 
   vast_sweep_phase2:
