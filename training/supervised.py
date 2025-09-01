@@ -10,11 +10,10 @@ possible. Performance metrics are computed using utilities from
 
 from __future__ import annotations
 
-import random
-from typing import Dict, List, Optional, Tuple
-import time as _time
-
 import logging
+import random
+import time as _time
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -24,11 +23,13 @@ import torch.nn.functional as F
 from data.mdataset import GraphDataset
 from data.scaffold_split import scaffold_split_indices
 from models.encoder import GNNEncoder
+from utils.early_stopping import EarlyStopping
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.pooling import global_mean_pool
-from utils.early_stopping import EarlyStopping
 
 logger = logging.getLogger(__name__)
+
+__all__ = ["stratified_split", "train_linear_head"]
 
 # Test harness supprt
 def _simple_pack_batch(dataset, batch_indices, task_type: str):
