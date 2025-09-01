@@ -28,6 +28,8 @@ import logging
 import os
 import sys
 import time
+import json
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -534,20 +536,107 @@ if _REPO_ROOT not in sys.path:
 
 # --- command implementations (package first, fallback to local sibling) ---
 try:
-    from scripts.commands.sweep_run import cmd_sweep_run
-    from scripts.commands.grid_search import cmd_grid_search
-    from scripts.commands.pretrain import cmd_pretrain
-    from scripts.commands.finetune import cmd_finetune
-    from scripts.commands.benchmark import cmd_benchmark
-    from scripts.commands.tox21 import cmd_tox21
+    from scripts.commands import (
+        sweep_run as _sweep_run,
+        grid_search as _grid_search,
+        pretrain as _pretrain,
+        finetune as _finetune,
+        benchmark as _benchmark,
+        tox21 as _tox21,
+    )
 except ModuleNotFoundError:
     # running as a plain script (no package context)
-    from commands.sweep_run import cmd_sweep_run
-    from commands.grid_search import cmd_grid_search
-    from commands.pretrain import cmd_pretrain
-    from commands.finetune import cmd_finetune
-    from commands.benchmark import cmd_benchmark
-    from commands.tox21 import cmd_tox21
+    from commands import (
+        sweep_run as _sweep_run,
+        grid_search as _grid_search,
+        pretrain as _pretrain,
+        finetune as _finetune,
+        benchmark as _benchmark,
+        tox21 as _tox21,
+    )
+
+
+evaluate_finetuned_head = _finetune.evaluate_finetuned_head
+
+
+def _inject_shared(m):
+    """Inject shared utilities into a command module.
+
+    This keeps the lightweight command modules decoupled while allowing
+    unit tests to monkeypatch functions on ``scripts.train_jepa`` and have
+    those patched versions used inside the command implementations.
+    """
+
+    m.logger = logger
+    m.load_directory_dataset = load_directory_dataset
+    m.build_encoder = build_encoder
+    m.MLPPredictor = MLPPredictor
+    m.EMA = EMA
+    m.train_jepa = train_jepa
+    m.train_contrastive = train_contrastive
+    m.train_linear_head = train_linear_head
+    m.run_tox21_case_study = run_tox21_case_study
+    m.run_grid_search = run_grid_search
+    m.maybe_init_wandb = maybe_init_wandb
+    m.plot_training_curves = plot_training_curves
+    m.resolve_device = resolve_device
+    m.aggregate_metrics = aggregate_metrics
+    m.CONFIG = CONFIG
+    m.DEFAULT_AUG = DEFAULT_AUG
+    m._maybe_to = _maybe_to
+    m._iter_params = _iter_params
+    m._safe_load_checkpoint = _safe_load_checkpoint
+    m._load_state_dict_forgiving = _load_state_dict_forgiving
+    m._maybe_labels = _maybe_labels
+    m._infer_num_classes = _infer_num_classes
+    m._maybe_state_dict = _maybe_state_dict
+    m.os = os
+    m.sys = sys
+    m.np = np
+    m.torch = torch
+    m.random = random
+    m.json = json
+    m.time = time
+    m.evaluate_finetuned_head = evaluate_finetuned_head
+    m.iter_augmentation_options = iter_augmentation_options
+    m.AugmentationConfig = AugmentationConfig
+    m.build_linear_head = build_linear_head
+
+
+def cmd_sweep_run(args: argparse.Namespace) -> None:
+    _inject_shared(_sweep_run)
+    _sweep_run.cmd_sweep_run(args)
+
+
+def cmd_grid_search(args: argparse.Namespace) -> None:
+    _inject_shared(_grid_search)
+    _grid_search.cmd_grid_search(args)
+
+
+def cmd_pretrain(args: argparse.Namespace) -> None:
+    _inject_shared(_pretrain)
+    _pretrain.cmd_pretrain(args)
+
+
+def cmd_finetune(args: argparse.Namespace) -> None:
+    _inject_shared(_finetune)
+    _finetune.cmd_finetune(args)
+
+
+def cmd_evaluate(args: argparse.Namespace) -> None:
+    # The evaluate command shares the finetune implementation.
+    # Calling our wrapper ensures any monkeypatched dependencies are used.
+    cmd_finetune(args)
+
+
+def cmd_benchmark(args: argparse.Namespace) -> None:
+    _inject_shared(_benchmark)
+    _benchmark.cmd_benchmark(args)
+
+
+def cmd_tox21(args: argparse.Namespace) -> None:
+    _inject_shared(_tox21)
+    _tox21.cmd_tox21(args)
 
 # --- W&B helpers (same pattern) ---
 try:
