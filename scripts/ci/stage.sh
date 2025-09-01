@@ -189,6 +189,17 @@ run_with_timeout() {
   else
     ensure_micromamba
 
+    # ensure the binary is callable in this subshell
+    export PATH="${MAMBA_ROOT_PREFIX}/bin:${PATH}"
+    : "${MMBIN:=${MAMBA_ROOT_PREFIX}/bin/micromamba}"
+    if [[ "$(basename "$MMBIN")" = "micromamba" && ! "$MMBIN" = /* ]]; then
+      MMBIN="${MAMBA_ROOT_PREFIX}/bin/micromamba"
+    fi
+    if [[ ! -x "$MMBIN" ]]; then
+      echo "[wandb_agent][fatal] micromamba not found at $MMBIN" >&2
+      exit 1
+    fi
+
    # --- ensure logging + ids are sane ---
     mkdir -p "$LOG_DIR"
     LOG="${LOG_DIR}/${s}.log"
@@ -212,7 +223,7 @@ run_with_timeout() {
 
     timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
       "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-      python -m wandb agent --count ${WANDB_COUNT:-50} "$SWEEP_ID" \
+      python -m wandb agent --count ${WANDB_COUNT:-50} "$SID" \
       2>&1 | tee "$LOG"
 
     rc=$?

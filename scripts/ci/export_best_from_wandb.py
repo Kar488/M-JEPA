@@ -292,9 +292,8 @@ def main():
 
         # Initialise optional W&B run for grid search
         wb = maybe_init_wandb(
-            use=True,
+            enable=True,
             project=os.environ.get("WANDB_PROJECT", PROJECT),
-            group=os.environ.get("WANDB_RUN_GROUP"),
             tags=["export_best"],
             config={
                 "sweep_id": sweep_id,
@@ -303,8 +302,9 @@ def main():
                 "phase2_emit_bounds": bool(args.emit_bounds),
                 "phase2_method": args.phase2_method,
                 "phase2_metric": args.phase2_metric or "",
-                # anything else you want as metadata…
+                # anything else we want as metadata…
             },
+            api_key=os.environ.get("WANDB_API_KEY"),
         )
 
         spec = {
