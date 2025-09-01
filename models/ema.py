@@ -7,9 +7,13 @@ changing target encoder in self‑supervised JEPA training.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+from typing import Optional
+
 import torch
 import torch.nn as nn
-from typing import Optional
+
+_NO_GRAD = getattr(torch, "no_grad", lambda: nullcontext())
 
 
 class EMA:
@@ -42,34 +46,34 @@ class EMA:
             buf = buf.to(p.device)
             self.params.append(buf)
 
-    @torch.no_grad()
     def update(self, model: nn.Module) -> None:
         """Update EMA parameters given the source model."""
-        for i, p in enumerate(model.parameters()):
-            if not p.requires_grad:
-                continue
-            ema_p = self.params[i]
-            # Ensure device/dtype match for the update
-            if ema_p.device != p.device:
-                ema_p = ema_p.to(p.device)
-                self.params[i] = ema_p
-            src = p.detach()
-            if self.use_fp32:
-                src = src.to(torch.float32)
-            else:
-                src = src.to(ema_p.dtype)
-            # ema = decay*ema + (1-decay)*param  (stable in-place)
-            ema_p.lerp_(src, float(1.0 - float(self.decay)))
+        with _NO_GRAD():
+            for i, p in enumerate(model.parameters()):
+                if not p.requires_grad:
+                    continue
+                ema_p = self.params[i]
+                # Ensure device/dtype match for the update
+                if ema_p.device != p.device:
+                    ema_p = ema_p.to(p.device)
+                    self.params[i] = ema_p
+                src = p.detach()
+                if self.use_fp32:
+                    src = src.to(torch.float32)
+                else:
+                    src = src.to(ema_p.dtype)
+                # ema = decay*ema + (1-decay)*param  (stable in-place)
+                ema_p.lerp_(src, float(1.0 - float(self.decay)))
  
 
-    @torch.no_grad()
     def copy_to(self, model: nn.Module) -> None:
         """Copy EMA parameters into the target model."""
-        for p, ema_p in zip(model.parameters(), self.params):
-            p.data.copy_(ema_p.to(p.dtype).to(p.device))
+        with _NO_GRAD():
+            for p, ema_p in zip(model.parameters(), self.params):
+                p.data.copy_(ema_p.to(p.dtype).to(p.device))
 
-    @torch.no_grad()
     def to(self, device: torch.device) -> None:
         """Move EMA buffers to a device."""
-        for i, ema_p in enumerate(self.params):
-            self.params[i] = ema_p.to(device)
+        with _NO_GRAD():
+            for i, ema_p in enumerate(self.params):
+                self.params[i] = ema_p.to(device)
