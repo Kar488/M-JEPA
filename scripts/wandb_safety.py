@@ -23,12 +23,13 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
 
     if maybe_init_wandb is not None:
         run = maybe_init_wandb(
-            use=True,
+            enable=True,
             project=os.getenv("WANDB_PROJECT", "mjepa"),
-            group=os.getenv("WANDB_RUN_GROUP"),
-            job_type="sweep-run",
-            tags=["sweep-run"],
             config=vars(args) if args is not None else None,
+            #group=os.getenv("WANDB_RUN_GROUP"),
+            #job_type="sweep-run",
+            tags=["sweep-run"],
+            
         )
         if run is not None:
             return run
