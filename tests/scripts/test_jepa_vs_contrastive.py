@@ -1,11 +1,13 @@
 import numpy as np
 import pytest
+from __future__ import annotations
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("rdkit")
 
 from models.ema import EMA
 from training.unsupervised import train_jepa, train_contrastive
+
 
 # Runtime import: needed because we *instantiate* GraphDataset
 from data.mdataset import GraphDataset, GraphData
