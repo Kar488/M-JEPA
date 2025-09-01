@@ -24,20 +24,19 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
     if maybe_init_wandb is not None:
         run = maybe_init_wandb(
             enable=True,
-            project=os.getenv("WANDB_PROJECT", "mjepa"),
+            project=os.getenv("WANDB_PROJECT", "m-jepa"),
             config=vars(args) if args is not None else None,
             #group=os.getenv("WANDB_RUN_GROUP"),
             #job_type="sweep-run",
             tags=["sweep-run"],
-            
+            api_key=os.getenv("WANDB_API_KEY"),   
         )
-        if run is not None:
-            return run
-
+        return getattr(wandb, "run", None)
+        
     # hard fallback
     try:
         run = wandb.init(
-            project=os.getenv("WANDB_PROJECT", "mjepa"),
+            project=os.getenv("WANDB_PROJECT", "m-jepa"),
             group=os.getenv("WANDB_RUN_GROUP"),
             job_type="sweep-run",
             config=vars(args) if args is not None else None,
@@ -54,12 +53,16 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
     if run is None:
         return
     with contextlib.suppress(Exception):
-        # val_rmse aliasing
-        if payload.get("val_rmse") is None:
-            for k in ("rmse_mean", "probe_rmse_mean"):
-                if k in payload and payload[k] is not None:
-                    run.summary["val_rmse"] = float(payload[k])
-                    break
+        # resolve RMSE and publish both to history and summary
+        v = payload.get("val_rmse")
+        if v is None:
+            for k in ("rmse_mean", "rmse", "probe_rmse_mean"):
+                 if payload.get(k) is not None:
+                     v = float(payload[k]); break
+        if v is not None:
+            wandb.log({"val_rmse": float(v)})
+            run.summary["val_rmse"] = float(v)
+
         # val_mae aliasing
         if "val_mae" not in payload and "mae_mean" in payload and payload["mae_mean"] is not None:
             run.summary["val_mae"] = float(payload["mae_mean"])
