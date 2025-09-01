@@ -33,7 +33,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         "atom_masking":      _b(G("aug_atom_masking", 0)),
         "subgraph_removal":  _b(G("aug_subgraph_removal", 0)),
     }
-    print("[sweep-run] args: " + json.dumps(vars(args), sort_keys=True, default=str))
+    #print("[sweep-run] args: " + json.dumps(vars(args), sort_keys=True, default=str))
 
     # Build config object
     cfg = Config(
@@ -121,19 +121,18 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         bf16=bool(int(getattr(args, "bf16", 0))),
     )
 
-    # tolerate different return conventions
-    if not isinstance(row, dict):
-        # if the training function returns just a float, wrap it
-        try:
-            print("[sweep-run] final keys:", list(row.keys()))
-            print("[sweep-run] val_rmse candidates:", {k: row.get(k) for k in ("val_rmse","rmse_mean","rmse","probe_rmse_mean")})
-            row = {"val_rmse": float(row)}
-        except Exception:
-            print("could not get a row for val_rmse to log")
-            row = {}
-
+    # --- normalize result into a payload dict for W&B summary update ---
+    if isinstance(row, dict):
+        payload = row
+    elif isinstance(row, (float, int)):
+        payload = {"val_rmse": float(row)} 
+    else:
+        # tuple like (metrics, artifacts), or None; grab the first dict if present
+        if isinstance(row, tuple) and row and isinstance(row[0], dict):
+            payload = row[0]
+        else:
+            payload = {}
     
-
-    _wb_summary_update(row)
+    _wb_summary_update(payload)
     _wb_finish_safely()
 

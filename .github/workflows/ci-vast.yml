@@ -258,7 +258,7 @@ jobs:
         env:
           HARD_WALL_MINS: 300
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 5
+          WANDB_COUNT: 2
           GRID_MODE: "wandb"   # or "custom"
           JEPA_SWEEP_SPEC: /srv/mjepa/sweeps/sweep_phase1_jepa.yaml
           CONTRAST_SWEEP_SPEC: /srv/mjepa/sweeps/sweep_phase1_contrastive.yaml
@@ -293,7 +293,7 @@ jobs:
            # agent knobs (already have these)
           HARD_WALL_MINS: 600
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 10
+          WANDB_COUNT: 4
           # recheck knobs (separate budget)
           TOPK_RECHECK: 5
           EXTRA_SEEDS: 3

@@ -34,9 +34,16 @@ class EdgeMPNNLayer(nn.Module):
     ) -> torch.Tensor:
         # edge_index: [2, E], directed (j -> i)
         i_idx, j_idx = edge_index[0], edge_index[1]
+
+        # Ensure consistent dtype under autocast (msg() may yield fp16/bf16)
+        if edge_attr.dtype != x.dtype:
+            edge_attr = edge_attr.to(x.dtype)
+
         # messages
         m_in = torch.cat([x[i_idx], x[j_idx], edge_attr], dim=-1)  # [E, 2*D + F]
         m_ij = self.msg(m_in)  # [E, H]
+        if m_ij.dtype != x.dtype:
+            m_ij = m_ij.to(x.dtype)
 
         # aggregate by target index i
         agg = torch.zeros(x.size(0), m_ij.size(1), device=x.device, dtype=x.dtype)
@@ -76,14 +83,14 @@ class EdgeGNNEncoder(EncoderBase):
 
 
     def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
-        x = _to_tensor(g.x, dtype=torch.float32, device=device)  # [N, Din]
+        x = _to_tensor(g.x, device=device)      
         e = _to_tensor(g.edge_index, dtype=torch.long, device=device)  # [2, E]
         edge_attr = getattr(g, "edge_attr", None)
         if edge_attr is None:
-             raise ValueError(
-                "edge_attr is required for EdgeGNNEncoder (set add_3d=True in dataset to get bond lengths)."
-            )
-        a = _to_tensor(edge_attr, dtype=torch.float32, device=device)  # [E, Fe]
+            # No edge features → use a zero-width matrix [E, 0]
+            a = torch.zeros((e.size(1), 0), dtype=x.dtype, device=device)
+        else:
+            a = _to_tensor(edge_attr, dtype=x.dtype, device=device)
         x = self.proj(x)
         for layer in self.layers:
             x = layer(x, e, a)

@@ -57,12 +57,14 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     # run JEPA agents (serial on 1 GPU; change CUDA_VISIBLE_DEVICES to fan out)
     export SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
     echo "[phase1] JEPA → $SWEEP_ID"
+    echo "Count → $WANDB_COUNT"
     : "${WANDB_COUNT:=30}"
     run_with_timeout wandb_agent || exit 1
 
     # run Contrastive agents
     export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
     echo "[phase1] Contrastive → $SWEEP_ID"
+    echo "Count → $WANDB_COUNT"
     : "${WANDB_COUNT:=30}"
     run_with_timeout wandb_agent || exit 1
     

@@ -54,3 +54,4 @@ experiments/__pycache__/grid_search.cpython-312.pyc
 outputs/grid_ckpts/jepa/jepa_ep0002.pt
 outputs/small_grid_results.csv
 data/tmp_small.parquet
+logs/wb_last_payload.json

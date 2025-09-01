@@ -1,7 +1,14 @@
 # scripts/mjepa/wandb_safety.py
 from __future__ import annotations
-from typing import Optional, Dict, Any
-import os, contextlib
+from typing import Optional, Dict, Any, TYPE_CHECKING
+import os, contextlib, json, time, pathlib
+
+if TYPE_CHECKING:
+    from wandb.sdk.wandb_run import Run  # for the Optional["Run"] annotation
+
+DEBUG = os.getenv("WBS_DEBUG", "1") == "1"
+def _dbg(*a):
+    if DEBUG: print("[wandb_safety]", *a)
 
 def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
     """Ensure there is an active wandb run for sweep-run. Returns a run or None."""
@@ -13,6 +20,7 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
 
     # respect disable flags
     if os.getenv("WANDB_MODE") == "disabled" or os.getenv("WANDB_DISABLED") in {"true", "1"}:
+        _dbg("WANDB disabled by env; skipping init")
         return None
 
     # prefer shared helper if present
@@ -34,6 +42,7 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
         return getattr(wandb, "run", None)
         
     # hard fallback
+    _dbg("fallback wandb.init(...)")
     try:
         run = wandb.init(
             project=os.getenv("WANDB_PROJECT", "m-jepa"),
@@ -42,8 +51,10 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
             config=vars(args) if args is not None else None,
             reinit=True,
         )
+        _dbg("wandb.init -> run id:", getattr(run, "id", None))
         return run
     except Exception:
+        _dbg("wandb.init raised; using wandb.run if present")
         return getattr(wandb, "run", None)
 
 def wb_summary_update(payload: Dict[str, Any]) -> None:
@@ -51,22 +62,40 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
     import wandb
     run = getattr(wandb, "run", None)
     if run is None:
+        _dbg("wb_summary_update: no active run; skipping. keys=", list(payload.keys()))
         return
-    with contextlib.suppress(Exception):
-        # resolve RMSE and publish both to history and summary
+    # persist last payload to help debugging
+    try:
+        log_dir = os.getenv("LOG_DIR") or "./logs"
+        pathlib.Path(log_dir).mkdir(parents=True, exist_ok=True)
+        with open(os.path.join(log_dir, "wb_last_payload.json"), "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, default=str)
+    except Exception as e:
+        _dbg("could not write wb_last_payload.json:", e)
+
+    try:
+        # resolve RMSE candidate
+        v_key = None
         v = payload.get("val_rmse")
         if v is None:
             for k in ("rmse_mean", "rmse", "probe_rmse_mean"):
-                 if payload.get(k) is not None:
-                     v = float(payload[k]); break
+                if payload.get(k) is not None:
+                    v_key, v = k, float(payload[k])
+                    break
         if v is not None:
+            _dbg(f"logging val_rmse={v} (from key={v_key or 'val_rmse'})")
             wandb.log({"val_rmse": float(v)})
             run.summary["val_rmse"] = float(v)
+        else:
+            _dbg("no RMSE candidate in payload; keys=", list(payload.keys()))
 
         # val_mae aliasing
-        if "val_mae" not in payload and "mae_mean" in payload and payload["mae_mean"] is not None:
+        if "val_mae" not in payload and payload.get("mae_mean") is not None:
             run.summary["val_mae"] = float(payload["mae_mean"])
+
         run.summary.update(payload)
+    except Exception as e:
+       _dbg("wb_summary_update exception:", e)
 
 def wb_finish_safely() -> None:
     with contextlib.suppress(Exception):

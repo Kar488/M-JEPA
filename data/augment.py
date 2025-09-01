@@ -512,10 +512,11 @@ def apply_graph_augmentations(
 
 
 def _clone_graph(g: GraphData) -> GraphData:
+    ea = getattr(g, "edge_attr", None)
     return GraphData(
         x=g.x.copy(),
         edge_index=g.edge_index.copy(),
-        edge_attr=None if g.edge_attr is None else g.edge_attr.copy(),
+        edge_attr=None if ea is None else ea.copy(),
     )
 
 
