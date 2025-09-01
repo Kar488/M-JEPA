@@ -1,31 +1,13 @@
 import argparse
-import sys
-import types
+
 import numpy as np
+import pytest
 
-try:  # pragma: no cover - torch may be unavailable
-    import torch  # noqa: F401
-except Exception:  # pragma: no cover
-    torch = types.SimpleNamespace(
-        load=lambda *args, **kwargs: {"encoder": {}},
-        manual_seed=lambda *args, **kwargs: None,
-        cuda=types.SimpleNamespace(is_available=lambda: False),
-    )
-    sys.modules["torch"] = torch
-
-# ensure modules for encoder
-try:  # pragma: no cover - optional dependency
-    import models.factory  # noqa: F401
-except Exception:  # pragma: no cover
-    sys.modules.setdefault(
-        "models.factory", types.SimpleNamespace(build_encoder=lambda *a, **k: None)
-    )
-try:  # pragma: no cover - optional dependency
-    import models.encoder  # noqa: F401
-except Exception:  # pragma: no cover
-    sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
-
+import models.encoder  # noqa: F401
+import models.factory  # noqa: F401
 from scripts import train_jepa as tj
+
+torch = pytest.importorskip("torch")
 
 
 def make_args(tmp_path, seeds=None):
@@ -136,7 +118,8 @@ def test_cmd_finetune_aggregates_metrics(tmp_path, monkeypatch):
         return captured_metrics["out"]
 
     monkeypatch.setattr(tj, "aggregate_metrics", aggregate_stub)
-    #forces scripts.train_jepa to see a harmless checkpoint dict during the test, so cmd_finetune won’t choke on the "stub" file.
+    # forces scripts.train_jepa to see a harmless checkpoint dict during the test,
+    # so cmd_finetune won’t choke on the "stub" file.
     monkeypatch.setattr(tj.torch, "load", lambda *a, **k: {"encoder": {}}, raising=True)
 
     args = make_args(tmp_path, seeds=[0, 1, 2])
