@@ -1,5 +1,16 @@
 from __future__ import annotations
+
 import argparse
+import os
+import sys
+import time
+import random
+from typing import Dict, List
+
+import numpy as np
+import torch
+
+
 def cmd_pretrain(args: argparse.Namespace) -> None:
     """Self‑supervised pretraining of a JEPA encoder and optional contrastive baseline."""
     logger.info("Starting pretrain with args: %s", args)
