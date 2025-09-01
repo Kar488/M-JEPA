@@ -35,29 +35,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 import numpy as np
-try:  # pragma: no cover - torch is optional for parsing/tests
-    import torch  # type: ignore
-except Exception:  # pragma: no cover - gracefully handle missing torch
-    torch = None  # type: ignore[assignment]
+# Import real PyTorch (fail fast if it's not available). Do NOT create a dummy 'torch'.
+import torch  # type: ignore
 import yaml
 
 from utils.dataset import load_dataset, load_directory_dataset, load_parquet_dataset
-
-# TODO remove later
-# Optional: enable stack dumps on SIGUSR1 (POSIX). Skip gracefully elsewhere e.g, local desktop on windows
-try:
-    import faulthandler
-    import signal
-
-    _sig = getattr(signal, "SIGUSR1", None)
-    if _sig is not None and hasattr(faulthandler, "register"):
-        faulthandler.register(_sig, all_threads=True)
-    else:
-        # Fallback: at least turn on faulthandler so fatal errors dump traces.
-        faulthandler.enable()
-except Exception:
-    pass
-# kill -USR1 <python-pid>   # stacks will print into log/console
 
 try:
     from data.augment import iter_augmentation_options  # type: ignore
@@ -451,10 +433,10 @@ def resolve_device(preferred: str) -> str:
 # ---------------------------------------------------------------------------
 
 # --- make repo root importable in tests/agents ---
-import os, sys
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+# import os, sys
+# _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# if _REPO_ROOT not in sys.path:
+#     sys.path.insert(0, _REPO_ROOT)
 
 # --- command implementations (package first, fallback to local sibling) ---
 try:
@@ -573,13 +555,6 @@ class CommandContext:
     _maybe_labels: Any
     _infer_num_classes: Any
     _maybe_state_dict: Any
-    os: Any
-    sys: Any
-    np: Any
-    torch: Any
-    random: Any
-    json: Any
-    time: Any
     evaluate_finetuned_head: Any
     iter_augmentation_options: Any
     AugmentationConfig: Any
@@ -587,7 +562,7 @@ class CommandContext:
 
 
 CMD_CONTEXT = CommandContext(
-    logger=logger,
+   logger=logger,
     load_dataset=load_dataset,
     load_directory_dataset=load_directory_dataset,
     build_encoder=build_encoder,
@@ -611,13 +586,6 @@ CMD_CONTEXT = CommandContext(
     _maybe_labels=_maybe_labels,
     _infer_num_classes=_infer_num_classes,
     _maybe_state_dict=_maybe_state_dict,
-    os=os,
-    sys=sys,
-    np=np,
-    torch=torch,
-    random=random,
-    json=json,
-    time=time,
     evaluate_finetuned_head=evaluate_finetuned_head,
     iter_augmentation_options=iter_augmentation_options,
     AugmentationConfig=AugmentationConfig,

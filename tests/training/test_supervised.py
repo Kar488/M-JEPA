@@ -19,7 +19,7 @@ class DummyEncoder(nn.Module):
         with torch.no_grad():
             self.linear.weight.copy_(torch.eye(dim))
 
-    def forward(self, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:  # noqa: ARG002
+    def forward(self, x: Tensor, adj: Tensor) -> Tensor:  # noqa: ARG002
         return self.linear(x)
 
 
