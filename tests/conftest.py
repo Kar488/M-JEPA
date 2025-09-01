@@ -10,66 +10,10 @@ sys.path.insert(0, os.path.abspath(Path(__file__).resolve().parent.parent))
 # conftest.py (append)
 import importlib, sys, types
 
-import torch as _torch_ok
-_ok_id = id(_torch_ok)
-_ok_attrs = {
-    "has_nn_Linear": hasattr(_torch_ok.nn, "Linear"),
-    "has_tensor": hasattr(_torch_ok, "tensor"),
-    "has_randn": hasattr(_torch_ok, "randn"),
-    "has_manual_seed": hasattr(_torch_ok, "manual_seed"),
-    "profiler": getattr(getattr(getattr(_torch_ok, "autograd", None), "profiler", None), "record_function", None),
-}
-
-def _torch_fingerprint(t):
-    return {
-        "id": id(t),
-        "file": getattr(t, "__file__", None),
-        "has_nn_Linear": hasattr(t.nn, "Linear") if hasattr(t, "nn") else False,
-        "has_tensor": hasattr(t, "tensor"),
-        "has_randn": hasattr(t, "randn"),
-        "has_manual_seed": hasattr(t, "manual_seed"),
-        "profiler_type": type(getattr(getattr(getattr(t, "autograd", None), "profiler", None), "record_function", None)).__name__,
-    }
-
-def pytest_runtest_setup(item):
-    import torch
-    fp = _torch_fingerprint(torch)
-    if (id(torch) != _ok_id or
-        not fp["has_nn_Linear"] or
-        not fp["has_tensor"] or
-        not fp["has_randn"] or
-        not fp["has_manual_seed"] or
-        fp["profiler_type"] not in ("function", "builtin_function_or_method", "RecordFunction", "record_function")):
-        print("\n[torch-corruption] Detected before test:", item.nodeid, fp)
-        # Who overwrote it? Print any project module that has a global named 'torch' not pointing to the real one.
-        for name, mod in list(sys.modules.items()):
-            if not name or not isinstance(mod, types.ModuleType): 
-                continue
-            if name.startswith(("torch", "pytest", "pluggy")): 
-                continue
-            t = getattr(mod, "torch", None)
-            if t is not None and t is not _torch_ok:
-                print("[torch-corruption] offender module:", name, "-> torch id:", id(t), "type:", type(t).__name__)
-
-
-# Ensure project 'training' beats tests/training shadow
-tests_root = Path(__file__).resolve().parent
-repo_root = tests_root.parent
-for mod in ("training", "training.supervised"):
-    if mod in sys.modules:
-        m = sys.modules[mod]
-        if getattr(m, "__file__", "") and str(tests_root) in m.__file__:
-            del sys.modules[mod]
 
 # --------------------------------------------------------
 # adding this to support MurckoScaffold failures  in moleculenet_dc tests
 def pytest_sessionstart(session):
-
-    import sys, torch
-    print(f"\n[debug] python: {sys.executable}")
-    print(f"[debug] torch: {getattr(torch,'__file__',None)}  v={getattr(torch,'__version__',None)}")
-    import torch.nn as nn
-    print(f"[debug] torch.nn: {getattr(nn,'__file__',None)}  has Linear? {'Linear' in dir(nn)}")
 
     try:
         from rdkit import Chem
