@@ -248,7 +248,7 @@ def main():
                 lo, hi = band
                 if lo == hi:
                     lo = float(lo) * 0.9
-                    hi = float(hi) * 1.1 or 1e-6
+                    hi = max(float(hi) * 1.1, 1e-6)
                 params[k] = {"min": float(lo), "max": float(hi)}
 
         for k in set_keys:

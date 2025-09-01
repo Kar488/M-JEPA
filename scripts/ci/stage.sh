@@ -213,7 +213,7 @@ run_with_timeout() {
     timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
       "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
       python -m wandb agent --count ${WANDB_COUNT:-50} "$SWEEP_ID" \
-      2>&1 | tee "$LOG_DIR/${s}.log"
+      2>&1 | tee "$LOG"
 
     rc=$?
     # If the agent “gracefully” exited 0 but clearly failed runs, force non-zero

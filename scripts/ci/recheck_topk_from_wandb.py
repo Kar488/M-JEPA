@@ -110,7 +110,9 @@ def main():
             rc = run_once(args.mm, args.program, args.subcmd, cfg, s,
                           args.unlabeled, args.labeled, args.log_dir,
                           args.project, args.group)
-            # after the run, you could read the metric from W&B; here we assume train_jepa.py writes best val to a file or W&B;
+            if rc != 0:
+                raise RuntimeError(f"recheck run failed with exit code {rc} (seed {s})")
+            # after the run, we could read the metric from W&B; here we assume train_jepa.py writes best val to a file or W&B;
             # to keep this self-contained, we re-fetch the last matching run (same group + tags would be best).
             # Minimal: refetch on metric for runs in the same project/group with matching cfg+seed.
             time.sleep(1)

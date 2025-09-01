@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname "$0")/common.sh"
 
 # Use the same helpers layer you already use elsewhere
 # (stage.sh gives you the timeout + logging wrappers)
