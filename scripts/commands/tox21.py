@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import argparse
+import sys
 def cmd_tox21(args: argparse.Namespace) -> None:
     """Run the Tox21 ranking case study."""
     logger.info("Starting Tox21 case study with args: %s", args)
