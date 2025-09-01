@@ -33,6 +33,10 @@ def pytest_sessionstart(session):
         # If RDKit isn't present at all, relevant tests will skip/fail as usual.
         pass
 
+@pytest.fixture(autouse=True)
+def _safe_grid_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRID_DIR", str(tmp_path / "grid"))
+    
 @pytest.fixture(scope="session")
 def tiny_parquet(tmp_path_factory):
     # Create a tiny parquet with just a few SMILES

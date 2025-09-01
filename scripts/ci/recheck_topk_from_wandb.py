@@ -15,7 +15,7 @@ Usage:
     --labeled   "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train" \
     --out "${GRID_DIR}/recheck_summary.json"
 """
-import argparse, json, os, math, time
+import argparse, json, os, math, time, tempfile, pathlib
 from typing import List, Dict, Any, Tuple
 import numpy as np
 import wandb
@@ -80,8 +80,32 @@ def main():
     ap.add_argument("--labeled",   required=True)
     ap.add_argument("--mm", default=os.environ.get("MMBIN","micromamba"))
     ap.add_argument("--log_dir", default=os.environ.get("LOG_DIR","./logs"))
-    ap.add_argument("--out", default=os.path.join(os.environ.get("GRID_DIR","."), "recheck_summary.json"))
+    # Pick a writable default at runtime (cwd or temp) if GRID_DIR is missing or not writable
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
+
+
+    # --- resolve a safe, writable output path and ensure parent exists ---
+    def _safe_out(user_out: str | None) -> str:
+        if user_out:
+            out_path = pathlib.Path(user_out)
+        else:
+            base = os.environ.get("GRID_DIR") or os.getcwd()
+            out_path = pathlib.Path(base) / "recheck_summary.json"
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            # also check writability
+            testfile = out_path.parent / ".writetest"
+            with open(testfile, "w", encoding="utf-8") as tf:
+                tf.write("ok")
+            testfile.unlink(missing_ok=True)
+        except Exception:
+            # fall back to temp dir on permission/creation error
+            out_path = pathlib.Path(tempfile.gettempdir()) / (out_path.name or "recheck_summary.json")
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+        return str(out_path)
+
+    args.out = _safe_out(args.out)
 
     api = wandb.Api()
     sweep = api.sweep(args.sweep)
