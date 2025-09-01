@@ -495,6 +495,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
 def cmd_grid_search(args: argparse.Namespace) -> None:
     _inject_shared(_grid_search)
+    # Propagate a monkeypatched run_grid_search into the command module.
+    # CMD_CONTEXT captures run_grid_search at import time, so tests that
+    # patch ``train_jepa.run_grid_search`` would otherwise have no effect.
+    # Reassign here to ensure the latest reference is used.
+    _grid_search.run_grid_search = run_grid_search
     _grid_search.cmd_grid_search(args)
 
 

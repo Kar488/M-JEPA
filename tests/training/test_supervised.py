@@ -1,14 +1,15 @@
-
+from __future__ import annotations
 import numpy as np
 import torch
 import torch.nn as nn
 import pytest
 
+torch = pytest.importorskip("torch")
 pytest.importorskip("rdkit")
-supervised = pytest.importorskip("training.supervised")
-stratified_split = supervised.stratified_split
-train_linear_head = supervised.train_linear_head
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from torch import Tensor
 
 class DummyEncoder(nn.Module):
     def __init__(self, dim: int):

@@ -7,9 +7,26 @@ from pathlib import Path
 import pytest
 sys.path.insert(0, os.path.abspath(Path(__file__).resolve().parent.parent))
 
+
+# Ensure project 'training' beats tests/training shadow
+tests_root = Path(__file__).resolve().parent
+repo_root = tests_root.parent
+for mod in ("training", "training.supervised"):
+    if mod in sys.modules:
+        m = sys.modules[mod]
+        if getattr(m, "__file__", "") and str(tests_root) in m.__file__:
+            del sys.modules[mod]
+
 # --------------------------------------------------------
 # adding this to support MurckoScaffold failures  in moleculenet_dc tests
 def pytest_sessionstart(session):
+
+    import sys, torch
+    print(f"\n[debug] python: {sys.executable}")
+    print(f"[debug] torch: {getattr(torch,'__file__',None)}  v={getattr(torch,'__version__',None)}")
+    import torch.nn as nn
+    print(f"[debug] torch.nn: {getattr(nn,'__file__',None)}  has Linear? {'Linear' in dir(nn)}")
+
     try:
         from rdkit import Chem
         from rdkit.Chem.Scaffolds import MurckoScaffold as MS

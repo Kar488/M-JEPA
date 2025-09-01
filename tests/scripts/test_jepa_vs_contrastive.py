@@ -1,6 +1,7 @@
+from __future__ import annotations
 import numpy as np
 import pytest
-from __future__ import annotations
+
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("rdkit")
@@ -10,13 +11,13 @@ from training.unsupervised import train_jepa, train_contrastive
 
 
 # Runtime import: needed because we *instantiate* GraphDataset
-from data.mdataset import GraphDataset, GraphData
-from torch import Tensor
+from data.mdataset import GraphDataset, GraphData 
 
 # Type-only import: avoids circular import / “variable in type expr”
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from data.mdataset import GraphData
+    from torch import Tensor
     
 
 class ConstantEncoder(torch.nn.Module):
