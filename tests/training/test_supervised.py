@@ -7,6 +7,8 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("rdkit")
 
+from training.supervised import stratified_split, train_linear_head
+
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from torch import Tensor

@@ -1,5 +1,13 @@
 from __future__ import annotations
+
 import argparse
+import os
+import sys
+from typing import Dict, List
+
+import numpy as np
+import torch
+
 
 def cmd_finetune(args: argparse.Namespace) -> None:
     """Fine‑tune a linear head on labelled data across multiple seeds resume & checkpoints."""

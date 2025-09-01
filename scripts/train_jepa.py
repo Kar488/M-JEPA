@@ -90,9 +90,10 @@ except Exception:
 
 try:
     from data.augment import AugmentationConfig
-    from data.mdataset import GraphData
+    from data.mdataset import GraphData, GraphDataset
 except Exception:
     GraphData = None  # type: ignore[assignment]
+    GraphDataset = None  # type: ignore[assignment]
 
     @dataclass(frozen=True)
     class AugmentationConfig:
