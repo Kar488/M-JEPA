@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 # Data & utils
 from data.mdataset import GraphData, GraphDataset
+from utils.dataset import (
+    load_dataset,
+    load_directory_dataset,
+    load_parquet_dataset,
+)
 try:  # pragma: no cover - optional dependency
     from utils.checkpoint import save_checkpoint
 except Exception:  # pragma: no cover
@@ -88,52 +93,7 @@ except Exception:  # pragma: no cover
 
 
 # ---------------------------- Dataset helpers ---------------------------- #
-
-
-def load_parquet_dataset(
-    filepath: str,
-    smiles_col: str = "smiles",
-    label_col: Optional[str] = None,
-    cache_dir: Optional[str] = None,
-    add_3d: bool = False,
-    random_seed: Optional[int] = None,
-    n_rows: Optional[int] = None,
-) -> GraphDataset:
-    return GraphDataset.from_parquet(
-        filepath=filepath,
-        smiles_col=smiles_col,
-        label_col=label_col,
-        cache_dir=cache_dir,
-        add_3d=add_3d,
-        random_seed=random_seed,
-        n_rows=n_rows,
-    )
-
-
-def load_directory_dataset(
-    dirpath: str,
-    ext: str = "parquet",
-    smiles_col: str = "smiles",
-    label_col: Optional[str] = None,
-    cache_dir: Optional[str] = None,
-    prefix_filter: Optional[str] = None,
-    add_3d: bool = False,
-    random_seed: Optional[int] = None,
-    n_rows_per_file: Optional[int] = None,
-    num_workers: int = 0,
-) -> GraphDataset:
-    return GraphDataset.from_directory(
-        dirpath=dirpath,
-        ext=ext,
-        smiles_col=smiles_col,
-        label_col=label_col,
-        cache_dir=cache_dir,
-        add_3d=add_3d,
-        random_seed=random_seed,
-        prefix_filter=prefix_filter,
-        n_rows_per_file=n_rows_per_file,
-        num_workers=num_workers,
-    )
+# Consolidated dataset loading utilities live in ``utils.dataset``.
 
 
 def _edge_dim_or_none(ds: GraphDataset) -> Optional[int]:

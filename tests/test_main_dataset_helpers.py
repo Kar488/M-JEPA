@@ -49,9 +49,8 @@ from data.mdataset import GraphData, GraphDataset
 from main import (
     _build_unlabeled_dataset_from_smiles,
     _ensure_labels_inplace_local,
-    load_directory_dataset,
-    load_parquet_dataset,
 )
+from utils.dataset import load_directory_dataset, load_parquet_dataset
 
 pd = pytest.importorskip("pandas")
 try:

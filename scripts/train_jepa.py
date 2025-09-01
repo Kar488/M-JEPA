@@ -41,6 +41,8 @@ except Exception:  # pragma: no cover - gracefully handle missing torch
     torch = None  # type: ignore[assignment]
 import yaml
 
+from utils.dataset import load_dataset, load_directory_dataset, load_parquet_dataset
+
 # TODO remove later
 # Optional: enable stack dumps on SIGUSR1 (POSIX). Skip gracefully elsewhere e.g, local desktop on windows
 try:
@@ -104,26 +106,11 @@ except Exception:
                         )
 
 
-# Attempt to import the dataset class at runtime while still allowing the
-# module to be imported when the dependency is missing.  When unavailable,
-# `GraphDataset` is set to ``None`` and the original exception is stored so
-# that callers can receive a clear error message when trying to load data.
-try:  # pragma: no cover - exercised via runtime import
-    from data.mdataset import GraphDataset
-
-    _GRAPH_DATASET_IMPORT_ERROR: Optional[Exception] = None
-except Exception as e:  # pragma: no cover - import-time failure path
-    GraphDataset = None  # type: ignore[assignment]
-    _GRAPH_DATASET_IMPORT_ERROR = e
-
-# Attempt to import reusable components from the package.
 try:
     from data.augment import AugmentationConfig
     from data.mdataset import GraphData
-
 except Exception:
     GraphData = None  # type: ignore[assignment]
-    load_directory_dataset = None  # type: ignore[assignment]
 
     @dataclass(frozen=True)
     class AugmentationConfig:
@@ -374,71 +361,6 @@ def _maybe_state_dict(obj):
         except Exception:
             return None
     return None
-
-
-def load_directory_dataset(
-    dirpath: str,
-    ext: str = "parquet",
-    smiles_col: str = "smiles",
-    label_col: Optional[str] = None,
-    cache_dir: Optional[str] = None,
-    prefix_filter: Optional[str] = None,
-    add_3d: bool = False,
-    random_seed: Optional[int] = None,
-    n_rows_per_file: Optional[int] = None,
-    max_graphs: Optional[int] = None,
-    num_workers: int = 0,
-) -> "GraphDataset":  # type: ignore
-    if GraphDataset is None:
-        raise ImportError(
-            "GraphDataset is unavailable. Ensure `data.mdataset.GraphDataset`"
-            " can be imported."
-        ) from _GRAPH_DATASET_IMPORT_ERROR
-    return GraphDataset.from_directory(
-        dirpath=dirpath,
-        ext=ext,
-        smiles_col=smiles_col,
-        label_col=label_col,
-        cache_dir=cache_dir,
-        add_3d=add_3d,
-        random_seed=random_seed,
-        prefix_filter=prefix_filter,
-        n_rows_per_file=n_rows_per_file,
-        max_graphs=max_graphs,
-        num_workers=num_workers,
-    )
-
-
-def load_parquet_dataset(
-    filepath: str,
-    smiles_col: str = "smiles",
-    label_col: Optional[str] = None,
-    cache_dir: Optional[str] = None,
-    add_3d: bool = False,
-    random_seed: Optional[int] = None,
-    n_rows: Optional[int] = None,
-) -> "GraphDataset":  # type: ignore
-    if GraphDataset is None:
-        raise ImportError(
-            "GraphDataset is unavailable. Ensure `data.mdataset.GraphDataset`"
-            " can be imported."
-        ) from _GRAPH_DATASET_IMPORT_ERROR
-    return GraphDataset.from_parquet(
-        filepath=filepath,
-        smiles_col=smiles_col,
-        label_col=label_col,
-        cache_dir=cache_dir,
-        add_3d=add_3d,
-        random_seed=random_seed,
-        n_rows=n_rows,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Configuration loading
-# ---------------------------------------------------------------------------
-
-
 def load_config(config_path: str) -> dict:
     """Load configuration from a YAML file."""
     path = Path(config_path)
@@ -560,47 +482,10 @@ evaluate_finetuned_head = _finetune.evaluate_finetuned_head
 
 
 def _inject_shared(m):
-    """Inject shared utilities into a command module.
+    """Inject shared utilities into a command module."""
 
-    This keeps the lightweight command modules decoupled while allowing
-    unit tests to monkeypatch functions on ``scripts.train_jepa`` and have
-    those patched versions used inside the command implementations.
-    """
-
-    m.logger = logger
-    m.load_directory_dataset = load_directory_dataset
-    m.build_encoder = build_encoder
-    m.MLPPredictor = MLPPredictor
-    m.EMA = EMA
-    m.train_jepa = train_jepa
-    m.train_contrastive = train_contrastive
-    m.train_linear_head = train_linear_head
-    m.run_tox21_case_study = run_tox21_case_study
-    m.run_grid_search = run_grid_search
-    m.maybe_init_wandb = maybe_init_wandb
-    m.plot_training_curves = plot_training_curves
-    m.resolve_device = resolve_device
-    m.aggregate_metrics = aggregate_metrics
-    m.CONFIG = CONFIG
-    m.DEFAULT_AUG = DEFAULT_AUG
-    m._maybe_to = _maybe_to
-    m._iter_params = _iter_params
-    m._safe_load_checkpoint = _safe_load_checkpoint
-    m._load_state_dict_forgiving = _load_state_dict_forgiving
-    m._maybe_labels = _maybe_labels
-    m._infer_num_classes = _infer_num_classes
-    m._maybe_state_dict = _maybe_state_dict
-    m.os = os
-    m.sys = sys
-    m.np = np
-    m.torch = torch
-    m.random = random
-    m.json = json
-    m.time = time
-    m.evaluate_finetuned_head = evaluate_finetuned_head
-    m.iter_augmentation_options = iter_augmentation_options
-    m.AugmentationConfig = AugmentationConfig
-    m.build_linear_head = build_linear_head
+    for name, value in CMD_CONTEXT.__dict__.items():
+        setattr(m, name, value)
 
 
 def cmd_sweep_run(args: argparse.Namespace) -> None:
@@ -653,50 +538,180 @@ except ModuleNotFoundError:
     )
 
 # ---------------------------------------------------------------------------
+# Dependency context
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CommandContext:
+    logger: logging.Logger
+    load_dataset: Any
+    load_directory_dataset: Any
+    build_encoder: Any
+    MLPPredictor: Any
+    EMA: Any
+    train_jepa: Any
+    train_contrastive: Any
+    train_linear_head: Any
+    run_tox21_case_study: Any
+    run_grid_search: Any
+    maybe_init_wandb: Any
+    plot_training_curves: Any
+    resolve_device: Any
+    aggregate_metrics: Any
+    CONFIG: Dict[str, Any]
+    DEFAULT_AUG: AugmentationConfig
+    _maybe_to: Any
+    _iter_params: Any
+    _safe_load_checkpoint: Any
+    _load_state_dict_forgiving: Any
+    _maybe_labels: Any
+    _infer_num_classes: Any
+    _maybe_state_dict: Any
+    os: Any
+    sys: Any
+    np: Any
+    torch: Any
+    random: Any
+    json: Any
+    time: Any
+    evaluate_finetuned_head: Any
+    iter_augmentation_options: Any
+    AugmentationConfig: Any
+    build_linear_head: Any
+
+
+CMD_CONTEXT = CommandContext(
+    logger=logger,
+    load_dataset=load_dataset,
+    load_directory_dataset=load_directory_dataset,
+    build_encoder=build_encoder,
+    MLPPredictor=MLPPredictor,
+    EMA=EMA,
+    train_jepa=train_jepa,
+    train_contrastive=train_contrastive,
+    train_linear_head=train_linear_head,
+    run_tox21_case_study=run_tox21_case_study,
+    run_grid_search=run_grid_search,
+    maybe_init_wandb=maybe_init_wandb,
+    plot_training_curves=plot_training_curves,
+    resolve_device=resolve_device,
+    aggregate_metrics=aggregate_metrics,
+    CONFIG=CONFIG,
+    DEFAULT_AUG=DEFAULT_AUG,
+    _maybe_to=_maybe_to,
+    _iter_params=_iter_params,
+    _safe_load_checkpoint=_safe_load_checkpoint,
+    _load_state_dict_forgiving=_load_state_dict_forgiving,
+    _maybe_labels=_maybe_labels,
+    _infer_num_classes=_infer_num_classes,
+    _maybe_state_dict=_maybe_state_dict,
+    os=os,
+    sys=sys,
+    np=np,
+    torch=torch,
+    random=random,
+    json=json,
+    time=time,
+    evaluate_finetuned_head=evaluate_finetuned_head,
+    iter_augmentation_options=iter_augmentation_options,
+    AugmentationConfig=AugmentationConfig,
+    build_linear_head=build_linear_head,
+)
+
+# ---------------------------------------------------------------------------
 # CLI parsing
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class CommonArgDefaults:
+    gnn_type: str
+    hidden_dim: int
+    num_layers: int
+    ema_decay: float
+    add_3d: bool
+    num_workers: int
+    cache_dir: Optional[str]
+    contiguous: bool
+    aug_rotate: bool
+    aug_mask_angle: bool
+    aug_dihedral: bool
+    epochs: int
+    batch_size: int
+    lr: float
+    seeds: Optional[List[int]]
+    device: str
+    prefetch_factor: int
+    pin_memory: bool
+    persistent_workers: bool
+    bf16: bool
+    devices: int
+    use_wandb: bool
+    wandb_project: str
+    wandb_tags: List[str]
+
+    @classmethod
+    def from_config(cls, section: str) -> "CommonArgDefaults":
+        model_cfg = CONFIG.get("model", {})
+        sec_cfg = CONFIG.get(section, {})
+        wandb_cfg = CONFIG.get("wandb", {})
+        return cls(
+            gnn_type=model_cfg.get("gnn_type", "mpnn"),
+            hidden_dim=model_cfg.get("hidden_dim", 64),
+            num_layers=model_cfg.get("num_layers", 2),
+            ema_decay=model_cfg.get("ema_decay", 0.99),
+            add_3d=False,
+            num_workers=0,
+            cache_dir=None,
+            contiguous=False,
+            aug_rotate=DEFAULT_AUG.rotate,
+            aug_mask_angle=DEFAULT_AUG.mask_angle,
+            aug_dihedral=DEFAULT_AUG.dihedral,
+            epochs=sec_cfg.get("epochs", 1),
+            batch_size=sec_cfg.get("batch_size", 32),
+            lr=sec_cfg.get("lr", 1e-3),
+            seeds=None,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            prefetch_factor=4,
+            pin_memory=True,
+            persistent_workers=True,
+            bf16=False,
+            devices=1,
+            use_wandb=False,
+            wandb_project=wandb_cfg.get("project", "m-jepa"),
+            wandb_tags=wandb_cfg.get("tags", []),
+        )
+
+
 def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
-    """Add arguments common to multiple commands.
+    """Add arguments common to multiple commands."""
 
-    Defaults are taken from the given config section.
-    """
-    # Model hyperparameters
-    model_cfg = CONFIG.get("model", {})
-    # Model hyperparameters
-    model_cfg = CONFIG.get("model", {})
-    p.add_argument("--gnn-type", type=str, default=model_cfg.get("gnn_type", "mpnn"), help="GNN encoder type")
-    p.add_argument("--hidden-dim", type=int, default=model_cfg.get("hidden_dim", 64), help="Hidden dimension size")
-    p.add_argument("--num-layers", type=int, default=model_cfg.get("num_layers", 2), help="Number of GNN layers")
-    p.add_argument("--ema-decay", type=float, default=model_cfg.get("ema_decay", 0.99), help="EMA decay rate")
-    p.add_argument("--add-3d", action="store_true", help="Augment with 3D coordinate featurisation")
-    p.add_argument("--num-workers", type=int, default=0, help="Process pool workers for SMILES conversion (0=serial)")
-    p.add_argument("--cache-dir", type=str, default=None, help="Directory to cache processed graphs")
-    p.add_argument("--contiguous", action="store_true", help="Use contiguous subgraph masking (JEPA)")
-    p.add_argument("--aug-rotate", action="store_true", default=DEFAULT_AUG.rotate, help="Randomly rotate coordinates during pretraining")
-    p.add_argument("--aug-mask-angle", action="store_true", default=DEFAULT_AUG.mask_angle, help="Mask bond angles during pretraining")
-    p.add_argument("--aug-dihedral", action="store_true", default=DEFAULT_AUG.dihedral, help="Perturb dihedral angles during pretraining")
-
-    sec_cfg = CONFIG.get(section, {})
-
-    p.add_argument("--epochs", type=int, default=sec_cfg.get("epochs", 1), help="Number of training epochs")
-    p.add_argument("--batch-size", type=int, default=sec_cfg.get("batch_size", 32), help="Batch size")
-    p.add_argument("--lr", type=float, default=sec_cfg.get("lr", 1e-3), help="Learning rate")
-    p.add_argument("--seeds", type=int, nargs="*", default=None, help="Random seeds for averaging results")
-    p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device")
-    p.add_argument("--prefetch-factor", type=int, default=4, help="Dataloader prefetch factor (workers>0 only).")
-    p.add_argument("--pin-memory", action="store_true", default=True, help="Pin CUDA host memory in DataLoader.")
-    p.add_argument("--persistent-workers", action="store_true", default=True, help="Keep worker processes alive across epochs (workers>0).")
-    p.add_argument("--bf16", action="store_true", help="Enable bfloat16 autocast on GPU.")
-    p.add_argument("--devices", type=int, default=1, help="Number of GPUs for DDP")
-
-    wandb_cfg = CONFIG.get("wandb", {})
-
-    p.add_argument("--use-wandb", action="store_true", help="Enable Weights & Biases logging")
-    p.add_argument("--wandb-project", type=str, default=wandb_cfg.get("project", "m-jepa"), help="W&B project name")
-    p.add_argument("--wandb-tags", nargs="*", default=wandb_cfg.get("tags", []), help="Tags for W&B run")
-
+    d = CommonArgDefaults.from_config(section)
+    p.add_argument("--gnn-type", type=str, default=d.gnn_type, help="GNN encoder type")
+    p.add_argument("--hidden-dim", type=int, default=d.hidden_dim, help="Hidden dimension size")
+    p.add_argument("--num-layers", type=int, default=d.num_layers, help="Number of GNN layers")
+    p.add_argument("--ema-decay", type=float, default=d.ema_decay, help="EMA decay rate")
+    p.add_argument("--add-3d", action="store_true", default=d.add_3d, help="Augment with 3D coordinate featurisation")
+    p.add_argument("--num-workers", type=int, default=d.num_workers, help="Process pool workers for SMILES conversion (0=serial)")
+    p.add_argument("--cache-dir", type=str, default=d.cache_dir, help="Directory to cache processed graphs")
+    p.add_argument("--contiguous", action="store_true", default=d.contiguous, help="Use contiguous subgraph masking (JEPA)")
+    p.add_argument("--aug-rotate", action="store_true", default=d.aug_rotate, help="Randomly rotate coordinates during pretraining")
+    p.add_argument("--aug-mask-angle", action="store_true", default=d.aug_mask_angle, help="Mask bond angles during pretraining")
+    p.add_argument("--aug-dihedral", action="store_true", default=d.aug_dihedral, help="Perturb dihedral angles during pretraining")
+    p.add_argument("--epochs", type=int, default=d.epochs, help="Number of training epochs")
+    p.add_argument("--batch-size", type=int, default=d.batch_size, help="Batch size")
+    p.add_argument("--lr", type=float, default=d.lr, help="Learning rate")
+    p.add_argument("--seeds", type=int, nargs="*", default=d.seeds, help="Random seeds for averaging results")
+    p.add_argument("--device", type=str, default=d.device, help="Device")
+    p.add_argument("--prefetch-factor", type=int, default=d.prefetch_factor, help="Dataloader prefetch factor (workers>0 only).")
+    p.add_argument("--pin-memory", action="store_true", default=d.pin_memory, help="Pin CUDA host memory in DataLoader.")
+    p.add_argument("--persistent-workers", action="store_true", default=d.persistent_workers, help="Keep worker processes alive across epochs (workers>0).")
+    p.add_argument("--bf16", action="store_true", default=d.bf16, help="Enable bfloat16 autocast on GPU.")
+    p.add_argument("--devices", type=int, default=d.devices, help="Number of GPUs for DDP")
+    p.add_argument("--use-wandb", action="store_true", default=d.use_wandb, help="Enable Weights & Biases logging")
+    p.add_argument("--wandb-project", type=str, default=d.wandb_project, help="W&B project name")
+    p.add_argument("--wandb-tags", nargs="*", default=d.wandb_tags, help="Tags for W&B run")
 
 def build_parser() -> argparse.ArgumentParser:
 
