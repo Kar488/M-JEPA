@@ -5,7 +5,9 @@ import torch.nn as nn
 import pytest
 
 pytest.importorskip("rdkit")
-from training.supervised import stratified_split, train_linear_head
+supervised = pytest.importorskip("training.supervised")
+stratified_split = supervised.stratified_split
+train_linear_head = supervised.train_linear_head
 
 
 class DummyEncoder(nn.Module):
