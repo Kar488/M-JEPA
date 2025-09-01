@@ -36,7 +36,11 @@ def pytest_sessionstart(session):
 @pytest.fixture(autouse=True)
 def _safe_grid_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("GRID_DIR", str(tmp_path / "grid"))
-    
+
+@pytest.fixture(autouse=True)
+def _safe_log_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+
 @pytest.fixture(scope="session")
 def tiny_parquet(tmp_path_factory):
     # Create a tiny parquet with just a few SMILES

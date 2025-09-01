@@ -107,6 +107,23 @@ def main():
 
     args.out = _safe_out(args.out)
 
+    # --- resolve a safe, writable log_dir too ---
+    def _safe_dir(d: str | None, fallback_name: str = "recheck_logs") -> str:
+        base = pathlib.Path(d or "./logs")
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            test = base / ".writetest"
+            with open(test, "w", encoding="utf-8") as tf:
+                tf.write("ok")
+            test.unlink(missing_ok=True)
+            return str(base)
+        except Exception:
+            tmp = pathlib.Path(tempfile.gettempdir()) / fallback_name
+            tmp.mkdir(parents=True, exist_ok=True)
+            return str(tmp)
+
+    args.log_dir = _safe_dir(args.log_dir)
+
     api = wandb.Api()
     sweep = api.sweep(args.sweep)
     maximize = (args.direction == "max")
@@ -124,7 +141,7 @@ def main():
         cfg.pop("seed", None)
         tops.append(cfg)
 
-    os.makedirs(args.log_dir, exist_ok=True)
+    #os.makedirs(args.log_dir, exist_ok=True)
 
     results = []
     for i, cfg in enumerate(tops):
