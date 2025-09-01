@@ -32,13 +32,24 @@ parameters:
 
   pretrain_batch_size: { values: [64, 128, 256] }
   finetune_batch_size: { values: [256] }
-  pretrain_epochs: { values: [10, 20, 30] }
-  finetune_epochs: { values: [1] }
+  pretrain_epochs: { values: [5, 10, 15] }
+  finetune_epochs: { values: [1, 3] }
   learning_rate:
     min: 1.0e-4
     max: 1.0e-2
     distribution: log_uniform
   temperature: { values: [0.07, 0.1, 0.2] }
+
+  max_pretrain_batches:  {values: [150, 300]}
+  max_finetune_batches:  {value: 100}
+  time-budget-mins:     {value: 30}
+
+  devices:              {value: 1}
+  num-workers:          {value: 4}
+  persistent-workers:   {value: 0} # 0 false
+  prefetch-factor:      {value: 2}
+  pin-memory:           {value: 0} # 0 false
+  bf16:                 {value: 1} #1 true
 
   task_type: { value: regression }
   label_col: { value: "measured log solubility in mols per litre" }

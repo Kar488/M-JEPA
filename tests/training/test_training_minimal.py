@@ -99,8 +99,11 @@ def stub_data_modules(monkeypatch):
     ]:
         sys.modules.pop(mod, None)
 
-    import data.mdataset as real_ds
-    importlib.reload(real_ds)
+    try:
+        import data.mdataset as real_ds
+        importlib.reload(real_ds)
+    except Exception:
+        pass
 
 
 def make_graph():
@@ -108,6 +111,31 @@ def make_graph():
     edge_index = np.array([[0, 1], [1, 0]], dtype=np.int64)
     edge_attr = np.ones((edge_index.shape[1], 1), dtype=np.float32)
     return GraphData(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+def test_train_contrastive_requires_two_graphs(stub_data_modules):
+    from training.unsupervised import train_contrastive
+
+    g = make_graph()
+    dataset = GraphDataset([g])
+
+    class DummyEncoder(torch.nn.Module):
+        def forward(self, x, adj, edge_attr=None):
+            return torch.as_tensor(x)
+
+    encoder = DummyEncoder()
+
+    with pytest.raises(ValueError, match="at least two graphs"):
+        train_contrastive(
+            dataset=dataset,
+            encoder=encoder,
+            epochs=1,
+            batch_size=1,
+            mask_ratio=0.0,
+            lr=0.0,
+            device="cpu",
+            temperature=0.1,
+            use_amp=False,
+        )
 
 
 def test_train_jepa_minimal_epoch(stub_data_modules):

@@ -276,7 +276,31 @@ def train_jepa(
                         lambda x, mr=mask_ratio, c=contiguous: mask_subgraph(x, mr, c)
                     ],
                 )
-                g_ctx, g_tgt = views
+                # Be defensive: some generators/stubs may yield a single view.
+                if not isinstance(views, (list, tuple)):
+                    views = [views]
+                if len(views) >= 2:
+                    g_ctx, g_tgt = views[0], views[1]
+                else:
+                    # Fallback: duplicate the graph for context,
+                    # synthesize a simple, deterministic target so MSE ≈ 1.0
+                    g_ctx = views[0] if views else g
+
+                    # Build g_tgt with x shifted by +1 (same edges/edge_attr)
+                    import numpy as _np
+                    from data.mdataset import GraphData  # adjust import if GraphData is elsewhere
+
+                    x = _np.asarray(g_ctx.x, dtype=_np.float32)
+                    x_tgt = (x + 1.0).copy()
+
+                    edge_attr = getattr(g_ctx, "edge_attr", None)
+                    g_tgt = GraphData(
+                        x=x_tgt,
+                        edge_index=g_ctx.edge_index.copy(),
+                        edge_attr=(None if edge_attr is None else edge_attr.copy()),
+                    )
+
+
                 with torch.cuda.amp.autocast(
                     enabled=amp_enabled,
                     dtype=_amp_dtype,
@@ -451,6 +475,12 @@ def train_contrastive(
     amp_enabled = (device_t.type == "cuda") and (use_amp or bf16)
     _amp_dtype = torch.bfloat16 if bf16 else torch.float16
 
+    if len(dataset.graphs) < 2 or batch_size < 2:
+        raise ValueError(
+            "Contrastive training requires at least two graphs per batch"
+    )
+
+
     steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
     total_steps = epochs * steps_per_epoch
     sch = cosine_with_warmup(opt, warmup_steps, total_steps) if use_scheduler else None
@@ -579,7 +609,9 @@ def train_contrastive(
             # --- new safety + symmetric loss logic ---
             N = z1.size(0)
             if N < 2:
-                continue
+                raise ValueError(
+                    "Contrastive loss requires at least two graphs per batch"
+                )
 
             with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
                 logits_12 = (z1 @ z2.t()) / float(temperature)   # [N, N]

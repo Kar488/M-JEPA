@@ -820,6 +820,7 @@ def build_parser() -> argparse.ArgumentParser:
     sweep.add_argument("--sample-unlabeled", "--sample_unlabeled", dest="sample_unlabeled", type=int, default=0)
     sweep.add_argument("--sample-labeled", "--sample_labeled", dest="sample_labeled", type=int, default=0)
     sweep.add_argument("--cache-dir", type=str, default=None)
+    sweep.add_argument("--time-budget-mins", type=int, default=0, help="Optional wallclock budget; stop early when exceeded.")
 
     # augmentations (accept 0/1 values from sweep)
     sweep.add_argument("--add-3d",               "--add_3d",               dest="add_3d",               type=int, choices=[0,1], default=0)
