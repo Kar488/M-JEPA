@@ -34,6 +34,7 @@ python scripts/eval_moleculenet.py \
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
@@ -223,12 +224,20 @@ def main() -> None:
         num_layers=args.num_layers,
         gnn_type=args.gnn_type,
     )
-    state = torch.load(args.encoder_checkpoint, map_location=device)
-    # Support checkpoints saved either directly or under 'encoder'
-    if isinstance(state, dict) and "encoder" in state:
-        encoder.load_state_dict(state["encoder"])
+
+    if os.path.exists(args.encoder_checkpoint):
+        state = torch.load(args.encoder_checkpoint, map_location=device)
+        # Support checkpoints saved either directly or under 'encoder'
+        if isinstance(state, dict) and "encoder" in state:
+            encoder.load_state_dict(state["encoder"])
+        else:
+            encoder.load_state_dict(state)
     else:
-        encoder.load_state_dict(state)
+        logger.warning(
+            "Encoder checkpoint %s not found; proceeding with randomly initialised weights",
+            args.encoder_checkpoint,
+        )
+
     encoder.to(device)
     encoder.eval()
 

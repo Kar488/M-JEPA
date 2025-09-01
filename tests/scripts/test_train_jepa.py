@@ -1,38 +1,18 @@
-import sys
 import argparse
 import types
+
 import pytest
 
-try:  # pragma: no cover - torch may be unavailable
-    import torch  # noqa: F401
-except Exception:  # pragma: no cover
-    torch = types.SimpleNamespace(
-        cuda=types.SimpleNamespace(is_available=lambda: False),
-        manual_seed=lambda *a, **k: None,
-        save=lambda *a, **k: None,
-        load=lambda *a, **k: {},
-        nn=types.SimpleNamespace(Module=object),
-    )
-    sys.modules["torch"] = torch
-    sys.modules["torch.nn"] = torch.nn
-
-try:  # pragma: no cover - optional dependency
-    import models.factory  # noqa: F401
-except Exception:  # pragma: no cover
-    sys.modules.setdefault(
-        "models.factory", types.SimpleNamespace(build_encoder=lambda *a, **k: None)
-    )
-try:  # pragma: no cover - optional dependency
-    import models.encoder  # noqa: F401
-except Exception:  # pragma: no cover
-    sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
-
+import models.encoder  # noqa: F401
+import models.factory  # noqa: F401
 from scripts import train_jepa as tj
 
+torch = pytest.importorskip("torch")
 
 # ---------------------------------------------------------------------------
 # iter_augmentation_options
 # ---------------------------------------------------------------------------
+
 
 def test_iter_augmentation_options_all_combinations():
     opts = list(tj.iter_augmentation_options([0, 1], [0, 1], [0, 1]))
@@ -62,6 +42,7 @@ def test_iter_augmentation_options_forced_flags():
 # Fallback imports for optional dependencies
 # ---------------------------------------------------------------------------
 
+
 def test_load_directory_dataset_missing_graphdataset(monkeypatch):
     monkeypatch.setattr(tj, "GraphDataset", None)
     monkeypatch.setattr(tj, "_GRAPH_DATASET_IMPORT_ERROR", ImportError("boom"))
@@ -72,7 +53,9 @@ def test_load_directory_dataset_missing_graphdataset(monkeypatch):
 
 def test_cmd_pretrain_missing_ema(monkeypatch, tmp_path):
     class DummyDataset:
-        graphs = [types.SimpleNamespace(x=types.SimpleNamespace(shape=(1, 3)), edge_attr=None)]
+        graphs = [
+            types.SimpleNamespace(x=types.SimpleNamespace(shape=(1, 3)), edge_attr=None)
+        ]
 
         def __len__(self):
             return 1
@@ -84,12 +67,16 @@ def test_cmd_pretrain_missing_ema(monkeypatch, tmp_path):
     monkeypatch.setattr(
         tj,
         "plot_training_curves",
-        lambda *a, **k: types.SimpleNamespace(savefig=lambda p, dpi=200: open(p, "wb").close()),
+        lambda *a, **k: types.SimpleNamespace(
+            savefig=lambda p, dpi=200: open(p, "wb").close()
+        ),
     )
     monkeypatch.setattr(
         tj,
         "maybe_init_wandb",
-        lambda *a, **k: types.SimpleNamespace(log=lambda *a, **k: None, finish=lambda: None),
+        lambda *a, **k: types.SimpleNamespace(
+            log=lambda *a, **k: None, finish=lambda: None
+        ),
     )
     monkeypatch.setattr(tj, "EMA", None)
 
@@ -128,9 +115,12 @@ def test_cmd_pretrain_missing_ema(monkeypatch, tmp_path):
 # CLI parsing and exit codes
 # ---------------------------------------------------------------------------
 
+
 def test_cli_pretrain_exit_code(tmp_path, monkeypatch):
     parser = tj.build_parser()
-    args = parser.parse_args(["pretrain", f"--unlabeled-dir={tmp_path}", f"--plot-dir={tmp_path}"])
+    args = parser.parse_args(
+        ["pretrain", f"--unlabeled-dir={tmp_path}", f"--plot-dir={tmp_path}"]
+    )
     assert args.epochs == tj.CONFIG["pretrain"]["epochs"]
     monkeypatch.setattr(tj, "load_directory_dataset", None)
     with pytest.raises(SystemExit) as exc:
@@ -140,7 +130,9 @@ def test_cli_pretrain_exit_code(tmp_path, monkeypatch):
 
 def test_cli_finetune_exit_code(tmp_path, monkeypatch):
     parser = tj.build_parser()
-    args = parser.parse_args(["finetune", "--labeled-dir", str(tmp_path), "--encoder", "enc.pt"])
+    args = parser.parse_args(
+        ["finetune", "--labeled-dir", str(tmp_path), "--encoder", "enc.pt"]
+    )
     assert args.epochs == tj.CONFIG["finetune"]["epochs"]
     monkeypatch.setattr(tj, "load_directory_dataset", None)
     with pytest.raises(SystemExit) as exc:
@@ -150,7 +142,9 @@ def test_cli_finetune_exit_code(tmp_path, monkeypatch):
 
 def test_cli_evaluate_exit_code(tmp_path, monkeypatch):
     parser = tj.build_parser()
-    args = parser.parse_args(["evaluate", "--labeled-dir", str(tmp_path), "--encoder", "enc.pt"])
+    args = parser.parse_args(
+        ["evaluate", "--labeled-dir", str(tmp_path), "--encoder", "enc.pt"]
+    )
     assert args.epochs == tj.CONFIG["evaluate"]["epochs"]
     monkeypatch.setattr(tj, "load_directory_dataset", None)
     with pytest.raises(SystemExit) as exc:

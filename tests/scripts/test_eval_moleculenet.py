@@ -1,30 +1,11 @@
 import argparse
-import sys
-import types
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
-# Stub torch and dependent modules unconditionally
-torch = types.ModuleType("torch")
-torch.load = lambda *a, **k: {}
-torch.device = lambda *a, **k: "cpu"
-torch.cuda = types.SimpleNamespace(is_available=lambda: False)
-
-nn_mod = types.ModuleType("torch.nn")
-nn_mod.__path__ = []
-nn_mod.Module = object
-func_mod = types.ModuleType("torch.nn.functional")
-nn_mod.functional = func_mod
-torch.nn = nn_mod
-
-sys.modules["torch"] = torch
-sys.modules["torch.nn"] = nn_mod
-sys.modules["torch.nn.functional"] = func_mod
-
-stub_supervised = types.ModuleType("training.supervised")
-stub_supervised.train_linear_head = lambda *a, **k: {}
-sys.modules["training.supervised"] = stub_supervised
+torch = pytest.importorskip("torch")
+pytest.importorskip("training.supervised")
 
 from scripts import eval_moleculenet as em  # noqa: E402
 

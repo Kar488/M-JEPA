@@ -1,42 +1,15 @@
 import argparse
 import os
-import sys
-import types
 
-try:  # pragma: no cover - torch may be unavailable
-    import torch  # noqa: F401
-    import torch.nn as torch_nn  # noqa: F401
-except Exception:  # pragma: no cover
-    torch_nn = types.SimpleNamespace(Module=object)
-    torch = types.SimpleNamespace(
-        save=lambda obj, path: open(path, "wb").close(),
-        load=lambda *args, **kwargs: {},
-        manual_seed=lambda *args, **kwargs: None,
-        cuda=types.SimpleNamespace(is_available=lambda: False),
-        nn=torch_nn,
-        __path__=[],
-    )
-    sys.modules["torch"] = torch
-    sys.modules["torch.nn"] = torch_nn
+import pytest
+import torch.nn as torch_nn  # noqa: F401
 
-try:  # pragma: no cover - optional dependency
-    import models.factory  # noqa: F401
-except Exception:  # pragma: no cover
-    sys.modules.setdefault(
-        "models.factory", types.SimpleNamespace(build_encoder=lambda *a, **k: None)
-    )
-try:  # pragma: no cover - optional dependency
-    import models.encoder  # noqa: F401
-except Exception:  # pragma: no cover
-    sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
-try:  # pragma: no cover - optional dependency
-    import data.augment  # noqa: F401
-except Exception:  # pragma: no cover
-    sys.modules.setdefault(
-        "data.augment", types.SimpleNamespace(iter_augmentation_options=lambda *a, **k: None)
-    )
-
+import data.augment  # noqa: F401
+import models.encoder  # noqa: F401
+import models.factory  # noqa: F401
 from scripts import train_jepa as tj
+
+torch = pytest.importorskip("torch")
 
 
 def make_args(
@@ -231,4 +204,6 @@ def test_cmd_pretrain_with_contrastive_branch(tmp_path, monkeypatch):
     # Contrastive branch should also receive them
     assert calls["train_contrastive_kwargs"].get("random_rotate") is args.aug_rotate
     assert calls["train_contrastive_kwargs"].get("mask_angle") is args.aug_mask_angle
-    assert calls["train_contrastive_kwargs"].get("perturb_dihedral") is args.aug_dihedral
+    assert (
+        calls["train_contrastive_kwargs"].get("perturb_dihedral") is args.aug_dihedral
+    )

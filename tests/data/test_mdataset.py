@@ -1,36 +1,30 @@
-import importlib
+import logging
 import random
 import sys
 import types
 
 import numpy as np
-try:
-    import torch
-except Exception:  # pragma: no cover - torch not available
-    torch = types.SimpleNamespace()
 import pytest
-import logging
+
+torch = pytest.importorskip("torch")
 pytest.importorskip("rdkit")
-from rdkit import Chem
+
 RDKit_AVAILABLE = True
 
-    
+
 # training.supervised imports data.scaffold_split which requires RDKit. Provide a
 # minimal stub so we can import stratified_split without pulling in RDKit.
 dummy_scaffold = types.ModuleType("data.scaffold_split")
 dummy_scaffold.scaffold_split_indices = lambda *args, **kwargs: ([], [], [])
 sys.modules.setdefault("data.scaffold_split", dummy_scaffold)
 
-from training.supervised import stratified_split
-
 # import GraphDataset and GraphData
-from data import GraphDataset
+from data import GraphDataset  # noqa: E402
+from training.supervised import stratified_split  # noqa: E402
+
 
 def _make_synthetic_dataset():
-    smiles = [
-            "CCO",
-            "CCN"
-        ]
+    smiles = ["CCO", "CCN"]
     labels = [0, 1]
     ds = GraphDataset.from_smiles_list(smiles, labels=labels, add_3d=False)
     return ds
@@ -55,9 +49,14 @@ def test_smiles_to_graph_fallback_features_edges():
             [1, 1, 0, 0],  # Hydrogen
             [1, 1, 0, 0],  # Hydrogen
         ]
-        assert np.allclose(g0.x, expected_types), f"Node features mismatch for CCO"
-        assert g0.edge_index.shape[1] == 16, f"Expected 16 edges for CCO, got {g0.edge_index.shape[1]}"  # 8 bonds * 2 (undirected)
-        assert g0.edge_attr.shape == (16, 7), f"Expected [16, 7] edge attributes, got {g0.edge_attr.shape}"
+        assert np.allclose(g0.x, expected_types), "Node features mismatch for CCO"
+        assert (
+            g0.edge_index.shape[1] == 16
+        ), f"Expected 16 edges for CCO, got {g0.edge_index.shape[1]}"
+        assert g0.edge_attr.shape == (
+            16,
+            7,
+        ), f"Expected [16, 7] edge attributes, got {g0.edge_attr.shape}"
 
         # For "CCN" (ethylamine, C2H5NH2): 3 heavy atoms + 7 hydrogens = 10 nodes
         assert g1.x.shape == (10, 4), f"Expected [10, 4] for CCN, got {g1.x.shape}"
@@ -85,8 +84,12 @@ def test_get_batch_splitting_and_labels():
         # For "CCO" (9 nodes) + "CCN" (10 nodes) = 19 nodes, 4 features
         assert X.shape == (19, 4), f"Expected [19, 4] for batch, got {X.shape}"
         assert A.shape == (19, 19), f"Expected [19, 19] adjacency, got {A.shape}"
-        assert torch.equal(ptr, torch.tensor([0, 9, 19], dtype=torch.long)), f"Expected [0, 9, 19] ptr, got {ptr.tolist()}"
-        assert torch.equal(labels, torch.tensor([0.0, 1.0])), f"Expected [0.0, 1.0] labels, got {labels.tolist()}"
+        assert torch.equal(
+            ptr, torch.tensor([0, 9, 19], dtype=torch.long)
+        ), f"Expected [0, 9, 19] ptr, got {ptr.tolist()}"
+        assert torch.equal(
+            labels, torch.tensor([0.0, 1.0])
+        ), f"Expected [0.0, 1.0] labels, got {labels.tolist()}"
     else:
         # Fallback: 2 nodes (CCO) + 3 nodes (CCN) = 5 nodes, 2 features
         assert X.shape == (5, 2)
@@ -108,20 +111,22 @@ def test_get_batch_splitting_and_labels():
 
 def test_stratified_split_balanced():
     smiles = [
-            "CCO",
-            "CCN",
-            "CCC",
-            "c1ccccc1",
-            "CC(=O)O",
-            "CCOCC",
-            ]
-   
+        "CCO",
+        "CCN",
+        "CCC",
+        "c1ccccc1",
+        "CC(=O)O",
+        "CCOCC",
+    ]
+
     labels = np.array([0, 0, 0, 1, 1, 1])
     ds = GraphDataset.from_smiles_list(smiles, labels=labels)
     indices = list(range(len(ds)))
 
     random.seed(0)
-    train, val, test = stratified_split(indices, ds.labels, train_frac=0.5, val_frac=0.25)
+    train, val, test = stratified_split(
+        indices, ds.labels, train_frac=0.5, val_frac=0.25
+    )
 
     # expected two graphs per split and coverage of both classes
     assert len(train) == len(val) == len(test) == 2
@@ -157,4 +162,3 @@ def test_smiles_to_graph_kekulize_warning(caplog):
     assert np.array_equal(g.x, expected_x)
     assert np.array_equal(g.edge_index, expected_e)
     assert g.edge_attr is None
-

@@ -1,33 +1,14 @@
 import argparse
-import sys
-import types
-import pandas as pd
-import pytest
 import logging
 
-try:  # pragma: no cover - torch may be unavailable
-    import torch  # noqa: F401
-except Exception:  # pragma: no cover
-    torch = types.SimpleNamespace(
-        load=lambda *args, **kwargs: {"encoder": {}},
-        manual_seed=lambda *args, **kwargs: None,
-        cuda=types.SimpleNamespace(is_available=lambda: False),
-    )
-    sys.modules["torch"] = torch
+import pandas as pd
+import pytest
 
-# Ensure encoder factory modules exist for import
-try:  # pragma: no cover - optional dependency
-    import models.factory  # noqa: F401
-except Exception:  # pragma: no cover
-    sys.modules.setdefault(
-        "models.factory", types.SimpleNamespace(build_encoder=lambda *a, **k: None)
-    )
-try:  # pragma: no cover - optional dependency
-    import models.encoder  # noqa: F401
-except Exception:  # pragma: no cover
-    sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
-
+import models.encoder  # noqa: F401
+import models.factory  # noqa: F401
 from scripts import train_jepa as tj
+
+torch = pytest.importorskip("torch")
 
 
 class DummyArray:
@@ -52,6 +33,7 @@ class DummyDataset:
 # ---------------------------------------------------------------------------
 # cmd_benchmark tests
 # ---------------------------------------------------------------------------
+
 
 def test_cmd_benchmark_selects_best_method(tmp_path, monkeypatch):
     dataset = DummyDataset()
@@ -189,8 +171,11 @@ def test_cmd_benchmark_eval_only_uses_test_dir(tmp_path, monkeypatch):
 # cmd_tox21 tests
 # ---------------------------------------------------------------------------
 
+
 def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
-    def tox_stub(csv_path, task_name, pretrain_epochs, finetune_epochs, num_top_exclude, device):
+    def tox_stub(
+        csv_path, task_name, pretrain_epochs, finetune_epochs, num_top_exclude, device
+    ):
         return 0.3, 0.1, 0.5, {"baseline": 0.2}
 
     monkeypatch.setattr(tj, "run_tox21_case_study", tox_stub)
@@ -229,13 +214,19 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
 
     logs = holder["wb"].logs
     assert any(
-        log.get("phase") == "tox21" and log.get("status") == "success" and log.get("mean_true") == 0.3
+        log.get("phase") == "tox21"
+        and log.get("status") == "success"
+        and log.get("mean_true") == 0.3
         for log in logs
     )
 
 
 def test_cmd_tox21_failure(monkeypatch):
-    monkeypatch.setattr(tj, "run_tox21_case_study", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        tj,
+        "run_tox21_case_study",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
 
     class DummyWB:
         def log(self, data):
@@ -266,6 +257,7 @@ def test_cmd_tox21_failure(monkeypatch):
 # ---------------------------------------------------------------------------
 # cmd_grid_search tests
 # ---------------------------------------------------------------------------
+
 
 def test_cmd_grid_search_logs_and_csv(tmp_path, monkeypatch):
     def grid_stub(**kwargs):
@@ -330,14 +322,20 @@ def test_cmd_grid_search_logs_and_csv(tmp_path, monkeypatch):
         warmup_steps=0,
         out_csv=str(out_csv),
         best_config_out=None,
-        force_refresh=False,  
+        force_refresh=False,
     )
 
     tj.cmd_grid_search(args)
 
     logs = holder["wb"].logs
-    assert any(log.get("phase") == "grid_search" and log.get("status") == "start" for log in logs)
-    assert any(log.get("phase") == "grid_search" and log.get("status") == "success" for log in logs)
+    assert any(
+        log.get("phase") == "grid_search" and log.get("status") == "start"
+        for log in logs
+    )
+    assert any(
+        log.get("phase") == "grid_search" and log.get("status") == "success"
+        for log in logs
+    )
     assert any("metric" in log for log in logs)
     assert out_csv.exists()
 
@@ -391,11 +389,11 @@ def test_cmd_grid_search_failure(monkeypatch, caplog, tmp_path):
         warmup_steps=0,
         out_csv=None,
         best_config_out=None,
-        force_refresh=False,  
+        force_refresh=False,
     )
 
     # Suppress error logs from tj during this test
-    caplog.set_level(logging.CRITICAL, logger='scripts.train_jepa')
+    caplog.set_level(logging.CRITICAL, logger="scripts.train_jepa")
 
     with pytest.raises(SystemExit) as ex:
         tj.cmd_grid_search(args)

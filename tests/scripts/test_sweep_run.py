@@ -2,26 +2,13 @@ import argparse
 import sys
 import types
 
-try:  # pragma: no cover - torch may be unavailable
-    import torch  # noqa: F401
-except Exception:  # pragma: no cover
-    torch = types.ModuleType("torch")
-    torch.load = lambda *a, **k: {}
-    torch.manual_seed = lambda *a, **k: None
-    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
-    nn_mod = types.ModuleType("torch.nn")
-    nn_mod.__path__ = []
-    nn_mod.Module = object
-    torch.nn = nn_mod
-    sys.modules["torch"] = torch
-    sys.modules["torch.nn"] = nn_mod
+import pytest
 
-sys.modules.setdefault(
-    "models.factory", types.SimpleNamespace(build_encoder=lambda **k: None)
-)
-sys.modules.setdefault("models.encoder", types.SimpleNamespace(GNNEncoder=object))
+import models.encoder  # noqa: F401
+import models.factory  # noqa: F401
+from scripts import train_jepa as tj
 
-from scripts import train_jepa as tj  # noqa: E402
+torch = pytest.importorskip("torch")
 
 
 def test_cmd_sweep_run_invokes_run_one(monkeypatch, tmp_path):

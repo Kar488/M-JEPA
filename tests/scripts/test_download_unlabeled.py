@@ -7,14 +7,6 @@ import pandas as pd
 import pytest
 import requests
 
-try:  # pragma: no cover - torch may be unavailable
-    import torch  # noqa: F401
-except Exception:  # pragma: no cover
-    torch = types.SimpleNamespace(Tensor=object)
-    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
-    torch.float32 = None
-    sys.modules.setdefault("torch", torch)
-
 from scripts import download_unlabeled
 from scripts.download_unlabeled import (
     save_parquet,
@@ -22,6 +14,8 @@ from scripts.download_unlabeled import (
     stream_pubchem,
     stream_zinc,
 )
+
+torch = pytest.importorskip("torch")
 
 
 def require_parquet_engine():
@@ -48,7 +42,9 @@ def mock_graphdataset(monkeypatch):
         graphs = [DummyGraph() for _ in smiles_list]
         return types.SimpleNamespace(smiles=smiles_list, graphs=graphs)
 
-    dummy_ds = types.SimpleNamespace(from_smiles_list=staticmethod(fake_from_smiles_list))
+    dummy_ds = types.SimpleNamespace(
+        from_smiles_list=staticmethod(fake_from_smiles_list)
+    )
     monkeypatch.setattr(download_unlabeled, "GraphDataset", dummy_ds, raising=False)
 
 
@@ -131,6 +127,7 @@ def test_save_parquet(tmp_path):
 
 def test_cli_main(monkeypatch, tmp_path):
     require_parquet_engine()
+
     def fake_stream_zinc(batch_size, start_page=1, sleep=0.5):
         yield 1, ["C"]
 
