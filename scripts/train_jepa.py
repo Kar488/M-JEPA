@@ -39,7 +39,12 @@ import numpy as np
 import torch  # type: ignore
 import yaml
 
-from utils.dataset import load_dataset, load_directory_dataset, load_parquet_dataset
+from utils.dataset import (
+    load_dataset,
+    load_directory_dataset as _utils_load_directory_dataset,
+    load_parquet_dataset,
+    _GRAPH_DATASET_IMPORT_ERROR as _UTILS_GRAPH_DATASET_IMPORT_ERROR,
+)
 
 try:
     from data.augment import iter_augmentation_options  # type: ignore
@@ -91,9 +96,11 @@ except Exception:
 try:
     from data.augment import AugmentationConfig
     from data.mdataset import GraphData, GraphDataset
-except Exception:
+    _GRAPH_DATASET_IMPORT_ERROR = _UTILS_GRAPH_DATASET_IMPORT_ERROR
+except Exception as e:
     GraphData = None  # type: ignore[assignment]
     GraphDataset = None  # type: ignore[assignment]
+    _GRAPH_DATASET_IMPORT_ERROR = e
 
     @dataclass(frozen=True)
     class AugmentationConfig:
@@ -123,6 +130,15 @@ except Exception:
                 mask_angle=bool(cfg.get("mask_angle", False)),
                 dihedral=bool(cfg.get("dihedral", False)),
             )
+
+
+# Re-export dataset loader with guard for optional dependency
+def load_directory_dataset(dirpath: str, **kwargs):  # type: ignore[override]
+    if GraphDataset is None:
+        raise ImportError(
+            "GraphDataset is unavailable. Ensure `data.mdataset.GraphDataset` can be imported."
+        ) from _GRAPH_DATASET_IMPORT_ERROR
+    return _utils_load_directory_dataset(dirpath, **kwargs)
 
 
 # Models
@@ -466,9 +482,10 @@ evaluate_finetuned_head = _finetune.evaluate_finetuned_head
 
 def _inject_shared(m):
     """Inject shared utilities into a command module."""
-
-    for name, value in CMD_CONTEXT.__dict__.items():
-        setattr(m, name, value)
+    import sys as _sys
+    this = _sys.modules[__name__]
+    for name in CMD_CONTEXT.__dict__:
+        setattr(m, name, getattr(this, name, getattr(CMD_CONTEXT, name)))
 
 
 def cmd_sweep_run(args: argparse.Namespace) -> None:

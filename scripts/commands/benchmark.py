@@ -1,5 +1,8 @@
 from __future__ import annotations
+
 import argparse
+import sys
+from typing import Any, Dict, List
 def cmd_benchmark(args: argparse.Namespace) -> None:
     """Compare JEPA and contrastive encoders on the same labelled dataset  with flexible loading + report.
 
@@ -17,8 +20,9 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         sys.exit(6)
 
     seeds: List[int]
-    if args.seeds is not None and len(args.seeds) > 0:
-        seeds = args.seeds
+    arg_seeds = getattr(args, "seeds", None)
+    if arg_seeds is not None and len(arg_seeds) > 0:
+        seeds = arg_seeds
     else:
         seeds = CONFIG.get("benchmark", {}).get("seeds", [0])  # type: ignore[assignment]
 
