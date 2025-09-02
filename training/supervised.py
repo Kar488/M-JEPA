@@ -27,6 +27,9 @@ from utils.early_stopping import EarlyStopping
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.pooling import global_mean_pool
 
+from utils.graph_ops import _encode_graph
+from data.mdataset import GraphData
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["stratified_split", "train_linear_head"]
@@ -159,14 +162,6 @@ def stratified_split(
     random.shuffle(test_idx)
     return train_idx, val_idx, test_idx
 
-# --- call encoder with flexible signature (forward(x) OR forward(x, adj))
-import torch.nn as nn
-def _encode_flexible(encoder: nn.Module, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
-    try:
-        return encoder(x)          # most encoders: forward(x)
-    except TypeError:
-        return encoder(x, adj)     # fallback when model needs adjacency
-
 def train_linear_head(
     dataset: GraphDataset,
     encoder: GNNEncoder,
@@ -263,7 +258,6 @@ def train_linear_head(
     in_dim = getattr(encoder, "hidden_dim", None) or getattr(encoder, "out_dim", None)
     if in_dim is None:
         # Fallback: infer embedding size from one sample
-        from utils.graph_ops import _encode_graph  # already used elsewhere
         with torch.no_grad():
             emb = _encode_graph(encoder, dataset.graphs[0])
             in_dim = int(emb.shape[-1])
@@ -330,7 +324,15 @@ def train_linear_head(
 
             with torch.no_grad():
                 with _amp_ctx:
-                    node_emb = _encode_flexible(encoder, batch_x, batch_adj)
+                    edge_idx = batch_adj.nonzero().T.detach().cpu().numpy()
+                    if edge_idx.size == 0:
+                        import numpy as _np
+                        edge_idx = _np.zeros((2, 0), dtype=_np.int64)
+                    g = GraphData(
+                        x=batch_x.detach().cpu().numpy(),
+                        edge_index=edge_idx,
+                    )
+                    node_emb = _encode_graph(encoder, g)
                     graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t)) if batch_ptr is not None else node_emb.mean(dim=0, keepdim=True)
 
             num_graphs = batch_ptr.numel() - 1
@@ -386,7 +388,15 @@ def train_linear_head(
 
                 with torch.no_grad():
                     with _amp_ctx:
-                        node_emb = _encode_flexible(encoder, batch_x, batch_adj)
+                        edge_idx = batch_adj.nonzero().T.detach().cpu().numpy()
+                        if edge_idx.size == 0:
+                            import numpy as _np
+                            edge_idx = _np.zeros((2, 0), dtype=_np.int64)
+                        g = GraphData(
+                            x=batch_x.detach().cpu().numpy(),
+                            edge_index=edge_idx,
+                        )
+                        node_emb = _encode_graph(encoder, g)
                         graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t)) if batch_ptr is not None else node_emb.mean(dim=0, keepdim=True)
                 
                 num_graphs = batch_ptr.numel() - 1
@@ -429,7 +439,15 @@ def train_linear_head(
             
             with torch.no_grad():
                 with _amp_ctx:
-                    node_emb = _encode_flexible(encoder, batch_x, batch_adj)
+                    edge_idx = batch_adj.nonzero().T.detach().cpu().numpy()
+                    if edge_idx.size == 0:
+                        import numpy as _np
+                        edge_idx = _np.zeros((2, 0), dtype=_np.int64)
+                    g = GraphData(
+                        x=batch_x.detach().cpu().numpy(),
+                        edge_index=edge_idx,
+                    )
+                    node_emb = _encode_graph(encoder, g)
                     graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t)) if batch_ptr is not None else node_emb.mean(dim=0, keepdim=True)
 
             num_graphs = batch_ptr.numel() - 1

@@ -154,7 +154,20 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                     except Exception:
                         pass
                     break
-                
+    else:
+        # classification: ensure val_auc lands in summary
+        if "val_auc" not in payload:
+            for k in ("auc", "roc_auc", "pr_auc"):
+                v = payload.get(k)
+                if v is not None:
+                    try:
+                        auc = float(v)
+                        print(f"[sweep-run] publishing val_auc={auc:.6f} (from key={k})", flush=True)
+                        payload["val_auc"] = auc
+                    except Exception:
+                        pass
+                    break
+               
     _wb_get_or_init(args)           # re-open if an inner path finished it
     _wb_summary_update(payload)
     _wb_finish_safely()

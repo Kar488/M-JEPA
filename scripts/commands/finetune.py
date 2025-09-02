@@ -7,6 +7,10 @@ from typing import Dict, List
 
 import numpy as np
 import torch
+import torch.nn as nn
+from data.mdataset import GraphData
+from utils.graph_ops import _encode_graph
+from utils.pooling import global_mean_pool
 
 
 def cmd_finetune(args: argparse.Namespace) -> None:
@@ -218,7 +222,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                 metrics = train_linear_head(
                     dataset=labeled,
                     encoder=encoder,
-                    head_type=getattr(args, "head", "linear"),  # <- change
+                    #head_type=getattr(args, "head", "linear"),  # <- change innvalid param for supervised?
                     task_type=args.task_type,
                     epochs=1,
                     max_batches=getattr(
@@ -349,12 +353,23 @@ def evaluate_finetuned_head(
     for start in range(0, len(dataset), args.batch_size):
         batch_indices = list(range(start, min(start + args.batch_size, len(dataset))))
         batch_x, batch_adj, batch_ptr, batch_labels = dataset.get_batch(batch_indices)
-        batch_x = batch_x.to(device)
-        batch_adj = batch_adj.to(device)
-        batch_ptr = batch_ptr.to(device)
+       
+        batch_x   = batch_x.to(device, non_blocking=True)
+        batch_adj = batch_adj.to(device, non_blocking=True)
+        batch_ptr = batch_ptr.to(device, non_blocking=True)
         with torch.no_grad():
-            emb = enc(batch_x, batch_adj, batch_ptr)
-            preds = head(emb).squeeze(1)
+            edge_idx = batch_adj.nonzero().T.detach().cpu().numpy()
+            if edge_idx.size == 0:
+                import numpy as _np
+                edge_idx = _np.zeros((2, 0), dtype=_np.int64)
+            g = GraphData(
+                x=batch_x.detach().cpu().numpy(),
+                edge_index=edge_idx,
+            )
+            node_emb = _encode_graph(enc, g)
+            graph_emb = global_mean_pool(node_emb, batch_ptr.to(device)) if batch_ptr is not None else node_emb.mean(dim=0, keepdim=True)
+            preds = head(graph_emb).squeeze(1)
+            
         all_preds.append(preds.detach().to(torch.float32).cpu().numpy())
         all_targets.append(batch_labels.to(torch.float32).cpu().numpy())
     y_true = np.concatenate(all_targets)

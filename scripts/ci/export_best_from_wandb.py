@@ -134,7 +134,7 @@ def uniq_vals(arr: List[Any]) -> List[Any]:
     return sorted(s, key=lambda x: (str(type(x)), str(x)))
 
 # Task + metric plan (robust to missing val_rmse)
-def pick_primary_metric(runs, task: str) -> Tuple[str, bool]:
+def pick_primary_metric(runs, task: str, args) -> Tuple[str, bool]:
     # (name, maximize?) ordered by preference
     if task == "regression":
         prefs = [("val_rmse", False), ("rmse", False), ("rmse_mean", False),
@@ -205,7 +205,7 @@ def main():
 
     # Task + metric plan
     task = args.task if args.task != "auto" else detect_task(runs)
-    primary, maximize = pick_primary_metric(runs, task)
+    primary, maximize = pick_primary_metric(runs, task, args)
     tiebreakers: List[Tuple[str,bool]] = []
     if task == "regression":
         if args.reg_tb1: tiebreakers.append((args.reg_tb1, False))

@@ -60,6 +60,29 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
     data_dir = getattr(args, "test_dir", None) or args.labeled_dir
 
+    # safe W&B helpers
+    # safe W&B helpers: prefer wb.log / wb.finish if present; else try wb.run.*
+    def _wb_log(payload):
+        if wb is None:
+            return
+        try:
+            if hasattr(wb, "log"):
+                wb.log(payload)
+            elif hasattr(wb, "run") and hasattr(wb.run, "log"):
+                wb.run.log(payload)
+        except Exception:
+            pass
+    def _wb_finish():
+        if wb is None:
+            return
+        try:
+            if hasattr(wb, "finish"):
+                wb.finish()
+            elif hasattr(wb, "run") and hasattr(wb.run, "finish"):
+                wb.run.finish()
+        except Exception:
+            pass
+
     try:
         labeled = load_directory_dataset(
             data_dir,
@@ -68,10 +91,10 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             num_workers=getattr(args, "num_workers", 0),
             cache_dir=getattr(args, "cache_dir", None),
         )  # type: ignore[arg-type]
-        wb.log({"phase": "data_load", "labeled_graphs": len(labeled)})
+        _wb_log({"phase": "data_load", "labeled_graphs": len(labeled)})
     except Exception:
         logger.exception("Failed to load labelled dataset for benchmarking")
-        wb.log({"phase": "data_load", "status": "error"})
+        _wb_log({"phase": "data_load", "status": "error"})
         sys.exit(1)
 
     input_dim = labeled.graphs[0].x.shape[1]
@@ -89,14 +112,14 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     # If a separate test directory is provided, run in eval-only mode using the
     # fine-tuned checkpoint and return early.
     if getattr(args, "test_dir", None):
-        wb.log({"phase": "benchmark", "status": "start"})
+        _wb_log({"phase": "benchmark", "status": "start"})
         agg_ft = evaluate_finetuned_head(args.ft_ckpt, labeled, args, device)
         if agg_ft:
             all_results["finetuned"] = agg_ft
             for k, v in agg_ft.items():
                 wb.log({f"finetuned/{k}": v})
         verdict = "finetuned"
-        wb.log({"phase": "benchmark", "status": "success", "best_method": verdict})
+        _wb_log({"phase": "benchmark", "status": "success", "best_method": verdict})
         logger.info(f"Benchmark completed. Best method: {verdict}")
 
         try:
@@ -114,7 +137,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         except Exception:
             logger.warning("Failed to write reports", exc_info=True)
         finally:
-            wb.finish()
+            _wb_finish()
         return
 
     def evaluate_state(
@@ -176,7 +199,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
         agg = aggregate_metrics(metrics_runs)
         for k, v in agg.items():
-            wb.log({f"{method_name}/{k}": v})
+            _wb_log({f"{method_name}/{k}": v})
         return agg
 
     # Thin wrappers that load, then call evaluate_state
@@ -192,7 +215,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             return {}
         return evaluate_state(state, "finetuned")
 
-    wb.log({"phase": "benchmark", "status": "start"})
+    _wb_log({"phase": "benchmark", "status": "start"})
     # Evaluate JEPA
     agg_jepa = evaluate_encoder(args.jepa_encoder, "jepa")
     all_results["jepa"] = agg_jepa
@@ -260,7 +283,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             ) < all_results.get(verdict, {}).get(key, float("inf")):
                 verdict = "finetuned"
 
-    wb.log({"phase": "benchmark", "status": "success", "best_method": verdict})
+    _wb_log({"phase": "benchmark", "status": "success", "best_method": verdict})
     logger.info(f"Benchmark completed. Best method: {verdict}")
 
     # --- Write JSON/CSV report with all results + verdict ---
@@ -281,5 +304,5 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     except Exception:
         logger.warning("Failed to write reports", exc_info=True)
     finally:
-        wb.finish()
+        _wb_finish()
 

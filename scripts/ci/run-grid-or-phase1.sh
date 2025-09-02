@@ -103,10 +103,19 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     
     # paired-effect report
     echo "[phase1] paired-effect"
+    # choose metric by the task the runs log (AUC for classification, RMSE for regression)
+    PE_METRIC="val_rmse"
+    [[ "${TASK_FROM_PE:-regression}" == "classification" ]] && PE_METRIC="val_auc"
     "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-    python -u "$APP_DIR/scripts/ci/paired_effect_from_wandb.py" \
-        --project "${WANDB_PROJECT}" --group "${WANDB_RUN_GROUP}" \
-    2>&1 | tee "${LOG_DIR:-$APP_DIR/logs}/paired_effect.log"
+      python -u "$APP_DIR/scripts/ci/paired_effect_from_wandb.py" \
+        --project "${WANDB_PROJECT}" \
+        --group   "${WANDB_RUN_GROUP}" \
+        --metric  "${PE_METRIC}" \
+        --aggregate pair-seed \
+        --seed "${CI_SEED:-42}" \
+        --strict \
+      2>&1 | tee "${LOG_DIR:-$APP_DIR/logs}/paired_effect.log"
+
 
     # === pick winner/task from paired-effect output ===
     PE_JSON="${GRID_DIR:-$APP_DIR/grid}/paired_effect.json"

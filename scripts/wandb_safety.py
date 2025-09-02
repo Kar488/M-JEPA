@@ -95,6 +95,17 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
         if "val_mae" not in payload and payload.get("mae_mean") is not None:
             run.summary["val_mae"] = float(payload["mae_mean"])
 
+
+        # classification: alias AUC candidates
+        if "val_auc" not in run.summary:
+            for k in ("val_auc", "auc", "roc_auc", "pr_auc"):
+                if payload.get(k) is not None:
+                    try:
+                        run.summary["val_auc"] = float(payload[k])
+                    except Exception:
+                        pass
+                    break
+
         run.summary.update(payload)
     except Exception as e:
        _dbg("wb_summary_update exception:", e)
