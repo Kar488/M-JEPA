@@ -42,7 +42,6 @@ parameters:
 
   max_pretrain_batches:  {values: [150, 300]}
   max_finetune_batches:  {value: 100}
-  time-budget-mins:     {value: 30}
 
   devices:              {value: 1}
   num-workers:          {value: 4}

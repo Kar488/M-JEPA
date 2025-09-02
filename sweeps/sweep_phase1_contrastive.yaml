@@ -26,7 +26,7 @@ parameters:
 
   max_pretrain_batches:  {values: [200, 400]}
   max_finetune_batches:  {value: 200}
-  
+
   devices:              {value: 1}
   num-workers:          {value: 4}
   persistent-workers:   {value: 0} # 0 false
@@ -44,7 +44,6 @@ parameters:
   aug_subgraph_removal: {values: [0, 1]}
 
   seed:                 {values: [1, 2, 3]}
-  time-budget-mins:     {value: 30}
   task_type:            {value: regression}
   label_col:            {value: "measured log solubility in mols per litre"}
   sample_unlabeled:     {value: 10000}
