@@ -113,7 +113,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         target_pretrain_samples=0,
         max_pretrain_batches=args.max_pretrain_batches,
         max_finetune_batches=args.max_finetune_batches,
-        disable_tqdm=(not getattr(args, "force_tqdm", False)),
         time_left=lambda: float("inf"),
         num_workers=int(getattr(args, "num_workers", 4)),
         pin_memory=bool(int(getattr(args, "pin_memory", 1))),
