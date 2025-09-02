@@ -1,5 +1,7 @@
 from __future__ import annotations
 import argparse
+import hashlib, json
+
 def cmd_sweep_run(args: argparse.Namespace) -> None:
     """
     Run one hyperparameter config (JEPA or contrastive) for W&B sweeps.
@@ -62,10 +64,32 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     _labeled_dir   = _resolve_env_path(args.labeled_dir)
     _unlabeled_dir = _resolve_env_path(args.unlabeled_dir)
+
     print(f"[sweep-run] resolved labeled_dir={_labeled_dir}")
     print(f"[sweep-run] resolved unlabeled_dir={_unlabeled_dir}")
 
-    _wb_get_or_init(args)
+    wb = _wb_get_or_init(args)
+
+    # Normalise a config subset that should match across methods for a "pair"
+    pid_cfg = {
+        "gnn_type": args.gnn_type,
+        "hidden_dim": args.hidden_dim,
+        "num_layers": args.num_layers,
+        "mask_ratio": getattr(args, "mask_ratio", None),
+        "contiguous": int(getattr(args, "contiguous", getattr(args, "contiguity", 0))),
+        # include seed when using --aggregate pair-seed
+        "seed": getattr(args, "seed", None),
+    }
+
+    pair_id = hashlib.sha1(json.dumps(pid_cfg, sort_keys=True).encode()).hexdigest()[:8]
+
+    if wb is not None:
+        wb.config.update({"training_method": args.training_method, "pair_id": pair_id},
+                        allow_val_change=True)
+    else:
+        print("⚠️ W&B is disabled or failed to init, skipping config update")
+
+    print(f"[sweep-run] training_method={args.training_method} pair_id={pair_id}", flush=True)
 
     import time as _t
     _deadline = None

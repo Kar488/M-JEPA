@@ -47,6 +47,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     # keep one umbrella group; never force a run id for agent trials
     unset WANDB_NAME WANDB_RUN_ID
     : "${WANDB_RUN_GROUP:=${GITHUB_RUN_ID:-pipeline-$(date -u +%Y%m%dT%H%M%SZ)}}"
+    echo "[phase1] WANDB_RUN_GROUP=${WANDB_RUN_GROUP}"
     export WANDB_RUN_GROUP WANDB_RESUME=allow
 
     # -------- Phase 1 orchestration (two sweeps) --------

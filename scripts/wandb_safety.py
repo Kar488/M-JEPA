@@ -35,8 +35,8 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
             enable=True,
             project=os.getenv("WANDB_PROJECT", "m-jepa"),
             config=vars(args) if args is not None else None,
-            #group=os.getenv("WANDB_RUN_GROUP"),
-            #job_type="sweep-run",
+            group=os.getenv("WANDB_RUN_GROUP"),
+            job_type="sweep-run",
             tags=["sweep-run"],
             api_key=os.getenv("WANDB_API_KEY"),   
         )

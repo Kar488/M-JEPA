@@ -57,6 +57,11 @@ def maybe_init_wandb(
     config: Optional[Dict[str, Any]] = None,
     tags: Optional[Sequence[str]] = None,
     api_key: Optional[str] = None,
+    *,
+    group: Optional[str] = None,          # optional
+    job_type: Optional[str] = None,       # optional
+    settings: Optional["wandb.Settings"] = None,  # optional passthrough
+    **extra: Any,                         # future-proof for more kwargs
 ):
     """Start a tracker if we ask nicely.
 
@@ -104,8 +109,8 @@ def maybe_init_wandb(
                 id   = env.get("WANDB_RUN_ID"),         # same id reused across stages
                 resume   = env.get("WANDB_RESUME", "allow"),# allow/auto/never/… (allow is safe)
                 name     = env.get("WANDB_NAME"),           # "grid", "pretrain", "finetune", …
-                group    = env.get("WANDB_RUN_GROUP"),       # optional
-                job_type = env.get("WANDB_JOB_TYPE"),        # optional
+                group    = env.get("WANDB_RUN_GROUP",group),       # optional
+                job_type = env.get("WANDB_JOB_TYPE",job_type),        # optional
                 dir  = env.get("WANDB_DIR"),             # e.g., /data/mjepa/wandb
                 mode     = env.get("WANDB_MODE"),            # online/offline/disabled
                 project  = env.get("WANDB_PROJECT", project), 
