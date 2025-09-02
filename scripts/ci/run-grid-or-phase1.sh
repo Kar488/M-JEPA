@@ -20,6 +20,22 @@ GRID_MODE_CLEAN="${GRID_MODE_CLEAN//\'/}"
 
 echo "DEBUG: GRID_MODE='$GRID_MODE' -> CLEAN='$GRID_MODE_CLEAN'"
 
+# -------- resolve JEPA/Contrastive sweep spec paths cleanly ----------
+resolve_spec() {
+  local hint="$1"
+  shift
+  # candidates to try, in order
+  local candidates=(
+    "$APP_DIR/sweeps/sweep_phase1_${hint}.yaml"
+    "$APP_DIR/sweep/sweep_phase1_${hint}.yaml"
+    "$APP_DIR/sweep_phase1_${hint}.yaml"
+  )
+  for p in "${candidates[@]}"; do
+    [[ -f "$p" ]] && { echo "$p"; return 0; }
+  done
+  return 1
+}
+
 if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     echo "[grid] running wandb sweep agent"
 
@@ -38,11 +54,28 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     # Create sweeps via the Python module inside the env that has wandb installed
     # (pass project/entity explicitly so it doesn't rely on local config)
     echo "[phase1] creating sweeps…jepa"
-    JEPA_SPEC="${JEPA_SWEEP_SPEC:-$APP_DIR/sweeps/sweep_phase1_jepa.yaml}" 
+    JEPA_SPEC="${JEPA_SWEEP_SPEC:-}"
+    if [[ -z "$JEPA_SPEC" ]]; then
+        JEPA_SPEC="$(resolve_spec jepa)" || {
+            echo "[fatal] missing sweep spec for JEPA."
+            echo "  looked in:"
+            echo "    - $APP_DIR/sweeps/sweep_phase1_jepa.yaml"
+            echo "    - $APP_DIR/sweep/sweep_phase1_jepa.yaml"
+            echo "    - $APP_DIR/sweep_phase1_jepa.yaml"
+            echo "  git status:"; git -C "$APP_DIR" status --porcelain
+            echo "  tree:"; ls -lah "$APP_DIR/sweeps" 2>/dev/null || true
+            exit 1
+        }
+    fi
     JEPA_ID="$(wandb_sweep_create "$JEPA_SPEC")"
 
     echo "[phase1] creating sweeps…contrastive"
-    CONTRAST_SPEC="${CONTRAST_SWEEP_SPEC:-$APP_DIR/sweeps/sweep_phase1_contrastive.yaml}" 
+    CONTRAST_SPEC="${CONTRAST_SWEEP_SPEC:}" 
+    if [[ -z "$CONTRAST_SPEC" ]]; then
+        CONTRAST_SPEC="$(resolve_spec contrastive)" || {
+            echo "[fatal] missing sweep spec for Contrastive (same candidate paths)."; exit 1;
+        }
+    fi
     CONTRAST_ID="$(wandb_sweep_create "$CONTRAST_SPEC")"
 
     # hard-validate: must be exactly 8 lowercase letters/digits
