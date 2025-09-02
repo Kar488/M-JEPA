@@ -252,8 +252,16 @@ def train_linear_head(
         train_idx = indices[:train_end]
         val_idx = indices[train_end:val_end]
         test_idx = indices[val_end:]
-        
-    head = nn.Linear(encoder.hidden_dim, 1).to(device_t)
+
+    in_dim = getattr(encoder, "hidden_dim", None) or getattr(encoder, "out_dim", None)
+    if in_dim is None:
+        # Fallback: infer embedding size from one sample
+        from utils.graph_ops import _encode_graph  # already used elsewhere
+        with torch.no_grad():
+            emb = _encode_graph(encoder, dataset.graphs[0])
+            in_dim = int(emb.shape[-1])
+    head = nn.Linear(in_dim, 1).to(device_t)
+    
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
             encoder, device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None

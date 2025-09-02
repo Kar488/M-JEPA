@@ -65,13 +65,22 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     print(f"[sweep-run] resolved labeled_dir={_labeled_dir}")
     print(f"[sweep-run] resolved unlabeled_dir={_unlabeled_dir}")
 
-    per_trial_cfg = {k: v for k, v in vars(args).items() if k != "func"}
-
-    use_wandb = bool(int(getattr(args, "use_wandb", 1)))   # default: on
-    project   = getattr(args, "wandb_project", None) or os.getenv("WANDB_PROJECT", "mjepa")
-    tags      = getattr(args, "wandb_tags", None)
-
     _wb_get_or_init(args)
+
+    import time as _t
+    _deadline = None
+    if getattr(args, "time_budget_mins", 0):
+        _deadline = _t.perf_counter() + float(args.time_budget_mins) * 60.0
+
+    def _time_left() -> float:
+        if _deadline is None:
+            return float("inf")
+        # minutes remaining
+        return max(0.0, (_deadline - _t.perf_counter()) / 60.0)
+    
+    import os, pathlib
+    if args.cache_dir:
+        pathlib.Path(args.cache_dir).mkdir(parents=True, exist_ok=True)
 
     # One-config run
     row = _run_one_config_method(
@@ -97,8 +106,8 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
         task_type=args.task_type,
         seeds=[args.seed],
-        device="cuda",
-        use_wandb=True,
+        device=resolve_device("cuda" if getattr(args, "devices", 1) > 0 else "cpu"),
+        use_wandb=bool(int(getattr(args, "use_wandb", 1))),
         ckpt_dir="outputs/sweep_ckpts",
         ckpt_every=50,
         use_scheduler=True,
@@ -110,12 +119,12 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         use_scaffold=False,
         prebuilt_loaders=None,
         prebuilt_datasets=None,
-        target_pretrain_samples=0,
-        max_pretrain_batches=args.max_pretrain_batches,
-        max_finetune_batches=args.max_finetune_batches,
-        time_left=lambda: float("inf"),
+        target_pretrain_samples=int(getattr(args, "target_pretrain_samples", 0)),
+        max_pretrain_batches=int(getattr(args, "max_pretrain_batches", 0)),
+        max_finetune_batches=int(getattr(args, "max_finetune_batches", 0)),
+        time_left=_time_left,
         num_workers=int(getattr(args, "num_workers", 4)),
-        pin_memory=bool(int(getattr(args, "pin_memory", 1))),
+        pin_memory=bool(int(getattr(args, "pin_memory", 0))),
         persistent_workers=bool(int(getattr(args, "persistent_workers", 0))),
         prefetch_factor=int(getattr(args, "prefetch_factor", 2)),
         bf16=bool(int(getattr(args, "bf16", 0))),
@@ -132,7 +141,21 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             payload = row[0]
         else:
             payload = {}
-    
+
+    if args.task_type == "regression":
+        if "val_rmse" not in payload:
+            for k in ("metric", "rmse", "rmse_mean", "probe_rmse_mean"):
+                v = payload.get(k)
+                if v is not None:
+                    try:
+                        rmse = float(v)
+                        print(f"[sweep-run] publishing val_rmse={rmse:.6f} (from key={k})", flush=True)
+                        payload["val_rmse"] = rmse
+                    except Exception:
+                        pass
+                    break
+                
+    _wb_get_or_init(args)           # re-open if an inner path finished it
     _wb_summary_update(payload)
     _wb_finish_safely()
 

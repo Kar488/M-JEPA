@@ -6,6 +6,7 @@ import os, contextlib, json, time, pathlib
 if TYPE_CHECKING:
     from wandb.sdk.wandb_run import Run  # for the Optional["Run"] annotation
 
+#TODO clean later
 DEBUG = os.getenv("WBS_DEBUG", "1") == "1"
 def _dbg(*a):
     if DEBUG: print("[wandb_safety]", *a)
@@ -78,7 +79,7 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
         v_key = None
         v = payload.get("val_rmse")
         if v is None:
-            for k in ("rmse_mean", "rmse", "probe_rmse_mean"):
+            for k in ("rmse_mean", "rmse", "probe_rmse_mean","metric"):
                 if payload.get(k) is not None:
                     v_key, v = k, float(payload[k])
                     break

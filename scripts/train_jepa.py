@@ -692,7 +692,6 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
 
     d = CommonArgDefaults.from_config(section)
     p.add_argument("--add-3d", "--add_3d", dest="add_3d", action=BoolFlag, default=d.add_3d, help="Augment with 3D coordinate featurisation")
-    p.add_argument("--num-workers", type=int, default=d.num_workers, help="Process pool workers for SMILES conversion (0=serial)")
     p.add_argument("--cache-dir", type=str, default=d.cache_dir, help="Directory to cache processed graphs")
     p.add_argument("--contiguity", "--contiguous", dest="contiguity", action=BoolFlag, default=d.contiguous, help="Use contiguous subgraph masking (JEPA)")
     p.add_argument("--aug-rotate", "--aug_rotate",dest="aug_rotate", action=BoolFlag, default=d.aug_rotate, help="Randomly rotate coordinates during pretraining")
@@ -702,12 +701,15 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     p.add_argument("--batch-size", type=int, default=d.batch_size, help="Batch size")
     p.add_argument("--lr", type=float, default=d.lr, help="Learning rate")
     p.add_argument("--seeds", type=int, nargs="*", default=d.seeds, help="Random seeds for averaging results")
-    p.add_argument("--device", type=str, default=d.device, help="Device")
+    
     p.add_argument("--prefetch-factor", type=int, default=d.prefetch_factor, help="Dataloader prefetch factor (workers>0 only).")
     p.add_argument("--pin-memory", "--pin_memory", dest="pin_memory", action=BoolFlag, default=d.pin_memory, help="Pin CUDA host memory in DataLoader.")
     p.add_argument("--persistent-workers", "--persistent_workers", dest="persistent_workers", action=BoolFlag, default=d.persistent_workers, help="Keep worker processes alive across epochs (workers>0).")
     p.add_argument("--bf16", action=BoolFlag, default=d.bf16, help="Enable bfloat16 autocast on GPU.")
+    p.add_argument("--device", type=str, default=d.device, help="Device")
     p.add_argument("--devices", type=int, default=d.devices, help="Number of GPUs for DDP")
+    p.add_argument("--num-workers", type=int, default=d.num_workers, help="Process pool workers for SMILES conversion (0=serial)")
+    
     p.add_argument("--use-wandb", "--use_wandb", dest="use_wandb", action=BoolFlag, default=d.use_wandb, help="Enable Weights & Biases logging")
     p.add_argument("--wandb-project", type=str, default=d.wandb_project, help="W&B project name")
     p.add_argument("--wandb-tags", nargs="*", default=d.wandb_tags, help="Tags for W&B run")

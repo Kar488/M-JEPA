@@ -133,6 +133,21 @@ def uniq_vals(arr: List[Any]) -> List[Any]:
             s.add(v)
     return sorted(s, key=lambda x: (str(type(x)), str(x)))
 
+# Task + metric plan (robust to missing val_rmse)
+def pick_primary_metric(runs, task: str) -> Tuple[str, bool]:
+    # (name, maximize?) ordered by preference
+    if task == "regression":
+        prefs = [("val_rmse", False), ("rmse", False), ("rmse_mean", False),
+                    ("probe_rmse_mean", False), ("metric", False)]
+    else:
+        prefs = [("val_auc", True), ("pr_auc", True), ("roc_auc", True),
+                    ("metric", True)]
+    for name, mx in prefs:
+        if any(metric(r, name) is not None for r in runs):
+            return name, mx
+    # fallback to the task default even if empty; choose_best will raise
+    return (args.reg_primary if task=="regression" else args.clf_primary,
+            False if task=="regression" else True)
 
 # ---------- main ----------
 
@@ -190,18 +205,13 @@ def main():
 
     # Task + metric plan
     task = args.task if args.task != "auto" else detect_task(runs)
+    primary, maximize = pick_primary_metric(runs, task)
+    tiebreakers: List[Tuple[str,bool]] = []
     if task == "regression":
-        primary, maximize = args.reg_primary, False
-        tiebreakers: List[Tuple[str,bool]] = []
-        if args.reg_tb1:
-            tiebreakers.append((args.reg_tb1, False))   # mae: minimize
+        if args.reg_tb1: tiebreakers.append((args.reg_tb1, False))
     else:
-        primary, maximize = args.clf_primary, True
-        tiebreakers = []
-        if args.clf_tb1:
-            tiebreakers.append((args.clf_tb1, False))   # brier: minimize
-        if args.clf_tb2:
-            tiebreakers.append((args.clf_tb2, True))    # pr_auc: maximize
+        if args.clf_tb1: tiebreakers.append((args.clf_tb1, False))
+        if args.clf_tb2: tiebreakers.append((args.clf_tb2, True))
 
     # Pick best
     best = choose_best(runs, primary, maximize, args.tie_eps, tiebreakers)

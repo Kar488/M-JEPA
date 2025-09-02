@@ -67,6 +67,8 @@ class EdgeGNNEncoder(EncoderBase):
         dropout: float = 0.1,
     ):
         super().__init__()
+        self.hidden_dim = int(hidden_dim)
+        self.out_dim = int(hidden_dim)
         self.proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList(
             [
