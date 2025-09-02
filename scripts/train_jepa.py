@@ -675,37 +675,55 @@ class CommonArgDefaults:
         )
 
 
+# Accept --flag, --flag=1, --flag 0 styles
+class BoolFlag(argparse.Action):
+    def __init__(self, option_strings, dest, **kwargs):
+        kwargs.setdefault("nargs", "?")
+        kwargs.setdefault("const", True)
+        super().__init__(option_strings, dest, **kwargs)
+    def __call__(self, parser, namespace, values, option_string=None):
+        if values is None:
+            setattr(namespace, self.dest, True)
+        else:
+            setattr(namespace, self.dest, bool(int(str(values))))
+
 def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     """Add arguments common to multiple commands."""
 
     d = CommonArgDefaults.from_config(section)
-    p.add_argument("--gnn-type", type=str, default=d.gnn_type, help="GNN encoder type")
-    p.add_argument("--hidden-dim", type=int, default=d.hidden_dim, help="Hidden dimension size")
-    p.add_argument("--num-layers", type=int, default=d.num_layers, help="Number of GNN layers")
-    p.add_argument("--ema-decay", type=float, default=d.ema_decay, help="EMA decay rate")
-    p.add_argument("--add-3d", action="store_true", default=d.add_3d, help="Augment with 3D coordinate featurisation")
+    p.add_argument("--add-3d", "--add_3d", dest="add_3d", action=BoolFlag, default=d.add_3d, help="Augment with 3D coordinate featurisation")
     p.add_argument("--num-workers", type=int, default=d.num_workers, help="Process pool workers for SMILES conversion (0=serial)")
     p.add_argument("--cache-dir", type=str, default=d.cache_dir, help="Directory to cache processed graphs")
-    p.add_argument("--contiguous", action="store_true", default=d.contiguous, help="Use contiguous subgraph masking (JEPA)")
-    p.add_argument("--aug-rotate", action="store_true", default=d.aug_rotate, help="Randomly rotate coordinates during pretraining")
-    p.add_argument("--aug-mask-angle", action="store_true", default=d.aug_mask_angle, help="Mask bond angles during pretraining")
-    p.add_argument("--aug-dihedral", action="store_true", default=d.aug_dihedral, help="Perturb dihedral angles during pretraining")
+    p.add_argument("--contiguity", "--contiguous", dest="contiguity", action=BoolFlag, default=d.contiguous, help="Use contiguous subgraph masking (JEPA)")
+    p.add_argument("--aug-rotate", "--aug_rotate",dest="aug_rotate", action=BoolFlag, default=d.aug_rotate, help="Randomly rotate coordinates during pretraining")
+    p.add_argument("--aug-mask-angle", "--aug_mask_angle", dest="aug_mask_angle", action=BoolFlag, default=d.aug_mask_angle, help="Mask bond angles during pretraining")
+    p.add_argument("--aug-dihedral", "--aug_dihedral", dest="aug_dihedral", action=BoolFlag, default=d.aug_dihedral, help="Perturb dihedral angles during pretraining")
     p.add_argument("--epochs", type=int, default=d.epochs, help="Number of training epochs")
     p.add_argument("--batch-size", type=int, default=d.batch_size, help="Batch size")
     p.add_argument("--lr", type=float, default=d.lr, help="Learning rate")
     p.add_argument("--seeds", type=int, nargs="*", default=d.seeds, help="Random seeds for averaging results")
     p.add_argument("--device", type=str, default=d.device, help="Device")
     p.add_argument("--prefetch-factor", type=int, default=d.prefetch_factor, help="Dataloader prefetch factor (workers>0 only).")
-    p.add_argument("--pin-memory", action="store_true", default=d.pin_memory, help="Pin CUDA host memory in DataLoader.")
-    p.add_argument("--persistent-workers", action="store_true", default=d.persistent_workers, help="Keep worker processes alive across epochs (workers>0).")
-    p.add_argument("--bf16", action="store_true", default=d.bf16, help="Enable bfloat16 autocast on GPU.")
+    p.add_argument("--pin-memory", "--pin_memory", dest="pin_memory", action=BoolFlag, default=d.pin_memory, help="Pin CUDA host memory in DataLoader.")
+    p.add_argument("--persistent-workers", "--persistent_workers", dest="persistent_workers", action=BoolFlag, default=d.persistent_workers, help="Keep worker processes alive across epochs (workers>0).")
+    p.add_argument("--bf16", action=BoolFlag, default=d.bf16, help="Enable bfloat16 autocast on GPU.")
     p.add_argument("--devices", type=int, default=d.devices, help="Number of GPUs for DDP")
-    p.add_argument("--use-wandb", action="store_true", default=d.use_wandb, help="Enable Weights & Biases logging")
+    p.add_argument("--use-wandb", "--use_wandb", dest="use_wandb", action=BoolFlag, default=d.use_wandb, help="Enable Weights & Biases logging")
     p.add_argument("--wandb-project", type=str, default=d.wandb_project, help="W&B project name")
     p.add_argument("--wandb-tags", nargs="*", default=d.wandb_tags, help="Tags for W&B run")
 
-def build_parser() -> argparse.ArgumentParser:
+def _add_model_args(p: argparse.ArgumentParser) -> None:
+    md = CONFIG.get("model", {})
+    p.add_argument("--gnn-type", "--gnn_type", dest="gnn_type",
+                   choices=["gcn","gat","mpnn","edge_mpnn","graphsage","gin"],
+                    default=md.get("gnn_type", "gcn"))
+    p.add_argument("--hidden-dim", "--hidden_dim", dest="hidden_dim", type=int, default=md.get("hidden_dim", 128))
+    p.add_argument("--num-layers", "--num_layers", dest="num_layers", type=int, default=md.get("num_layers", 2))
+    p.add_argument("--mask-ratio", "--mask_ratio", dest="mask_ratio", type=float, default=md.get("mask_ratio", 0.15))
+    p.add_argument("--ema-decay", "--ema_decay", dest="ema_decay", type=float, default=md.get("ema_decay", 0.996))
+    p.add_argument("--temperature", dest="temperature", type=float, default=md.get("temperature", 0.1))
 
+def build_parser() -> argparse.ArgumentParser:
 
     """Construct the argument parser with subcommands."""
     parser = argparse.ArgumentParser(
@@ -721,14 +739,13 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--ckpt-dir", type=str, default="ckpts/pretrain", help="Directory to save pretrain checkpoints")
     pre.add_argument("--resume-ckpt", type=str, default="", help="Resume pretraining from a checkpoint")
     pre.add_argument("--save-every", type=int, default=1, help="Save a pretrain checkpoint every N epochs")
-    pre.add_argument("--mask-ratio", type=float, default=0.15, help="Fraction of nodes to mask in each view (JEPA/contrastive).")
     pre.add_argument("--plot-dir", type=str, default=CONFIG.get("plot_dir", "plots"), help="Directory to save training plots")
     pre.add_argument("--force-tqdm", action="store_true", help="Force-enable tqdm progress bars even when not attached to a TTY")
-    pre.add_argument("--temperature", type=float, default=0.1, help="InfoNCE temperature (contrastive only)")
     pre.add_argument("--sample-unlabeled", type=int, default=0, help="If >0, load at most N graphs from the unlabeled dataset.")
     pre.add_argument("--n-rows-per-file", type=int, default=None, help="If set, limit rows read per file when loading datasets.")
-
+    
     _add_common_args(pre, "pretrain")
+    _add_model_args(pre)
     pre.set_defaults(func=cmd_pretrain)
 
     # Fine‑tune subcommand
@@ -744,6 +761,7 @@ def build_parser() -> argparse.ArgumentParser:
     ft.add_argument("--task-type", choices=["classification", "regression"], default="classification")
     ft.add_argument("--patience", type=int, default=CONFIG.get("finetune", {}).get("patience", 10), help="Early stopping patience")
     _add_common_args(ft, "finetune")
+    _add_model_args(ft)
     ft.set_defaults(func=cmd_finetune)
 
     # Evaluate subcommand (alias for finetune)
@@ -758,6 +776,7 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--task-type", choices=["classification", "regression"], default="classification")
     ev.add_argument("--patience", type=int, default=CONFIG.get("evaluate", {}).get("patience", 10), help="Early stopping patience")
     _add_common_args(ev, "evaluate")
+    _add_model_args(ev)
     ev.set_defaults(func=cmd_evaluate)
     # Benchmark subcommand
     bench = sub.add_parser("benchmark", help="Compare JEPA and contrastive encoders on labelled data"); 
@@ -772,6 +791,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--report-dir", type=str, default="reports", help="where to write JSON/CSV"); 
     bench.add_argument("--report-stem", type=str, default="", help="filename stem; defaults to timestamped benchmark_*")
     _add_common_args(bench, "benchmark")
+    _add_model_args(bench)
     bench.set_defaults(func=cmd_benchmark)
     # Tox21 case study
     tox = sub.add_parser("tox21", help="Run the Tox21 case study experiment")
@@ -782,59 +802,46 @@ def build_parser() -> argparse.ArgumentParser:
     tox.add_argument("--finetune-epochs", type=int, default=case_cfg.get("finetune_epochs", 20), help="Epochs to train regression head in case study"); 
     tox.add_argument("--num-top-exclude", type=int, default=case_cfg.get("num_top_exclude", 10), help="Top‑k toxic compounds to exclude when ranking")
     _add_common_args(tox, "case_study")
+    _add_model_args(tox)
     tox.set_defaults(func=cmd_tox21)
 
     # pointing to wandb hyberband
-    sweep = sub.add_parser("sweep-run")
-   # --- sweep-run (W&B will pass --key=value with underscores) ---
+    sweep = sub.add_parser("sweep-run", help="Single trial run from W&B sweep")
 
-    # paths
-    sweep.add_argument("--labeled-dir",   "--labeled_dir",   dest="labeled_dir",   type=str, required=True)
+    # paths + task core
+    sweep.add_argument("--labeled-dir", "--labeled_dir", dest="labeled_dir", type=str, required=True)
     sweep.add_argument("--unlabeled-dir", "--unlabeled_dir", dest="unlabeled_dir", type=str, required=True)
-
-    # core task/config
-    sweep.add_argument("--training-method", "--training_method",
-                    dest="training_method", choices=["jepa","contrastive"], default="jepa")
-    sweep.add_argument("--task-type", "--task_type",
-                    dest="task_type", choices=["classification","regression"], default="classification")
+    sweep.add_argument("--training-method", "--training_method", dest="training_method",
+                    choices=["jepa","contrastive"], default="jepa")
+    sweep.add_argument("--task-type", "--task_type", dest="task_type",
+                    choices=["classification","regression"], default="regression")
     sweep.add_argument("--label-col", "--label_col", dest="label_col", type=str, default="label")
-    sweep.add_argument("--seed", dest="seed", type=int, default=0)
-    sweep.add_argument("--temperature", dest="temperature", type=float, default=0.1)
-    sweep.add_argument("--ema-decay", "--ema_decay", dest="ema_decay", type=float, default=0.999)
 
-    # model/hparams
-    sweep.add_argument("--mask-ratio", "--mask_ratio", dest="mask_ratio", type=float, default=0.15)
-    sweep.add_argument("--contiguity", dest="contiguity", type=int, default=1)
+    # hparams unique to sweep-run
     sweep.add_argument("--learning-rate", "--learning_rate", dest="learning_rate", type=float, default=1e-3)
-    sweep.add_argument("--gnn-type", "--gnn_type", dest="gnn_type", type=str, default="gcn")
-    sweep.add_argument("--hidden-dim", "--hidden_dim", dest="hidden_dim", type=int, default=256)
-    sweep.add_argument("--num-layers", "--num_layers", dest="num_layers", type=int, default=3)
+    sweep.add_argument("--seed", dest="seed", type=int, default=0)
 
-    # training config
+    # training lengths / caps
     sweep.add_argument("--pretrain-batch-size", "--pretrain_batch_size", dest="pretrain_batch_size", type=int, default=64)
     sweep.add_argument("--finetune-batch-size", "--finetune_batch_size", dest="finetune_batch_size", type=int, default=64)
-    sweep.add_argument("--pretrain-epochs", "--pretrain_epochs", dest="pretrain_epochs", type=int, default=50)
-    sweep.add_argument("--finetune-epochs", "--finetune_epochs", dest="finetune_epochs", type=int, default=5)
+    sweep.add_argument("--pretrain-epochs", "--pretrain_epochs", dest="pretrain_epochs", type=int, default=10)
+    sweep.add_argument("--finetune-epochs", "--finetune_epochs", dest="finetune_epochs", type=int, default=1)
     sweep.add_argument("--max-pretrain-batches", "--max_pretrain_batches", dest="max_pretrain_batches", type=int, default=0)
     sweep.add_argument("--max-finetune-batches", "--max_finetune_batches", dest="max_finetune_batches", type=int, default=0)
     sweep.add_argument("--sample-unlabeled", "--sample_unlabeled", dest="sample_unlabeled", type=int, default=0)
-    sweep.add_argument("--sample-labeled", "--sample_labeled", dest="sample_labeled", type=int, default=0)
-    sweep.add_argument("--cache-dir", type=str, default=None)
-    sweep.add_argument("--time-budget-mins", type=int, default=0, help="Optional wallclock budget; stop early when exceeded.")
+    sweep.add_argument("--sample-labeled", "--sample_labeled", dest="sample_labeled", type=int, default=0) 
+    sweep.add_argument("--time-budget-mins", type=int, default=0)
 
-    # augmentations (accept 0/1 values from sweep)
-    sweep.add_argument("--add-3d",               "--add_3d",               dest="add_3d",               type=int, choices=[0,1], default=0)
-    sweep.add_argument("--aug-rotate",           "--aug_rotate",           dest="aug_rotate",           type=int, choices=[0,1], default=0)
-    sweep.add_argument("--aug-mask-angle",       "--aug_mask_angle",       dest="aug_mask_angle",       type=int, choices=[0,1], default=0)
-    sweep.add_argument("--aug-dihedral",         "--aug_dihedral",         dest="aug_dihedral",         type=int, choices=[0,1], default=0)
-    sweep.add_argument("--aug-bond-deletion",    "--aug_bond_deletion",    dest="aug_bond_deletion",    type=int, choices=[0,1], default=0)
-    sweep.add_argument("--aug-atom-masking",     "--aug_atom_masking",     dest="aug_atom_masking",     type=int, choices=[0,1], default=0)
+    # aug flags not covered by common (structural ones)
+    sweep.add_argument("--aug-bond-deletion", "--aug_bond_deletion", dest="aug_bond_deletion", type=int, choices=[0,1], default=0)
+    sweep.add_argument("--aug-atom-masking",  "--aug_atom_masking",  dest="aug_atom_masking",  type=int, choices=[0,1], default=0)
     sweep.add_argument("--aug-subgraph-removal", "--aug_subgraph_removal", dest="aug_subgraph_removal", type=int, choices=[0,1], default=0)
 
-    sweep.add_argument("--num-workers", type=int, default=0, help="Process pool workers for SMILES conversion (0=serial)") 
-   
-    sweep.set_defaults(func=cmd_sweep_run)
+    # pull in perf/common knobs once (devices, workers, pin/prefetch/bf16/use-wandb, etc.)
+    _add_common_args(sweep, "sweep")
+    _add_model_args(sweep)
 
+    sweep.set_defaults(func=cmd_sweep_run)
     # ------------------------------------------------------------------
     # Grid search
     # ------------------------------------------------------------------
