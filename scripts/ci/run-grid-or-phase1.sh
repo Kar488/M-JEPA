@@ -70,7 +70,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     JEPA_ID="$(wandb_sweep_create "$JEPA_SPEC")"
 
     echo "[phase1] creating sweeps…contrastive"
-    CONTRAST_SPEC="${CONTRAST_SWEEP_SPEC:}" 
+    CONTRAST_SPEC="${CONTRAST_SWEEP_SPEC:-}" 
     if [[ -z "$CONTRAST_SPEC" ]]; then
         CONTRAST_SPEC="$(resolve_spec contrastive)" || {
             echo "[fatal] missing sweep spec for Contrastive (same candidate paths)."; exit 1;
