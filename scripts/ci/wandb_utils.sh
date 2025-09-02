@@ -19,6 +19,17 @@ sanitize_sweep_yaml() {
   dos2unix "$f" 2>/dev/null || true
 }
 
+sanitize_sweep_yaml_copy() {
+  # $1 = source yaml, $2 = dest yaml
+  local src="$1" dst="$2"
+  mkdir -p "$(dirname "$dst")"
+  cp "$src" "$dst"
+  # Fix flow-list command → block list with explicit 'python'
+  perl -0777 -i -pe 's/command:\s*\[[^\]]*\]/command:\n  - "python"\n  - "${program}"\n  - "sweep-run"\n  - "${args}"/s' "$dst"
+  # Hyphenated flags expected by your CLI
+  sed -i -E 's/\blabeled[_-]dir\b/labeled-dir/g; s/\bunlabeled[_-]dir\b/unlabeled-dir/g' "$dst"
+}
+
 qualify_sweep_id() {
   local id="$1"
   if [[ "$id" == */* ]]; then echo "$id"; else echo "${WANDB_ENTITY}/${WANDB_PROJECT}/${id}"; fi
@@ -27,9 +38,16 @@ qualify_sweep_id() {
 wandb_sweep_create() {
   local spec="$1"
   [[ -f "$spec" ]] || { echo "[fatal] missing sweep spec: $spec" >&2; return 2; }
-  sanitize_sweep_yaml "$spec"
+
   ensure_micromamba
-  "$MMBIN" run -n mjepa env APP_DIR="$APP_DIR" SPEC="$spec" WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
+
+  local tmp
+  tmp="$(mktemp -d)"
+  local copy="$tmp/spec.yaml"
+  sanitize_sweep_yaml_copy "$spec" "$copy"
+  
+  
+  "$MMBIN" run -n mjepa env APP_DIR="$APP_DIR" SPEC="$copy" WANDB_PROJECT="$WANDB_PROJECT" WANDB_ENTITY="$WANDB_ENTITY" \
     python - <<'PY' | tail -n1 | tr -d '\r\n '
 import os, yaml, wandb, os.path as p
 with open(os.environ["SPEC"], "r") as f:
