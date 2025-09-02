@@ -314,20 +314,24 @@ def train_linear_head(
                     _embs = []
                     for i in batch_indices:
                         g_i = dataset.graphs[i]
-                        if hasattr(g_i, "to_tensors"):
-                            # test stub path: encoder expects (x, adj)
-                            x_i, adj_i = g_i.to_tensors()
-                            x_i   = x_i.to(device_t, non_blocking=True)
-                            adj_i = adj_i.to(device_t, non_blocking=True)
-                            try:
-                                h_nodes = encoder(x_i, adj_i)
-                            except TypeError:
-                                h_nodes = encoder(x_i)  # ultra-defensive
-                            g_vec = h_nodes.mean(dim=0, keepdim=True)                 # [1, D]
-                        else:
-                            # real path: preserves edge_attr from SMILES graphs
+                        # Prefer the GraphData path (preserves edge_attr) first
+                        try:
                             h_nodes = _encode_graph(encoder, g_i)                      # [Ni, D]
                             g_vec   = _pool_graph_emb(h_nodes, g_i).reshape(1, -1)     # [1, D]
+                        except Exception:
+                            # Fallback for test stubs that expose to_tensors() and encoders that accept (x, adj)
+                            if hasattr(g_i, "to_tensors"):
+                                x_i, adj_i = g_i.to_tensors()
+                                x_i   = x_i.to(device_t, non_blocking=True)
+                                adj_i = adj_i.to(device_t, non_blocking=True)
+                                try:
+                                    h_nodes = encoder(x_i, adj_i)
+                                except TypeError:
+                                    h_nodes = encoder(x_i)
+                                g_vec = h_nodes.mean(dim=0, keepdim=True)
+                            else:
+                                # Re-raise if no tensor fallback exists
+                                raise
                         _embs.append(g_vec.to(device_t))
                     graph_emb = torch.cat(_embs, dim=0)                                 # [B, D]
 
@@ -375,18 +379,21 @@ def train_linear_head(
                         _embs = []
                         for i in batch_indices:
                             g_i = dataset.graphs[i]
-                            if hasattr(g_i, "to_tensors"):
-                                x_i, adj_i = g_i.to_tensors()
-                                x_i   = x_i.to(device_t, non_blocking=True)
-                                adj_i = adj_i.to(device_t, non_blocking=True)
-                                try:
-                                    h_nodes = encoder(x_i, adj_i)
-                                except TypeError:
-                                    h_nodes = encoder(x_i)
-                                g_vec = h_nodes.mean(dim=0, keepdim=True)
-                            else:
+                            try:
                                 h_nodes = _encode_graph(encoder, g_i)
                                 g_vec   = _pool_graph_emb(h_nodes, g_i).reshape(1, -1)
+                            except Exception:
+                                if hasattr(g_i, "to_tensors"):
+                                    x_i, adj_i = g_i.to_tensors()
+                                    x_i   = x_i.to(device_t, non_blocking=True)
+                                    adj_i = adj_i.to(device_t, non_blocking=True)
+                                    try:
+                                        h_nodes = encoder(x_i, adj_i)
+                                    except TypeError:
+                                        h_nodes = encoder(x_i)
+                                    g_vec = h_nodes.mean(dim=0, keepdim=True)
+                                else:
+                                    raise
                             _embs.append(g_vec.to(device_t))
                         graph_emb = torch.cat(_embs, dim=0)
 
@@ -425,18 +432,21 @@ def train_linear_head(
                     _embs = []
                     for i in batch_indices:
                         g_i = dataset.graphs[i]
-                        if hasattr(g_i, "to_tensors"):
-                            x_i, adj_i = g_i.to_tensors()
-                            x_i   = x_i.to(device_t, non_blocking=True)
-                            adj_i = adj_i.to(device_t, non_blocking=True)
-                            try:
-                                h_nodes = encoder(x_i, adj_i)
-                            except TypeError:
-                                h_nodes = encoder(x_i)
-                            g_vec = h_nodes.mean(dim=0, keepdim=True)
-                        else:
+                        try:
                             h_nodes = _encode_graph(encoder, g_i)
                             g_vec   = _pool_graph_emb(h_nodes, g_i).reshape(1, -1)
+                        except Exception:
+                            if hasattr(g_i, "to_tensors"):
+                                x_i, adj_i = g_i.to_tensors()
+                                x_i   = x_i.to(device_t, non_blocking=True)
+                                adj_i = adj_i.to(device_t, non_blocking=True)
+                                try:
+                                    h_nodes = encoder(x_i, adj_i)
+                                except TypeError:
+                                    h_nodes = encoder(x_i)
+                                g_vec = h_nodes.mean(dim=0, keepdim=True)
+                            else:
+                                raise
                         _embs.append(g_vec.to(device_t))
                     graph_emb = torch.cat(_embs, dim=0)
 

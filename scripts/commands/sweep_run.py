@@ -70,22 +70,26 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     wb = _wb_get_or_init(args)
 
+    mr = getattr(args, "mask_ratio", None)
+    if mr is not None: mr = round(float(mr), 6)
+
     # Normalise a config subset that should match across methods for a "pair"
     pid_cfg = {
         "gnn_type": args.gnn_type,
         "hidden_dim": args.hidden_dim,
         "num_layers": args.num_layers,
-        "mask_ratio": getattr(args, "mask_ratio", None),
+        "mask_ratio": mr,
         "contiguous": int(getattr(args, "contiguous", getattr(args, "contiguity", 0))),
-        # include seed when using --aggregate pair-seed
-        "seed": getattr(args, "seed", None),
     }
 
     pair_id = hashlib.sha1(json.dumps(pid_cfg, sort_keys=True).encode()).hexdigest()[:8]
 
     if wb is not None:
-        wb.config.update({"training_method": args.training_method, "pair_id": pair_id},
-                        allow_val_change=True)
+        wb.config.update({
+        "training_method": args.training_method,
+        "pair_id": pair_id,
+        "seed": getattr(args, "seed", None)   # keep seed visible separately
+        }, allow_val_change=True)
     else:
         print("⚠️ W&B is disabled or failed to init, skipping config update")
 
