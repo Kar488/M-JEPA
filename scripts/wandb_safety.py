@@ -43,20 +43,21 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
         return getattr(wandb, "run", None)
         
     # hard fallback
-    _dbg("fallback wandb.init(...)")
-    try:
-        run = wandb.init(
-            project=os.getenv("WANDB_PROJECT", "m-jepa"),
-            group=os.getenv("WANDB_RUN_GROUP"),
-            job_type="sweep-run",
-            config=vars(args) if args is not None else None,
-            reinit=True,
-        )
-        _dbg("wandb.init -> run id:", getattr(run, "id", None))
-        return run
-    except Exception:
-        _dbg("wandb.init raised; using wandb.run if present")
-        return getattr(wandb, "run", None)
+    if run is None:
+        _dbg("fallback wandb.init(...)")
+        try:
+            run = wandb.init(
+                project=os.getenv("WANDB_PROJECT", "m-jepa"),
+                group=os.getenv("WANDB_RUN_GROUP"),
+                job_type="sweep-run",
+                config=vars(args) if args is not None else None,
+                reinit=True,
+            )
+            _dbg("wandb.init -> run id:", getattr(run, "id", None))
+            return run
+        except Exception:
+            _dbg("wandb.init raised; using wandb.run if present")
+            return getattr(wandb, "run", None)
 
 def wb_summary_update(payload: Dict[str, Any]) -> None:
     """Safe summary update: only writes if a run exists; never throws."""

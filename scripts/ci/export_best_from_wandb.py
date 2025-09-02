@@ -292,7 +292,7 @@ def main():
         if isinstance(params.get("mask_ratio"), dict) and "min" in params["mask_ratio"]:
             params["mask_ratio"].setdefault("distribution", "uniform")
         if isinstance(params.get("learning_rate"), dict) and "min" in params["learning_rate"]:
-            params["learning_rate"].setdefault("distribution", "log_uniform")
+            params["learning_rate"].setdefault("distribution", "log_uniform_values")
 
         # JEPA or Contrastive per Phase-1 winner
         training_method_param = {"value": winner}

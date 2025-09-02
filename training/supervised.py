@@ -159,6 +159,13 @@ def stratified_split(
     random.shuffle(test_idx)
     return train_idx, val_idx, test_idx
 
+# --- call encoder with flexible signature (forward(x) OR forward(x, adj))
+import torch.nn as nn
+def _encode_flexible(encoder: nn.Module, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
+    try:
+        return encoder(x)          # most encoders: forward(x)
+    except TypeError:
+        return encoder(x, adj)     # fallback when model needs adjacency
 
 def train_linear_head(
     dataset: GraphDataset,
@@ -261,7 +268,7 @@ def train_linear_head(
             emb = _encode_graph(encoder, dataset.graphs[0])
             in_dim = int(emb.shape[-1])
     head = nn.Linear(in_dim, 1).to(device_t)
-    
+
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
             encoder, device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None
@@ -323,7 +330,7 @@ def train_linear_head(
 
             with torch.no_grad():
                 with _amp_ctx:
-                    node_emb = encoder(batch_x, batch_adj)
+                    node_emb = _encode_flexible(encoder, batch_x, batch_adj)
                     graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t)) if batch_ptr is not None else node_emb.mean(dim=0, keepdim=True)
 
             num_graphs = batch_ptr.numel() - 1
@@ -379,7 +386,7 @@ def train_linear_head(
 
                 with torch.no_grad():
                     with _amp_ctx:
-                        node_emb = encoder(batch_x, batch_adj)
+                        node_emb = _encode_flexible(encoder, batch_x, batch_adj)
                         graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t)) if batch_ptr is not None else node_emb.mean(dim=0, keepdim=True)
                 
                 num_graphs = batch_ptr.numel() - 1
@@ -422,7 +429,7 @@ def train_linear_head(
             
             with torch.no_grad():
                 with _amp_ctx:
-                    node_emb = encoder(batch_x, batch_adj)
+                    node_emb = _encode_flexible(encoder, batch_x, batch_adj)
                     graph_emb = global_mean_pool(node_emb, batch_ptr.to(device_t)) if batch_ptr is not None else node_emb.mean(dim=0, keepdim=True)
 
             num_graphs = batch_ptr.numel() - 1

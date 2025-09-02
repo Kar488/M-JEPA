@@ -41,7 +41,7 @@ on:
       hyperparam_mode:
         description: "Which hyperparameter search strategy to use"
         required: false
-        default: "custom"
+        default: "wandb"
         type: choice
         options:
           - custom
