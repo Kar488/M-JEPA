@@ -205,6 +205,45 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     [[ "$SWEEP_ID2" =~ ^[a-z0-9]{8}$ ]] || { echo "[phase2][fatal] bad sweep id: '$SWEEP_ID2'"; exit 1; }
     echo -n "$SWEEP_ID2" > "${GRID_DIR:-$APP_DIR/grid}/phase2_sweep_id.txt"
     echo "[phase2] created sweep: $SWEEP_ID2  (saved to $GRID_DIR/phase2_sweep_id.txt)"
+
+    # --- Export Phase-1 runs to CSV (robust; no bare `python`) ---
+    # Resolve a python binary
+    # PY_BIN="$(command -v python || command -v python3 || true)"
+    # if [[ -z "$PY_BIN" ]]; then
+    #   echo "[export][fatal] No python interpreter on PATH (tried python, python3)"; exit 127
+    # fi
+
+    # # Run inside the mjepa env so pandas/wandb are available
+    # "$MMBIN" run -n mjepa bash -lc "
+    #   set -euo pipefail
+    #   $PY_BIN - <<'PY'
+    # import os, pandas as pd, wandb
+    # ent   = os.environ.get('WANDB_ENTITY')
+    # proj  = os.environ.get('WANDB_PROJECT')
+    # group = os.environ.get('WANDB_RUN_GROUP')  # Phase-1 group
+    # api   = wandb.Api()
+
+    # filters = {'group': group} if group else None
+    # runs = api.runs(f'{ent}/{proj}', filters=filters)
+
+    # rows = []
+    # for r in runs:
+    #     row = {}
+    #     row.update(dict(r.config or {}))
+    #     row.update(dict(r.summary or {}))
+    #     row['id']    = r.id
+    #     row['name']  = r.name
+    #     row['state'] = r.state
+    #     row['group'] = r.group
+    #     rows.append(row)
+
+    # out_dir = os.environ.get('GRID_DIR') or os.path.join(os.environ.get('APP_DIR','.'), 'grid')
+    # os.makedirs(out_dir, exist_ok=True)
+    # out_csv = os.path.join(out_dir, 'phase1_runs_export.csv')
+    # pd.DataFrame(rows).to_csv(out_csv, index=False)
+    # print(f'[export] wrote {len(rows)} rows to {out_csv}')
+    # PY
+    # "
         
 else
     echo "[grid] running custom grid-search"

@@ -9,7 +9,7 @@
 ###############################################################
 
 model:
-  gnn_type: mpnn       # Encoder backbone (mpnn, gcn, gat, etc.)
+  gnn_type: edge_mpnn   # Encoder backbone (mpnn, gcn, gat, etc.)
   hidden_dim: 256       # Hidden dimension of all GNN layers and embeddings
   num_layers: 3         # Number of message passing layers
   ema_decay: 0.99       # Exponential moving average decay for target encoder
