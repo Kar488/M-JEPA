@@ -27,7 +27,7 @@ parameters:
   contiguity: { values: [0, 1] }
   hidden_dim: { values: [128, 256] }
   num_layers: { values: [2, 3] }
-  gnn_type: { values: [gcn, gat, mpnn, edge_mpnn] }
+  gnn_type: { values: [gine, dmpnn, schnet3d] }
   add_3d: { values: [0, 1] }
 
   pretrain_batch_size: { values: [64, 128, 256] }

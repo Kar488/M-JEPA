@@ -262,7 +262,7 @@ jobs:
           GRID_MODE: "wandb"   # or "custom"
           JEPA_SWEEP_SPEC: /srv/mjepa/sweeps/sweep_phase1_jepa.yaml
           CONTRAST_SWEEP_SPEC: /srv/mjepa/sweeps/sweep_phase1_contrastive.yaml
-          EXPORT_OUT_PATH: /data/mjepa/experiments/${{ env.GRID_DIR }}/best_grid_config.json
+          EXPORT_OUT_PATH: ${{ env.GRID_DIR }}/best_grid_config.json
           EXPORT_PHASE2_PATH: /srv/mjepa/sweeps/grid_sweep_phase2.yaml
           PHASE2_UNLABELED_DIR: /srv/mjepa/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  /srv/mjepa/data/katielinkmoleculenet_benchmark/train
