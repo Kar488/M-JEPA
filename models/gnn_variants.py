@@ -239,7 +239,8 @@ class GINE(EncoderBase):
         )
         self.out_norm = nn.LayerNorm(hidden_dim)
 
-    def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
+    # NEW: node-level encoder
+    def _encode_nodes(self, g: GraphData, device: torch.device) -> torch.Tensor:
         x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
         e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)
         a = getattr(g, "edge_attr", None)
@@ -250,9 +251,19 @@ class GINE(EncoderBase):
         x = self.proj(x)
         for layer in self.layers:
             x = layer(x, e, a)
-        x = self.out_norm(x)
+        return self.out_norm(x)  # [N, D]
+
+    # NEW: forward returns node embeddings
+    def forward(self, g: GraphData, device: torch.device) -> torch.Tensor:
+        return self._encode_nodes(g, device)  # [N, D]
+
+    # keep: graph-level convenience for tests
+    def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
+        x = self._encode_nodes(g, device)  # [N, D]
         from utils.pooling import global_mean_pool
-        return global_mean_pool(x, getattr(g, "graph_ptr", None))
+        graph_ptr = getattr(g, "graph_ptr", None)
+        return global_mean_pool(x, graph_ptr)  # [D] (single-graph case)
+
 
 
 # -------------------------
@@ -300,7 +311,7 @@ class DMPNN(EncoderBase):
         )
         self.out_norm = nn.LayerNorm(hidden_dim)
 
-    def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
+    def _encode_nodes(self, g: GraphData, device: torch.device) -> torch.Tensor:
         x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
         e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)
         a = getattr(g, "edge_attr", None)
@@ -311,9 +322,17 @@ class DMPNN(EncoderBase):
         x = self.proj(x)
         for layer in self.layers:
             x = layer(x, e, a)
-        x = self.out_norm(x)
+        return self.out_norm(x)  # [N, D]
+
+    def forward(self, g: GraphData, device: torch.device) -> torch.Tensor:
+        return self._encode_nodes(g, device)  # [N, D]
+
+    def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
+        x = self._encode_nodes(g, device)
         from utils.pooling import global_mean_pool
-        return global_mean_pool(x, getattr(g, "graph_ptr", None))
+        graph_ptr = getattr(g, "graph_ptr", None)
+        return global_mean_pool(x, graph_ptr)  # [D]
+
 
 
 # -------------------------
@@ -353,7 +372,7 @@ class AttentiveFPEncoder(EncoderBase):
         self.out_norm = nn.LayerNorm(hidden_dim)
         self.readout = AttnReadout(hidden_dim)
 
-    def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
+    def _encode_nodes(self, g: GraphData, device: torch.device) -> torch.Tensor:
         x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
         e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)
         a = getattr(g, "edge_attr", None)
@@ -361,23 +380,26 @@ class AttentiveFPEncoder(EncoderBase):
             a = torch.zeros((e.size(1), 0), dtype=x.dtype, device=device)
         else:
             a = torch.as_tensor(a, dtype=x.dtype, device=device)
-
         x = self.proj(x)
         for layer in self.layers:
             x = layer(x, e, a)
-        x = self.out_norm(x)
+        return self.out_norm(x)  # [N, D]
 
+    # forward: node embeddings (pipeline will pool)
+    def forward(self, g: GraphData, device: torch.device) -> torch.Tensor:
+        return self._encode_nodes(g, device)
+
+    # encode_graph: attention readout to [D] (tests)
+    def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
+        x = self._encode_nodes(g, device)  # [N, D]
         graph_ptr = getattr(g, "graph_ptr", None)
         if graph_ptr is not None:
             graph_ptr = torch.as_tensor(graph_ptr, device=device, dtype=torch.long)
-
-        z = self.readout(x, graph_ptr)
-
-        # --- flatten if a single-graph batch shape sneaks through as (1, D) ---
+        z = self.readout(x, graph_ptr)     # [D] or [B, D] -> we expect single graph in tests
         if z.dim() == 2 and z.size(0) == 1:
             z = z.squeeze(0)
+        return z  # [D]
 
-        return z
 
 
 # -------------------------
@@ -434,20 +456,28 @@ class SchNet3D(EncoderBase):
         self.layers = nn.ModuleList([SchNetInteraction(hidden_dim, num_kernels) for _ in range(num_layers)])
         self.out_norm = nn.LayerNorm(hidden_dim)
 
-    def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
-        # Requires g.pos [N, 3]
-        pos = torch.as_tensor(getattr(g, "pos"), dtype=torch.float32, device=device)
+    def _encode_nodes(self, g: GraphData, device: torch.device) -> torch.Tensor:
+        pos = getattr(g, "pos", None)
         if pos is None:
             raise ValueError("SchNet3D requires 3D coordinates `pos`. Enable --add-3d and ensure loader populates g.pos.")
+        pos = torch.as_tensor(pos, dtype=torch.float32, device=device)
         x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
         e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)
         i, j = e[0], e[1]
         rij = pos[i] - pos[j]
-        dij = torch.linalg.norm(rij, dim=-1)  # [E]
-        rbf = self.rbf(dij)  # [E, K]
+        dij = torch.linalg.norm(rij, dim=-1)        # [E]
+        rbf = self.rbf(dij)                         # [E, K]
         x = self.proj(x)
         for layer in self.layers:
             x = layer(x, i, j, rbf)
-        x = self.out_norm(x)
+        return self.out_norm(x)  # [N, D]
+
+    def forward(self, g: GraphData, device: torch.device) -> torch.Tensor:
+        return self._encode_nodes(g, device)  # [N, D]
+
+    def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
+        x = self._encode_nodes(g, device)
         from utils.pooling import global_mean_pool
-        return global_mean_pool(x, getattr(g, "graph_ptr", None))
+        graph_ptr = getattr(g, "graph_ptr", None)
+        return global_mean_pool(x, graph_ptr)  # [D]
+
