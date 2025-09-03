@@ -48,8 +48,8 @@ check_shared_equal() {
   local keys=(gnn_type hidden_dim num_layers contiguity seed)
   for k in "${keys[@]}"; do
     local a b
-    a="$(yq -oj -I=0 ".parameters.${k}" "$jepa")"
-    b="$(yq -oj -I=0 ".parameters.${k}" "$ctr")"
+    a="$(yq ".parameters.${k}" "$jepa")"
+    b="$(yq ".parameters.${k}" "$ctr")"
     if [[ "$a" != "$b" ]]; then
       echo "[fatal] sweep mismatch for '${k}':
   JEPA:        $a
