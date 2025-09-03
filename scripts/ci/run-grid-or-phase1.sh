@@ -190,10 +190,11 @@ PY
 
     OUT_PATH="${EXPORT_OUT_PATH:-${GRID_DIR:-$APP_DIR/grid}/best_grid_config.json}"
     PHASE2_PATH="${EXPORT_PHASE2_PATH:-$APP_DIR/sweeps/grid_sweep_phase2.yaml}"
-
+ 
+    PY_BIN="$(command -v python || command -v python3)"
     PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
     "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-      python -u "$APP_DIR/scripts/ci/export_best_from_wandb.py" \
+      "$PY_BIN" -u "$APP_DIR/scripts/ci/export_best_from_wandb.py" \
         --sweep-id "$BEST_SWEEP" \
         --task "$TASK_FROM_PE" \
         --phase2-method bayes \

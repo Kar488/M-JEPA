@@ -6,6 +6,9 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 import torch
+from models.gnn_variants import (
+    GATMultiHead, GIN, GraphSAGE, GINE, DMPNN, AttentiveFPEncoder
+)
 
 
 @dataclass
@@ -13,6 +16,8 @@ class GraphData:
     x: np.ndarray
     edge_index: np.ndarray
     edge_attr: np.ndarray | None = None
+    pos: np.ndarray | None = None 
+    graph_ptr: np.ndarray | None = None
 
 
 class GraphDataset:
@@ -106,7 +111,43 @@ def test_gnn_variants_forward(stub_graph_dataset):
 
     g = make_graph()
     device = torch.device("cpu")
-    for cls in (GraphSAGE, GIN, GATMultiHead):
-        model = cls(input_dim=4, hidden_dim=8, num_layers=2)
+    for cls in (GraphSAGE, GIN, GATMultiHead, GINE, DMPNN, AttentiveFPEncoder):
+        model = cls(input_dim=4, hidden_dim=8, num_layers=2, edge_dim=5) \
+                if cls in (GINE, DMPNN, AttentiveFPEncoder) \
+                else cls(input_dim=4, hidden_dim=8, num_layers=2)
         out = model.encode_graph(g, device)
         assert out.shape == (8,)
+
+# helper for 3D graphs (SchNet)
+def make_graph_3d():
+    g = make_graph()
+    g.pos = np.random.randn(3, 3).astype(np.float32)  # xyz coords
+    return g
+
+def test_gine_forward(stub_graph_dataset):
+    from models.gnn_variants import GINE
+    g = make_graph()
+    m = GINE(input_dim=4, edge_dim=5, hidden_dim=8, num_layers=2, dropout=0.0)
+    out = m.encode_graph(g, torch.device("cpu"))
+    assert out.shape == (8,)
+
+def test_dmpnn_forward(stub_graph_dataset):
+    from models.gnn_variants import DMPNN
+    g = make_graph()
+    m = DMPNN(input_dim=4, edge_dim=5, hidden_dim=8, num_layers=2, dropout=0.0)
+    out = m.encode_graph(g, torch.device("cpu"))
+    assert out.shape == (8,)
+
+def test_attentivefp_forward(stub_graph_dataset):
+    from models.gnn_variants import AttentiveFPEncoder
+    g = make_graph()
+    m = AttentiveFPEncoder(input_dim=4, edge_dim=5, hidden_dim=8, num_layers=2, dropout=0.0)
+    out = m.encode_graph(g, torch.device("cpu"))
+    assert out.shape == (8,)
+
+def test_schnet3d_forward(stub_graph_dataset):
+    from models.gnn_variants import SchNet3D
+    g = make_graph_3d()
+    m = SchNet3D(input_dim=4, hidden_dim=8, num_layers=2)
+    out = m.encode_graph(g, torch.device("cpu"))
+    assert out.shape == (8,)
