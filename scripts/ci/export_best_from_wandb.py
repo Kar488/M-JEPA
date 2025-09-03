@@ -271,8 +271,8 @@ def main():
             else:
                 params[k] = {"values": vals}
 
-        params["-labeled_dir"]      = {"value": "${env:PHASE2_LABELED_DI}"}
-        params["-unlabeled_dir"]    = {"value": "${env:PHASE2_UNLABELED_DIR}"}
+        params["labeled_dir"]      = {"value": "${env:PHASE2_LABELED_DI}"}
+        params["unlabeled_dir"]    = {"value": "${env:PHASE2_UNLABELED_DIR}"}
 
         # safety in case Schnet is chosen and 3D is not set
         try:

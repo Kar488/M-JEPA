@@ -76,6 +76,7 @@ env:
   GRID_DIR: /data/mjepa/experiments/${{ github.run_id }}/grid
   PRETRAIN_DIR: /data/mjepa/experiments/${{ github.run_id }}/pretrain
   FINETUNE_DIR: /data/mjepa/experiments/${{ github.run_id }}/finetune
+  CKPT_DIR: /data/mjepa/experiments/${{ github.run_id }}/finetune
   BENCH_DIR: /data/mjepa/experiments/${{ github.run_id }}/bench
   TOX21_DIR: /data/mjepa/experiments/${{ github.run_id }}/tox21
   LOG_DIR: /data/mjepa/experiments/${{ github.run_id }}/logs
@@ -328,7 +329,7 @@ jobs:
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           command_timeout: 40m
-          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
+          envs: APP_DIR,GRID_CACHE_DIR,PRETRAIN_CACHE_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,CKPT_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             GRID_MODE,WANDB_COUNT
           script: |
@@ -341,7 +342,7 @@ jobs:
     name: Fine tune model
     runs-on: ubuntu-latest
     needs: vast_pretrain
-    if: >
+    if:
       ${{
           inputs.run_vast_jobs != 'false' &&
           always() &&
@@ -369,7 +370,7 @@ jobs:
     name: Benchmark
     runs-on: ubuntu-latest
     needs: vast_finetune
-    if: >
+    if:
       ${{
           inputs.run_vast_jobs != 'false' &&
           always() &&
@@ -397,7 +398,7 @@ jobs:
     name: Tox21 Evaluation
     runs-on: ubuntu-latest
     needs: vast_finetune
-    if: >
+    if:
       ${{
           inputs.run_vast_jobs != 'false' &&
           always() &&
