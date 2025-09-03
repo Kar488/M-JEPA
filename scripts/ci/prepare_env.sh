@@ -79,3 +79,16 @@ PY
 
 echo "[prepare_env] APP_DIR=$APP_DIR"
 echo "[prepare_env] EXP_ROOT=$EXP_ROOT"
+
+# --- Ensure yq is installed ---
+if ! command -v yq >/dev/null 2>&1; then
+  echo "[prepare-env] Installing yq..."
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update && sudo apt-get install -y yq
+  elif command -v brew >/dev/null 2>&1; then
+    brew install yq
+  else
+    echo "[prepare-env][warn] Could not install yq automatically."
+    echo "Please install manually: https://github.com/mikefarah/yq"
+  fi
+fi

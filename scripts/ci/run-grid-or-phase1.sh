@@ -36,6 +36,30 @@ resolve_spec() {
   return 1
 }
 
+# --- enforce pairing-friendly sweeps (grid + identical shared knobs) ---
+force_grid() {
+  local in="$1" out="$2"
+  # rewrite method: random -> grid
+  yq ' .method = "grid" ' "$in" > "$out"
+}
+
+check_shared_equal() {
+  local jepa="$1" ctr="$2"; shift 2
+  local keys=(gnn_type hidden_dim num_layers contiguity seed)
+  for k in "${keys[@]}"; do
+    local a b
+    a="$(yq -oj -I=0 ".parameters.${k}" "$jepa")"
+    b="$(yq -oj -I=0 ".parameters.${k}" "$ctr")"
+    if [[ "$a" != "$b" ]]; then
+      echo "[fatal] sweep mismatch for '${k}':
+  JEPA:        $a
+  Contrastive: $b" >&2
+      exit 1
+    fi
+  done
+}
+
+
 if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     echo "[grid] running wandb sweep agent"
 
@@ -43,6 +67,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     require_cmd perl
     require_cmd sed
     require_cmd dos2unix
+    require_cmd yq  # lightweight YAML CLI (pipx install yq or brew install yq)
 
     # keep one umbrella group; never force a run id for agent trials
     unset WANDB_NAME WANDB_RUN_ID
@@ -54,7 +79,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
     # Create sweeps via the Python module inside the env that has wandb installed
     # (pass project/entity explicitly so it doesn't rely on local config)
-    echo "[phase1] creating sweeps…jepa"
+    
     JEPA_SPEC="${JEPA_SWEEP_SPEC:-}"
     if [[ -z "$JEPA_SPEC" ]]; then
         JEPA_SPEC="$(resolve_spec jepa)" || {
@@ -68,16 +93,28 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
             exit 1
         }
     fi
-    JEPA_ID="$(wandb_sweep_create "$JEPA_SPEC")"
+    TMP_JEPA="$(mktemp)";      force_grid "$JEPA_SPEC" "$TMP_JEPA"
 
-    echo "[phase1] creating sweeps…contrastive"
     CONTRAST_SPEC="${CONTRAST_SWEEP_SPEC:-}" 
     if [[ -z "$CONTRAST_SPEC" ]]; then
         CONTRAST_SPEC="$(resolve_spec contrastive)" || {
             echo "[fatal] missing sweep spec for Contrastive (same candidate paths)."; exit 1;
         }
     fi
-    CONTRAST_ID="$(wandb_sweep_create "$CONTRAST_SPEC")"
+    TMP_CONTRAST="$(mktemp)";  force_grid "$CONTRAST_SPEC" "$TMP_CONTRAST"
+
+    # Validate the shared grids are identical (gnn_type, hidden_dim, num_layers, contiguity, seed)
+    check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
+
+    echo "[phase1] creating sweeps…jepa"
+    # Create temp, gridified copies
+    
+
+    JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
+
+    echo "[phase1] creating sweeps…contrastive"
+    
+    CONTRAST_ID="$(wandb_sweep_create "$TMP_CONTRAST")"
 
     # hard-validate: must be exactly 8 lowercase letters/digits
     if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
