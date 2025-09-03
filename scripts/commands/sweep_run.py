@@ -78,7 +78,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         "gnn_type": args.gnn_type,
         "hidden_dim": args.hidden_dim,
         "num_layers": args.num_layers,
-        "mask_ratio": mr,
         "contiguous": int(getattr(args, "contiguous", getattr(args, "contiguity", 0))),
     }
 
@@ -93,7 +92,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     else:
         print("⚠️ W&B is disabled or failed to init, skipping config update")
 
-    print(f"[sweep-run] training_method={args.training_method} pair_id={pair_id}", flush=True)
+    print(f"[sweep-run] training_method={args.training_method} pid_cfg={pid_cfg} pair_id={pair_id}", flush=True)
 
     import time as _t
     _deadline = None
