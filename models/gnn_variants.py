@@ -239,7 +239,6 @@ class GINE(EncoderBase):
         )
         self.out_norm = nn.LayerNorm(hidden_dim)
 
-    # NEW: node-level encoder
     def _encode_nodes(self, g: GraphData, device: torch.device) -> torch.Tensor:
         x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
         e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)
@@ -253,18 +252,17 @@ class GINE(EncoderBase):
             x = layer(x, e, a)
         return self.out_norm(x)  # [N, D]
 
-    # NEW: forward returns node embeddings
-    def forward(self, g: GraphData, device: torch.device) -> torch.Tensor:
+    # forward must NOT take 'device'; infer from parameters
+    def forward(self, g: GraphData) -> torch.Tensor:
+        device = next(self.parameters()).device
         return self._encode_nodes(g, device)  # [N, D]
 
-    # keep: graph-level convenience for tests
+    # test convenience: pool to [D]
     def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
         x = self._encode_nodes(g, device)  # [N, D]
         from utils.pooling import global_mean_pool
         graph_ptr = getattr(g, "graph_ptr", None)
-        return global_mean_pool(x, graph_ptr)  # [D] (single-graph case)
-
-
+        return global_mean_pool(x, graph_ptr)  # [D]
 
 # -------------------------
 # D-MPNN: directed edge message passing (Chemprop style)
@@ -324,15 +322,15 @@ class DMPNN(EncoderBase):
             x = layer(x, e, a)
         return self.out_norm(x)  # [N, D]
 
-    def forward(self, g: GraphData, device: torch.device) -> torch.Tensor:
-        return self._encode_nodes(g, device)  # [N, D]
+    def forward(self, g: GraphData) -> torch.Tensor:
+        device = next(self.parameters()).device
+        return self._encode_nodes(g, device)
 
     def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
         x = self._encode_nodes(g, device)
         from utils.pooling import global_mean_pool
         graph_ptr = getattr(g, "graph_ptr", None)
-        return global_mean_pool(x, graph_ptr)  # [D]
-
+        return global_mean_pool(x, graph_ptr)
 
 
 # -------------------------
@@ -385,22 +383,19 @@ class AttentiveFPEncoder(EncoderBase):
             x = layer(x, e, a)
         return self.out_norm(x)  # [N, D]
 
-    # forward: node embeddings (pipeline will pool)
-    def forward(self, g: GraphData, device: torch.device) -> torch.Tensor:
-        return self._encode_nodes(g, device)
+    def forward(self, g: GraphData) -> torch.Tensor:
+        device = next(self.parameters()).device
+        return self._encode_nodes(g, device)  # [N, D]
 
-    # encode_graph: attention readout to [D] (tests)
     def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
         x = self._encode_nodes(g, device)  # [N, D]
         graph_ptr = getattr(g, "graph_ptr", None)
         if graph_ptr is not None:
             graph_ptr = torch.as_tensor(graph_ptr, device=device, dtype=torch.long)
-        z = self.readout(x, graph_ptr)     # [D] or [B, D] -> we expect single graph in tests
+        z = self.readout(x, graph_ptr)     # [D] or [1, D]
         if z.dim() == 2 and z.size(0) == 1:
             z = z.squeeze(0)
-        return z  # [D]
-
-
+        return z
 
 # -------------------------
 # SchNet-lite (3D): RBF + filter networks
@@ -472,12 +467,15 @@ class SchNet3D(EncoderBase):
             x = layer(x, i, j, rbf)
         return self.out_norm(x)  # [N, D]
 
-    def forward(self, g: GraphData, device: torch.device) -> torch.Tensor:
-        return self._encode_nodes(g, device)  # [N, D]
+    def forward(self, g: GraphData) -> torch.Tensor:
+        device = next(self.parameters()).device
+        return self._encode_nodes(g, device)
 
     def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
         x = self._encode_nodes(g, device)
         from utils.pooling import global_mean_pool
         graph_ptr = getattr(g, "graph_ptr", None)
-        return global_mean_pool(x, graph_ptr)  # [D]
+        return global_mean_pool(x, graph_ptr)
+
+
 
