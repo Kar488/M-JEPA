@@ -437,6 +437,8 @@ class SchNet3D(EncoderBase):
     def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
         # Requires g.pos [N, 3]
         pos = torch.as_tensor(getattr(g, "pos"), dtype=torch.float32, device=device)
+        if pos is None:
+            raise ValueError("SchNet3D requires 3D coordinates `pos`. Enable --add-3d and ensure loader populates g.pos.")
         x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
         e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)
         i, j = e[0], e[1]

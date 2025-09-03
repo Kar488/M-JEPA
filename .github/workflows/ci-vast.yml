@@ -269,7 +269,7 @@ jobs:
         
 
   vast_sweep_phase2:
-    if: ${{ github.event.inputs.hyperparam_mode == 'wandb' }}
+    if: ${{ (inputs.hyperparam_mode || 'wandb') == 'wandb' }}
     name: Sweep Phase 2 (Bayes refinement)
     runs-on: ubuntu-latest
     #timeout-minutes: 1860
@@ -304,10 +304,20 @@ jobs:
     name: Pretain JEPA Model
     runs-on: ubuntu-latest
     needs: [vast_learn_hyperparameters, vast_sweep_phase2]
-    if: |
-      ${{ github.event.inputs.run_vast_jobs != 'false' }} ||
-      (github.event.inputs.param_type != 'wandb' && always() && needs.vast_learn_hyperparameters.result == 'success') ||
-      (github.event.inputs.param_type == 'custom' && always() && needs.vast_sweep_phase2.result == 'success')
+    if: >
+      ${{ inputs.run_vast_jobs != 'false'
+        || (
+            ((inputs.hyperparam_mode || 'wandb') == 'wandb')
+            && always()
+            && needs.vast_learn_hyperparameters.result == 'success'
+            && needs.vast_sweep_phase2.result == 'success'
+          )
+        || (
+            ((inputs.hyperparam_mode || '') == 'custom')
+            && always()
+            && needs.vast_learn_hyperparameters.result == 'success'
+          )
+      }}
     steps:
       - name: Pretrain on Vast
         uses: appleboy/ssh-action@v1

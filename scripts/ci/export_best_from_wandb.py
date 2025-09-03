@@ -287,6 +287,10 @@ def main():
             for k in list(params.keys()):
                 if k.startswith("aug_") or k in ("temperature", "seed", "seeds"):
                     params.pop(k, None)
+        elif winner == "contrastive":
+            for k in list(params.keys()):
+                if k in ("mask_ratio", "ema_decay"):
+                    params.pop(k, None)
 
         # Suggest distributions for continuous ranges so Bayes can interpolate well.
         if isinstance(params.get("mask_ratio"), dict) and "min" in params["mask_ratio"]:

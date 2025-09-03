@@ -17,6 +17,19 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     add_3d               = to_bool(getattr(args, "add_3d", 0))
     aug_contiguity       = to_bool(getattr(args, "contiguity", 0))
 
+    gnn = str(getattr(args, "gnn_type", "")).lower()
+    add_3d = to_bool(getattr(args, "add_3d", 0))
+    aug_contiguity = to_bool(getattr(args, "contiguity", 0))
+
+    if gnn in ("schnet3d", "schnet"):
+        if not add_3d:
+            print("[guard] gnn_type=schnet3d requires --add-3d=1; enabling it.", flush=True)
+            add_3d = True
+    else:
+        if add_3d:
+            print(f"[guard] gnn_type={gnn} is a 2D backbone; forcing --add-3d=0.", flush=True)
+            add_3d = False
+
     import json
 
     def _b(x):
@@ -87,7 +100,9 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         wb.config.update({
         "training_method": args.training_method,
         "pair_id": pair_id,
-        "seed": getattr(args, "seed", None)   # keep seed visible separately
+        "seed": getattr(args, "seed", None),   # keep seed visible separately
+        "gnn_type": gnn,
+        "add_3d": int(add_3d),   # <-- ensure Phase-2 sees the gated value
         }, allow_val_change=True)
     else:
         print("⚠️ W&B is disabled or failed to init, skipping config update")

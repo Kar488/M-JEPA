@@ -717,8 +717,13 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
 def _add_model_args(p: argparse.ArgumentParser) -> None:
     md = CONFIG.get("model", {})
     p.add_argument("--gnn-type", "--gnn_type", dest="gnn_type",
-                   choices=["gcn","gat","mpnn","edge_mpnn","graphsage","gin"],
-                    default=md.get("gnn_type", "gcn"))
+                   choices=["gcn","gat","mpnn","edge_mpnn","graphsage","gin", "gine", "dmpnn", "attentivefp", "schnet3d"],
+                    default=md.get("edge_mpnn"),
+                    help=(
+                        "Backbone GNN. Use 'gine' (GIN+edge) or 'dmpnn' (Chemprop-style directed MPNN) "
+                        "for 2D/bond-aware runs; 'schnet3d' for 3D geometry (requires pos); "
+                        "'attentivefp' for attention readout over atoms/bonds."
+                    ),)
     p.add_argument("--hidden-dim", "--hidden_dim", dest="hidden_dim", type=int, default=md.get("hidden_dim", 128))
     p.add_argument("--num-layers", "--num_layers", dest="num_layers", type=int, default=md.get("num_layers", 2))
     p.add_argument("--mask-ratio", "--mask_ratio", dest="mask_ratio", type=float, default=md.get("mask_ratio", 0.15))
