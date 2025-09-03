@@ -271,6 +271,18 @@ def main():
             else:
                 params[k] = {"values": vals}
 
+        params["-labeled_dir"]      = {"value": "${env:PHASE2_LABELED_DI}"}
+        params["-unlabeled_dir"]    = {"value": "${env:PHASE2_UNLABELED_DIR}"}
+
+        # safety in case Schnet is chosen and 3D is not set
+        try:
+            gnn_val = (params.get("gnn_type", {}) or {}).get("value")
+            if gnn_val == "schnet3d":
+                params["add_3d"] = {"value": 1}
+        except Exception:
+            pass
+        
+
         phase2_metric_name = args.phase2_metric or primary
         phase2_goal        = "maximize" if maximize else "minimize"
 

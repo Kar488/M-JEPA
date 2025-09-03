@@ -20,8 +20,8 @@ export SWEEP_ID="${WANDB_ENTITY}/${WANDB_PROJECT}/${WANDB_SWEEP_ID2}"  # stage.s
 : "${WANDB_COUNT:=100}"                                                # default trials
 
 echo "[phase2] using sweep: $SWEEP_ID"
-# Use the same wrapper you use elsewhere for agents (timeout, tee, graceful stop)
-run_with_timeout "wandb_agent"    # uses SWEEP_ID & WANDB_COUNT internally:contentReference[oaicite:1]{index=1}
+# Use the same wrapper we use in phase 1 for agents (timeout, tee, graceful stop)
+run_with_timeout wandb_agent || exit 1    # uses SWEEP_ID & WANDB_COUNT internally:contentReference[oaicite:1]{index=1}
 
 # 2) Recheck top-k on extra seeds (with the same timeout pattern)
 : "${TOPK_RECHECK:=5}"
