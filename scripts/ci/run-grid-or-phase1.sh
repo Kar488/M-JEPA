@@ -158,22 +158,16 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     # === pick winner/task from paired-effect output ===
     PE_JSON="${GRID_DIR:-$APP_DIR/grid}/paired_effect.json"
     if [[ -f "$PE_JSON" ]]; then
-        METHOD_WINNER="$(env PE_JSON="$PE_JSON" python - <<'PY'
-import json, os
-p = os.environ.get("PE_JSON")
-with open(p, "r") as f:
-    j = json.load(f)
-print(j.get("winner","jepa"))
-PY
-)"
-  TASK_FROM_PE="$(env PE_JSON="$PE_JSON" python - <<'PY'
-import json, os
-p = os.environ.get("PE_JSON")
-with open(p, "r") as f:
-    j = json.load(f)
-print(j.get("task","regression"))
-PY
-)"
+        if command -v jq >/dev/null 2>&1; then
+            METHOD_WINNER="$(jq -r '.winner // "jepa"' "$PE_JSON")"
+            TASK_FROM_PE="$(jq -r '.task   // "regression"' "$PE_JSON")"
+        else
+            # fallback: naive extraction without jq
+            METHOD_WINNER="$(grep -o '"winner"\s*:\s*"[^"]*"' "$PE_JSON" | head -1 | sed 's/.*"winner"\s*:\s*"\([^"]*\)".*/\1/')" 
+            TASK_FROM_PE="$(grep -o '"task"\s*:\s*"[^"]*"'   "$PE_JSON" | head -1 | sed 's/.*"task"\s*:\s*"\([^"]*\)".*/\1/')" 
+            : "${METHOD_WINNER:=jepa}"
+            : "${TASK_FROM_PE:=regression}"
+        fi
         export METHOD_WINNER TASK_FROM_PE
         echo "[phase1] paired-effect decided winner=${METHOD_WINNER} task=${TASK_FROM_PE}"
     else
@@ -181,6 +175,8 @@ PY
         : "${METHOD_WINNER:=jepa}"
         : "${TASK_FROM_PE:=regression}"
     fi
+
+
 
     # export best + write Phase-2 (Bayes) sweep YAML (explicit args; no ARGV dependency)
     WINNER="${METHOD_WINNER:-jepa}"
@@ -191,10 +187,9 @@ PY
     OUT_PATH="${EXPORT_OUT_PATH:-${GRID_DIR:-$APP_DIR/grid}/best_grid_config.json}"
     PHASE2_PATH="${EXPORT_PHASE2_PATH:-$APP_DIR/sweeps/grid_sweep_phase2.yaml}"
  
-    PY_BIN="$(command -v python || command -v python3)"
     PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
     "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-      "$PY_BIN" -u "$APP_DIR/scripts/ci/export_best_from_wandb.py" \
+      python -u "$APP_DIR/scripts/ci/export_best_from_wandb.py" \
         --sweep-id "$BEST_SWEEP" \
         --task "$TASK_FROM_PE" \
         --phase2-method bayes \

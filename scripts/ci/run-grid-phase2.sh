@@ -38,6 +38,7 @@ mkdir -p "$LOG_DIR"
 LOG="${LOG_DIR}/recheck_topk.log"
 echo "[recheck_topk] wall budget=${SOFT}s, grace=${GRACE}s"
 
+
 timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
   "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
   python -u "$APP_DIR/scripts/recheck_topk_from_wandb.py" \
