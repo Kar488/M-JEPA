@@ -331,7 +331,7 @@ class AttnReadout(nn.Module):
         score = torch.matmul(g, self.query)  # [N]
         if graph_ptr is None:
             attn = torch.softmax(score, dim=0).unsqueeze(-1)
-            return torch.sum(attn * x, dim=0, keepdim=True)
+            return torch.sum(attn * x, dim=0)
         # batched graphs
         num_graphs = int(graph_ptr.max().item()) + 1
         out = []
@@ -361,14 +361,23 @@ class AttentiveFPEncoder(EncoderBase):
             a = torch.zeros((e.size(1), 0), dtype=x.dtype, device=device)
         else:
             a = torch.as_tensor(a, dtype=x.dtype, device=device)
+
         x = self.proj(x)
         for layer in self.layers:
             x = layer(x, e, a)
         x = self.out_norm(x)
+
         graph_ptr = getattr(g, "graph_ptr", None)
         if graph_ptr is not None:
             graph_ptr = torch.as_tensor(graph_ptr, device=device, dtype=torch.long)
-        return self.readout(x, graph_ptr)
+
+        z = self.readout(x, graph_ptr)
+
+        # --- flatten if a single-graph batch shape sneaks through as (1, D) ---
+        if z.dim() == 2 and z.size(0) == 1:
+            z = z.squeeze(0)
+
+        return z
 
 
 # -------------------------
@@ -395,13 +404,25 @@ class SchNetInteraction(nn.Module):
         self.norm = nn.LayerNorm(dim)
 
     def forward(self, x: torch.Tensor, i: torch.Tensor, j: torch.Tensor, rbf: torch.Tensor) -> torch.Tensor:
-        # message m_ij = (filter(r_ij) * W x_j)
-        Wxh = self.lin(x)
-        m = rbf @ self.filter[0].weight.T  # cheap approximation; ok for lite impl
-        # project to [E, D]
-        m = self.filter(m)  # [E, D]
-        agg = torch.zeros_like(x)
-        agg.index_add_(0, i, m * Wxh[j])
+        """
+        x   : [N, D]     node embeddings
+        i,j : [E]        edge indices (messages are j -> i)
+        rbf : [E, K]     radial basis features for each edge distance
+        """
+        # Linear projection of source nodes
+        Wxh = self.lin(x)                  # [N, D]
+
+        # Produce edge-wise filters from RBFs via the filter network
+        f_ij = self.filter(rbf)            # [E, D]
+
+        # Edge messages: modulate source embedding with edge filter
+        msg = f_ij * Wxh[j]                # [E, D]
+
+        # Aggregate into destination nodes
+        agg = torch.zeros_like(x)          # [N, D]
+        agg.index_add_(0, i, msg)          # sum messages per node
+
+        # Residual + normalization
         return self.norm(x + agg)
 
 
