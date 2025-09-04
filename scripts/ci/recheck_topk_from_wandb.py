@@ -167,8 +167,8 @@ def main():
     print("  extra_seeds=", args.extra_seeds, flush=True)
     print("  program    =", args.program, flush=True)
     print("  subcmd     =", args.subcmd, flush=True)
-    print("  unlabeled  =", args.unlabeled, flush=True)
-    print("  labeled    =", args.labeled, flush=True)
+    print("  unlabeled  =", args.unlabeled_dir, flush=True)
+    print("  labeled    =", args.labeled_dir, flush=True)
     print("  mm         =", args.mm, flush=True)
     print("  log_dir    =", args.log_dir, flush=True)
     print("  out        =", args.out, flush=True)
@@ -249,7 +249,7 @@ def main():
     for i, cfg in enumerate(tops):
         seeds = [1000 + i*10 + s for s in range(args.extra_seeds)]
         vals = []
-        print(f"[recheck] launching seed {s} for config index {i}", flush=True)
+        print(f"[recheck] launching seed {seeds} for config index {i}", flush=True)
         for s in seeds:
             rc = run_once(args.mm, args.program, args.subcmd, cfg, s,
               args.unlabeled_dir, args.labeled_dir, args.log_dir,
