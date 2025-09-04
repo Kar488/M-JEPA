@@ -12,6 +12,10 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    git clone https://github.com/.../M-JEPA.git
    cd M-JEPA
    pip install -r requirements.txt
+   pip install torch
+   pip install rdkit
+   pip install torch-geometric
+   pip install deepchem
    pre-commit install
    ```
    Install torch and deepchem through conda
