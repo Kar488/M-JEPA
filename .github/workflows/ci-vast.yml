@@ -300,6 +300,8 @@ jobs:
           EXTRA_SEEDS: 3
           PHASE2_METRIC: val_rmse
           PHASE2_DIRECTION: min
+          PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
+          PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
                 
   vast_pretrain:
     name: Pretain JEPA Model
