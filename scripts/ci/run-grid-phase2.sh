@@ -19,6 +19,13 @@ export WANDB_SWEEP_ID2="$(cat "$SWEEP_ID_FILE")"
 export SWEEP_ID="${WANDB_ENTITY}/${WANDB_PROJECT}/${WANDB_SWEEP_ID2}"  # stage.sh reads SWEEP_ID
 : "${WANDB_COUNT:=100}"                                                # default trials
 
+: "${PHASE2_LABELED_DIR:?[phase2] PHASE2_LABELED_DIR not set}"
+: "${PHASE2_UNLABELED_DIR:?[phase2] PHASE2_UNLABELED_DIR not set}"
+[[ -d "$PHASE2_LABELED_DIR"   ]] || { echo "[phase2][fatal] not a dir: $PHASE2_LABELED_DIR"; exit 2; }
+[[ -d "$PHASE2_UNLABELED_DIR" ]] || { echo "[phase2][fatal] not a dir: $PHASE2_UNLABELED_DIR"; exit 2; }
+echo "[phase2] labeled=$PHASE2_LABELED_DIR  unlabeled=$PHASE2_UNLABELED_DIR"
+
+
 echo "[phase2] using sweep: $SWEEP_ID"
 # Use the same wrapper we use in phase 1 for agents (timeout, tee, graceful stop)
 run_with_timeout wandb_agent || exit 1    # uses SWEEP_ID & WANDB_COUNT internally:contentReference[oaicite:1]{index=1}

@@ -309,13 +309,10 @@ jobs:
       ${{
           (inputs.hyperparam_mode == 'wandb' &&
           inputs.run_vast_jobs != 'false' &&
-          always() &&
-          needs.vast_learn_hyperparameters.result == 'success' &&
           needs.vast_sweep_phase2.result == 'success')
         ||
           (inputs.hyperparam_mode == 'custom' &&
           inputs.run_vast_jobs != 'false' &&
-          always() &&
           needs.vast_learn_hyperparameters.result == 'success')
       }}
     steps:
@@ -345,7 +342,6 @@ jobs:
     if:
       ${{
           inputs.run_vast_jobs != 'false' &&
-          always() &&
           needs.vast_pretrain.result == 'success' }}
     steps:
       - name: Finetune on Vast
@@ -373,7 +369,6 @@ jobs:
     if:
       ${{
           inputs.run_vast_jobs != 'false' &&
-          always() &&
           needs.vast_finetune.result == 'success' }}
     steps:
       - name: Benchmark on Vast
@@ -401,7 +396,6 @@ jobs:
     if:
       ${{
           inputs.run_vast_jobs != 'false' &&
-          always() &&
           needs.vast_finetune.result == 'success' }}
     steps:
       - name: Tox21 on Vast

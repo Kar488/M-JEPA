@@ -675,6 +675,16 @@ class CommonArgDefaults:
         )
 
 
+def _to_bool(v):
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("1", "true", "t", "yes", "y", "on"):
+        return True
+    if s in ("0", "false", "f", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"Expected boolean (0/1/true/false), got '{v}'")
+
 # Accept --flag, --flag=1, --flag 0 styles
 class BoolFlag(argparse.Action):
     def __init__(self, option_strings, dest, **kwargs):
@@ -685,7 +695,7 @@ class BoolFlag(argparse.Action):
         if values is None:
             setattr(namespace, self.dest, True)
         else:
-            setattr(namespace, self.dest, bool(int(str(values))))
+            setattr(namespace, self.dest, _to_bool(values))
 
 def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     """Add arguments common to multiple commands."""

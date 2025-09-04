@@ -271,7 +271,7 @@ def main():
             else:
                 params[k] = {"values": vals}
 
-        params["labeled_dir"]      = {"value": "${env:PHASE2_LABELED_DI}"}
+        params["labeled_dir"]      = {"value": "${env:PHASE2_LABELED_DIR}"}
         params["unlabeled_dir"]    = {"value": "${env:PHASE2_UNLABELED_DIR}"}
 
         # safety in case Schnet is chosen and 3D is not set
@@ -337,8 +337,8 @@ def main():
             "program": "${env:APP_DIR}/scripts/train_jepa.py",
             "command": [
                 "${interpreter}", "${program}", "sweep-run",
-                "--unlabeled-dir", args.phase2_unlabeled_dir,
-                 "--labeled-dir",   args.phase2_labeled_dir,
+                # "--unlabeled-dir", args.phase2_unlabeled_dir, # sending it as normal params
+                #  "--labeled-dir",   args.phase2_labeled_dir, # sending it as normal params
                 "${args}"
             ],
             "method": args.phase2_method,                 # expect "bayes"
