@@ -27,6 +27,13 @@ def metric_of(run, name, default=None):
     if v is None: v = run.config.get(name, None)
     return v if v is not None else default
 
+def pick_topk(sweep, metric: str, maximize: bool, k: int):
+    runs = list(sweep.runs)
+    have = [r for r in runs if metric_of(r, metric) is not None]
+    have.sort(key=(lambda r: -float(metric_of(r, metric, -math.inf))) if maximize
+                    else (lambda r:  float(metric_of(r, metric,  math.inf))))
+    return have[:max(1, k)]
+
 def run_once(mm, program, subcmd, cfg: Dict[str, Any], seed: int,
              unlabeled: str, labeled: str, log_dir: str,
              project: str, group: str) -> int:
