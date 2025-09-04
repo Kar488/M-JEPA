@@ -56,8 +56,8 @@ timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
     --extra_seeds "$EXTRA_SEEDS" \
     --program "$APP_DIR/scripts/train_jepa.py" \
     --subcmd "sweep-run" \
-    --unlabeled "$PHASE2_UNLABELED_DIR" \
-    --labeled   "$PHASE2_LABELED_DIR" \
+    --unlabeled-dir "$PHASE2_UNLABELED_DIR" \
+    --labeled-dir   "$PHASE2_LABELED_DIR" \
     --out "${GRID_DIR:-$APP_DIR/grid}/recheck_summary.json" \
   2>&1 | tee "$LOG"
 

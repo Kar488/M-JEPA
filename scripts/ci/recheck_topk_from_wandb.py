@@ -11,8 +11,8 @@ Usage:
     --topk 5 --extra_seeds 3 \
     --program "${env:APP_DIR}/scripts/train_jepa.py" \
     --subcmd "sweep-run" \
-    --unlabeled "${env:APP_DIR}/data/ZINC-canonicalized" \
-    --labeled   "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train" \
+    --unlabeled-dir "${env:APP_DIR}/data/ZINC-canonicalized" \
+    --labeled-dir   "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train" \
     --out "${GRID_DIR}/recheck_summary.json"
 """
 import argparse, json, os, math, time, tempfile, pathlib
@@ -76,8 +76,8 @@ def main():
     ap.add_argument("--extra_seeds", type=int, default=3)
     ap.add_argument("--program", required=True)
     ap.add_argument("--subcmd", default="sweep-run")
-    ap.add_argument("--unlabeled", required=True)
-    ap.add_argument("--labeled",   required=True)
+    ap.add_argument("--unlabeled-dir", "--unlabeled_dir", dest="unlabeled_dir", required=True)
+    ap.add_argument("--labeled-dir",   "--labeled_dir",   dest="labeled_dir",   required=True)
     ap.add_argument("--mm", default=os.environ.get("MMBIN","micromamba"))
     ap.add_argument("--log_dir", default=os.environ.get("LOG_DIR","./logs"))
     # Pick a writable default at runtime (cwd or temp) if GRID_DIR is missing or not writable
@@ -149,7 +149,7 @@ def main():
         vals = []
         for s in seeds:
             rc = run_once(args.mm, args.program, args.subcmd, cfg, s,
-                          args.unlabeled, args.labeled, args.log_dir,
+                          args.unlabeled_dir, args.labeled_dir, args.log_dir,
                           args.project, args.group)
             if rc != 0:
                 raise RuntimeError(f"recheck run failed with exit code {rc} (seed {s})")
