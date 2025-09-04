@@ -39,24 +39,34 @@ def run_once(mm, program, subcmd, cfg: Dict[str, Any], seed: int,
              project: str, group: str) -> int:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+   
     # ensure recheck runs land in the same project/group
     if "WANDB_PROJECT" not in env and project:
         env["WANDB_PROJECT"] = project
     if "WANDB_RUN_GROUP" not in env and group:
         env["WANDB_RUN_GROUP"] = group
     env.setdefault("WANDB_JOB_TYPE", "recheck")
+   
     # Build CLI from winner config + seed
     args = [mm, "run", "-n", "mjepa", "env", "PYTHONUNBUFFERED=1",
             "python", "-u", program, subcmd,
             "--unlabeled-dir", unlabeled,
             "--labeled-dir",   labeled]
+    
     for k, v in cfg.items():
+        key = f"--{k.replace('_','-')}"
+        # pass explicit values for booleans (parser expects a value)
         if isinstance(v, bool):
-            if v: args += [f"--{k.replace('_','-')}"]
+            args += [key, "1" if v else "0"]
+        # also normalize ints for safety (e.g., 0/1 stored as int)
+        elif isinstance(v, (int, float)):
+            args += [key, str(v)]
         else:
-            args += [f"--{k.replace('_','-')}", str(v)]
+            args += [key, str(v)]
+    
     args += ["--seed", str(seed)]
     log = os.path.join(log_dir, f"recheck_{cfg.get('training_method','jepa')}_seed{seed}.log")
+    
     with open(log, "w", encoding="utf-8") as f:
         p = subprocess.Popen(args, stdout=f, stderr=subprocess.STDOUT, env=env)
     return p.wait()
@@ -76,8 +86,10 @@ def main():
     ap.add_argument("--extra_seeds", type=int, default=3)
     ap.add_argument("--program", required=True)
     ap.add_argument("--subcmd", default="sweep-run")
-    ap.add_argument("--unlabeled-dir", "--unlabeled_dir", dest="unlabeled_dir", required=True)
-    ap.add_argument("--labeled-dir",   "--labeled_dir",   dest="labeled_dir",   required=True)
+    ap.add_argument("--unlabeled-dir", "--unlabeled_dir", "--unlabeled",
+                dest="unlabeled_dir", required=True)
+    ap.add_argument("--labeled-dir", "--labeled_dir", "--labeled",
+                    dest="labeled_dir", required=True)
     ap.add_argument("--mm", default=os.environ.get("MMBIN","micromamba"))
     ap.add_argument("--log_dir", default=os.environ.get("LOG_DIR","./logs"))
     # Pick a writable default at runtime (cwd or temp) if GRID_DIR is missing or not writable
@@ -149,8 +161,8 @@ def main():
         vals = []
         for s in seeds:
             rc = run_once(args.mm, args.program, args.subcmd, cfg, s,
-                          args.unlabeled_dir, args.labeled_dir, args.log_dir,
-                          args.project, args.group)
+              args.unlabeled_dir, args.labeled_dir, args.log_dir,
+              args.project, args.group)
             if rc != 0:
                 raise RuntimeError(f"recheck run failed with exit code {rc} (seed {s})")
             # after the run, we could read the metric from W&B; here we assume train_jepa.py writes best val to a file or W&B;
