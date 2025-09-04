@@ -48,7 +48,7 @@ echo "[recheck_topk] wall budget=${SOFT}s, grace=${GRACE}s"
 
 timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
   "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-  python -u "$APP_DIR/scripts/recheck_topk_from_wandb.py" \
+  python -u "$APP_DIR/scripts/ci/recheck_topk_from_wandb.py" \
     --sweep "${WANDB_ENTITY}/${WANDB_PROJECT}/${WANDB_SWEEP_ID2}" \
     --metric "$PHASE2_METRIC" \
     --direction "$PHASE2_DIRECTION" \
