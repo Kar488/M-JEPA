@@ -27,46 +27,79 @@ def metric_of(run, name, default=None):
     if v is None: v = run.config.get(name, None)
     return v if v is not None else default
 
-def pick_topk(sweep, metric: str, maximize: bool, k: int):
-    runs = list(sweep.runs)
-    have = [r for r in runs if metric_of(r, metric) is not None]
-    have.sort(key=(lambda r: -float(metric_of(r, metric, -math.inf))) if maximize
-                    else (lambda r:  float(metric_of(r, metric,  math.inf))))
-    return have[:max(1, k)]
-
 def run_once(mm, program, subcmd, cfg: Dict[str, Any], seed: int,
              unlabeled: str, labeled: str, log_dir: str,
              project: str, group: str) -> int:
+    import shlex, subprocess, os
+
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-   
-    # ensure recheck runs land in the same project/group
     if "WANDB_PROJECT" not in env and project:
         env["WANDB_PROJECT"] = project
     if "WANDB_RUN_GROUP" not in env and group:
         env["WANDB_RUN_GROUP"] = group
     env.setdefault("WANDB_JOB_TYPE", "recheck")
-   
-    # Build CLI from winner config + seed
-    args = [mm, "run", "-n", "mjepa", "env", "PYTHONUNBUFFERED=1",
-            "python", "-u", program, subcmd,
-            "--unlabeled-dir", unlabeled,
-            "--labeled-dir",   labeled]
-    
+
+    # --- base command (micromamba, program, subcmd, and required dataset flags)
+    args = [
+        mm, "run", "-n", "mjepa", "env", "PYTHONUNBUFFERED=1",
+        "python", "-u", program, subcmd,
+        "--unlabeled-dir", unlabeled,
+        "--labeled-dir",   labeled,
+    ]
+
+    # --- always pass training method explicitly; default to jepa if missing
+    method = str(cfg.get("training_method", "jepa")).lower()
+    args += ["--training-method", method]
+
+    # --- normalize/migrate keys from W&B config to sweep-run CLI flags
+    # drop keys the CLI does not support directly
+    DROP_KEYS = {
+        "augmentations",       # nested dict → represented via individual aug_* flags
+        "pair_id", "pair_key", # analysis artifacts
+        "_wandb", "wandb_version",
+        "seed",                # we override with our own seed below
+        # add any other analysis-only keys you log into config
+    }
+    # map shorthand / differing names to CLI flag names
+    MAP = {
+        "pretrain_bs":       "pretrain-batch-size",
+        "finetune_bs":       "finetune-batch-size",
+        "lr":                "learning-rate",
+        "label_col":         "label-col",
+        "gnn_type":          "gnn-type",
+        "add_3d":            "add-3d",
+        "contiguous":        "contiguity",   # CLI expects --contiguity
+        # common long names below just get "_" → "-" automatically
+    }
+
     for k, v in cfg.items():
-        key = f"--{k.replace('_','-')}"
-        # pass explicit values for booleans (parser expects a value)
+        if k in DROP_KEYS:
+            continue
+        if v is None:
+            continue
+        # skip training_method here (we added it explicitly already)
+        if k == "training_method":
+            continue
+        # skip nested structures that aren't valid single CLI values
+        if isinstance(v, (dict, list, tuple)):
+            continue
+
+        cli_key = MAP.get(k, k).replace("_", "-")
+        flag = f"--{cli_key}"
+
+        # pass explicit values; parser expects a value for all of these
         if isinstance(v, bool):
-            args += [key, "1" if v else "0"]
-        # also normalize ints for safety (e.g., 0/1 stored as int)
-        elif isinstance(v, (int, float)):
-            args += [key, str(v)]
+            args += [flag, "1" if v else "0"]
         else:
-            args += [key, str(v)]
-    
+            args += [flag, str(v)]
+
+    # seed per recheck trial
     args += ["--seed", str(seed)]
-    log = os.path.join(log_dir, f"recheck_{cfg.get('training_method','jepa')}_seed{seed}.log")
-    
+
+    # log out and exec
+    os.makedirs(log_dir, exist_ok=True)
+    log = os.path.join(log_dir, f"recheck_{method}_seed{seed}.log")
     with open(log, "w", encoding="utf-8") as f:
         p = subprocess.Popen(args, stdout=f, stderr=subprocess.STDOUT, env=env)
     return p.wait()
