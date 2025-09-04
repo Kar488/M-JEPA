@@ -37,7 +37,7 @@ def pick_topk(sweep, metric: str, maximize: bool, k: int):
 def run_once(mm, program, subcmd, cfg: Dict[str, Any], seed: int,
              unlabeled: str, labeled: str, log_dir: str,
              project: str, group: str) -> int:
-    import shlex, subprocess, os
+    import os, shlex, subprocess
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -47,7 +47,7 @@ def run_once(mm, program, subcmd, cfg: Dict[str, Any], seed: int,
         env["WANDB_RUN_GROUP"] = group
     env.setdefault("WANDB_JOB_TYPE", "recheck")
 
-    # --- base command (micromamba, program, subcmd, and required dataset flags)
+    # Base command
     args = [
         mm, "run", "-n", "mjepa", "env", "PYTHONUNBUFFERED=1",
         "python", "-u", program, subcmd,
@@ -55,59 +55,80 @@ def run_once(mm, program, subcmd, cfg: Dict[str, Any], seed: int,
         "--labeled-dir",   labeled,
     ]
 
-    # --- always pass training method explicitly; default to jepa if missing
+    # Force training method explicitly (default to jepa)
     method = str(cfg.get("training_method", "jepa")).lower()
     args += ["--training-method", method]
 
-    # --- normalize/migrate keys from W&B config to sweep-run CLI flags
-    # drop keys the CLI does not support directly
-    DROP_KEYS = {
-        "augmentations",       # nested dict → represented via individual aug_* flags
-        "pair_id", "pair_key", # analysis artifacts
-        "_wandb", "wandb_version",
-        "seed",                # we override with our own seed below
-        # add any other analysis-only keys you log into config
+    # sweep-run supported flags (hyphen form)
+    ALLOWED = {
+        "task-type", "label-col",
+        "gnn-type", "hidden-dim", "num-layers", "contiguity", "add-3d",
+        "learning-rate", "pretrain-batch-size", "finetune-batch-size",
+        "pretrain-epochs", "finetune-epochs",
+        "max-pretrain-batches", "max-finetune-batches",
+        "sample-unlabeled", "sample-labeled",
+        "time-budget-mins",
+        "aug-bond-deletion", "aug-atom-masking", "aug-subgraph-removal",
+        "aug-rotate", "aug-mask-angle", "aug-dihedral",
+        "prefetch-factor", "pin-memory", "persistent-workers",
+        "bf16", "num-workers", "devices", "device",
+        "mask-ratio", "ema-decay",      # JEPA-only
+        "temperature",                  # Contrastive-only
+        "cache-dir", "use-wandb", "wandb-project", "wandb-tags",
+        "target-pretrain-samples",
     }
-    # map shorthand / differing names to CLI flag names
     MAP = {
-        "pretrain_bs":       "pretrain-batch-size",
-        "finetune_bs":       "finetune-batch-size",
-        "lr":                "learning-rate",
-        "label_col":         "label-col",
-        "gnn_type":          "gnn-type",
-        "add_3d":            "add-3d",
-        "contiguous":        "contiguity",   # CLI expects --contiguity
-        # common long names below just get "_" → "-" automatically
+        "pretrain_bs":  "pretrain-batch-size",
+        "finetune_bs":  "finetune-batch-size",
+        "lr":           "learning-rate",
+        "label_col":    "label-col",
+        "gnn_type":     "gnn-type",
+        "add_3d":       "add-3d",
+        "contiguous":   "contiguity",   # CLI expects --contiguity
+        # long names fall through
+    }
+    DROP = {
+        "augmentations", "pair_id", "pair_key", "_wandb", "wandb_version",
+        "seed", "name", "id", "group",
     }
 
+    forwarded = []  # for debug print below
+
     for k, v in cfg.items():
-        if k in DROP_KEYS:
+        if k in DROP or v is None:
             continue
-        if v is None:
-            continue
-        # skip training_method here (we added it explicitly already)
-        if k == "training_method":
-            continue
-        # skip nested structures that aren't valid single CLI values
         if isinstance(v, (dict, list, tuple)):
+            continue
+        if k == "training_method":
             continue
 
         cli_key = MAP.get(k, k).replace("_", "-")
-        flag = f"--{cli_key}"
+        if cli_key not in ALLOWED:
+            continue
 
-        # pass explicit values; parser expects a value for all of these
+        flag = f"--{cli_key}"
         if isinstance(v, bool):
             args += [flag, "1" if v else "0"]
         else:
             args += [flag, str(v)]
+        forwarded.append((flag, v))
 
-    # seed per recheck trial
+    # Seed per recheck
     args += ["--seed", str(seed)]
 
-    # log out and exec
+    # Make sure log dir exists; write the command at the top of the log
     os.makedirs(log_dir, exist_ok=True)
     log = os.path.join(log_dir, f"recheck_{method}_seed{seed}.log")
+
+    # stdout: show what we're about to run
+    print("[recheck] cmd:", " ".join(map(shlex.quote, args)), flush=True)
+    if forwarded:
+        print("[recheck] forwarded flags:", forwarded, flush=True)
+
     with open(log, "w", encoding="utf-8") as f:
+        f.write("[recheck] cmd: " + " ".join(map(shlex.quote, args)) + "\n")
+        if forwarded:
+            f.write("[recheck] forwarded flags: " + repr(forwarded) + "\n")
         p = subprocess.Popen(args, stdout=f, stderr=subprocess.STDOUT, env=env)
     return p.wait()
 
@@ -136,6 +157,21 @@ def main():
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
+    print("[recheck] args parsed:", flush=True)
+    print("  sweep      =", args.sweep, flush=True)
+    print("  project    =", args.project, flush=True)
+    print("  group      =", args.group, flush=True)
+    print("  metric     =", args.metric, flush=True)
+    print("  direction  =", args.direction, flush=True)
+    print("  topk       =", args.topk, flush=True)
+    print("  extra_seeds=", args.extra_seeds, flush=True)
+    print("  program    =", args.program, flush=True)
+    print("  subcmd     =", args.subcmd, flush=True)
+    print("  unlabeled  =", args.unlabeled, flush=True)
+    print("  labeled    =", args.labeled, flush=True)
+    print("  mm         =", args.mm, flush=True)
+    print("  log_dir    =", args.log_dir, flush=True)
+    print("  out        =", args.out, flush=True)
 
     # --- resolve a safe, writable output path and ensure parent exists ---
     def _safe_out(user_out: str | None) -> str:
@@ -181,6 +217,20 @@ def main():
     maximize = (args.direction == "max")
     top = pick_topk(sweep, args.metric, maximize, args.topk)
 
+    print(f"[recheck] picked top {len(top)} from sweep: {[r.id for r in top]}", flush=True)
+
+    def _kv(d, keys=("training_method","gnn_type","hidden_dim","num_layers","contiguity","mask_ratio","ema_decay","temperature","learning_rate")):
+        out = {}
+        for k in keys:
+            v = d.get(k)
+            if v is not None:
+                out[k] = v
+        return out
+
+    print("[recheck] top configs (key fields):", flush=True)
+    for r in top:
+        print(" ", r.id, _kv(r.config), flush=True)
+
     # Extract the raw config dict for each top run
     tops: List[Dict[str, Any]] = []
     for r in top:
@@ -199,11 +249,20 @@ def main():
     for i, cfg in enumerate(tops):
         seeds = [1000 + i*10 + s for s in range(args.extra_seeds)]
         vals = []
+        print(f"[recheck] launching seed {s} for config index {i}", flush=True)
         for s in seeds:
             rc = run_once(args.mm, args.program, args.subcmd, cfg, s,
               args.unlabeled_dir, args.labeled_dir, args.log_dir,
               args.project, args.group)
             if rc != 0:
+                # show last ~120 lines of the log for quick diagnosis
+                log_path = os.path.join(args.log_dir, f"recheck_{cfg.get('training_method','jepa')}_seed{s}.log")
+                try:
+                    with open(log_path, "r", encoding="utf-8") as lf:
+                        lines = lf.readlines()[-120:]
+                    print(f"[recheck][seed {s}] log tail:", "".join(lines), flush=True)
+                except Exception as _e:
+                    print(f"[recheck][seed {s}] could not read log {log_path}: {_e}", flush=True)
                 raise RuntimeError(f"recheck run failed with exit code {rc} (seed {s})")
             # after the run, we could read the metric from W&B; here we assume train_jepa.py writes best val to a file or W&B;
             # to keep this self-contained, we re-fetch the last matching run (same group + tags would be best).
