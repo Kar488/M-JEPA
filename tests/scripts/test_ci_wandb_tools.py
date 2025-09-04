@@ -145,7 +145,7 @@ def test_recheck_topk_summary_and_empty(monkeypatch, tmp_path):
     out = tmp_path / "summary.json"
     monkeypatch.setattr(sys, "argv", [
         "rc", "--sweep", "ent/proj/sw1", "--program", "prog.py",
-        "--unlabeled", "u", "--labeled", "l", "--topk", "1",
+        "--unlabeled-dir", "u", "--labeled-dir", "l", "--topk", "1",
         "--extra_seeds", "2", "--project", "proj", "--group", "grp",
         "--metric", "val_rmse", "--direction", "min", "--out", str(out)
     ])
