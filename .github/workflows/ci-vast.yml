@@ -335,7 +335,7 @@ jobs:
           script: |
             bash "$APP_DIR/scripts/ci/run-pretrain.sh"
         env:
-          HARD_WALL_MINS: 30
+          HARD_WALL_MINS: 90
           KILL_AFTER_SECS: 120
 
   vast_finetune:
