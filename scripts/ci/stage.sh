@@ -33,6 +33,7 @@ stage_needs() {
     "$APP_DIR/scripts/ci/common.sh"
     "$APP_DIR/scripts/ci/run-${s}.sh"
   )
+  
   case "$s" in
     grid)   printf '%s\n' "${base[@]}" ;;
     pretrain) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" ;;

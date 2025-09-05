@@ -260,7 +260,6 @@ def main():
                 try:
                     with open(log_path, "r", encoding="utf-8") as lf:
                         lines = lf.readlines()[-120:]
-                    print(f"[recheck][seed {s}] log tail:", "".join(lines), flush=True)
                 except Exception as _e:
                     print(f"[recheck][seed {s}] could not read log {log_path}: {_e}", flush=True)
                 raise RuntimeError(f"recheck run failed with exit code {rc} (seed {s})")
@@ -297,7 +296,11 @@ def main():
                    "topk": args.topk, "extra_seeds": args.extra_seeds,
                    "results": results}, f, indent=2)
 
-    # --- Also write the single best config for downstream pretrain/finetune ---
+
+    # --- Normalize Phase-2 winner to Phase-1 schema and automically back up best_grid_config.json from phase1 ---
+    out_dir = os.path.dirname(args.out)
+
+    # 1) Resolve target and backup paths
     # choose best by direction: min → lowest mean, max → highest mean
     best = None
     if results:
@@ -308,10 +311,29 @@ def main():
         if ranked:
             best = ranked[0]
 
-    best_path = os.path.join(os.path.dirname(args.out), "phase2_best_config.json")
-    with open(best_path, "w", encoding="utf-8") as bf:
-        json.dump({"metric": args.metric, "direction": args.direction, "best": best}, bf, indent=2)
-    print(f"[recheck] wrote best config → {best_path}", flush=True)
+    p1_best = os.path.join(out_dir, "best_grid_config.json")
+    p1_backup = os.path.join(out_dir, "best_grid_config.phase1.json")
+    tmp_write = os.path.join(out_dir, ".best_grid_config.tmp")
+
+    # 2) Extract winner config as Phase-1 schema: {"config": {...}}
+    winner_cfg = (best or {}).get("config") or {}
+    payload = {"config": winner_cfg}
+
+    # 3) Backup existing Phase-1 best (if present) BEFORE writing new one
+    try:
+        if os.path.isfile(p1_best) and not os.path.isfile(p1_backup):
+            import shutil
+            shutil.copy2(p1_best, p1_backup)
+            print(f"[recheck] backed up Phase-1 best → {p1_backup}", flush=True)
+    except Exception as e:
+        print(f"[recheck][warn] backup skipped: {e}", flush=True)
+
+    # 4) Atomic write of the new best_grid_config.json
+    with open(tmp_write, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp_write, p1_best)
+    print(f"[recheck] wrote Phase-2 winner as Phase-1 best → {p1_best}", flush=True)
+
 
 if __name__ == "__main__":
     main()
