@@ -728,7 +728,7 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
     md = CONFIG.get("model", {})
     p.add_argument("--gnn-type", "--gnn_type", dest="gnn_type",
                    choices=["gcn","gat","mpnn","edge_mpnn","graphsage","gin", "gine", "dmpnn", "attentivefp", "schnet3d"],
-                    default=md.get("edge_mpnn"),
+                    default=md.get("gnn_type", "edge_mpnn"),
                     help=(
                         "Backbone GNN. Use 'gine' (GIN+edge) or 'dmpnn' (Chemprop-style directed MPNN) "
                         "for 2D/bond-aware runs; 'schnet3d' for 3D geometry (requires pos); "

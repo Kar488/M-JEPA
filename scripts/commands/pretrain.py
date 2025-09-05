@@ -191,7 +191,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     ),  # ensure it does not crash for unit tests
                     batch_size=args.batch_size,
                     mask_ratio=args.mask_ratio,
-                    contiguous=args.contiguous,
+                    contiguous=getattr(args, "contiguity", False),
                     lr=args.lr,
                     device=device,
                     reg_lambda=1e-4,
