@@ -297,5 +297,21 @@ def main():
                    "topk": args.topk, "extra_seeds": args.extra_seeds,
                    "results": results}, f, indent=2)
 
+    # --- Also write the single best config for downstream pretrain/finetune ---
+    # choose best by direction: min → lowest mean, max → highest mean
+    best = None
+    if results:
+        if args.direction == "min":
+            ranked = sorted([r for r in results if r["mean"] is not None], key=lambda r: r["mean"])
+        else:
+            ranked = sorted([r for r in results if r["mean"] is not None], key=lambda r: -r["mean"])
+        if ranked:
+            best = ranked[0]
+
+    best_path = os.path.join(os.path.dirname(args.out), "phase2_best_config.json")
+    with open(best_path, "w", encoding="utf-8") as bf:
+        json.dump({"metric": args.metric, "direction": args.direction, "best": best}, bf, indent=2)
+    print(f"[recheck] wrote best config → {best_path}", flush=True)
+
 if __name__ == "__main__":
     main()

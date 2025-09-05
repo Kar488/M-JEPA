@@ -32,13 +32,12 @@ python_bin() {
   fi
 }
 
-# Allow cache directories to be overridden by env vars supplied by the workflow
-GRID_DIR="${GRID_CACHE_DIR:-$EXP_ROOT/grid}"
-PRETRAIN_DIR="${PRETRAIN_CACHE_DIR:-$EXP_ROOT/pretrain}"
-FINETUNE_DIR="${FINETUNE_CACHE_DIR:-$EXP_ROOT/finetune}"
-BENCH_DIR="${BENCH_CACHE_DIR:-$EXP_ROOT/bench}"
-TOX21_DIR="${TOX21_CACHE_DIR:-$EXP_ROOT/tox21}"
-LOG_DIR="$EXP_ROOT/logs"
+# Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
+: "${GRID_DIR:=${GRID_CACHE_DIR:-$EXP_ROOT/grid}}"
+: "${PRETRAIN_DIR:=${PRETRAIN_CACHE_DIR:-$EXP_ROOT/pretrain}}"
+: "${FINETUNE_DIR:=${FINETUNE_CACHE_DIR:-$EXP_ROOT/finetune}}"
+: "${BENCH_DIR:=${BENCH_CACHE_DIR:-$EXP_ROOT/bench}}"
+: "${TOX21_DIR:=${TOX21_CACHE_DIR:-$EXP_ROOT/tox21}}"
 
 mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR" "$WANDB_DIR"
 export GRID_DIR PRETRAIN_DIR FINETUNE_DIR BENCH_DIR TOX21_DIR LOG_DIR
