@@ -292,28 +292,40 @@ def main():
 
 
     # --- Normalize Phase-2 winner to Phase-1 schema and automically back up best_grid_config.json from phase1 ---
+    # --- Choose winner from recheck; fallback to sweep top if needed ---
     out_dir = os.path.dirname(args.out)
 
-    # 1) Resolve target and backup paths
-    # choose best by direction: min → lowest mean, max → highest mean
+    # 1) Try recheck results first
     best = None
     if results:
-        if args.direction == "min":
-            ranked = sorted([r for r in results if r["mean"] is not None], key=lambda r: r["mean"])
-        else:
-            ranked = sorted([r for r in results if r["mean"] is not None], key=lambda r: -r["mean"])
-        if ranked:
-            best = ranked[0]
+        cand = [r for r in results if r.get("mean") is not None]
+        if cand:
+            if args.direction == "min":
+                best = sorted(cand, key=lambda r: r["mean"])[0]
+            else:
+                best = sorted(cand, key=lambda r: -r["mean"])[0]
 
-    p1_best = os.path.join(out_dir, "best_grid_config.json")
+    winner_cfg = None
+    if best is not None:
+        winner_cfg = (best or {}).get("config") or None
+
+    # 2) Fallback: use the top sweep run's config (already filtered earlier)
+    if winner_cfg is None:
+        if top:
+            # copy W&B run.config into a plain dict, drop internals and seed
+            cfg = {k: v for k, v in top[0].config.items() if not k.startswith("_")}
+            cfg.pop("seed", None)
+            winner_cfg = cfg
+            print("[recheck] fallback: using top sweep config (no recheck means)", flush=True)
+        else:
+            winner_cfg = {}
+            print("[recheck][warn] no top entries and no recheck means; writing empty config", flush=True)
+
+    # 3) Atomically write Phase-2 winner in Phase-1 schema: {"config": {...}}
+    p1_best   = os.path.join(out_dir, "best_grid_config.json")
     p1_backup = os.path.join(out_dir, "best_grid_config.phase1.json")
     tmp_write = os.path.join(out_dir, ".best_grid_config.tmp")
 
-    # 2) Extract winner config as Phase-1 schema: {"config": {...}}
-    winner_cfg = (best or {}).get("config") or {}
-    payload = {"config": winner_cfg}
-
-    # 3) Backup existing Phase-1 best (if present) BEFORE writing new one
     try:
         if os.path.isfile(p1_best) and not os.path.isfile(p1_backup):
             import shutil
@@ -322,11 +334,11 @@ def main():
     except Exception as e:
         print(f"[recheck][warn] backup skipped: {e}", flush=True)
 
-    # 4) Atomic write of the new best_grid_config.json
     with open(tmp_write, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+        json.dump({"config": winner_cfg}, f, indent=2)
     os.replace(tmp_write, p1_best)
     print(f"[recheck] wrote Phase-2 winner as Phase-1 best → {p1_best}", flush=True)
+
 
 
 if __name__ == "__main__":
