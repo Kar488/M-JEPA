@@ -120,13 +120,7 @@ def run_once(mm, program, subcmd, cfg: Dict[str, Any], seed: int,
     os.makedirs(log_dir, exist_ok=True)
     log = os.path.join(log_dir, f"recheck_{method}_seed{seed}.log")
 
-    # stdout: show what we're about to run
-    print("[recheck] cmd:", " ".join(map(shlex.quote, args)), flush=True)
-    if forwarded:
-        print("[recheck] forwarded flags:", forwarded, flush=True)
-
     with open(log, "w", encoding="utf-8") as f:
-        f.write("[recheck] cmd: " + " ".join(map(shlex.quote, args)) + "\n")
         if forwarded:
             f.write("[recheck] forwarded flags: " + repr(forwarded) + "\n")
         p = subprocess.Popen(args, stdout=f, stderr=subprocess.STDOUT, env=env)

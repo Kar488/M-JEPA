@@ -72,5 +72,5 @@ else
 fi
 
 # === materialize Phase-2 winner as fixed CLI for downstream ===
-BEST_JSON="${GRID_DIR:-$APP_DIR/grid}/phase2_best_config.json"
+BEST_JSON="${GRID_DIR:-$APP_DIR/grid}/best_grid_config.json"
 [[ -s "$BEST_JSON" ]] || { echo "[phase2][fatal] missing $BEST_JSON"; exit 2; }
