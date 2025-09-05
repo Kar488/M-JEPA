@@ -207,6 +207,17 @@ model_common = {
     "contiguities": "--contiguities",
     "add_3d_options": "--add-3d-options",
     "lr": "--lr",
+
+    # >>> add singular keys used by best_grid_config.json <<<
+    "gnn_type": "--gnn-type",
+    "hidden_dim": "--hidden-dim",
+    "num_layers": "--num-layers",
+    "ema_decay": "--ema-decay",
+    "contiguity": "--contiguity",
+    "add_3d": "--add-3d",
+    "learning_rate": "--learning-rate",
+
+    # other common knobs
     "learning_rates": "--learning-rates",
     "use_scheduler": "--use-scheduler",
     "warmup_steps": "--warmup-steps",
