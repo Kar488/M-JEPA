@@ -57,7 +57,6 @@ pretrain:
 finetune:
   <<: *common
   labeled_dir: ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
-  test_dir: ${BENCH_DATA_DIR}
   encoder: ${PRETRAIN_DIR}/encoder.pt
   task_type: regression
   label_col: "measured log solubility in mols per litre"
