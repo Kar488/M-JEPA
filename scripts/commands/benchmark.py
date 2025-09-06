@@ -1,4 +1,5 @@
 from __future__ import annotations
+from finetune import evaluate_finetuned_head
 
 import argparse
 import sys

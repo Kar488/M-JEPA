@@ -301,3 +301,4 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
   # paste wandb key whn asked and then copy the generated url to project code
 
   d. fix hyper‑parameters for grid we know do not strongly affect performance (e.g., maybe fix hidden_dim=256 and num_layers=3 if we know deeper networks give no benefit) or run cap (300-500)
+  e. reporting threshold-free metrics and your finetune already selects best by VAL through a seperate eval step

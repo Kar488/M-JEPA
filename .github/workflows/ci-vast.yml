@@ -357,7 +357,7 @@ jobs:
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           command_timeout: 190m
-          envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
+          envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,CKPT_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID
           script: |
             bash "$APP_DIR/scripts/ci/run-finetune.sh"
@@ -384,13 +384,16 @@ jobs:
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           command_timeout: 70m
-          envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
+          envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR, BENCH_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
+            BENCH_VAL_DIR,BENCH_TEST_DIR,PHASE2_LABELED_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID
           script: |
             bash "$APP_DIR/scripts/ci/run-bench.sh"
         env:
           HARD_WALL_MINS: 60
           KILL_AFTER_SECS: 120
+          BENCH_VAL_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/val
+          BENCH_TEST_DIR: ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/test
 
   vast_tox21:
     name: Tox21 Evaluation

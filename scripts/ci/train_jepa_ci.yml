@@ -57,6 +57,7 @@ pretrain:
 finetune:
   <<: *common
   labeled_dir: ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
+  test_dir: ${VAL_UNLABELED_DIR}
   encoder: ${PRETRAIN_DIR}/encoder.pt
   task_type: regression
   label_col: "measured log solubility in mols per litre"
@@ -69,11 +70,13 @@ finetune:
 bench:
   <<: *common
   labeled_dir: ${APP_DIR}/data/katielinkmoleculenet_benchmark/test
+  test_dir:   ${BENCH_DATA_DIR}
   label_col: "measured log solubility in mols per litre"
   task_type: regression
   jepa_encoder: ${PRETRAIN_DIR}/encoder.pt
   ft_ckpt: ${FINETUNE_DIR}/seed_0/ft_best.pt
   report_dir: ${BENCH_DIR}/reports
+  report_stem: ${REPORT_STEM}
   use_wandb: true
 
 tox21:

@@ -183,6 +183,8 @@ dataset_loader = {
     "dataset_dir": "--dataset-dir",
     "unlabeled_dir": "--unlabeled-dir",
     "labeled_dir": "--labeled-dir",
+    "test_dir":    "--test-dir",
+    "report_stem": "--report-stem",
     "csv": "--csv",
     "label_col": "--label-col",
     "smiles_col": "--smiles-col",
