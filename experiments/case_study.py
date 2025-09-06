@@ -2,7 +2,7 @@
 
 This module demonstrates how JEPA embeddings can prioritise molecules by
 ranking predictions on the Tox21 dataset. A small encoder is pretrained on
-unlabelled molecules, a regression head is fitted on a chosen toxicity task
+unlabelled molecules, a classification head is fitted on a chosen toxicity task
 and the most toxic predictions are compared against a random exclusion
 baseline.
 """
@@ -17,10 +17,18 @@ if TYPE_CHECKING:
 import logging
 import os
 import random
-from typing import Iterable, Tuple
+from typing import Iterable, Tuple, Optional, List, Dict
 
 import numpy as np
 import pandas as pd
+
+try:
+    from rdkit import Chem
+    from rdkit.Chem.Scaffolds import MurckoScaffold
+    _HAS_RDKIT = True
+except Exception:
+    _HAS_RDKIT = False
+from sklearn.metrics import roc_auc_score, brier_score_loss
 
 from models.ema import EMA
 from models.encoder import GNNEncoder
@@ -35,6 +43,7 @@ logger = logging.getLogger(__name__)
 import sys
 import importlib, types
 from pathlib import Path
+import torch
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -74,8 +83,8 @@ def run_tox21_case_study(
     csv_path: str,
     task_name: str,
     smiles_col: str = "smiles",
-    train_fraction: float = 0.8,
-    val_fraction: float = 0.1,
+    train_fraction: float = 0.8,# only used if scaffold split not possible
+    val_fraction: float = 0.1,# only used if scaffold split not possible
     seed: int = 42,
     pretrain_epochs: int = 5,
     finetune_epochs: int = 20,
@@ -94,7 +103,7 @@ def run_tox21_case_study(
         val_fraction: Fraction of data used for validation.
         seed: Random seed for reproducibility.
         pretrain_epochs: Number of epochs for JEPA pretraining.
-        finetune_epochs: Number of epochs for the regression head.
+        finetune_epochs: Number of epochs for the classification head.
         num_top_exclude: Number of top predicted toxic compounds to exclude
             when computing the post-filter mean toxicity.
         device: Device on which to run computations.
@@ -143,15 +152,50 @@ def run_tox21_case_study(
 
     all_labels = dataset.labels.astype(float)
     num_total = len(dataset)
-    num_train = int(train_fraction * num_total)
-    num_val = int(val_fraction * num_total)
+    # -------------------------------
+    # Scaffold split (fallback to random)
+    # -------------------------------
+    def _scaffold(smiles: str) -> Optional[str]:
+        if not _HAS_RDKIT:
+            return None
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return None
+        scf = MurckoScaffold.GetScaffoldForMol(mol)
+        return Chem.MolToSmiles(scf, isomericSmiles=True) if scf is not None else None
 
-    indices = list(range(num_total))
-    random.seed(seed)
-    random.shuffle(indices)
-    train_idx = indices[:num_train]
-    val_idx = indices[num_train : num_train + num_val]
-    test_idx = indices[num_train + num_val :]
+    rng = np.random.default_rng(seed)
+    if _HAS_RDKIT:
+        scaffolds: Dict[str, List[int]] = {}
+        for i, s in enumerate(smiles_list):
+            key = _scaffold(s) or f"NOSCAF_{i}"
+            scaffolds.setdefault(key, []).append(i)
+        # Sort scaffold bins by descending size for deterministic fill
+        bins = sorted(scaffolds.values(), key=len, reverse=True)
+        train_idx, val_idx, test_idx = [], [], []
+        n_train = int(0.8 * num_total)     # standard 80/10/10 for case study
+        n_val   = int(0.1 * num_total)
+        for bin_idx in bins:
+            # place this whole scaffold bin into the first split that has room
+            if len(train_idx) + len(bin_idx) <= n_train:
+                train_idx.extend(bin_idx)
+            elif len(val_idx) + len(bin_idx) <= n_val:
+                val_idx.extend(bin_idx)
+            else:
+                test_idx.extend(bin_idx)
+        # If any leftovers due to rounding, push into test
+        rest = [i for i in range(num_total) if i not in train_idx+val_idx+test_idx]
+        test_idx.extend(rest)
+        logger.info("Scaffold split: train=%d val=%d test=%d", len(train_idx), len(val_idx), len(test_idx))
+    else:
+        logger.warning("RDKit not available; using RANDOM split for case study.")
+        idx = np.arange(num_total)
+        rng.shuffle(idx)
+        n_train = int(0.8 * num_total)
+        n_val   = int(0.1 * num_total)
+        train_idx = idx[:n_train].tolist()
+        val_idx   = idx[n_train:n_train+n_val].tolist()
+        test_idx  = idx[n_train+n_val:].tolist()
 
     input_dim = dataset.graphs[0].x.shape[1]
     hidden_dim = 256
@@ -201,39 +245,94 @@ def run_tox21_case_study(
     val_ds = subset_dataset(dataset, val_idx)
     _ = subset_dataset(dataset, test_idx)
 
+
     combined_ds_graphs = train_ds.graphs + val_ds.graphs
     combined_ds_labels = np.concatenate([train_ds.labels, val_ds.labels])
     combined_ds = GraphDatasetCls(combined_ds_graphs, combined_ds_labels)
 
-    regression_metrics = sup.train_linear_head(
+    # -------------------------------
+    # Train classification head (Tox21 is binary classification)
+    # -------------------------------
+    clf_metrics = sup.train_linear_head(
         dataset=combined_ds,
         encoder=encoder,
-        task_type="regression",
+        task_type="classification",
         epochs=finetune_epochs,
         lr=1e-3,
         batch_size=32,
         device=device,
         patience=5,
+        # selection_metric="val_auc",  # uncomment if supported
     )
 
-    reg_head = regression_metrics.get("head")
+    head = clf_metrics.get("head")
     encoder.eval()
-    reg_head.eval()
-
+    head.eval()
+    head = head.to(device)
+    encoder = encoder.to(device)
+    
     batch_indices = list(range(num_total))
-    batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices)
-    import torch
-
-    batch_x = batch_x.to(device)
+    batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices) 
+    batch_x   = batch_x.to(device)
     batch_adj = batch_adj.to(device)
-    node_emb = encoder(batch_x, batch_adj)
-    graph_emb = global_mean_pool(node_emb, batch_ptr)
-    preds = reg_head(graph_emb).squeeze(1).detach().cpu().numpy()
+    # batch_ptr must be on device and long dtype for pooling/scatter ops
+    batch_ptr = batch_ptr.to(device)
+    if batch_ptr.dtype != torch.long:
+        batch_ptr = batch_ptr.long()
 
-    sorted_indices = np.argsort(-preds)
-    exclude_pred = sorted_indices[:num_top_exclude]
-    remaining_pred = [i for i in range(num_total) if i not in exclude_pred]
+    node_emb  = encoder(batch_x, batch_adj)
+    graph_emb = global_mean_pool(node_emb, batch_ptr)
+    # classification: use probability (sigmoid over logits)
+    logits = head(graph_emb).squeeze(1)
+    probs  = torch.sigmoid(logits).detach().cpu().numpy()
+
+    test_idx_arr = np.asarray(test_idx)
+
+    # JEPA triage: exclude top-k most toxic within TEST
+    test_probs = probs[test_idx_arr]
+    k = min(num_top_exclude, test_probs.size)
+    top_k = np.argsort(-test_probs)[:k]
+    exclude_pred = test_idx_arr[top_k]
+    remaining_pred = [i for i in test_idx_arr if i not in exclude_pred]
     mean_pred = float(np.mean(all_labels[remaining_pred])) if remaining_pred else 0.0
+
+    # Random baseline triage (within TEST)
+    rng = np.random.default_rng(seed)
+    k = min(num_top_exclude, test_idx_arr.size)
+    exclude_rand = rng.choice(test_idx_arr, size=k, replace=False)
+    remaining_rand = [i for i in test_idx_arr if i not in exclude_rand]
+    mean_rand = float(np.mean(all_labels[remaining_rand])) if remaining_rand else 0.0
+
+    # Reference mean should also be TEST mean
+    mean_true = float(np.mean(all_labels[test_idx_arr]))
+
+    # Mask NaNs and guard degenerate splits
+    y_true = all_labels[test_idx_arr].astype(float)
+    y_pred = probs[test_idx_arr]
+    m = ~np.isnan(y_true)
+    y_true_m = y_true[m]
+    y_pred_m = y_pred[m]
+    if y_true_m.size > 0 and np.unique(y_true_m).size > 1:
+        auc = float(roc_auc_score(y_true_m.astype(int), y_pred_m))
+        brier = float(brier_score_loss(y_true_m.astype(int), y_pred_m))
+
+        def _ece(y, p, n_bins=10):
+            bins = np.linspace(0.0, 1.0, n_bins+1)
+            idxs = np.digitize(p, bins) - 1
+            ece = 0.0
+            for b in range(n_bins):
+                mask = idxs == b
+                if not np.any(mask):
+                    continue
+                conf = p[mask].mean()
+                acc  = (y[mask] == (p[mask] >= 0.5)).mean()
+                ece += (np.sum(mask) / len(p)) * abs(acc - conf)
+            return float(ece)
+        ece = _ece(y_true_m.astype(int), y_pred_m, n_bins=10)
+        logger.info("Tox21 %s TEST metrics — AUC=%.4f, Brier=%.4f, ECE=%.4f",
+                    task_name, auc, brier, ece)
+    else:
+        logger.warning("TEST split degenerate (one class/empty). Skipping AUC/Brier/ECE.")
 
     baseline_means: dict[str, float] = {}
     if baseline_embeddings:
@@ -254,19 +353,13 @@ def run_tox21_case_study(
                 )
             reg = Ridge(alpha=1.0, random_state=seed).fit(X[train_val_idx], y_train_val)
             pred = reg.predict(X)
-            top = np.argsort(-pred)[:num_top_exclude]
-            remain = [i for i in range(num_total) if i not in top]
-            baseline_means[name] = (
-                float(np.mean(all_labels[remain])) if remain else 0.0
-            )
+            pred_test = pred[test_idx_arr]
+            k = min(num_top_exclude, pred_test.size)
+            top = np.argsort(-pred_test)[:k]
+            exclude = test_idx_arr[top]
+            remain = [i for i in test_idx_arr if i not in exclude]
+            baseline_means[name] = float(np.mean(all_labels[remain])) if len(remain) else 0.0
 
-    random_indices = np.arange(num_total)
-    np.random.shuffle(random_indices)
-    exclude_rand = random_indices[:num_top_exclude]
-    remaining_rand = [i for i in range(num_total) if i not in exclude_rand]
-    mean_rand = float(np.mean(all_labels[remaining_rand])) if remaining_rand else 0.0
-
-    mean_true = float(np.mean(all_labels))
     return mean_true, mean_rand, mean_pred, baseline_means
 
 

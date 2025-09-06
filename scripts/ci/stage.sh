@@ -142,6 +142,11 @@ run_with_timeout() {
       subcmd="grid-search"    # argparse subcommand
     fi
 
+    if [ "$s" = "bench" ]; then
+      section="bench"
+      subcmd="benchmark"
+    fi
+
     # parsing flags from arr[@] inside stage.sh (e.g. --epochs 50, --batch-size 128),
     local getv; getv() {
       local k="$1" n=0

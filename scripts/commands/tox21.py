@@ -27,9 +27,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         mean_true, mean_random, mean_jepa, baseline_means = run_tox21_case_study(
             csv_path=args.csv,
             task_name=args.task,
-            pretrain_epochs=args.pretrain_epochs,
-            finetune_epochs=args.finetune_epochs,
-            num_top_exclude=args.num_top_exclude,
+            pretrain_epochs=getattr(args, "pretrain_epochs", 5),
+            finetune_epochs=getattr(args, "finetune_epochs", 20),
+            num_top_exclude=getattr(args, "num_top_exclude", 10),
             device=resolve_device(args.device),
         )
         # Assemble a single metrics dictionary so all values appear on the same
@@ -45,9 +45,10 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         for name, val in baseline_means.items():
             metrics[f"baseline/{name}"] = val
         wb.log(metrics)
-    except Exception:
-        logger.warning("Tox21 case study failed")
-        wb.log({"phase": "tox21", "status": "error"})
+    except Exception as e:
+        # Log full traceback and surface the message to W&B
+        logger.exception("Tox21 case study failed")
+        wb.log({"phase": "tox21", "status": "error", "error": str(e)})
         sys.exit(5)
     finally:
         wb.finish()
