@@ -250,6 +250,14 @@ except Exception:
         return _DummyFig()
 
 
+try:
+    from ..utils.checkpoint  import safe_load_checkpoint as _safe_load_checkpoint        # type: ignore[import-not-found]
+    from ..utils.checkpoint  import load_state_dict_forgiving as _load_state_dict_forgiving      # type: ignore[import-not-found]
+except ImportError:
+    # Fallback: absolute imports when run from repo root with PYTHONPATH set
+    from utils.checkpoint import safe_load_checkpoint  as _safe_load_checkpoint        # type: ignore[import-not-found]
+    from utils.checkpoint import load_state_dict_forgiving as _load_state_dict_forgiving        # type: ignore[import-not-found]
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -278,34 +286,6 @@ def _maybe_labels(ds):
             except Exception:
                 return None
     return None
-
-
-def _load_state_dict_forgiving(module, state):
-    """Call load_state_dict with strict=False when supported; fall back otherwise."""
-    try:
-        module.load_state_dict(state, strict=False)
-    except TypeError:
-        module.load_state_dict(state)
-
-
-def _safe_load_checkpoint(path: str, device: str):
-    """
-    Best-effort checkpoint loader:
-      - Returns the loaded state (or {"encoder": {}}) for valid .pt files
-      - Returns {} if the file is not a valid PyTorch checkpoint (common in smoke tests)
-    This keeps CLI/tests from crashing when a stub file is used.
-    """
-    try:
-        return torch.load(path, map_location=device)
-    except Exception as e:
-        logger.warning(
-            "Could not load checkpoint %r (%s). Proceeding with random init (test/smoke mode).",
-            path,
-            e,
-        )
-        # Return empty dict so load_state_dict is a no-op if needed
-        return {"encoder": {}}
-
 
 def _infer_num_classes(labeled) -> int:
     """Best-effort class count. Falls back to 2 if we can't see labels."""
@@ -818,7 +798,7 @@ def build_parser() -> argparse.ArgumentParser:
     tox.add_argument("--pretrain-epochs", type=int, default=case_cfg.get("pretrain_epochs", 5), help="JEPA pretrain epochs for case study"); 
     tox.add_argument("--finetune-epochs", type=int, default=case_cfg.get("finetune_epochs", 20), help="Epochs to train regression head in case study"); 
     tox.add_argument("--tox21-dir", dest="tox21_dir", type=str, required=False, default=None, help="Directory of Tox21 outputs"); 
-    tox.add_argument("--triage-pct", type=float, default=0.10, help="Fraction of TEST to exclude (e.g., 0.10 = 10%)")
+    tox.add_argument("--triage-pct", type=float, default=0.10, help="Fraction of TEST to exclude (e.g., 0.10 = 10%%)")
     tox.add_argument("--no-calibrate", action="store_true", help="Disable Platt scaling on VAL")
     _add_common_args(tox, "case_study")
     _add_model_args(tox)

@@ -50,6 +50,16 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
     from utils.checkpoint import load_checkpoint  # for fine-tuned ckpt (encoder+head)
 
+    try:
+        from ..utils.checkpoint  import safe_load_checkpoint as _safe_load_checkpoint        # type: ignore[import-not-found]
+        from ..utils.checkpoint  import load_state_dict_forgiving as _load_state_dict_forgiving      # type: ignore[import-not-found]
+        from ..utils.checkpoint  import resolve_ckpt_path   # type: ignore[import-not-found]
+    except ImportError:
+        # Fallback: absolute imports when run from repo root with PYTHONPATH set
+        from utils.checkpoint import safe_load_checkpoint  as _safe_load_checkpoint        # type: ignore[import-not-found]
+        from utils.checkpoint import load_state_dict_forgiving as _load_state_dict_forgiving        # type: ignore[import-not-found]
+        from utils.checkpoint import resolve_ckpt_path  # type: ignore[import-not-found]
+
     # --- paths / report ---
     args.report_dir = getattr(args, "report_dir", "reports")
     os.makedirs(args.report_dir, exist_ok=True)
@@ -113,11 +123,13 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     # fine-tuned checkpoint and return early.
     if getattr(args, "test_dir", None):
         _wb_log({"phase": "benchmark", "status": "start"})
+        # Don’t resolve here—tests monkey-patch evaluate_finetuned_head().
+        # Pass through what the CLI provided.
         agg_ft = evaluate_finetuned_head(args.ft_ckpt, labeled, args, device)
         if agg_ft:
             all_results["finetuned"] = agg_ft
             for k, v in agg_ft.items():
-                wb.log({f"finetuned/{k}": v})
+                _wb_log({f"finetuned/{k}": v})
         verdict = "finetuned"
         _wb_log({"phase": "benchmark", "status": "success", "best_method": verdict})
         logger.info(f"Benchmark completed. Best method: {verdict}")
@@ -204,7 +216,18 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
     # Thin wrappers that load, then call evaluate_state
     def evaluate_encoder(ckpt_path: str, method_name: str) -> Dict[str, float]:
-        state = _safe_load_checkpoint(ckpt_path, device)
+        state, loaded_path = _safe_load_checkpoint(
+            primary=ckpt_path,
+            ckpt_dir=None,
+            default_name="encoder.pt",
+            map_location=device,
+            allow_missing=True,
+        )
+        if not isinstance(state, dict):
+            state = {}
+        if "encoder" not in state or not state["encoder"]:
+            logger.warning("No encoder weights; using random init (path=%r).", loaded_path or getattr(args, "ft_ckpt", None))
+            
         return evaluate_state(state, method_name)
 
     def evaluate_finetuned(ft_ckpt_path: str) -> Dict[str, float]:

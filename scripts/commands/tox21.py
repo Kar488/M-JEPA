@@ -10,30 +10,29 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         sys.exit(5)
 
     import os, json, csv
-    report_dir = getattr(args, "tox21_dir", None) or getattr(args, "report_dir", None) or os.environ.get("TOX21_DIR")
-
+    
     triage_pct = getattr(args, "triage_pct", 0.10)
     calibrate  = not getattr(args, "no_calibrate", False)
 
-    report_dir = (
-        getattr(args, "tox21_dir", None)
-        or getattr(args, "report_dir", None)
-        or os.environ.get("TOX21_DIR")
-    )
+    # choose a writable report dir (arg → env → <csv_dir>/reports)
+    report_dir = getattr(args, "tox21_dir", None) \
+                 or getattr(args, "report_dir", None) \
+                 or os.environ.get("TOX21_DIR")
+
     if not report_dir:
         csv_dir = os.path.dirname(os.path.abspath(args.csv))
         report_dir = os.path.join(csv_dir, "reports")
     os.makedirs(report_dir, exist_ok=True)
 
     wb = maybe_init_wandb(
-        args.use_wandb,
-        project=args.wandb_project,
-        tags=args.wandb_tags,
+        getattr(args, "use_wandb", False),
+        project=getattr(args, "wandb_project", "m-jepa"),
+        tags=getattr(args, "wandb_tags", []),
         config={
             "csv": args.csv,
             "task": args.task,
-            "pretrain_epochs": args.pretrain_epochs,
-            "finetune_epochs": args.finetune_epochs,
+            "pretrain_epochs": getattr(args, "pretrain_epochs", 5),
+            "finetune_epochs": getattr(args, "finetune_epochs", 20),
             "triage_pct": triage_pct,
             "calibrate": calibrate,
         },
@@ -48,7 +47,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             finetune_epochs=getattr(args, "finetune_epochs", 20),
             triage_pct=triage_pct,
             calibrate=calibrate,
-            device=resolve_device(args.device),
+            device=resolve_device(getattr(args, "device", "cpu")),
         )
         
         # Assemble a single metrics dictionary so all values appear on the same

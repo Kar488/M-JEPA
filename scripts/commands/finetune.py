@@ -19,6 +19,13 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     logger.info("Starting finetune with args: %s", args)
 
     from utils.checkpoint import load_checkpoint, save_checkpoint
+    try:
+        from ..utils.checkpoint  import safe_load_checkpoint as _safe_load_checkpoint        # type: ignore[import-not-found]
+        from ..utils.checkpoint  import load_state_dict_forgiving as _load_state_dict_forgiving      # type: ignore[import-not-found]
+    except ImportError:
+        # Fallback: absolute imports when run from repo root with PYTHONPATH set
+        from utils.checkpoint import safe_load_checkpoint  as _safe_load_checkpoint        # type: ignore[import-not-found]
+        from utils.checkpoint import load_state_dict_forgiving as _load_state_dict_forgiving        # type: ignore[import-not-found]
 
     # Directories / resume
     args.ckpt_dir = getattr(args, "ckpt_dir", "ckpts/finetune")
@@ -128,18 +135,22 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         # ensure modules on device
         _maybe_to(encoder, device)
 
-        # Load checkpoint
         # Load pretrained encoder weights (from pretrain output)
         if getattr(args, "encoder", None):
-            enc_state = _safe_load_checkpoint(args.encoder, device)
-            if enc_state is not None:
+            state, _ = _safe_load_checkpoint(
+                primary=args.encoder,
+                ckpt_dir=None,
+                default_name="encoder.pt",
+                map_location=device,
+                allow_missing=False,
+            )
+            # state may be {"encoder": ...} or a raw state_dict
+            enc_weights = state.get("encoder", state) if isinstance(state, dict) else {}
+            if enc_weights:
                 logger.info("[finetune] loaded encoder from %s", args.encoder)
-                _load_state_dict_forgiving(
-                    encoder,
-                    enc_state if "encoder" not in enc_state else enc_state["encoder"],
-                )
+                _load_state_dict_forgiving(encoder, enc_weights)
             else:
-                logger.warning("Encoder not loaded; proceeding with random init")
+                logger.warning("[finetune] no encoder weights found in %s; using random init", args.encoder)
 
         # If resuming a fine-tune checkpoint, it may contain a fresher encoder
         if "encoder" in resume_state:
@@ -269,11 +280,12 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     )
                     wrote_best = True
                     # optional: stable link at the finetune root
+
                     try:
+                        from utils.checkpoint import safe_link_or_copy
                         link = os.path.join(args.ckpt_dir, "head.pt")
-                        if os.path.islink(link) or os.path.exists(link):
-                            os.remove(link)
-                        os.symlink(best_path, link)
+                        mode = safe_link_or_copy(best_path, link)
+                        logger.info("Updated head.pt (%s) -> %s", mode, best_path)
                     except Exception:
                         logger.warning(
                             "Could not create head.pt symlink", exc_info=True
@@ -306,11 +318,12 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                         snaps.sort(key=lambda s: int(s.split("_")[-1].split(".")[0]))
                         last = os.path.join(seed_dir, snaps[-1])
                         best_path = os.path.join(seed_dir, "ft_best.pt")
+                       
                         shutil.copy2(last, best_path)
-                        link = os.path.join(args.ckpt_dir, "head.pt")
-                        if os.path.islink(link) or os.path.exists(link):
-                            os.remove(link)
-                        os.symlink(best_path, link)
+                        from utils.checkpoint import safe_link_or_copy
+                        mode = safe_link_or_copy(best_path, os.path.join(args.ckpt_dir, "head.pt"))
+                        logger.info("Fallback best: head.pt (%s) -> %s", mode, best_path)
+                        
                         logger.warning("No metric '%s' found; promoted %s to ft_best.pt", metric_name, snaps[-1])
                 except Exception:
                     logger.warning("Failed to create fallback ft_best.pt", exc_info=True)
@@ -352,10 +365,13 @@ def evaluate_finetuned_head(
     try:
         from ..models.factory import build_encoder        # type: ignore[import-not-found]
         from ..utils.pooling import global_mean_pool      # type: ignore[import-not-found]
+        from ..utils.checkpoint  import load_state_dict_forgiving as _load_state_dict_forgiving      # type: ignore[import-not-found]
     except ImportError:
         # Fallback: absolute imports when run from repo root with PYTHONPATH set
         from models.factory import build_encoder          # type: ignore[import-not-found]
         from utils.pooling import global_mean_pool        # type: ignore[import-not-found]
+        from utils.checkpoint import load_state_dict_forgiving as _load_state_dict_forgiving        # type: ignore[import-not-found]
+
 
     state = load_checkpoint(ckpt_path)
     if "encoder" not in state or "head" not in state:
