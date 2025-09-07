@@ -205,6 +205,7 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         pretrain_epochs=1,
         finetune_epochs=1,
         triage_pct=0.10,
+        tox21_dir=str(tmp_path / "reports"),
         device="cpu",
         use_wandb=True,
         wandb_project="test",
@@ -222,7 +223,7 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
     )
 
 
-def test_cmd_tox21_failure(monkeypatch):
+def test_cmd_tox21_failure(tmp_path,monkeypatch):
     monkeypatch.setattr(
         tj,
         "run_tox21_case_study",
@@ -237,6 +238,7 @@ def test_cmd_tox21_failure(monkeypatch):
             pass
 
     monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: DummyWB())
+    monkeypatch.delenv("TOX21_DIR", raising=False)
 
     args = argparse.Namespace(
         csv="c",
@@ -244,6 +246,7 @@ def test_cmd_tox21_failure(monkeypatch):
         pretrain_epochs=1,
         finetune_epochs=1,
         triage_pct=0.10,
+        tox21_dir=str(tmp_path / "reports"),
         device="cpu",
         use_wandb=False,
         wandb_project="p",
