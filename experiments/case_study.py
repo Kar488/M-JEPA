@@ -292,10 +292,11 @@ def run_tox21_case_study(
     probs = _predict_probs_in_chunks(dataset, encoder, head, device, batch_size=256)
 
     test_idx_arr = np.asarray(test_idx)
+    # choose top-k as 10% of TEST (at least 1)
+    k = max(1, int(0.10 * test_idx_arr.size))
 
     # JEPA triage: exclude top-k most toxic within TEST
     test_probs = probs[test_idx_arr]
-    k = min(num_top_exclude, test_probs.size)
     top_k = np.argsort(-test_probs)[:k]
     exclude_pred = test_idx_arr[top_k]
     remaining_pred = [i for i in test_idx_arr if i not in exclude_pred]
@@ -303,7 +304,6 @@ def run_tox21_case_study(
 
     # Random baseline triage (within TEST)
     rng = np.random.default_rng(seed)
-    k = min(num_top_exclude, test_idx_arr.size)
     exclude_rand = rng.choice(test_idx_arr, size=k, replace=False)
     remaining_rand = [i for i in test_idx_arr if i not in exclude_rand]
     mean_rand = float(np.mean(all_labels[remaining_rand])) if remaining_rand else 0.0
@@ -359,7 +359,6 @@ def run_tox21_case_study(
             reg = Ridge(alpha=1.0, random_state=seed).fit(X[train_val_idx], y_train_val)
             pred = reg.predict(X)
             pred_test = pred[test_idx_arr]
-            k = min(num_top_exclude, pred_test.size)
             top = np.argsort(-pred_test)[:k]
             exclude = test_idx_arr[top]
             remain = [i for i in test_idx_arr if i not in exclude]

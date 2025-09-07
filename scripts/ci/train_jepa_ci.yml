@@ -48,7 +48,7 @@ pretrain:
   sample_unlabeled: 50000
   plot_dir: ${PRETRAIN_DIR}/plots
   n_rows_per_file: 1000
-  ckpt_dir: ${CKPT_DIR}
+  ckpt_dir: ${PRETRAIN_DIR}
   save_every: 1
   output: ${PRETRAIN_DIR}/encoder.pt
   force_tqdm: true
@@ -60,9 +60,9 @@ finetune:
   encoder: ${PRETRAIN_DIR}/encoder.pt
   task_type: regression
   label_col: "measured log solubility in mols per litre"
-  ckpt_dir: ${CKPT_DIR}
+  ckpt_dir: ${FINETUNE_DIR}
   save_every: 1
-  metric: val_loss
+  metric: val_rmse
   patience: 10
   use_wandb: true
 
@@ -73,7 +73,7 @@ bench:
   label_col: "measured log solubility in mols per litre"
   task_type: regression
   jepa_encoder: ${PRETRAIN_DIR}/encoder.pt
-  ft_ckpt: ${FINETUNE_DIR}/seed_0/ft_best.pt
+  ft_ckpt: ${FINETUNE_DIR}/head.pt
   report_dir: ${BENCH_DIR}/reports
   report_stem: ${REPORT_STEM}
   use_wandb: true

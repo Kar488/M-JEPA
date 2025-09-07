@@ -78,9 +78,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _labeled_dir   = _resolve_env_path(args.labeled_dir)
     _unlabeled_dir = _resolve_env_path(args.unlabeled_dir)
 
-    print(f"[sweep-run] resolved labeled_dir={_labeled_dir}")
-    print(f"[sweep-run] resolved unlabeled_dir={_unlabeled_dir}")
-
     wb = _wb_get_or_init(args)
 
     mr = getattr(args, "mask_ratio", None)
@@ -107,7 +104,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     else:
         print("⚠️ W&B is disabled or failed to init, skipping config update")
 
-    print(f"[sweep-run] training_method={args.training_method} pid_cfg={pid_cfg} pair_id={pair_id}", flush=True)
+    #print(f"[sweep-run] training_method={args.training_method} pid_cfg={pid_cfg} pair_id={pair_id}", flush=True)
 
     import time as _t
     _deadline = None

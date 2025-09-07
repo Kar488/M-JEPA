@@ -45,6 +45,28 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         for name, val in baseline_means.items():
             metrics[f"baseline/{name}"] = val
         wb.log(metrics)
+
+        import os, json, csv
+        report_dir = getattr(args, "tox21_dir", os.path.join(os.path.dirname(args.csv), "reports"))
+        os.makedirs(report_dir, exist_ok=True)
+        stem = f"tox21_{args.task}"
+        with open(os.path.join(report_dir, f"{stem}.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "mean_true": float(mean_true),
+                "mean_rand": float(mean_random),
+                "mean_pred": float(mean_jepa),
+                "baselines": {k: float(v) for k, v in (baseline_means or {}).items()},
+            }, f, indent=2, sort_keys=True)
+
+        with open(os.path.join(report_dir, f"{stem}.csv"), "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["metric", "value"])
+            w.writerow(["mean_true", float(mean_true)])
+            w.writerow(["mean_rand", float(mean_random)])
+            w.writerow(["mean_pred", float(mean_jepa)])
+            for k, v in (baseline_means or {}).items():
+                w.writerow([f"baseline/{k}", float(v)])
+
     except Exception as e:
         # Log full traceback and surface the message to W&B
         logger.exception("Tox21 case study failed")

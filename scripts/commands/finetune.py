@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 from typing import Dict, List
 
@@ -218,6 +219,8 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             # initialize best depending on direction
             best_metric = -float("inf") if higher_is_better else float("inf")
 
+            wrote_best = False
+            last_epoch = start_epoch - 1
             for epoch in range(start_epoch, args.epochs):
                 metrics = train_linear_head(
                     dataset=labeled,
@@ -264,7 +267,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                         scheduler=scheduler.state_dict(),
                         best_metric=best_metric,
                     )
-
+                    wrote_best = True
                     # optional: stable link at the finetune root
                     try:
                         link = os.path.join(args.ckpt_dir, "head.pt")
@@ -293,6 +296,26 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     scheduler.step()
                 except Exception:
                     pass
+            # Fallback: if no best was recorded, promote last snapshot to best + head.pt
+            if not wrote_best:
+                logger.info("Attempting to write best")
+                try:
+                    # find latest epoch file we just wrote
+                    snaps = [p for p in os.listdir(seed_dir) if p.startswith("ft_epoch_") and p.endswith(".pt")]
+                    if snaps:
+                        snaps.sort(key=lambda s: int(s.split("_")[-1].split(".")[0]))
+                        last = os.path.join(seed_dir, snaps[-1])
+                        best_path = os.path.join(seed_dir, "ft_best.pt")
+                        shutil.copy2(last, best_path)
+                        link = os.path.join(args.ckpt_dir, "head.pt")
+                        if os.path.islink(link) or os.path.exists(link):
+                            os.remove(link)
+                        os.symlink(best_path, link)
+                        logger.warning("No metric '%s' found; promoted %s to ft_best.pt", metric_name, snaps[-1])
+                except Exception:
+                    logger.warning("Failed to create fallback ft_best.pt", exc_info=True)
+
+
             wb.log({"phase": f"finetune_{seed}", "status": "success"})
             metrics_runs.append({k: v for k, v in metrics.items() if k != "head"})
         except Exception:

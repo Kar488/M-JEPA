@@ -18,6 +18,9 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    pip install deepchem
    pre-commit install
    ```
+
+   Turn on developer mode in developer settings for symlinks to work when running tests
+
    Install torch and deepchem through conda
    Optional: install RDKit via conda or `micromamba` for full chemistry features.
    For Parquet support, install either `pyarrow` or `fastparquet`; tests will
