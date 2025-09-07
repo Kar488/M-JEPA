@@ -82,4 +82,5 @@ tox21:
   <<: *common
   csv: ${APP_DIR}/data/tox21/data.csv
   task: NR-AR
+  tox21_dir: ${TOX21_DIR}
   use_wandb: true

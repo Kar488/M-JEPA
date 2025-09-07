@@ -174,7 +174,8 @@ def test_cmd_benchmark_eval_only_uses_test_dir(tmp_path, monkeypatch):
 
 def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
     def tox_stub(
-        csv_path, task_name, pretrain_epochs, finetune_epochs, num_top_exclude, device
+        *, csv_path, task_name, pretrain_epochs, finetune_epochs,
+        triage_pct=0.10, calibrate=True, device="cpu", **kwargs
     ):
         return 0.3, 0.1, 0.5, {"baseline": 0.2}
 
@@ -203,7 +204,7 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         task="NR-AR",
         pretrain_epochs=1,
         finetune_epochs=1,
-        num_top_exclude=0,
+        triage_pct=0.10,
         device="cpu",
         use_wandb=True,
         wandb_project="test",
@@ -242,7 +243,7 @@ def test_cmd_tox21_failure(monkeypatch):
         task="t",
         pretrain_epochs=1,
         finetune_epochs=1,
-        num_top_exclude=0,
+        triage_pct=0.10,
         device="cpu",
         use_wandb=False,
         wandb_project="p",

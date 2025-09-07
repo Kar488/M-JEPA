@@ -9,6 +9,22 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         logger.error("Case study module is unavailable.")
         sys.exit(5)
 
+    import os, json, csv
+    report_dir = getattr(args, "tox21_dir", None) or getattr(args, "report_dir", None) or os.environ.get("TOX21_DIR")
+
+    triage_pct = getattr(args, "triage_pct", 0.10)
+    calibrate  = not getattr(args, "no_calibrate", False)
+
+    report_dir = (
+        getattr(args, "tox21_dir", None)
+        or getattr(args, "report_dir", None)
+        or os.environ.get("TOX21_DIR")
+    )
+    if not report_dir:
+        csv_dir = os.path.dirname(os.path.abspath(args.csv))
+        report_dir = os.path.join(csv_dir, "reports")
+    os.makedirs(report_dir, exist_ok=True)
+
     wb = maybe_init_wandb(
         args.use_wandb,
         project=args.wandb_project,
@@ -18,7 +34,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "task": args.task,
             "pretrain_epochs": args.pretrain_epochs,
             "finetune_epochs": args.finetune_epochs,
-            "num_top_exclude": args.num_top_exclude,
+            "triage_pct": triage_pct,
+            "calibrate": calibrate,
         },
     )
 
@@ -29,12 +46,26 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             task_name=args.task,
             pretrain_epochs=getattr(args, "pretrain_epochs", 5),
             finetune_epochs=getattr(args, "finetune_epochs", 20),
-            num_top_exclude=getattr(args, "num_top_exclude", 10),
+            triage_pct=triage_pct,
+            calibrate=calibrate,
             device=resolve_device(args.device),
         )
+        
         # Assemble a single metrics dictionary so all values appear on the same
         # W&B step.  We prefix baseline keys for clarity.  This allows
         # convenient visualisation of all outputs together in the W&B UI.
+
+        wb.log({
+             "phase": "tox21",
+             "status": "success",
+             "mean_true": float(mean_true),
+             "mean_rand": float(mean_random),
+             "mean_pred": float(mean_jepa),
+            "task": args.task,
+            "triage_pct": triage_pct,
+            "calibrate": calibrate,
+         })
+        
         metrics = {
             "phase": "tox21",
             "status": "success",
@@ -46,9 +77,6 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             metrics[f"baseline/{name}"] = val
         wb.log(metrics)
 
-        import os, json, csv
-        report_dir = getattr(args, "tox21_dir", os.path.join(os.path.dirname(args.csv), "reports"))
-        os.makedirs(report_dir, exist_ok=True)
         stem = f"tox21_{args.task}"
         with open(os.path.join(report_dir, f"{stem}.json"), "w", encoding="utf-8") as f:
             json.dump({

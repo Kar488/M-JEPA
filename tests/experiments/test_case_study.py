@@ -27,7 +27,7 @@ def test_tox21_case_study_smoke(monkeypatch):
         task_name="NR-AR",
         pretrain_epochs=1,
         finetune_epochs=1,
-        num_top_exclude=1,
+        triage_pct=0.10,
     )
     assert all(isinstance(x, float) for x in results[:3])
     assert isinstance(results[3], dict)

@@ -28,7 +28,7 @@ try:
     _HAS_RDKIT = True
 except Exception:
     _HAS_RDKIT = False
-from sklearn.metrics import roc_auc_score, brier_score_loss
+from sklearn.metrics import roc_auc_score, brier_score_loss, average_precision_score
 
 from models.ema import EMA
 from models.encoder import GNNEncoder
@@ -37,6 +37,9 @@ from training.supervised import train_linear_head
 from training.unsupervised import train_jepa
 from utils.pooling import global_mean_pool
 from utils.seed import set_seed
+
+import inspect
+from sklearn.linear_model import LogisticRegression
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +91,9 @@ def run_tox21_case_study(
     seed: int = 42,
     pretrain_epochs: int = 5,
     finetune_epochs: int = 20,
-    num_top_exclude: int = 10,
+    triage_pct: float = 0.10,       # proportion of TEST to exclude (e.g., 0.10 = 10%)
+    calibrate: bool = True,         # fit Platt scaling on VAL logits and apply to TEST
+    use_pos_weight: bool = True,    # pass pos_weight for imbalance if trainer supports it
     device: str = "cpu",
     baseline_embeddings: dict[str, str] | None = None,
 ) -> Tuple[float, float, float, dict[str, float]]:
@@ -104,8 +109,8 @@ def run_tox21_case_study(
         seed: Random seed for reproducibility.
         pretrain_epochs: Number of epochs for JEPA pretraining.
         finetune_epochs: Number of epochs for the classification head.
-        num_top_exclude: Number of top predicted toxic compounds to exclude
-            when computing the post-filter mean toxicity.
+        triage_pct: Fraction of TEST to exclude (e.g., 0.10 = 10%).
+        calibrate: If True, fit Platt scaling on VAL logits and apply to TEST.
         device: Device on which to run computations.
         baseline_embeddings: Optional mapping of baseline name to a file
             containing precomputed embeddings (``.npy`` or ``.csv``) in the
@@ -245,7 +250,6 @@ def run_tox21_case_study(
     val_ds = subset_dataset(dataset, val_idx)
     _ = subset_dataset(dataset, test_idx)
 
-
     combined_ds_graphs = train_ds.graphs + val_ds.graphs
     combined_ds_labels = np.concatenate([train_ds.labels, val_ds.labels])
     combined_ds = GraphDatasetCls(combined_ds_graphs, combined_ds_labels)
@@ -253,6 +257,22 @@ def run_tox21_case_study(
     # -------------------------------
     # Train classification head (Tox21 is binary classification)
     # -------------------------------
+    # ---- Imbalance handling: compute pos_weight on TRAIN+VAL and pass if supported ----
+    trainval_labels = combined_ds.labels
+    mask = ~np.isnan(trainval_labels)
+    n_all = int(mask.sum())
+    n_pos = int(np.nansum(trainval_labels[mask]))
+    n_neg = max(0, n_all - n_pos)
+    extra_args = {}
+    if use_pos_weight and n_pos > 0 and n_neg > 0:
+        import torch
+        pos_weight = torch.tensor([n_neg / max(1, n_pos)], device=device, dtype=torch.float32)
+        if "pos_weight" in inspect.signature(sup.train_linear_head).parameters:
+            extra_args["pos_weight"] = pos_weight
+        elif "class_weight" in inspect.signature(sup.train_linear_head).parameters:
+            extra_args["class_weight"] = {0: 1.0, 1: float(n_neg / max(1, n_pos))}
+
+    # Train classification head (Tox21 is binary classification)
     clf_metrics = sup.train_linear_head(
         dataset=combined_ds,
         encoder=encoder,
@@ -262,6 +282,7 @@ def run_tox21_case_study(
         batch_size=32,
         device=device,
         patience=5,
+        **extra_args,
         # selection_metric="val_auc",  # uncomment if supported
     )
 
@@ -271,33 +292,54 @@ def run_tox21_case_study(
     head = head.to(device)
     encoder = encoder.to(device)
     
-    def _predict_probs_in_chunks(ds, encoder, head, device, batch_size=256):
+    def _predict_logits_probs_in_chunks(ds, idxs, encoder, head, device, batch_size=256):
         encoder.eval(); head.eval()
-        n = len(ds)
-        probs = np.empty(n, dtype=np.float32)
+        import torch
+        n = len(idxs)
+        logits_out = np.empty(n, dtype=np.float32)
+        probs_out  = np.empty(n, dtype=np.float32)
         with torch.no_grad():
             for start in range(0, n, batch_size):
                 end = min(start + batch_size, n)
-                idxs = list(range(start, end))
-                batch_x, batch_adj, batch_ptr, _ = ds.get_batch(idxs)
+                slice_idxs = list(idxs[start:end])
+                batch_x, batch_adj, batch_ptr, _ = ds.get_batch(slice_idxs)
                 batch_x   = batch_x.to(device)
                 batch_adj = batch_adj.to(device)
                 batch_ptr = batch_ptr.to(device).long()
                 node_emb  = encoder(batch_x, batch_adj)
                 graph_emb = global_mean_pool(node_emb, batch_ptr)
                 logits    = head(graph_emb).squeeze(1)
-                probs[start:end] = torch.sigmoid(logits).detach().cpu().numpy()
-        return probs
+                logits_out[start:end] = logits.detach().cpu().numpy()
+                probs_out[start:end]  = torch.sigmoid(logits).detach().cpu().numpy()
+        return logits_out, probs_out
 
-    probs = _predict_probs_in_chunks(dataset, encoder, head, device, batch_size=256)
-
+    # Predict on VAL (for calibration) and TEST
+    import numpy as _np
+    val_idx_arr  = np.asarray(val_idx)
     test_idx_arr = np.asarray(test_idx)
-    # choose top-k as 10% of TEST (at least 1)
-    k = max(1, int(0.10 * test_idx_arr.size))
+    val_logits,  val_probs  = _predict_logits_probs_in_chunks(dataset, val_idx_arr,  encoder, head, device, batch_size=256)
+    test_logits, test_probs = _predict_logits_probs_in_chunks(dataset, test_idx_arr, encoder, head, device, batch_size=256)
 
-    # JEPA triage: exclude top-k most toxic within TEST
-    test_probs = probs[test_idx_arr]
-    top_k = np.argsort(-test_probs)[:k]
+    
+    # ---- Optional VAL calibration (Platt scaling) → apply to TEST ----
+    calibrated_probs = test_probs
+    if calibrate:
+        try:
+            val_y = all_labels[val_idx_arr].astype(float)
+            m = ~np.isnan(val_y)
+            if m.sum() > 1 and np.unique(val_y[m]).size > 1:
+                lr = LogisticRegression(solver="lbfgs", max_iter=1000)
+                lr.fit(val_logits[m].reshape(-1, 1), val_y[m].astype(int))
+                calibrated_probs = lr.predict_proba(test_logits.reshape(-1, 1))[:, 1]
+        except Exception as _e:
+            logger.warning("Calibration skipped due to error: %s", _e)
+
+    # --- Triage within TEST only (percentage, using calibrated probs if available) ---
+    test_prob_rank = calibrated_probs  # use test_probs if you later disable calibration entirely
+    k = max(1, int(triage_pct * test_idx_arr.size))
+    k = min(k, test_idx_arr.size)
+
+    top_k = np.argsort(-test_prob_rank)[:k]
     exclude_pred = test_idx_arr[top_k]
     remaining_pred = [i for i in test_idx_arr if i not in exclude_pred]
     mean_pred = float(np.mean(all_labels[remaining_pred])) if remaining_pred else 0.0
@@ -308,34 +350,41 @@ def run_tox21_case_study(
     remaining_rand = [i for i in test_idx_arr if i not in exclude_rand]
     mean_rand = float(np.mean(all_labels[remaining_rand])) if remaining_rand else 0.0
 
-    # Reference mean should also be TEST mean
+    # Reference: TEST mean
     mean_true = float(np.mean(all_labels[test_idx_arr]))
+
+    # Classification metrics on TEST: ROC-AUC, PR-AUC, Brier, ECE
 
     # Mask NaNs and guard degenerate splits
     y_true = all_labels[test_idx_arr].astype(float)
-    y_pred = probs[test_idx_arr]
+    y_pred = calibrated_probs
     m = ~np.isnan(y_true)
     y_true_m = y_true[m]
     y_pred_m = y_pred[m]
     if y_true_m.size > 0 and np.unique(y_true_m).size > 1:
-        auc = float(roc_auc_score(y_true_m.astype(int), y_pred_m))
+        auc   = float(roc_auc_score(y_true_m.astype(int), y_pred_m))
+        ap    = float(average_precision_score(y_true_m.astype(int), y_pred_m))
         brier = float(brier_score_loss(y_true_m.astype(int), y_pred_m))
 
+        # compare mean predicted probability vs. empirical positive rate per bin
         def _ece(y, p, n_bins=10):
-            bins = np.linspace(0.0, 1.0, n_bins+1)
+            bins = np.linspace(0.0, 1.0, n_bins + 1)
             idxs = np.digitize(p, bins) - 1
             ece = 0.0
+            N = len(p)
             for b in range(n_bins):
                 mask = idxs == b
                 if not np.any(mask):
                     continue
-                conf = p[mask].mean()
-                acc  = (y[mask] == (p[mask] >= 0.5)).mean()
-                ece += (np.sum(mask) / len(p)) * abs(acc - conf)
+                conf = p[mask].mean()     # average predicted prob in bin
+                freq = y[mask].mean()     # empirical positive rate in bin
+                ece += (np.sum(mask) / N) * abs(freq - conf)
             return float(ece)
         ece = _ece(y_true_m.astype(int), y_pred_m, n_bins=10)
-        logger.info("Tox21 %s TEST metrics — AUC=%.4f, Brier=%.4f, ECE=%.4f",
-                    task_name, auc, brier, ece)
+        logger.info(
+            "Tox21 %s TEST metrics — AUC=%.4f, PR-AUC=%.4f, Brier=%.4f, ECE=%.4f",
+            task_name, auc, ap, brier, ece
+        )
     else:
         logger.warning("TEST split degenerate (one class/empty). Skipping AUC/Brier/ECE.")
 
@@ -375,7 +424,7 @@ if __name__ == "__main__":
             task_name="NR-AR",
             pretrain_epochs=1,
             finetune_epochs=1,
-            num_top_exclude=1,
+            triage_pct=0.10,
         )
         logger.info("Mean true toxicity: %s", true_mean)
         logger.info("Mean toxicity after random exclusion: %s", rand_mean)

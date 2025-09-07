@@ -817,8 +817,9 @@ def build_parser() -> argparse.ArgumentParser:
     case_cfg = CONFIG.get("case_study", {}); 
     tox.add_argument("--pretrain-epochs", type=int, default=case_cfg.get("pretrain_epochs", 5), help="JEPA pretrain epochs for case study"); 
     tox.add_argument("--finetune-epochs", type=int, default=case_cfg.get("finetune_epochs", 20), help="Epochs to train regression head in case study"); 
-    tox.add_argument("--num-top-exclude", type=int, default=case_cfg.get("num_top_exclude", 10), help="Top‑k toxic compounds to exclude when ranking")
-    tox.add_argument("--tox21-dir", required=False, help="Directory of Tox21 outputs"); 
+    tox.add_argument("--tox21-dir", dest="tox21_dir", type=str, required=False, default=None, help="Directory of Tox21 outputs"); 
+    tox.add_argument("--triage-pct", type=float, default=0.10, help="Fraction of TEST to exclude (e.g., 0.10 = 10%)")
+    tox.add_argument("--no-calibrate", action="store_true", help="Disable Platt scaling on VAL")
     _add_common_args(tox, "case_study")
     _add_model_args(tox)
     tox.set_defaults(func=cmd_tox21)

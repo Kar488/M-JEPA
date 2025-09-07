@@ -118,7 +118,6 @@ def test_tox21_parser_defaults_and_handler(tmp_path):
     case_cfg = CONFIG["case_study"]
     assert args.pretrain_epochs == case_cfg["pretrain_epochs"]
     assert args.finetune_epochs == case_cfg["finetune_epochs"]
-    assert args.num_top_exclude == case_cfg["num_top_exclude"]
     #assert args.gnn_type == CONFIG["model"]["gnn_type"]
     assert args.hidden_dim == CONFIG["model"]["hidden_dim"]
 

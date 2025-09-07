@@ -349,6 +349,14 @@ def evaluate_finetuned_head(
     from utils.checkpoint import load_checkpoint
     from utils.metrics import compute_classification_metrics, compute_regression_metrics
 
+    try:
+        from ..models.factory import build_encoder        # type: ignore[import-not-found]
+        from ..utils.pooling import global_mean_pool      # type: ignore[import-not-found]
+    except ImportError:
+        # Fallback: absolute imports when run from repo root with PYTHONPATH set
+        from models.factory import build_encoder          # type: ignore[import-not-found]
+        from utils.pooling import global_mean_pool        # type: ignore[import-not-found]
+
     state = load_checkpoint(ckpt_path)
     if "encoder" not in state or "head" not in state:
         logger.warning("Checkpoint missing encoder or head: %s", ckpt_path)
