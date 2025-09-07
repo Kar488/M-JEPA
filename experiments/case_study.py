@@ -271,20 +271,25 @@ def run_tox21_case_study(
     head = head.to(device)
     encoder = encoder.to(device)
     
-    batch_indices = list(range(num_total))
-    batch_x, batch_adj, batch_ptr, _ = dataset.get_batch(batch_indices) 
-    batch_x   = batch_x.to(device)
-    batch_adj = batch_adj.to(device)
-    # batch_ptr must be on device and long dtype for pooling/scatter ops
-    batch_ptr = batch_ptr.to(device)
-    if batch_ptr.dtype != torch.long:
-        batch_ptr = batch_ptr.long()
+    def _predict_probs_in_chunks(ds, encoder, head, device, batch_size=256):
+        encoder.eval(); head.eval()
+        n = len(ds)
+        probs = np.empty(n, dtype=np.float32)
+        with torch.no_grad():
+            for start in range(0, n, batch_size):
+                end = min(start + batch_size, n)
+                idxs = list(range(start, end))
+                batch_x, batch_adj, batch_ptr, _ = ds.get_batch(idxs)
+                batch_x   = batch_x.to(device)
+                batch_adj = batch_adj.to(device)
+                batch_ptr = batch_ptr.to(device).long()
+                node_emb  = encoder(batch_x, batch_adj)
+                graph_emb = global_mean_pool(node_emb, batch_ptr)
+                logits    = head(graph_emb).squeeze(1)
+                probs[start:end] = torch.sigmoid(logits).detach().cpu().numpy()
+        return probs
 
-    node_emb  = encoder(batch_x, batch_adj)
-    graph_emb = global_mean_pool(node_emb, batch_ptr)
-    # classification: use probability (sigmoid over logits)
-    logits = head(graph_emb).squeeze(1)
-    probs  = torch.sigmoid(logits).detach().cpu().numpy()
+    probs = _predict_probs_in_chunks(dataset, encoder, head, device, batch_size=256)
 
     test_idx_arr = np.asarray(test_idx)
 

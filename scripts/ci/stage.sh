@@ -58,6 +58,11 @@ build_stage_args() {
     subcmd="grid-search"    # argparse subcommand
   fi
 
+  if [ "$s" = "bench" ]; then
+    section="bench"
+    subcmd="benchmark"
+  fi
+  
   build_argv_from_yaml "$section"
   expand_array_vars ARGV
   #echo "ARGV after expansion: ${ARGV[@]}"
