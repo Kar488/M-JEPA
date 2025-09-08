@@ -62,7 +62,7 @@ finetune:
   label_col: "measured log solubility in mols per litre"
   ckpt_dir: ${FINETUNE_DIR}
   save_every: 1
-  metric: val_loss
+  metric: val_rmse
   patience: 10
   use_wandb: true
 

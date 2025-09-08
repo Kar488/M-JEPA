@@ -108,9 +108,39 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     # Aggregate metrics across seeds
     metrics_runs: List[Dict[str, float]] = []
 
-    # choose metric & direction
-    metric_name = getattr(args, "metric", "val_loss")
-    higher_is_better = metric_name.lower() in {"acc", "accuracy", "auc", "auroc", "f1"}
+    # --- choose metric & direction (maximize cls metrics, minimize losses/errors) ---
+    metric_name = (getattr(args, "metric", "val_loss") or "").lower()
+    higher_is_better = metric_name in {
+        "acc", "accuracy",
+        "auc", "auroc", "val_auc",
+        "f1", "f1_macro", "f1_micro",
+        "r2", "val_r2",
+    }
+
+    def _lookup_metric(m: dict, name: str):
+        """Return float metric value; try common aliases if the exact key is missing."""
+        v = m.get(name)
+        if v is not None:
+            try:
+                return float(v)
+            except Exception:
+                return None
+        aliases = {
+            "val_rmse": ["rmse_mean", "rmse"],
+            "val_mae":  ["mae_mean", "mae"],
+            "val_auc":  ["auc", "auroc"],
+            "acc":      ["accuracy", "val_acc"],
+            "accuracy": ["acc", "val_acc"],
+            "r2":       ["val_r2"],
+        }
+        for k in aliases.get(name, []):
+            v = m.get(k)
+            if v is not None:
+                try:
+                    return float(v)
+                except Exception:
+                    return None
+        return None
 
     def _is_better(curr, best):
         return (curr > best) if higher_is_better else (curr < best)
@@ -259,13 +289,9 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     prefetch_factor=getattr(args, "prefetch_factor", 4),
                     bf16=getattr(args, "bf16", False),
                 )
-                current = metrics.get(metric_name, None)
-                if current is not None:
-                    # normalize to float
-                    try:
-                        current = float(current)
-                    except Exception:
-                        current = None
+                
+                current = _lookup_metric(metrics, metric_name)
+
                 if current is not None and _is_better(current, best_metric):
                     best_metric = current
                     best_path = os.path.join(seed_dir, "ft_best.pt")
@@ -372,7 +398,13 @@ def evaluate_finetuned_head(
         from utils.pooling import global_mean_pool        # type: ignore[import-not-found]
         from utils.checkpoint import load_state_dict_forgiving as _load_state_dict_forgiving        # type: ignore[import-not-found]
 
-
+    # local helper so there are zero naming conflicts with injected globals
+    def _to_dev(x, dev):
+        try:
+            return x.to(dev)
+        except Exception:
+            return x
+        
     state = load_checkpoint(ckpt_path)
     if "encoder" not in state or "head" not in state:
         logger.warning("Checkpoint missing encoder or head: %s", ckpt_path)
@@ -390,8 +422,8 @@ def evaluate_finetuned_head(
     _load_state_dict_forgiving(enc, state["encoder"])
     head = nn.Linear(enc.hidden_dim, 1)
     _load_state_dict_forgiving(head, state["head"])
-    _maybe_to(enc, device)
-    _maybe_to(head, device)
+    enc  = _to_dev(enc, device)
+    head = _to_dev(head, device)
     enc.eval()
     head.eval()
 

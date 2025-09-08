@@ -754,7 +754,7 @@ def build_parser() -> argparse.ArgumentParser:
     ft.add_argument("--resume-ckpt", type=str, default="", help="resume fine-tune from this checkpoint")
     ft.add_argument("--save-every", type=int, default=1, help="save checkpoint every N epochs")
     ft.add_argument("--save-final", action="store_true", help="also save ft_last.pt at the end")
-    ft.add_argument("--metric", type=str, default="val_loss", choices=["val_loss", "acc", "auroc"])
+    ft.add_argument("--metric", type=str, default="val_loss", choices=["val_loss", "acc", "auroc","val_rmse"])
     ft.add_argument("--task-type", choices=["classification", "regression"], default="classification")
     ft.add_argument("--patience", type=int, default=CONFIG.get("finetune", {}).get("patience", 10), help="Early stopping patience")
     _add_common_args(ft, "finetune")

@@ -205,9 +205,7 @@ def train_linear_head(
     Returns:
         A dictionary of metrics on the test set (only populated on rank 0).
     """
-    logger.info(
-        "Training linear head on %d graphs for %s task", len(dataset), task_type
-    )
+
     assert dataset.labels is not None, "Dataset must have labels."
     assert task_type in {"classification", "regression"}
 
