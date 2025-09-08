@@ -398,6 +398,10 @@ def evaluate_finetuned_head(
         from utils.pooling import global_mean_pool        # type: ignore[import-not-found]
         from utils.checkpoint import load_state_dict_forgiving as _load_state_dict_forgiving        # type: ignore[import-not-found]
 
+    # module logger (safe even when run outside the injector)
+    import logging
+    logger = logging.getLogger(__name__)
+
     # local helper so there are zero naming conflicts with injected globals
     def _to_dev(x, dev):
         try:
@@ -409,33 +413,99 @@ def evaluate_finetuned_head(
     if "encoder" not in state or "head" not in state:
         logger.warning("Checkpoint missing encoder or head: %s", ckpt_path)
         return {}
+    
+    # 1) Try to get the exact encoder config from the finetune ckpt
+    enc_cfg = {}
+    if isinstance(state, dict):
+        enc_cfg = {k: v for k, v in (state.get("encoder_cfg") or {}).items() if v is not None}
 
-    enc = build_encoder(
-        gnn_type=args.gnn_type,
-        input_dim=dataset.graphs[0].x.shape[1],
-        hidden_dim=args.hidden_dim,
-        num_layers=args.num_layers,
-        edge_dim=None
-        if dataset.graphs[0].edge_attr is None
-        else dataset.graphs[0].edge_attr.shape[1],
-    )
-    _load_state_dict_forgiving(enc, state["encoder"])
-    head = nn.Linear(enc.hidden_dim, 1)
-    _load_state_dict_forgiving(head, state["head"])
+    logger.info("Eval encoder cfg: %s", enc_cfg)
+
+    # 2) If missing, look for a sidecar pretrain encoder next to the head
+    #    (we often symlink encoder.pt into the finetune dir)
+    import os, collections
+    import torch
+    sidecar = os.path.join(os.path.dirname(ckpt_path or ""), "encoder.pt")
+    side_state = None
+    if not enc_cfg and os.path.isfile(sidecar):
+        try:
+            side_state = torch.load(sidecar, map_location="cpu")
+        except Exception:
+            side_state = None
+
+    # 3) If still missing, *attempt* to infer hidden_dim from state shapes (best-effort)
+    def _infer_hidden_dim(sd):
+        if not isinstance(sd, dict): return None
+        c = collections.Counter()
+        for k, v in sd.items():
+            shp = getattr(v, "shape", None)
+            if isinstance(shp, tuple) and len(shp) == 2:
+                in_f = shp[1]
+                if 64 <= in_f <= 2048 and in_f % 32 == 0:
+                    c[in_f] += 1
+        return c.most_common(1)[0][0] if c else None
+
+    if not enc_cfg:
+        hid = _infer_hidden_dim((state or {}).get("encoder", {})) or _infer_hidden_dim(side_state or {})
+        if hid:
+            enc_cfg["hidden_dim"] = hid
+
+    # 4) Fall back to CLI args for anything still missing
+    for k in ("gnn_type", "hidden_dim", "num_layers", "add_3d"):
+        if k not in enc_cfg and hasattr(args, k):
+            enc_cfg[k] = getattr(args, k)
+
+    # 5) Finally build the encoder with the best config we have
+    enc = build_encoder(**{k: v for k, v in enc_cfg.items() if v is not None})
+
+    # load weights (prefer finetune's encoder substate; else sidecar)
+    enc_sub = (state or {}).get("encoder", {})
+    if not enc_sub and isinstance(side_state, dict):
+        enc_sub = side_state
+    _load_state_dict_forgiving(enc, enc_sub)
+
+       # ---- build & load HEAD from checkpoint (infer shape from saved weights) ----
+    import torch.nn as nn
+    head_state = (state or {}).get("head", {})
+    in_dim, out_dim = None, 1
+
+    if isinstance(head_state, dict):
+        for k, v in head_state.items():
+            if k.endswith("weight") and getattr(v, "ndim", 0) == 2:
+                out_dim, in_dim = v.shape  # [out, in]
+                break
+
+    # best-effort fallback for in_dim if weight shape wasn’t found
+    if in_dim is None:
+        in_dim = enc_cfg.get("hidden_dim") or getattr(enc, "hidden_dim", None) or getattr(enc, "out_dim", None)
+    if in_dim is None:
+        logger.error("Cannot infer head input dim; encoder_cfg=%s", enc_cfg)
+        raise RuntimeError("Cannot infer head input dim")
+
+    head = nn.Linear(int(in_dim), int(out_dim))
+    if isinstance(head_state, dict) and head_state:
+        _load_state_dict_forgiving(head, head_state)
+
+    # move to device & eval
     enc  = _to_dev(enc, device)
     head = _to_dev(head, device)
-    enc.eval()
-    head.eval()
+    enc.eval(); head.eval()
 
+
+    # use probabilities for classification; raw scores for regression
+    task_is_cls = (getattr(args, "task_type", "regression") == "classification")
     all_preds: List[np.ndarray] = []
     all_targets: List[np.ndarray] = []
+
     for start in range(0, len(dataset), args.batch_size):
         batch_indices = list(range(start, min(start + args.batch_size, len(dataset))))
         batch_x, batch_adj, batch_ptr, batch_labels = dataset.get_batch(batch_indices)
        
         batch_x   = batch_x.to(device, non_blocking=True)
         batch_adj = batch_adj.to(device, non_blocking=True)
-        batch_ptr = batch_ptr.to(device, non_blocking=True)
+        # batch_ptr may be None; when present, pooling indices should be long
+        batch_ptr = batch_ptr.to(device, non_blocking=True).long() if batch_ptr is not None else None
+
         with torch.no_grad():
             edge_idx = batch_adj.nonzero().T.detach().cpu().numpy()
             if edge_idx.size == 0:
@@ -445,15 +515,28 @@ def evaluate_finetuned_head(
                 x=batch_x.detach().cpu().numpy(),
                 edge_index=edge_idx,
             )
-            node_emb = _encode_graph(enc, g)
-            graph_emb = global_mean_pool(node_emb, batch_ptr.to(device)) if batch_ptr is not None else node_emb.mean(dim=0, keepdim=True)
-            preds = head(graph_emb).squeeze(1)
-            
-        all_preds.append(preds.detach().to(torch.float32).cpu().numpy())
-        all_targets.append(batch_labels.to(torch.float32).cpu().numpy())
-    y_true = np.concatenate(all_targets)
-    y_pred = np.concatenate(all_preds)
-    if args.task_type == "classification":
+
+            node_emb  = _encode_graph(enc, g)  # or your _encode_graph helper
+            graph_emb = (
+                global_mean_pool(node_emb, batch_ptr) if batch_ptr is not None
+                else node_emb.mean(dim=0, keepdim=True)
+            )
+            logits = head(graph_emb).squeeze(1)
+            preds_t = torch.sigmoid(logits) if task_is_cls else logits
+            all_preds.append(preds_t.detach().cpu().numpy())
+            # targets: one value per graph in the batch (already aligned with graph_emb)
+            all_targets.append(batch_labels.detach().cpu().numpy())
+    
+    # concat & mask NaN targets
+    y_pred = np.concatenate(all_preds).astype(np.float32)
+    y_true = np.concatenate(all_targets).astype(np.float32)
+    mask = ~np.isnan(y_true)
+    y_true = y_true[mask]
+    y_pred = y_pred[mask]
+    
+    if task_is_cls:
+        y_true = y_true.astype(np.int64, copy=False)
+        # y_pred are probabilities in [0,1] for classification
         return compute_classification_metrics(y_true, y_pred)
     return compute_regression_metrics(y_true, y_pred)
 
