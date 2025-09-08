@@ -91,6 +91,7 @@ def run_tox21_case_study(
     seed: int = 42,
     pretrain_epochs: int = 5,
     finetune_epochs: int = 20,
+    lr: float = 1e-3,
     triage_pct: float = 0.10,       # proportion of TEST to exclude (e.g., 0.10 = 10%)
     calibrate: bool = True,         # fit Platt scaling on VAL logits and apply to TEST
     use_pos_weight: bool = True,    # pass pos_weight for imbalance if trainer supports it
@@ -109,6 +110,7 @@ def run_tox21_case_study(
         seed: Random seed for reproducibility.
         pretrain_epochs: Number of epochs for JEPA pretraining.
         finetune_epochs: Number of epochs for the classification head.
+        lr: float = The learning rate.
         triage_pct: Fraction of TEST to exclude (e.g., 0.10 = 10%).
         calibrate: If True, fit Platt scaling on VAL logits and apply to TEST.
         device: Device on which to run computations.
@@ -240,7 +242,7 @@ def run_tox21_case_study(
         batch_size=64,
         mask_ratio=0.15,
         contiguous=False,
-        lr=1e-4,
+        lr=lr,
         device=device,
         reg_lambda=1e-4,
     )
@@ -278,12 +280,12 @@ def run_tox21_case_study(
         encoder=encoder,
         task_type="classification",
         epochs=finetune_epochs,
-        lr=1e-3,
+        lr=lr,
         batch_size=32,
         device=device,
         patience=5,
         **extra_args,
-        # selection_metric="val_auc",  # uncomment if supported
+        # selection_metric="val_auc",  # uncomment when supported
     )
 
     head = clf_metrics.get("head")

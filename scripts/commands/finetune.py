@@ -352,7 +352,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                         
                         logger.warning("No metric '%s' found; promoted %s to ft_best.pt", metric_name, snaps[-1])
                 except Exception:
-                    logger.warning("Failed to create fallback ft_best.pt", exc_info=True)
+                    logger.warning("Failed to create fallback ft_best.pt", exc_info=True) # type: ignore
 
 
             wb.log({"phase": f"finetune_{seed}", "status": "success"})
@@ -455,6 +455,22 @@ def evaluate_finetuned_head(
         if k not in enc_cfg and hasattr(args, k):
             enc_cfg[k] = getattr(args, k)
 
+    # 4.5) Ensure required input_dim is present (infer from dataset if needed)
+    in_dim = None
+    for attr in ("input_dim", "node_feat_dim", "n_node_features"):
+        val = getattr(dataset, attr, None)
+        if isinstance(val, int) and val > 0:
+            in_dim = val
+            break
+    if in_dim is None:
+        try:
+            bx, _, _, _ = dataset.get_batch([0])
+            in_dim = int(bx.shape[-1])
+        except Exception:
+            in_dim = None
+    if in_dim is not None:
+        enc_cfg["input_dim"] = in_dim
+
     # 5) Finally build the encoder with the best config we have (filter unknown keys)
 
     import inspect
@@ -462,7 +478,7 @@ def evaluate_finetuned_head(
     try:
         sig_params = set(inspect.signature(build_encoder).parameters.keys())
     except (ValueError, TypeError):
-        sig_params = {"gnn_type", "hidden_dim", "num_layers"}  # conservative fallback
+        sig_params = {"gnn_type", "hidden_dim", "num_layers", "input_dim"}  # conservative fallback
     # normalize & filter
     norm = dict(enc_cfg)
     gt = norm.get("gnn_type")
