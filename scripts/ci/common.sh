@@ -290,6 +290,8 @@ benchmark_only = {
 
 tox21_only = {
     "task": "--task",
+    "pretrain_epochs": "--pretrain-epochs",
+    "finetune_epochs": "--finetune-epochs",
 }
 
 # 6) Final per-stage maps (compose without duplication)

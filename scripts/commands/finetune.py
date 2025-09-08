@@ -455,8 +455,24 @@ def evaluate_finetuned_head(
         if k not in enc_cfg and hasattr(args, k):
             enc_cfg[k] = getattr(args, k)
 
-    # 5) Finally build the encoder with the best config we have
-    enc = build_encoder(**{k: v for k, v in enc_cfg.items() if v is not None})
+    # 5) Finally build the encoder with the best config we have (filter unknown keys)
+
+    import inspect
+    enc_cfg = enc_cfg or {}
+    try:
+        sig_params = set(inspect.signature(build_encoder).parameters.keys())
+    except (ValueError, TypeError):
+        sig_params = {"gnn_type", "hidden_dim", "num_layers"}  # conservative fallback
+    # normalize & filter
+    norm = dict(enc_cfg)
+    gt = norm.get("gnn_type")
+    if isinstance(gt, str):
+        norm["gnn_type"] = gt.lower()
+    filtered = {k: v for k, v in norm.items() if (v is not None and k in sig_params)}
+    extra = [k for k in norm if k not in sig_params]
+    if extra and 'logger' in globals():
+        logger.debug("build_encoder: ignoring unsupported keys: %s", extra)
+    enc = build_encoder(**filtered)
 
     # load weights (prefer finetune's encoder substate; else sidecar)
     enc_sub = (state or {}).get("encoder", {})

@@ -45,6 +45,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             task_name=args.task,
             pretrain_epochs=getattr(args, "pretrain_epochs", 5),
             finetune_epochs=getattr(args, "finetune_epochs", 20),
+            lr=getattr(args, "lr", 1e-3),
             triage_pct=triage_pct,
             calibrate=calibrate,
             device=resolve_device(getattr(args, "device", "cpu")),
