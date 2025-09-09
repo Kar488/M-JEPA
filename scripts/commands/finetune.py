@@ -455,6 +455,15 @@ def evaluate_finetuned_head(
         if k not in enc_cfg and hasattr(args, k):
             enc_cfg[k] = getattr(args, k)
 
+    # 4.1) Derive edge_dim from the dataset (needed for edge_mpnn)
+    try:
+        g0 = dataset.graphs[0]
+        _edge_dim = None if getattr(g0, "edge_attr", None) is None else int(g0.edge_attr.shape[1])
+    except Exception:
+        _edge_dim = None
+    if _edge_dim is not None:
+        enc_cfg["edge_dim"] = _edge_dim
+
     # 4.5) Ensure required input_dim is present (infer from dataset if needed)
     in_dim = None
     for attr in ("input_dim", "node_feat_dim", "n_node_features"):
@@ -484,6 +493,13 @@ def evaluate_finetuned_head(
     gt = norm.get("gnn_type")
     if isinstance(gt, str):
         norm["gnn_type"] = gt.lower()
+
+    if norm.get("gnn_type") == "edge_mpnn" and norm.get("edge_dim") is None:
+        # Be permissive: default to a single constant edge feature instead of crashing
+        norm["edge_dim"] = 1
+        if 'logger' in globals():
+            logger.warning("edge_dim missing for edge_mpnn; defaulting to 1 (no edge features found)")
+
     filtered = {k: v for k, v in norm.items() if (v is not None and k in sig_params)}
     extra = [k for k in norm if k not in sig_params]
     if extra and 'logger' in globals():
