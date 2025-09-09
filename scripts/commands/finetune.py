@@ -461,8 +461,9 @@ def evaluate_finetuned_head(
         _edge_dim = None if getattr(g0, "edge_attr", None) is None else int(g0.edge_attr.shape[1])
     except Exception:
         _edge_dim = None
-    if _edge_dim is not None:
-        enc_cfg["edge_dim"] = _edge_dim
+    if _edge_dim <= 0:
+        _edge_dim = 1
+    enc_cfg.setdefault("edge_dim", _edge_dim)
 
     # 4.5) Ensure required input_dim is present (infer from dataset if needed)
     in_dim = None
@@ -505,6 +506,23 @@ def evaluate_finetuned_head(
     if extra and 'logger' in globals():
         logger.debug("build_encoder: ignoring unsupported keys: %s", extra)
     enc = build_encoder(**filtered)
+
+    # If edge features are missing/empty, pad them so forward() won’t blow up
+    def _ensure_edge_attr(g, need_dim: int):
+        import torch as _t
+        e = getattr(g, "edge_attr", None)
+        if e is None or (e.ndim == 2 and e.shape[1] == 0):
+            # create zeros with shape (E, need_dim)
+            E = int(getattr(g, "edge_index", None).shape[1]) if hasattr(g, "edge_index") \
+                else int((getattr(g, "adj", None) > 0).sum().item()) if hasattr(g, "adj") else 0
+            g.edge_attr = _t.zeros((E, need_dim), dtype=g.x.dtype, device=g.x.device)
+        elif e.shape[1] != need_dim:
+            if e.shape[1] < need_dim:
+                pad = _t.zeros((e.shape[0], need_dim - e.shape[1]), dtype=e.dtype, device=e.device)
+                g.edge_attr = _t.cat([e, pad], dim=1)
+            else:
+                g.edge_attr = e[:, :need_dim]
+        return g
 
     # load weights (prefer finetune's encoder substate; else sidecar)
     enc_sub = (state or {}).get("encoder", {})
@@ -564,6 +582,7 @@ def evaluate_finetuned_head(
                 edge_index=edge_idx,
             )
 
+            g = _ensure_edge_attr(g, enc_cfg["edge_dim"])
             node_emb  = _encode_graph(enc, g)  # or your _encode_graph helper
             graph_emb = (
                 global_mean_pool(node_emb, batch_ptr) if batch_ptr is not None

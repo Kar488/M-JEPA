@@ -50,7 +50,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             hidden_dim=getattr(args, "hidden_dim", 128),
             num_layers=getattr(args, "num_layers", 2),
             gnn_type=getattr(args, "gnn_type", "edge_mpnn"),
-            contiguity=getattr(args, "contiguity", getattr(args, "contiguous", False)),
+            # drop contiguity for now (case_study doesn’t accept it yet)
+            #contiguity=getattr(args, "contiguity", getattr(args, "contiguous", False)),
             contrastive=getattr(args, "contrastive", False),
             triage_pct=getattr(args, "triage_pct", 0.10),
             calibrate=not getattr(args, "no_calibrate", False),
