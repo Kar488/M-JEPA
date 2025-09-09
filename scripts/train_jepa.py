@@ -801,6 +801,8 @@ def build_parser() -> argparse.ArgumentParser:
     tox.add_argument("--learning-rate", dest="lr", type=float, default=1e-3)
     tox.add_argument("--triage-pct", type=float, default=0.10, help="Fraction of TEST to exclude (e.g., 0.10 = 10%%)")
     tox.add_argument("--no-calibrate", action="store_true", help="Disable Platt scaling on VAL")
+    tox.add_argument("--contrastive", action="store_true",
+                     help="Use contrastive pretraining instead of JEPA during the case study")
     _add_common_args(tox, "case_study")
     _add_model_args(tox)
     tox.set_defaults(func=cmd_tox21)

@@ -41,13 +41,19 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     try:
         wb.log({"phase": "tox21", "status": "start"})
         mean_true, mean_random, mean_jepa, baseline_means = run_tox21_case_study(
-            csv_path=args.csv,
-            task_name=args.task,
+            csv_path=getattr(args, "csv"),
+            task_name=getattr(args, "task"),
             pretrain_epochs=getattr(args, "pretrain_epochs", 5),
             finetune_epochs=getattr(args, "finetune_epochs", 20),
             lr=getattr(args, "lr", 1e-3),
-            triage_pct=triage_pct,
-            calibrate=calibrate,
+            # model knobs may be missing if caller bypassed argparse
+            hidden_dim=getattr(args, "hidden_dim", 128),
+            num_layers=getattr(args, "num_layers", 2),
+            gnn_type=getattr(args, "gnn_type", "edge_mpnn"),
+            contiguity=getattr(args, "contiguity", getattr(args, "contiguous", False)),
+            contrastive=getattr(args, "contrastive", False),
+            triage_pct=getattr(args, "triage_pct", 0.10),
+            calibrate=not getattr(args, "no_calibrate", False),
             device=resolve_device(getattr(args, "device", "cpu")),
         )
         

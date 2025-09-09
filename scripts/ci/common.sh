@@ -170,12 +170,57 @@ best_config_args() {
   # Reads best_grid_config.json and prints CLI args for the given stage
   local stage="$1"
   local cfg="$GRID_DIR/best_grid_config.json"
-  [ -f "$cfg" ] || return 0
+  if [[ ! -s "$cfg" ]]; then
+    # fail fast for stages that require the winner
+    case "$stage" in bench|pretrain|finetune|tox21)
+      echo "[fatal] $stage needs winner but missing: $cfg" >&2; return 2;;
+    esac
+    return 0
+  fi
   local py; py=$(python_bin) || { echo "python not found" >&2; return 127; }
   "$py" - "$cfg" "$stage" <<'PY'
 import json, sys
 path, stage = sys.argv[1], sys.argv[2]
-cfg = json.load(open(path))
+raw = json.load(open(path))
+
+# --- flatten possible W&B shapes ---
+def _get(key, default=None):
+    # 1) flat
+    if isinstance(raw, dict) and key in raw:
+        v = raw[key]
+        if isinstance(v, dict) and "value" in v:  # sometimes already wrapped
+            return v["value"]
+        return v
+    # 2) wandb-like: parameters.<key>.value
+    p = raw.get("parameters") or raw.get("config") or {}
+    if isinstance(p, dict) and key in p:
+        v = p[key]
+        if isinstance(v, dict) and "value" in v:
+            return v["value"]
+        return v
+    return default
+
+# Build a flat cfg the rest of the code expects
+cfg = {}
+for k in ["gnn_type","hidden_dim","num_layers","ema_decay","contiguity","add_3d",
+          "lr","learning_rate","temperature","training_method","method"]:
+    v = _get(k)
+    if v is not None:
+        cfg[k] = v
+
+# normalise: learning_rate → lr (benchmark/help only exposes --lr)
+if "lr" not in cfg and "learning_rate" in cfg:
+    cfg["lr"] = cfg["learning_rate"]
+
+# normalise: method → contrastive flag
+tm = cfg.get("training_method") or cfg.get("method")
+if isinstance(tm, str) and tm.lower().startswith("con"):
+    cfg["contrastive"] = True
+
+# Translate single-choice method to a boolean CLI toggle
+tm = cfg.get("training_method") or cfg.get("method")
+if isinstance(tm, str) and tm.lower().startswith("con"):
+    print("--contrastive")
 
 # --- Unified, refactor-safe mappings (kebab-case) ---
 # 1) Dataset / loader / device knobs that multiple stages accept
@@ -211,13 +256,14 @@ model_common = {
     "lr": "--lr",
 
     # >>> add singular keys used by best_grid_config.json <<<
+    # emit --lr universally so it isn't filtered by benchmark's allow-list
     "gnn_type": "--gnn-type",
     "hidden_dim": "--hidden-dim",
     "num_layers": "--num-layers",
     "ema_decay": "--ema-decay",
     "contiguity": "--contiguity",
     "add_3d": "--add-3d",
-    "learning_rate": "--learning-rate",
+    "learning_rate": "--lr",
 
     # other common knobs
     "learning_rates": "--learning-rates",

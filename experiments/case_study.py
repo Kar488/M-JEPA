@@ -92,6 +92,12 @@ def run_tox21_case_study(
     pretrain_epochs: int = 5,
     finetune_epochs: int = 20,
     lr: float = 1e-3,
+    hidden_dim: int = 256,
+    num_layers: int = 3,
+    gnn_type: str = "mpnn",
+    contiguous: bool = False,
+    mask_ratio: float = 0.15,
+    contrastive: bool = False,
     triage_pct: float = 0.10,       # proportion of TEST to exclude (e.g., 0.10 = 10%)
     calibrate: bool = True,         # fit Platt scaling on VAL logits and apply to TEST
     use_pos_weight: bool = True,    # pass pos_weight for imbalance if trainer supports it
@@ -205,9 +211,7 @@ def run_tox21_case_study(
         test_idx  = idx[n_train+n_val:].tolist()
 
     input_dim = dataset.graphs[0].x.shape[1]
-    hidden_dim = 256
-    num_layers = 3
-    gnn_type = "mpnn"
+    
     logger.info(
         "Pretraining for %d epochs then finetuning for %d epochs",
         pretrain_epochs,
@@ -232,7 +236,8 @@ def run_tox21_case_study(
     sup = importlib.import_module("training.supervised")
     unsup = importlib.import_module("training.unsupervised")
     
-    unsup.train_jepa(
+    train_fn = getattr(unsup, "train_contrastive", unsup.train_jepa) if contrastive else unsup.train_jepa
+    train_fn(
         dataset=dataset,
         encoder=encoder,
         ema_encoder=ema_encoder,
@@ -240,8 +245,8 @@ def run_tox21_case_study(
         ema=ema_helper,
         epochs=pretrain_epochs,
         batch_size=64,
-        mask_ratio=0.15,
-        contiguous=False,
+        mask_ratio=mask_ratio,
+        contiguous=contiguous,
         lr=lr,
         device=device,
         reg_lambda=1e-4,
@@ -330,9 +335,9 @@ def run_tox21_case_study(
             val_y = all_labels[val_idx_arr].astype(float)
             m = ~np.isnan(val_y)
             if m.sum() > 1 and np.unique(val_y[m]).size > 1:
-                lr = LogisticRegression(solver="lbfgs", max_iter=1000)
-                lr.fit(val_logits[m].reshape(-1, 1), val_y[m].astype(int))
-                calibrated_probs = lr.predict_proba(test_logits.reshape(-1, 1))[:, 1]
+                platt = LogisticRegression(solver="lbfgs", max_iter=1000)
+                platt.fit(val_logits[m].reshape(-1, 1), val_y[m].astype(int))
+                calibrated_probs = platt.predict_proba(test_logits.reshape(-1, 1))[:, 1]
         except Exception as _e:
             logger.warning("Calibration skipped due to error: %s", _e)
 
