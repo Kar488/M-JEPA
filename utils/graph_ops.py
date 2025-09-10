@@ -176,3 +176,50 @@ def _ensure_edge_attr_np_or_torch(g, need_dim: int, device=None):
         elif e.shape[1] > need_dim:
             g.edge_attr = e[:, :need_dim]
     return g
+
+def _encode_graph_flex(encoder, g, device=None):
+    """
+    Call either a factory-style encoder (encoder(g))
+    or a legacy encoder that expects (x, adj).
+    Handles numpy/torch inputs.
+    """
+    import numpy as np
+    import torch
+
+    # First try the single-arg (factory) path.
+    try:
+        return encoder(g)
+    except TypeError:
+        # Fall back to legacy (x, adj) signature.
+        x = getattr(g, "x", None)
+        adj = getattr(g, "adj", None)
+
+        # If adj isn't present but edge_index is, build a quick adjacency.
+        if adj is None and getattr(g, "edge_index", None) is not None:
+            ei = g.edge_index
+            if isinstance(ei, np.ndarray):
+                N = int(x.shape[0])
+                A = np.zeros((N, N), dtype=np.float32)
+                A[ei[0], ei[1]] = 1
+                A[ei[1], ei[0]] = 1  # assume undirected
+                adj = A
+            else:
+                # torch
+                N = int(x.shape[0])
+                A = torch.zeros((N, N), dtype=torch.float32, device=device)
+                A[ei[0], ei[1]] = 1
+                A[ei[1], ei[0]] = 1
+                adj = A
+
+        # Convert numpy → torch as needed
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x).to(device)
+        elif hasattr(x, "to"):
+            x = x.to(device)
+
+        if isinstance(adj, np.ndarray):
+            adj = torch.from_numpy(adj).to(device)
+        elif hasattr(adj, "to"):
+            adj = adj.to(device)
+
+        return encoder(x, adj)

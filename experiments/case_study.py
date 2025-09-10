@@ -78,6 +78,7 @@ def _load_real_graphdataset():
     return module.GraphDataset
 
 from utils.graph_ops import _ensure_edge_attr_np_or_torch as ensure_edge_attr
+from utils.graph_ops import _encode_graph_flex
 
 def _import_graphdataset():
     from data.mdataset import GraphDataset
@@ -338,7 +339,7 @@ def run_tox21_case_study(
                     g = dataset.graphs[i]
                     g = ensure_edge_attr(g, edge_dim, device=device)
                     # single-arg forward: pass the graph object
-                    node_emb = encoder(g)            # [N_i, D]
+                    node_emb = _encode_graph_flex(encoder, g, device)   # [N_i, D]
                     graph_embs.append(node_emb.mean(0, keepdim=True))  # mean-pool → [1, D]
                 if not graph_embs:
                     continue
