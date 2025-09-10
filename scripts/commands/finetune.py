@@ -508,21 +508,73 @@ def evaluate_finetuned_head(
     enc = build_encoder(**filtered)
 
     # If edge features are missing/empty, pad them so forward() won’t blow up
-    def _ensure_edge_attr(g, need_dim: int):
-        import torch as _t
+    def _ensure_edge_attr(g, need_dim: int, device=None):
+        """
+        Ensure g.edge_attr exists and has shape (E, need_dim).
+        Works whether g.x / g.edge_attr are numpy arrays or torch tensors.
+        """
+        import numpy as np
+        try:
+            import torch as _t
+            _HAS_TORCH = True
+        except Exception:
+            _HAS_TORCH = False
+
+        # 1) How many edges?
+        E = 0
+        ei = getattr(g, "edge_index", None)
+        if ei is not None:
+            try:
+                E = int(ei.shape[1])
+            except Exception:
+                E = int(np.array(ei).shape[1])
+        else:
+            adj = getattr(g, "adj", None)
+            if adj is not None:
+                if _HAS_TORCH and isinstance(adj, _t.Tensor):
+                    E = int((adj > 0).sum().item())
+                else:
+                    A = np.asarray(adj)
+                    E = int((A > 0).sum())
+
+        # 2) Build a zeros matrix of the *same type family* as g.x (numpy or torch)
+        def _zeros_like_x(n_rows, n_cols):
+            x = getattr(g, "x", None)
+            if _HAS_TORCH and isinstance(x, _t.Tensor):
+                dt = x.dtype
+                dev = x.device if hasattr(x, "device") else device
+                if dev is not None:
+                    return _t.zeros((n_rows, n_cols), dtype=dt, device=dev)
+                return _t.zeros((n_rows, n_cols), dtype=dt)
+            # fallback: numpy
+            dt = getattr(x, "dtype", np.float32)
+            return np.zeros((n_rows, n_cols), dtype=dt)
+
+        # 3) Create or fix edge_attr
         e = getattr(g, "edge_attr", None)
-        if e is None or (e.ndim == 2 and e.shape[1] == 0):
-            # create zeros with shape (E, need_dim)
-            E = int(getattr(g, "edge_index", None).shape[1]) if hasattr(g, "edge_index") \
-                else int((getattr(g, "adj", None) > 0).sum().item()) if hasattr(g, "adj") else 0
-            g.edge_attr = _t.zeros((E, need_dim), dtype=g.x.dtype, device=g.x.device)
-        elif e.shape[1] != need_dim:
+        e_w = getattr(e, "shape", (0, 0))[1] if e is not None else 0
+
+        if e is None or e_w == 0:
+            g.edge_attr = _zeros_like_x(E, need_dim)
+            return g
+
+        # 4) Pad / truncate to need_dim (handle both numpy and torch)
+        if _HAS_TORCH and isinstance(e, _t.Tensor):
             if e.shape[1] < need_dim:
-                pad = _t.zeros((e.shape[0], need_dim - e.shape[1]), dtype=e.dtype, device=e.device)
+                pad = _zeros_like_x(e.shape[0], need_dim - e.shape[1])
                 g.edge_attr = _t.cat([e, pad], dim=1)
-            else:
+            elif e.shape[1] > need_dim:
                 g.edge_attr = e[:, :need_dim]
+        else:
+            e_np = np.asarray(e)
+            if e_np.shape[1] < need_dim:
+                pad = _zeros_like_x(e_np.shape[0], need_dim - e_np.shape[1])
+                g.edge_attr = np.concatenate([e_np, pad], axis=1)
+            elif e_np.shape[1] > need_dim:
+                g.edge_attr = e_np[:, :need_dim]
+
         return g
+
 
     # load weights (prefer finetune's encoder substate; else sidecar)
     enc_sub = (state or {}).get("encoder", {})
@@ -582,7 +634,7 @@ def evaluate_finetuned_head(
                 edge_index=edge_idx,
             )
 
-            g = _ensure_edge_attr(g, enc_cfg["edge_dim"])
+            g = _ensure_edge_attr(g, int(enc_cfg["edge_dim"]), device=device)
             node_emb  = _encode_graph(enc, g)  # or your _encode_graph helper
             graph_emb = (
                 global_mean_pool(node_emb, batch_ptr) if batch_ptr is not None

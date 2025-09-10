@@ -217,18 +217,38 @@ def run_tox21_case_study(
         pretrain_epochs,
         finetune_epochs,
     )
-    encoder = GNNEncoder(
+    try:
+        from models.factory import build_encoder  # provides 'edge_mpnn' + fallbacks
+    except Exception:
+        # fallback to basic encoder if factory not present
+        from models.encoder import GNNEncoder as _BasicEnc
+    # Derive edge_dim (needed by gine/edge_mpnn/dmpnn/attentivefp). Fallback to 1 if absent.
+    edge_dim = 0
+    try:
+        g0 = dataset.graphs[0]
+        if getattr(g0, "edge_attr", None) is not None:
+            edge_dim = int(g0.edge_attr.shape[1])
+    except Exception:
+        pass
+    if gnn_type.lower() in ("gine","gin_edge","gin+edge","edge_mpnn","mpnn_edge","edge",
+                            "dmpnn","chemprop","attentivefp","attnfp") and edge_dim <= 0:
+        edge_dim = 1
+
+    encoder = build_encoder(
+        gnn_type=gnn_type,
         input_dim=input_dim,
         hidden_dim=hidden_dim,
         num_layers=num_layers,
-        gnn_type=gnn_type,
+        edge_dim=edge_dim,
     )
-    ema_encoder = GNNEncoder(
+    ema_encoder = build_encoder(
+        gnn_type=gnn_type,
         input_dim=input_dim,
         hidden_dim=hidden_dim,
         num_layers=num_layers,
-        gnn_type=gnn_type,
+        edge_dim=edge_dim,
     )
+    
     ema_helper = EMA(encoder, decay=0.99)
     predictor = MLPPredictor(embed_dim=hidden_dim, hidden_dim=hidden_dim * 2)
 
