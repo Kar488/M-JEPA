@@ -305,7 +305,7 @@ jobs:
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
                 
   vast_pretrain:
-    name: Pretain JEPA Model
+    name: Pretain Model
     runs-on: ubuntu-latest
     needs: [vast_learn_hyperparameters, vast_sweep_phase2]
     if: >
@@ -398,11 +398,11 @@ jobs:
   vast_tox21:
     name: Tox21 Evaluation
     runs-on: ubuntu-latest
-    needs: vast_finetune
+    needs: vast_sweep_phase2
     if:
       ${{
           inputs.run_vast_jobs != 'false' &&
-          needs.vast_finetune.result == 'success' }}
+          needs.vast_sweep_phase2.result == 'success' }}
     steps:
       - name: Tox21 on Vast
         uses: appleboy/ssh-action@v1
