@@ -325,33 +325,37 @@ def run_tox21_case_study(
     head = head.to(device)
     encoder = encoder.to(device)
     
-    def _predict_logits_probs_in_chunks(ds, idxs, encoder, head, device, batch_size=256):
+
+
+    def _predict_logits_probs_in_chunks(dataset, idcs, encoder, head, device, batch_size=256, edge_dim=1):
         encoder.eval(); head.eval()
-        import torch
-        n = len(idxs)
-        logits_out = np.empty(n, dtype=np.float32)
-        probs_out  = np.empty(n, dtype=np.float32)
+        all_logits, all_probs = [], []
         with torch.no_grad():
-            for start in range(0, n, batch_size):
-                end = min(start + batch_size, n)
-                slice_idxs = list(idxs[start:end])
-                batch_x, batch_adj, batch_ptr, _ = ds.get_batch(slice_idxs)
-                batch_x   = batch_x.to(device)
-                batch_adj = batch_adj.to(device)
-                batch_ptr = batch_ptr.to(device).long()
-                node_emb  = encoder(batch_x, batch_adj)
-                graph_emb = global_mean_pool(node_emb, batch_ptr)
-                logits    = head(graph_emb).squeeze(1)
-                logits_out[start:end] = logits.detach().cpu().numpy()
-                probs_out[start:end]  = torch.sigmoid(logits).detach().cpu().numpy()
-        return logits_out, probs_out
+            for start in range(0, len(idcs), batch_size):
+                chunk = idcs[start:start+batch_size]
+                graph_embs = []
+                for i in chunk:
+                    g = dataset.graphs[i]
+                    g = ensure_edge_attr(g, edge_dim, device=device)
+                    # single-arg forward: pass the graph object
+                    node_emb = encoder(g)            # [N_i, D]
+                    graph_embs.append(node_emb.mean(0, keepdim=True))  # mean-pool → [1, D]
+                if not graph_embs:
+                    continue
+                batch = torch.cat(graph_embs, dim=0).to(device)        # [B, D]
+                logits = head(batch)                                   # [B, 1] for binary
+                probs  = torch.sigmoid(logits) if logits.shape[-1] == 1 else torch.softmax(logits, dim=-1)
+                all_logits.append(logits.detach().cpu())
+                all_probs.append(probs.detach().cpu())
+        return torch.cat(all_logits, dim=0), torch.cat(all_probs, dim=0)
+
 
     # Predict on VAL (for calibration) and TEST
     import numpy as _np
     val_idx_arr  = np.asarray(val_idx)
     test_idx_arr = np.asarray(test_idx)
-    val_logits,  val_probs  = _predict_logits_probs_in_chunks(dataset, val_idx_arr,  encoder, head, device, batch_size=256)
-    test_logits, test_probs = _predict_logits_probs_in_chunks(dataset, test_idx_arr, encoder, head, device, batch_size=256)
+    val_logits,  val_probs  = _predict_logits_probs_in_chunks(dataset, val_idx_arr,  encoder, head, device, batch_size=256, edge_dim=edge_dim)
+    test_logits, test_probs = _predict_logits_probs_in_chunks(dataset, test_idx_arr, encoder, head, device, batch_size=256, edge_dim=edge_dim)
 
     
     # ---- Optional VAL calibration (Platt scaling) → apply to TEST ----

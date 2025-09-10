@@ -127,7 +127,7 @@ def _pool_graph_emb(h: torch.Tensor, g: Any) -> torch.Tensor:
 
 
 def _ensure_edge_attr_np_or_torch(g, need_dim: int, device=None):
-    """Ensure g.edge_attr exists and has width need_dim (works for numpy or torch)."""
+    """Ensure g.edge_attr exists and has width need_dim (numpy or torch)."""
     import numpy as np
     try:
         import torch as _t
@@ -135,7 +135,7 @@ def _ensure_edge_attr_np_or_torch(g, need_dim: int, device=None):
     except Exception:
         HAS_TORCH = False
 
-    # edge count
+    # how many edges?
     E = 0
     ei = getattr(g, "edge_index", None)
     if ei is not None:
@@ -144,13 +144,14 @@ def _ensure_edge_attr_np_or_torch(g, need_dim: int, device=None):
         A = np.asarray(g.adj)
         E = int((A > 0).sum())
 
-    # zeros like x (numpy or torch)
+    # zeros like x
     def zeros_like_x(nr, nc):
         x = getattr(g, "x", None)
-        if HAS_TORCH and isinstance(x, _t.Tensor):
-            return _t.zeros((nr, nc), dtype=x.dtype,
-                            device=(x.device if hasattr(x, "device") else device))
-        return np.zeros((nr, nc), dtype=(getattr(x, "dtype", np.float32)))
+        if HAS_TORCH and hasattr(x, "dtype"):
+            dev = getattr(x, "device", None) or device
+            return _t.zeros((nr, nc), dtype=x.dtype, device=dev)
+        dt = getattr(x, "dtype", np.float32)
+        return np.zeros((nr, nc), dtype=dt)
 
     e = getattr(g, "edge_attr", None)
     w = 0 if e is None else int(np.array(e).shape[1])
@@ -159,7 +160,7 @@ def _ensure_edge_attr_np_or_torch(g, need_dim: int, device=None):
         g.edge_attr = zeros_like_x(E, need_dim)
         return g
 
-    # pad / trim
+    # pad/trim
     if HAS_TORCH and "Tensor" in type(e).__name__:
         import torch as _t
         if e.shape[1] < need_dim:
@@ -175,5 +176,3 @@ def _ensure_edge_attr_np_or_torch(g, need_dim: int, device=None):
         elif e.shape[1] > need_dim:
             g.edge_attr = e[:, :need_dim]
     return g
-# -- end guard -----------------------------------------------------------------
-
