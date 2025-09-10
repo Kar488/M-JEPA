@@ -77,7 +77,7 @@ def _load_real_graphdataset():
 
     return module.GraphDataset
 
-from utils.graph_ops import ensure_edge_attr
+from utils.graph_ops import _ensure_edge_attr_np_or_torch as ensure_edge_attr
 
 def _import_graphdataset():
     from data.mdataset import GraphDataset
