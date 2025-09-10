@@ -144,37 +144,101 @@ def _ensure_edge_attr_np_or_torch(g, need_dim: int, device=None):
         A = np.asarray(g.adj)
         E = int((A > 0).sum())
 
-    # zeros like x
+    # ---- helpers to coerce device/dtype -----------------------------------------
+    def _to_torch_device(dev):
+        import torch as _t
+        if dev is None or isinstance(dev, _t.device):
+            return dev
+        return _t.device(dev)  # accepts "cpu", "cuda", "cuda:0"
+
+    def _to_torch_dtype(dt):
+        import torch as _t, numpy as np
+        if isinstance(dt, _t.dtype):
+            return dt
+        # map common numpy dtypes → torch dtypes (fallback to float32)
+        return {
+            np.float32: _t.float32,
+            np.float64: _t.float64,
+            np.float16: _t.float16,
+            np.int64:   _t.int64,
+            np.int32:   _t.int32,
+            np.int16:   _t.int16,
+            np.int8:    _t.int8,
+            np.uint8:   _t.uint8,
+        }.get(dt, _t.float32)
+
+    # ---- zeros like x (works for numpy or torch) --------------------------------
     def zeros_like_x(nr, nc):
+        import numpy as np
+        try:
+            import torch as _t
+            HAS_TORCH = True
+        except Exception:
+            HAS_TORCH = False
+
         x = getattr(g, "x", None)
-        if HAS_TORCH and hasattr(x, "dtype"):
-            dev = getattr(x, "device", None) or device
-            return _t.zeros((nr, nc), dtype=x.dtype, device=dev)
+
+        # A) x is TORCH tensor → allocate TORCH zeros that match it
+        if HAS_TORCH and isinstance(x, _t.Tensor):
+            dev_t = x.device if hasattr(x, "device") else None
+            if dev_t is None and device is not None:
+                dev_t = _to_torch_device(device)
+            return _t.zeros((nr, nc), dtype=x.dtype, device=dev_t) if dev_t \
+                else _t.zeros((nr, nc), dtype=x.dtype)
+
+        # B) x is NUMPY but caller wants TORCH (factory encoders path)
+        if HAS_TORCH and device is not None:
+            dev_t = _to_torch_device(device)
+            if isinstance(x, np.ndarray):
+                # upgrade x to torch so everything stays consistent
+                g.x = _t.from_numpy(x).to(dev_t)
+                x = g.x
+            dt = x.dtype if isinstance(x, _t.Tensor) else _t.float32
+            return _t.zeros((nr, nc), dtype=dt, device=dev_t)
+
+        # C) pure NUMPY fallback
+        import numpy as np
         dt = getattr(x, "dtype", np.float32)
         return np.zeros((nr, nc), dtype=dt)
-
+    # -----------------------------------------------------------------------------
+    # ---- read/repair edge_attr ---------------------------------------------------
     e = getattr(g, "edge_attr", None)
+    import numpy as np
     w = 0 if e is None else int(np.array(e).shape[1])
 
     if e is None or w == 0:
         g.edge_attr = zeros_like_x(E, need_dim)
         return g
 
-    # pad/trim
-    if HAS_TORCH and "Tensor" in type(e).__name__:
+    # if x is torch but edge_attr is numpy, upgrade edge_attr to torch first
+    try:
         import torch as _t
-        if e.shape[1] < need_dim:
-            pad = zeros_like_x(e.shape[0], need_dim - e.shape[1])
-            g.edge_attr = _t.cat([e, pad], dim=1)
-        elif e.shape[1] > need_dim:
-            g.edge_attr = e[:, :need_dim]
-    else:
-        e = np.asarray(e)
-        if e.shape[1] < need_dim:
-            pad = zeros_like_x(e.shape[0], need_dim - e.shape[1])
-            g.edge_attr = np.concatenate([e, pad], axis=1)
-        elif e.shape[1] > need_dim:
-            g.edge_attr = e[:, :need_dim]
+        if isinstance(getattr(g, "x", None), _t.Tensor) and isinstance(e, np.ndarray):
+            g.edge_attr = _t.from_numpy(e).to(g.x.dtype).to(g.x.device)
+            e = g.edge_attr
+    except Exception:
+        pass
+
+    # ---- pad/trim to need_dim (numpy or torch) ----------------------------------
+    try:
+        import torch as _t
+        if isinstance(e, _t.Tensor):
+            if e.shape[1] < need_dim:
+                pad = zeros_like_x(e.shape[0], need_dim - e.shape[1])
+                g.edge_attr = _t.cat([e, pad], dim=1)
+            elif e.shape[1] > need_dim:
+                g.edge_attr = e[:, :need_dim]
+        else:
+            e_np = np.asarray(e)
+            if e_np.shape[1] < need_dim:
+                pad = zeros_like_x(e_np.shape[0], need_dim - e_np.shape[1])
+                g.edge_attr = np.concatenate([e_np, pad], axis=1)
+            elif e_np.shape[1] > need_dim:
+                g.edge_attr = e_np[:, :need_dim]
+    except Exception:
+        # last-resort: leave as-is if anything unexpected happens
+        g.edge_attr = e
+
     return g
 
 def _encode_graph_flex(encoder, g, device=None):
