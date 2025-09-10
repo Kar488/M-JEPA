@@ -77,10 +77,11 @@ def _load_real_graphdataset():
 
     return module.GraphDataset
 
+from utils.graph_ops import ensure_edge_attr
+
 def _import_graphdataset():
     from data.mdataset import GraphDataset
     return GraphDataset
-
 
 def run_tox21_case_study(
     csv_path: str,
@@ -224,6 +225,7 @@ def run_tox21_case_study(
         from models.encoder import GNNEncoder as _BasicEnc
     # Derive edge_dim (needed by gine/edge_mpnn/dmpnn/attentivefp). Fallback to 1 if absent.
     edge_dim = 0
+    
     try:
         g0 = dataset.graphs[0]
         if getattr(g0, "edge_attr", None) is not None:
@@ -232,7 +234,11 @@ def run_tox21_case_study(
         pass
     if gnn_type.lower() in ("gine","gin_edge","gin+edge","edge_mpnn","mpnn_edge","edge",
                             "dmpnn","chemprop","attentivefp","attnfp") and edge_dim <= 0:
-        edge_dim = 1
+        edge_dim = 1 # safe fallback when graphs have no edge features
+
+    # ---- pre-pad ALL graphs once so pretrain/finetune can't crash ---------------
+    for i, g in enumerate(dataset.graphs):
+        dataset.graphs[i] = ensure_edge_attr(g, edge_dim, device=device)
 
     encoder = build_encoder(
         gnn_type=gnn_type,

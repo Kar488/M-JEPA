@@ -124,3 +124,56 @@ def _pool_graph_emb(h: torch.Tensor, g: Any) -> torch.Tensor:
     if h.dim() == 2:
         return h.mean(dim=0)
     return h
+
+
+def _ensure_edge_attr_np_or_torch(g, need_dim: int, device=None):
+    """Ensure g.edge_attr exists and has width need_dim (works for numpy or torch)."""
+    import numpy as np
+    try:
+        import torch as _t
+        HAS_TORCH = True
+    except Exception:
+        HAS_TORCH = False
+
+    # edge count
+    E = 0
+    ei = getattr(g, "edge_index", None)
+    if ei is not None:
+        E = int(np.array(ei).shape[1])
+    elif getattr(g, "adj", None) is not None:
+        A = np.asarray(g.adj)
+        E = int((A > 0).sum())
+
+    # zeros like x (numpy or torch)
+    def zeros_like_x(nr, nc):
+        x = getattr(g, "x", None)
+        if HAS_TORCH and isinstance(x, _t.Tensor):
+            return _t.zeros((nr, nc), dtype=x.dtype,
+                            device=(x.device if hasattr(x, "device") else device))
+        return np.zeros((nr, nc), dtype=(getattr(x, "dtype", np.float32)))
+
+    e = getattr(g, "edge_attr", None)
+    w = 0 if e is None else int(np.array(e).shape[1])
+
+    if e is None or w == 0:
+        g.edge_attr = zeros_like_x(E, need_dim)
+        return g
+
+    # pad / trim
+    if HAS_TORCH and "Tensor" in type(e).__name__:
+        import torch as _t
+        if e.shape[1] < need_dim:
+            pad = zeros_like_x(e.shape[0], need_dim - e.shape[1])
+            g.edge_attr = _t.cat([e, pad], dim=1)
+        elif e.shape[1] > need_dim:
+            g.edge_attr = e[:, :need_dim]
+    else:
+        e = np.asarray(e)
+        if e.shape[1] < need_dim:
+            pad = zeros_like_x(e.shape[0], need_dim - e.shape[1])
+            g.edge_attr = np.concatenate([e, pad], axis=1)
+        elif e.shape[1] > need_dim:
+            g.edge_attr = e[:, :need_dim]
+    return g
+# -- end guard -----------------------------------------------------------------
+

@@ -203,7 +203,7 @@ def _get(key, default=None):
 # Build a flat cfg the rest of the code expects
 cfg = {}
 for k in ["gnn_type","hidden_dim","num_layers","ema_decay","contiguity","add_3d",
-          "lr","learning_rate","temperature","training_method","method"]:
+          "lr","learning_rate","temperature","training_method","method","pretrain_epochs","finetune_epochs"]:
     v = _get(k)
     if v is not None:
         cfg[k] = v
