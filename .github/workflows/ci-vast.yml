@@ -250,16 +250,16 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 280m
+          command_timeout: 340m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,WANDB_ENTITY,WANDB_SWEEP_ID1,
             GRID_MODE,WANDB_COUNT, JEPA_SWEEP_SPEC,CONTRAST_SWEEP_SPEC,EXPORT_OUT_PATH,EXPORT_PHASE2_PATH,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR
           script: |
             bash "$APP_DIR/scripts/ci/run-grid-or-phase1.sh"
         env:
-          HARD_WALL_MINS: 300
+          HARD_WALL_MINS: 320
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 2
+          WANDB_COUNT: 16
           GRID_MODE: "wandb"   # or "custom"
           JEPA_SWEEP_SPEC: ${{ env.APP_DIR }}/sweeps/sweep_phase1_jepa.yaml
           CONTRAST_SWEEP_SPEC: ${{ env.APP_DIR }}/sweeps/sweep_phase1_contrastive.yaml
@@ -285,7 +285,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 610m
+          command_timeout: 520m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,WANDB_ENTITY,
             GRID_MODE,WANDB_COUNT, TOPK_RECHECK,EXTRA_SEEDS,PHASE2_METRIC,PHASE2_DIRECTION,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR
@@ -293,9 +293,9 @@ jobs:
             bash "$APP_DIR/scripts/ci/run-grid-phase2.sh"
         env:
            # agent knobs (already have these)
-          HARD_WALL_MINS: 600
+          HARD_WALL_MINS: 500
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 4
+          WANDB_COUNT: 24
           # recheck knobs (separate budget)
           TOPK_RECHECK: 5
           EXTRA_SEEDS: 3
@@ -331,12 +331,17 @@ jobs:
           command_timeout: 90m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,CKPT_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
-            GRID_MODE,WANDB_COUNT
+            GRID_MODE,WANDB_COUNT,
+            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
+            BESTCFG_NO_EPOCHS
           script: |
             bash "$APP_DIR/scripts/ci/run-pretrain.sh"
         env:
           HARD_WALL_MINS: 90
           KILL_AFTER_SECS: 120
+          PRETRAIN_EPOCHS: "40"
+          FINETUNE_EPOCHS: "8"
+          BESTCFG_NO_EPOCHS: "1"
 
   vast_finetune:
     name: Fine tune model
@@ -358,12 +363,17 @@ jobs:
           request_pty: true
           command_timeout: 190m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,CKPT_DIR,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
+            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
+            BESTCFG_NO_EPOCHS
           script: |
             bash "$APP_DIR/scripts/ci/run-finetune.sh"
         env:
           HARD_WALL_MINS: 180
           KILL_AFTER_SECS: 120
+          PRETRAIN_EPOCHS: "40"
+          FINETUNE_EPOCHS: "8"
+          BESTCFG_NO_EPOCHS: "1"
 
   vast_benchmark:
     name: Benchmark
@@ -383,14 +393,16 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 70m
+          command_timeout: 100m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR, BENCH_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             BENCH_VAL_DIR,BENCH_TEST_DIR,PHASE2_LABELED_DIR,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
+            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
+            BESTCFG_NO_EPOCHS
           script: |
             bash "$APP_DIR/scripts/ci/run-bench.sh"
         env:
-          HARD_WALL_MINS: 60
+          HARD_WALL_MINS: 90
           KILL_AFTER_SECS: 120
           BENCH_VAL_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/val
           BENCH_TEST_DIR: ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/test
@@ -415,9 +427,14 @@ jobs:
           request_pty: true
           command_timeout: 70m
           envs: APP_DIR,GRID_DIR,TOX21_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
+            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
+            BESTCFG_NO_EPOCHS
           script: |
             bash "$APP_DIR/scripts/ci/run-tox21.sh"
         env:
           HARD_WALL_MINS: 60
           KILL_AFTER_SECS: 120
+          PRETRAIN_EPOCHS: "40"
+          FINETUNE_EPOCHS: "8"
+          BESTCFG_NO_EPOCHS: "1"

@@ -45,11 +45,12 @@ pretrain:
   <<: *common
   unlabeled_dir: ${APP_DIR}/data/ZINC-canonicalized
   labeled_dir:   ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
-  sample_unlabeled: 50000
+  sample_unlabeled: 10000 # consistent with whats in phase 1 and phase 2
   plot_dir: ${PRETRAIN_DIR}/plots
   n_rows_per_file: 1000
   ckpt_dir: ${PRETRAIN_DIR}
   save_every: 1
+  pretrain_epochs: ${PRETRAIN_EPOCHS:-40}   # maps to --epochs for "pretrain"
   output: ${PRETRAIN_DIR}/encoder.pt
   force_tqdm: true
   use_wandb: true
@@ -62,6 +63,7 @@ finetune:
   label_col: "measured log solubility in mols per litre"
   ckpt_dir: ${FINETUNE_DIR}
   save_every: 1
+  finetune_epochs: ${FINETUNE_EPOCHS:-8}    # maps to --epochs for "finetune"
   metric: val_rmse
   patience: 10
   use_wandb: true
@@ -83,4 +85,6 @@ tox21:
   csv: ${APP_DIR}/data/tox21/data.csv
   task: NR-AR
   tox21_dir: ${TOX21_DIR}
+  pretrain_epochs: ${PRETRAIN_EPOCHS:-40}   # maps to --pretrain-epochs for "tox21"
+  finetune_epochs: ${FINETUNE_EPOCHS:-8}    # maps to --finetune-epochs for "tox21"
   use_wandb: true

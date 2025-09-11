@@ -359,6 +359,12 @@ maps = {
     },
 }
 
+skip = set(os.environ.get("BESTCFG_SKIP", "").split())
+if os.environ.get("BESTCFG_NO_EPOCHS") == "1":
+    skip.update(["pretrain_epochs", "finetune_epochs"])
+for k in list(skip):
+    cfg.pop(k, None)
+    
 mapping = maps.get(stage, {})
 for key, flag in mapping.items():
     if key not in cfg:
