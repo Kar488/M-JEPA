@@ -506,19 +506,41 @@ def apply_graph_augmentations(
         g = remove_random_subgraph(g)
 
     return g
-    
-
         
+def _clone_graph(graph):
+    """Clone GraphData that may store numpy arrays or torch tensors."""
+    import numpy as np
+    try:
+        import torch as _t
+        HAS_TORCH = True
+    except Exception:
+        HAS_TORCH = False
 
+    def _cp(a):
+        if a is None:
+            return None
+        if HAS_TORCH and isinstance(a, _t.Tensor):
+            return a.detach().clone()
+        if hasattr(a, "copy"):             # numpy or array-like with .copy()
+            return a.copy()
+        return np.array(a, copy=True)
 
-def _clone_graph(g: GraphData) -> GraphData:
-    ea = getattr(g, "edge_attr", None)
-    return GraphData(
-        x=g.x.copy(),
-        edge_index=g.edge_index.copy(),
-        edge_attr=None if ea is None else ea.copy(),
+    # Only pass supported ctor fields
+    g2 = GraphData(
+        x=_cp(getattr(graph, "x", None)),
+        edge_index=_cp(getattr(graph, "edge_index", None)),
+        edge_attr=_cp(getattr(graph, "edge_attr", None)),
     )
-
+    # Carry optional attributes by assignment (NOT via constructor)
+    for name in ("y", "mask", "batch", "smiles", "id"):
+        if hasattr(graph, name):
+            try:
+                setattr(g2, name, _cp(getattr(graph, name)))
+            except Exception:
+                setattr(g2, name, getattr(graph, name))
+    # NOTE: Do NOT store adjacency on GraphData. If a legacy encoder needs it,
+    # build adj on the fly from edge_index where it’s used.
+    return g2
 
 def generate_views(
     graph: GraphData,
