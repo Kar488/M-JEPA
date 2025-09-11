@@ -79,6 +79,7 @@ def _load_real_graphdataset():
 
 from utils.graph_ops import _ensure_edge_attr_np_or_torch as ensure_edge_attr
 from utils.graph_ops import _encode_graph_flex
+from utils.bond_feats import attach_bond_features_from_smiles
 
 def _import_graphdataset():
     from data.mdataset import GraphDataset
@@ -165,8 +166,24 @@ def run_tox21_case_study(
     if len(dataset) == 0:
         raise ValueError("No valid molecules could be parsed from the dataset.")
 
+
     all_labels = dataset.labels.astype(float)
     num_total = len(dataset)
+
+    for i, g in enumerate(dataset.graphs):
+        # be extra-safe if dataset has no .smiles or a row is None
+        smi = getattr(g, "smiles", None) or (getattr(dataset, "smiles", None)[i] if hasattr(dataset, "smiles") else None)
+        if not smi:
+            continue  # can’t featurize bonds without SMILES; leave edge_attr as-is
+        g.smiles = smi
+
+        # only (re)compute if missing or empty
+        ea = getattr(g, "edge_attr", None)
+        if ea is None or getattr(ea, "shape", (0, 0))[1] == 0:
+            attach_bond_features_from_smiles(g, smi) # sets edge_attr to shape (E, 13)
+
+    print(dataset.graphs[0].edge_attr.shape) # (E, 13)
+
     # -------------------------------
     # Scaffold split (fallback to random)
     # -------------------------------
@@ -366,7 +383,7 @@ def run_tox21_case_study(
             val_y = all_labels[val_idx_arr].astype(float)
             m = ~np.isnan(val_y)
             if m.sum() > 1 and np.unique(val_y[m]).size > 1:
-                platt = LogisticRegression(solver="lbfgs", max_iter=1000)
+                platt = LogisticRegression(solver="lbfgs", max_iter=1000, class_weight="balanced") # <-- auto-weights inverse to class frequency
                 platt.fit(val_logits[m].reshape(-1, 1), val_y[m].astype(int))
                 calibrated_probs = platt.predict_proba(test_logits.reshape(-1, 1))[:, 1]
         except Exception as _e:
