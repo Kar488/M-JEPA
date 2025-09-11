@@ -139,11 +139,19 @@ def _ensure_edge_attr_np_or_torch(g, need_dim: int, device=None):
     E = 0
     ei = getattr(g, "edge_index", None)
     if ei is not None:
-        E = int(np.array(ei).shape[1])
-    elif getattr(g, "adj", None) is not None:
-        A = np.asarray(g.adj)
-        E = int((A > 0).sum())
-
+        if HAS_TORCH and isinstance(ei, _t.Tensor):
+            E = int(ei.shape[1])
+        else:
+            E = int(np.asarray(ei).shape[1])
+    else:
+        adj = getattr(g, "adj", None)
+        if adj is not None:
+            if HAS_TORCH and isinstance(adj, _t.Tensor):
+                E = int((adj > 0).sum().item())
+            else:
+                A = np.asarray(adj)
+                E = int((A > 0).sum())
+ 
     # ---- helpers to coerce device/dtype -----------------------------------------
     def _to_torch_device(dev):
         import torch as _t
@@ -204,7 +212,12 @@ def _ensure_edge_attr_np_or_torch(g, need_dim: int, device=None):
     # ---- read/repair edge_attr ---------------------------------------------------
     e = getattr(g, "edge_attr", None)
     import numpy as np
-    w = 0 if e is None else int(np.array(e).shape[1])
+    if e is None:
+        w = 0
+    elif HAS_TORCH and isinstance(e, _t.Tensor):
+        w = int(e.shape[1])
+    else:
+        w = int(np.asarray(e).shape[1])
 
     if e is None or w == 0:
         g.edge_attr = zeros_like_x(E, need_dim)
@@ -222,7 +235,7 @@ def _ensure_edge_attr_np_or_torch(g, need_dim: int, device=None):
     # ---- pad/trim to need_dim (numpy or torch) ----------------------------------
     try:
         import torch as _t
-        if isinstance(e, _t.Tensor):
+        if HAS_TORCH and isinstance(e, _t.Tensor):
             if e.shape[1] < need_dim:
                 pad = zeros_like_x(e.shape[0], need_dim - e.shape[1])
                 g.edge_attr = _t.cat([e, pad], dim=1)
