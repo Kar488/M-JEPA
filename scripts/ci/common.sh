@@ -179,8 +179,12 @@ best_config_args() {
   fi
   local py; py=$(python_bin) || { echo "python not found" >&2; return 127; }
   "$py" - "$cfg" "$stage" <<'PY'
-import json, sys
-path, stage = sys.argv[1], sys.argv[2]
+import os, json, sys
+path = sys.argv[1]
+# normalize stage and support 'benchmark' alias
+stage = (sys.argv[2].lower().strip() if len(sys.argv) > 2 else "bench")
+if stage == "benchmark":
+    stage = "bench"
 raw = json.load(open(path))
 
 # --- flatten possible W&B shapes ---
@@ -359,12 +363,23 @@ maps = {
     },
 }
 
-skip = set(os.environ.get("BESTCFG_SKIP", "").split())
+# Build the skip set from env (accept space- or comma-separated)
+_raw = os.environ.get("BESTCFG_SKIP", "")
+# accept comma- or space-separated values and normalize
+skip = {s.strip() for s in _raw.replace(",", " ").split() if s.strip()}
+
+# treat 'learning_rate' as an alias for 'lr'
+if "learning_rate" in skip:
+  skip.add("lr")
+
+# Add epochs if requested
 if os.environ.get("BESTCFG_NO_EPOCHS") == "1":
-    skip.update(["pretrain_epochs", "finetune_epochs"])
+  skip.update(["pretrain_epochs", "finetune_epochs"])
+
+# Drop the keys (if present) - run this ALWAYS
 for k in list(skip):
     cfg.pop(k, None)
-    
+
 mapping = maps.get(stage, {})
 for key, flag in mapping.items():
     if key not in cfg:

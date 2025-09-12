@@ -183,6 +183,9 @@ def train_jepa(
     steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
     total_steps = epochs * steps_per_epoch
     sch = cosine_with_warmup(opt, warmup_steps, total_steps) if use_scheduler else None
+    # EMA momentum schedule: start from current decay, finish near 1.0 for a stable target
+    ema_start = float(getattr(ema, "decay", 0.996))
+    ema_end   = 0.9999
     wb = maybe_init_wandb(
         use_wandb,
         project=wandb_project,
@@ -351,7 +354,18 @@ def train_jepa(
 
             lv = float(loss.detach().cpu().item())
             ep_loss += lv
+            # ---- Cosine EMA momentum ramp: ema.decay = ema_start → ema_end over total_steps ----
             step += 1
+            if hasattr(ema, "set_decay"):
+                # alpha ∈ [0,1]
+                alpha = min(1.0, step / float(total_steps)) if total_steps > 0 else 1.0
+                # smooth 0→1
+                w = 0.5 * (1.0 - math.cos(math.pi * alpha))
+                ema_now = ema_start + (ema_end - ema_start) * w
+                ema.set_decay(ema_now)
+            # Update target with the scheduled momentum
+            _enc = encoder.module if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder
+            ema.update(_enc)
             if wb and is_main_process():
                 wb.log(
                     {

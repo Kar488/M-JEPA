@@ -635,21 +635,27 @@ def evaluate_finetuned_head(
             )
 
             g = _ensure_edge_attr(g, int(enc_cfg["edge_dim"]), device=device)
-            node_emb  = _encode_graph(enc, g)  # or your _encode_graph helper
+            node_emb  = _encode_graph(enc, g)  # [N, D]
+            # Guard against NaNs/Infs before pooling or batching
+            node_emb  = torch.nan_to_num(node_emb, nan=0.0, posinf=0.0, neginf=0.0)
             graph_emb = (
                 global_mean_pool(node_emb, batch_ptr) if batch_ptr is not None
                 else node_emb.mean(dim=0, keepdim=True)
             )
             logits = head(graph_emb).squeeze(1)
+             # Clamp any stray non-finite values in the head output
+            logits = torch.nan_to_num(logits, nan=0.0, posinf=1e6, neginf=-1e6)
             preds_t = torch.sigmoid(logits) if task_is_cls else logits
+            # And sanitize the post-activation tensor too (esp. regression path)
+            preds_t = torch.nan_to_num(preds_t, nan=0.0, posinf=1e6, neginf=-1e6)
             all_preds.append(preds_t.detach().cpu().numpy())
             # targets: one value per graph in the batch (already aligned with graph_emb)
             all_targets.append(batch_labels.detach().cpu().numpy())
     
-    # concat & mask NaN targets
+    # concat & filter non-finite rows (both y_true and y_pred)
     y_pred = np.concatenate(all_preds).astype(np.float32)
     y_true = np.concatenate(all_targets).astype(np.float32)
-    mask = ~np.isnan(y_true)
+    mask = np.isfinite(y_true) & np.isfinite(y_pred)
     y_true = y_true[mask]
     y_pred = y_pred[mask]
     

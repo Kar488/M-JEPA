@@ -41,6 +41,19 @@ def _safe_grid_dir(tmp_path, monkeypatch):
 def _safe_log_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
 
+@pytest.fixture(autouse=True)
+def _writable_data_dir(tmp_path, monkeypatch):
+    """
+    Ensure every test (and its subprocesses) write under a per-test folder,
+    never /data.
+    """
+    data_dir = tmp_path / "data"
+    cache_dir = tmp_path / ".cache"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache_dir))
+
 @pytest.fixture(scope="session")
 def tiny_parquet(tmp_path_factory):
     # Create a tiny parquet with just a few SMILES

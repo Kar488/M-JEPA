@@ -357,12 +357,18 @@ def run_tox21_case_study(
                     g = ensure_edge_attr(g, edge_dim, device=device)
                     # single-arg forward: pass the graph object
                     node_emb = _encode_graph_flex(encoder, g, device)   # [N_i, D]
+                    # guard against NaNs in node embeddings before pooling
+                    node_emb = torch.nan_to_num(node_emb, nan=0.0, posinf=0.0, neginf=0.0)
                     graph_embs.append(node_emb.mean(0, keepdim=True))  # mean-pool → [1, D]
                 if not graph_embs:
                     continue
                 batch = torch.cat(graph_embs, dim=0).to(device)        # [B, D]
                 logits = head(batch)                                   # [B, 1] for binary
+                # sanitize logits & derived probabilities
+                logits = torch.nan_to_num(logits, nan=0.0, posinf=1e6, neginf=-1e6)
                 probs  = torch.sigmoid(logits) if logits.shape[-1] == 1 else torch.softmax(logits, dim=-1)
+                probs  = torch.clamp(probs, 1e-6, 1.0 - 1e-6)
+                probs  = torch.nan_to_num(probs, nan=0.5, posinf=1.0, neginf=0.0)
                 all_logits.append(logits.detach().cpu())
                 all_probs.append(probs.detach().cpu())
         return torch.cat(all_logits, dim=0), torch.cat(all_probs, dim=0)
@@ -381,11 +387,17 @@ def run_tox21_case_study(
     if calibrate:
         try:
             val_y = all_labels[val_idx_arr].astype(float)
-            m = ~np.isnan(val_y)
-            if m.sum() > 1 and np.unique(val_y[m]).size > 1:
-                platt = LogisticRegression(solver="lbfgs", max_iter=1000, class_weight="balanced") # <-- auto-weights inverse to class frequency
-                platt.fit(val_logits[m].reshape(-1, 1), val_y[m].astype(int))
-                calibrated_probs = platt.predict_proba(test_logits.reshape(-1, 1))[:, 1]
+            Xv = np.asarray(val_logits).reshape(-1, 1)
+            # keep only finite rows and both classes present
+            m = (~np.isnan(val_y)) & np.isfinite(Xv[:, 0])
+            yv = val_y[m].astype(int)
+            Xv = np.nan_to_num(Xv[m], copy=False, nan=0.0, posinf=1e6, neginf=-1e6)
+            if yv.size > 1 and np.unique(yv).size > 1:
+                platt = LogisticRegression(solver="lbfgs", max_iter=1000, class_weight="balanced")
+                platt.fit(Xv, yv)
+                Xt = np.asarray(test_logits).reshape(-1, 1)
+                Xt = np.nan_to_num(Xt, copy=False, nan=0.0, posinf=1e6, neginf=-1e6)
+                calibrated_probs = platt.predict_proba(Xt)[:, 1]
         except Exception as _e:
             logger.warning("Calibration skipped due to error: %s", _e)
 
@@ -417,9 +429,20 @@ def run_tox21_case_study(
     y_true_m = y_true[m]
     y_pred_m = y_pred[m]
     if y_true_m.size > 0 and np.unique(y_true_m).size > 1:
-        auc   = float(roc_auc_score(y_true_m.astype(int), y_pred_m))
-        ap    = float(average_precision_score(y_true_m.astype(int), y_pred_m))
-        brier = float(brier_score_loss(y_true_m.astype(int), y_pred_m))
+
+        # --- Metrics on TEST (NaN/Inf safe) ---
+        yy = y_true_m.astype(int)
+        pp = np.asarray(y_pred_m).astype(float)
+        keep = (~np.isnan(yy)) & np.isfinite(pp)
+        yy, pp = yy[keep], np.nan_to_num(pp[keep], copy=False, nan=0.5, posinf=1.0, neginf=0.0)
+        # if not enough signal/classes, return neutral scores instead of crashing
+        if yy.size < 2 or np.unique(yy).size < 2:
+            auc, ap, brier = 0.5, float('nan'), float('nan')
+        else:
+            auc   = float(roc_auc_score(yy, pp))
+            ap    = float(average_precision_score(yy, pp))
+            brier = float(brier_score_loss(yy, pp))
+        
 
         # compare mean predicted probability vs. empirical positive rate per bin
         def _ece(y, p, n_bins=10):
@@ -435,7 +458,9 @@ def run_tox21_case_study(
                 freq = y[mask].mean()     # empirical positive rate in bin
                 ece += (np.sum(mask) / N) * abs(freq - conf)
             return float(ece)
-        ece = _ece(y_true_m.astype(int), y_pred_m, n_bins=10)
+        
+        from utils import _expected_calibration_error 
+        ece = _expected_calibration_error(yy, pp, n_bins=10)
         logger.info(
             "Tox21 %s TEST metrics — AUC=%.4f, PR-AUC=%.4f, Brier=%.4f, ECE=%.4f",
             task_name, auc, ap, brier, ece

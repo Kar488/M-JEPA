@@ -46,6 +46,10 @@ class EMA:
             buf = buf.to(p.device)
             self.params.append(buf)
 
+    def set_decay(self, decay: float) -> None:
+        """Dynamically update EMA decay/momentum during training."""
+        self.decay = float(decay)
+
     def update(self, model: nn.Module) -> None:
         """Update EMA parameters given the source model."""
         with _NO_GRAD():
