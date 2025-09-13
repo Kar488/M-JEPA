@@ -13,12 +13,19 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     from wandb_safety import wb_summary_update as _wb_summary_update
     from wandb_safety import wb_finish_safely as _wb_finish_safely
 
-    # --- 1) Apply W&B sweep config → argparse so sampled hparams actually take effect ---
+    # --- 0) Initialize W&B run FIRST (no config!), then read sampled config ---
+    import os
     try:
         import wandb
-        cfg = dict(getattr(wandb, "config", {}))
     except Exception:
-        cfg = {}
+        wandb = None
+    run = None
+    if wandb is not None:
+        # do NOT pass config here; agent provides sampled config
+        run = wandb.run or _wb_get_or_init(project=getattr(args, "wandb_project", None),
+                                           job_type="sweep-run",
+                                           mode=os.getenv("WANDB_MODE"))
+    cfg = dict(getattr(wandb, "config", {})) if wandb is not None else {}
 
     def _as_bool(v):
         if isinstance(v, bool): return v
@@ -125,8 +132,14 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _labeled_dir   = _resolve_env_path(args.labeled_dir)
     _unlabeled_dir = _resolve_env_path(args.unlabeled_dir)
 
-    wb = _wb_get_or_init(args)
-
+    # NOTE: we already initialized earlier; do NOT re-init with args/config here
+    wb = wandb.run if wandb is not None else None
+    # re-open if an inner path finished it (without config!)
+    if wandb is not None and wandb.run is None:
+        _wb_get_or_init(project=getattr(args, "wandb_project", None),
+                        job_type="sweep-run",
+                        mode=os.getenv("WANDB_MODE"))
+    
     mr = getattr(args, "mask_ratio", None)
     if mr is not None: mr = round(float(mr), 6)
 
