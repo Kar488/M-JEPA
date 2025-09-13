@@ -22,7 +22,8 @@ parameters:
   finetune_epochs:      {values: [1, 3]}
   learning_rate:        {values: [1e-4, 2e-4, 3e-4]}
   mask_ratio:           {values: [0.15, 0.30, 0.50]}
-  contiguity:           {values: [0, 1]}
+  #masks a connected subgraph (functional group/ring/chain) - 1, avoid scattered nodes that is also used in literature but can leak info via nearby nodes
+  contiguity:           {value: 1}
 
   max_pretrain_batches:  {values: [200, 400]}
   max_finetune_batches:  {value: 200}

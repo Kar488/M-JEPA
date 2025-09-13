@@ -13,7 +13,8 @@ parameters:
 
   # model + hparams
   mask_ratio:           {values: [0.15, 0.30, 0.50]}
-  contiguity:           {values: [0, 1]}
+  #masks a connected subgraph (functional group/ring/chain) - 1, avoid scattered nodes that is also used in literature but can leak info via nearby nodes
+  contiguity:           {value: 1}
   hidden_dim:           {values: [128, 256]}
   num_layers:           {values: [2, 3]}
   gnn_type:             {values: [gine, dmpnn, schnet3d]}

@@ -1,4 +1,4 @@
-import os, json, tempfile, subprocess, shlex, pathlib,sys
+import os, json, tempfile, subprocess, shlex, pathlib, sys, shutil
 import pytest
 
 
@@ -6,8 +6,14 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 COMMON_SH = os.getenv("COMMON_SH", str(ROOT / "scripts" / "ci" / "common.sh"))
 
-pytestmark = pytest.mark.skipif(not pathlib.Path(COMMON_SH).exists(),
-                                reason=f"common.sh not found at {COMMON_SH}")
+# Find a bash to run common.sh (Windows-friendly)
+BASH = os.getenv("BASH") or shutil.which("bash")
+pytestmark = [
+    pytest.mark.skipif(not pathlib.Path(COMMON_SH).exists(),
+                       reason=f"common.sh not found at {COMMON_SH}"),
+    pytest.mark.skipif(BASH is None,
+                       reason="bash not found; set env BASH to Git Bash (e.g., C:\\Program Files\\Git\\bin\\bash.exe)"),
+]
 
 import os
 import pytest
@@ -54,17 +60,20 @@ export -f rewrite_path _wrap_args_and_exec mkdir install cp mv touch tee
 '''
         # Export DATA_DIR/XDG_CACHE_HOME, install shim, then source common.sh.
         # set -x to surface commands in stderr for easier debugging.
+        # Convert Windows paths to POSIX so Git Bash can source them
+        msys_common = pathlib.Path(COMMON_SH).as_posix()
+        msys_grid   = pathlib.Path(str(grid_dir)).as_posix()
         cmd = (
             "set -euo pipefail; set -x; "
-            f"export DATA_DIR={shlex.quote(str(data_dir))}; "
-            f"export XDG_CACHE_HOME={shlex.quote(str(cache_dir))}; "
+            f"export DATA_DIR={shlex.quote(pathlib.Path(data_dir).as_posix())}; "
+            f"export XDG_CACHE_HOME={shlex.quote(pathlib.Path(cache_dir).as_posix())}; "
             f"{shim} "
-            f"source {shlex.quote(COMMON_SH)}; "
-            f"export GRID_DIR={shlex.quote(str(grid_dir))}; "
+            f"source {shlex.quote(msys_common)}; "
+            f"export GRID_DIR={shlex.quote(msys_grid)}; "
             f"best_config_args {shlex.quote(stage)}"
         )
         proc = subprocess.run(
-            ["bash", "-lc", cmd],
+            [BASH, "-lc", cmd],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

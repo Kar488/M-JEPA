@@ -285,7 +285,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 520m
+          command_timeout: 740m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,WANDB_ENTITY,
             GRID_MODE,WANDB_COUNT, TOPK_RECHECK,EXTRA_SEEDS,PHASE2_METRIC,PHASE2_DIRECTION,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR
@@ -293,7 +293,7 @@ jobs:
             bash "$APP_DIR/scripts/ci/run-grid-phase2.sh"
         env:
            # agent knobs (already have these)
-          HARD_WALL_MINS: 500
+          HARD_WALL_MINS: 720
           KILL_AFTER_SECS: 120
           WANDB_COUNT: 24
           # recheck knobs (separate budget)
@@ -328,7 +328,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 90m
+          command_timeout: 199m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,CKPT_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             GRID_MODE,WANDB_COUNT,
@@ -337,7 +337,7 @@ jobs:
           script: |
             bash "$APP_DIR/scripts/ci/run-pretrain.sh"
         env:
-          HARD_WALL_MINS: 90
+          HARD_WALL_MINS: 190
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "40"
           FINETUNE_EPOCHS: "8"

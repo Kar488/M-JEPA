@@ -13,13 +13,60 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     from wandb_safety import wb_summary_update as _wb_summary_update
     from wandb_safety import wb_finish_safely as _wb_finish_safely
 
-    to_bool = lambda v: bool(int(v)) if isinstance(v, (str,int)) else bool(v)
-    add_3d               = to_bool(getattr(args, "add_3d", 0))
-    aug_contiguity       = to_bool(getattr(args, "contiguity", 0))
+    # --- 1) Apply W&B sweep config → argparse so sampled hparams actually take effect ---
+    try:
+        import wandb
+        cfg = dict(getattr(wandb, "config", {}))
+    except Exception:
+        cfg = {}
 
-    gnn = str(getattr(args, "gnn_type", "")).lower()
-    add_3d = to_bool(getattr(args, "add_3d", 0))
+    def _as_bool(v):
+        if isinstance(v, bool): return v
+        try: return bool(int(str(v)))
+        except Exception: return bool(v)
+
+    def _apply(src_key, dest_attr, cast=lambda x: x):
+        if src_key in cfg:
+            try:
+                setattr(args, dest_attr, cast(cfg[src_key]))
+            except Exception:
+                pass
+
+    # core model + training knobs commonly swept
+    _apply("gnn_type",             "gnn_type",             lambda s: str(s).lower())
+    _apply("hidden_dim",           "hidden_dim",           int)
+    _apply("num_layers",           "num_layers",           int)
+    _apply("add_3d",               "add_3d",               _as_bool)
+    _apply("contiguity",           "contiguity",           _as_bool)
+    _apply("mask_ratio",           "mask_ratio",           float)
+    _apply("ema_decay",            "ema_decay",            float)
+    _apply("temperature",          "temperature",          float)
+    _apply("pretrain_epochs",      "pretrain_epochs",      int)
+    _apply("finetune_epochs",      "finetune_epochs",      int)
+    _apply("pretrain_batch_size",  "pretrain_batch_size",  int)
+    _apply("finetune_batch_size",  "finetune_batch_size",  int)
+    _apply("max_pretrain_batches", "max_pretrain_batches", int)
+    _apply("max_finetune_batches", "max_finetune_batches", int)
+    _apply("sample_unlabeled",     "sample_unlabeled",     int)
+    _apply("sample_labeled",       "sample_labeled",       int)
+    # learning rate may be named "learning_rate" or "lr"
+    if "learning_rate" in cfg:
+        args.learning_rate = float(cfg["learning_rate"])
+    elif "lr" in cfg:
+        args.learning_rate = float(cfg["lr"])
+
+    # booleans used below
+    to_bool = _as_bool
+    add_3d         = to_bool(getattr(args, "add_3d", 0))
     aug_contiguity = to_bool(getattr(args, "contiguity", 0))
+    gnn = str(getattr(args, "gnn_type", "")).lower()
+
+    import os
+    if os.environ.get("SWEEP_DUMP", "0") == "1":
+        print(f"[sweep-run] gnn_type={gnn} hidden_dim={args.hidden_dim} num_layers={args.num_layers} "
+              f"add_3d={to_bool(getattr(args,'add_3d',0))} contiguity={to_bool(getattr(args,'contiguity',0))} "
+              f"lr={getattr(args,'learning_rate',None)}")
+        return
 
     if gnn in ("schnet3d", "schnet"):
         if not add_3d:
@@ -56,7 +103,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         contiguous=aug_contiguity,
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
-        gnn_type=args.gnn_type,
+        gnn_type=gnn,
         ema_decay=args.ema_decay,
         add_3d=add_3d,
         pretrain_bs=args.pretrain_batch_size,
