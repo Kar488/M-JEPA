@@ -7,7 +7,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     Run one hyperparameter config (JEPA or contrastive) for W&B sweeps.
     Mirrors one row of grid-search, but logs directly to W&B.
     """
-    from experiments.grid_search import Config, AugmentationConfig, _run_one_config_method  
+    from experiments.grid_search import Config, _run_one_config_method  
 
     from wandb_safety import wb_get_or_init as _wb_get_or_init
     from wandb_safety import wb_summary_update as _wb_summary_update
