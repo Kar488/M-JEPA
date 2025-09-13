@@ -33,9 +33,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     run = None
     if wandb is not None:
         # do NOT pass config here; agent provides sampled config
-        run = wandb.run or _wb_get_or_init(args)
-        wb = _wb_get_or_init(args)
-    cfg = dict(getattr(wandb, "config", {})) if wandb is not None else {}
+        wb = getattr(wandb, "run", None) or _wb_get_or_init(args)
+    try:
+        cfg = wandb.config.as_dict()
+    except Exception:
+        cfg = dict(getattr(wandb, "config", {}) or {})
 
     def _as_bool(v):
         if isinstance(v, bool): return v
@@ -86,7 +88,8 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     if os.environ.get("SWEEP_DUMP", "0") == "1":
         print(f"[sweep-run] gnn_type={gnn} hidden_dim={args.hidden_dim} num_layers={args.num_layers} "
               f"add_3d={to_bool(getattr(args,'add_3d',0))} contiguity={to_bool(getattr(args,'contiguity',0))} "
-              f"lr={getattr(args,'learning_rate',None)}")
+               f"lr={getattr(args,'learning_rate',None)}",
+              flush=True)
         return
 
     if gnn in ("schnet3d", "schnet"):
@@ -159,10 +162,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     # Normalise a config subset that should match across methods for a "pair"
     pid_cfg = {
-        "gnn_type": args.gnn_type,
-        "hidden_dim": args.hidden_dim,
-        "num_layers": args.num_layers,
-        "contiguous": int(getattr(args, "contiguous", getattr(args, "contiguity", 0))),
+        "gnn_type":    gnn,
+        "hidden_dim":  int(args.hidden_dim),
+        "num_layers":  int(args.num_layers),
+        # use the actual contiguity knob name; no stray 'contiguous'
+        "contiguity":  int(getattr(args, "contiguity", 0)),
     }
 
     pair_id = hashlib.sha1(json.dumps(pid_cfg, sort_keys=True).encode()).hexdigest()[:8]
