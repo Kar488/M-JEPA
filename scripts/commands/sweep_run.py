@@ -7,11 +7,22 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     Run one hyperparameter config (JEPA or contrastive) for W&B sweeps.
     Mirrors one row of grid-search, but logs directly to W&B.
     """
-    from experiments.grid_search import Config, _run_one_config_method  
+    from experiments.grid_search import Config, AugmentationConfig, _run_one_config_method  
 
     from wandb_safety import wb_get_or_init as _wb_get_or_init
     from wandb_safety import wb_summary_update as _wb_summary_update
     from wandb_safety import wb_finish_safely as _wb_finish_safely
+
+    # dataset + device helpers live in train_jepa.py; import them here so the
+    # lambdas below resolve correctly in this module’s namespace.
+    try:
+        from scripts.train_jepa import load_directory_dataset, resolve_device
+    except Exception:
+        # fallback when executed with repo root on sys.path but not as a package
+        try:
+            from train_jepa import load_directory_dataset, resolve_device
+        except Exception as e:
+            raise ImportError("Could not import load_directory_dataset/resolve_device") from e
 
     # --- 0) Initialize W&B run FIRST (no config!), then read sampled config ---
     import os
@@ -25,6 +36,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         run = wandb.run or _wb_get_or_init(project=getattr(args, "wandb_project", None),
                                            job_type="sweep-run",
                                            mode=os.getenv("WANDB_MODE"))
+        wb = _wb_get_or_init(args)
     cfg = dict(getattr(wandb, "config", {})) if wandb is not None else {}
 
     def _as_bool(v):
@@ -41,9 +53,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     # core model + training knobs commonly swept
     _apply("gnn_type",             "gnn_type",             lambda s: str(s).lower())
+    _apply("gnn",                 "gnn_type",             lambda s: str(s).lower())
     _apply("hidden_dim",           "hidden_dim",           int)
     _apply("num_layers",           "num_layers",           int)
     _apply("add_3d",               "add_3d",               _as_bool)
+    _apply("contiguous",           "contiguity",           _as_bool)
     _apply("contiguity",           "contiguity",           _as_bool)
     _apply("mask_ratio",           "mask_ratio",           float)
     _apply("ema_decay",            "ema_decay",            float)
@@ -52,6 +66,8 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _apply("finetune_epochs",      "finetune_epochs",      int)
     _apply("pretrain_batch_size",  "pretrain_batch_size",  int)
     _apply("finetune_batch_size",  "finetune_batch_size",  int)
+    _apply("pretrain_bs",          "pretrain_batch_size",  int)
+    _apply("finetune_bs",           "finetune_batch_size", int)
     _apply("max_pretrain_batches", "max_pretrain_batches", int)
     _apply("max_finetune_batches", "max_finetune_batches", int)
     _apply("sample_unlabeled",     "sample_unlabeled",     int)
@@ -152,6 +168,10 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     }
 
     pair_id = hashlib.sha1(json.dumps(pid_cfg, sort_keys=True).encode()).hexdigest()[:8]
+    print(f"[sweep-run] pair_id={pair_id} | gnn_type={args.gnn_type} | "
+          f"hidden_dim={args.hidden_dim} | num_layers={args.num_layers} | "
+          f"contiguity={int(getattr(args,'contiguity',0))} | add_3d={int(bool(getattr(args,'add_3d',0)))}",
+          flush=True)
 
     if wb is not None:
         wb.config.update({
