@@ -33,9 +33,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     run = None
     if wandb is not None:
         # do NOT pass config here; agent provides sampled config
-        run = wandb.run or _wb_get_or_init(project=getattr(args, "wandb_project", None),
-                                           job_type="sweep-run",
-                                           mode=os.getenv("WANDB_MODE"))
+        run = wandb.run or _wb_get_or_init(args)
         wb = _wb_get_or_init(args)
     cfg = dict(getattr(wandb, "config", {})) if wandb is not None else {}
 
