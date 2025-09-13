@@ -30,14 +30,27 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         import wandb
     except Exception:
         wandb = None
-    run = None
-    if wandb is not None:
-        # do NOT pass config here; agent provides sampled config
-        wb = getattr(wandb, "run", None) or _wb_get_or_init(args)
+    wb = getattr(wandb, "run", None) or _wb_get_or_init(args)
+    
     try:
         cfg = wandb.config.as_dict()
     except Exception:
         cfg = dict(getattr(wandb, "config", {}) or {})
+
+    # flatten nested configs so "model.gnn_type" etc. are visible to _apply
+    def _flatten(d, parent_key="", sep="."):
+        out = {}
+        for k, v in (d or {}).items():
+            nk = f"{parent_key}{sep}{k}" if parent_key else str(k)
+            if isinstance(v, dict):
+                out.update(_flatten(v, nk, sep))
+            else:
+                out[nk] = v
+                out[k] = v  # also expose short key (last segment)
+            return out
+    cfg = _flatten(cfg)
+
+    print(f"[sweep-run] cfg keys sample: {sorted(list(cfg.keys()))[:10]}", flush=True)
 
     def _as_bool(v):
         if isinstance(v, bool): return v
@@ -51,13 +64,29 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             except Exception:
                 pass
 
+    def _apply_any(src_keys, dest_attr, cast=lambda x: x):
+        for k in src_keys:
+            if k in cfg:
+                try:
+                    setattr(args, dest_attr, cast(cfg[k]))
+                    return
+                except Exception:
+                    pass
+
     # core model + training knobs commonly swept
+    _apply_any(["gnn_type", "model.gnn_type", "model/gnn_type", "backbone", "model.backbone"], 
+               "gnn_type", lambda s: str(s).lower())
+    _apply_any(["contiguity", "model.contiguity", "contiguous", "model.contiguous"], 
+               "contiguity", _as_bool)
+    _apply_any(["pretrain_bs", "pretrain_batch_size", "train.pretrain_bs"], 
+               "pretrain_batch_size", int)
+    _apply_any(["finetune_bs", "finetune_batch_size", "train.finetune_bs"], 
+               "finetune_batch_size", int)
+
     _apply("gnn_type",             "gnn_type",             lambda s: str(s).lower())
-    _apply("gnn",                 "gnn_type",             lambda s: str(s).lower())
     _apply("hidden_dim",           "hidden_dim",           int)
     _apply("num_layers",           "num_layers",           int)
     _apply("add_3d",               "add_3d",               _as_bool)
-    _apply("contiguous",           "contiguity",           _as_bool)
     _apply("contiguity",           "contiguity",           _as_bool)
     _apply("mask_ratio",           "mask_ratio",           float)
     _apply("ema_decay",            "ema_decay",            float)
@@ -66,8 +95,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _apply("finetune_epochs",      "finetune_epochs",      int)
     _apply("pretrain_batch_size",  "pretrain_batch_size",  int)
     _apply("finetune_batch_size",  "finetune_batch_size",  int)
-    _apply("pretrain_bs",          "pretrain_batch_size",  int)
-    _apply("finetune_bs",           "finetune_batch_size", int)
     _apply("max_pretrain_batches", "max_pretrain_batches", int)
     _apply("max_finetune_batches", "max_finetune_batches", int)
     _apply("sample_unlabeled",     "sample_unlabeled",     int)
@@ -149,13 +176,9 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _labeled_dir   = _resolve_env_path(args.labeled_dir)
     _unlabeled_dir = _resolve_env_path(args.unlabeled_dir)
 
-    # NOTE: we already initialized earlier; do NOT re-init with args/config here
+    # NOTE: run already initialized; do NOT re-init here. If a prior path closed it,
+    # the agent will re-launch this process with a fresh sweep context.
     wb = wandb.run if wandb is not None else None
-    # re-open if an inner path finished it (without config!)
-    if wandb is not None and wandb.run is None:
-        _wb_get_or_init(project=getattr(args, "wandb_project", None),
-                        job_type="sweep-run",
-                        mode=os.getenv("WANDB_MODE"))
     
     mr = getattr(args, "mask_ratio", None)
     if mr is not None: mr = round(float(mr), 6)
