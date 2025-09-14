@@ -15,19 +15,18 @@ parameters:
   mask_ratio:           {values: [0.15, 0.30, 0.50]}
   #masks a connected subgraph (functional group/ring/chain) - 1, avoid scattered nodes that is also used in literature but can leak info via nearby nodes
   contiguity:           {value: 1}
-  hidden_dim:           {values: [128, 256]}
-  num_layers:           {values: [2, 3]}
-  gnn_type:             {values: [gine, dmpnn, schnet3d]}
-  ema_decay:            {values: [0.99, 0.996, 0.998]}
+  hidden_dim:           {values: [128, 256] }
+  num_layers:           {values: [3, 4]}
+  ema_decay:            {values: [0.995, 0.996, 0.998]}
   add_3d:               {values: [0, 1]}
   pretrain_batch_size:  {values: [64, 128, 256]}
-  finetune_batch_size: { values: [256] }
+  finetune_batch_size:  {values: [256] }
   pretrain_epochs:      {values: [5, 10, 15]}
   finetune_epochs:      {values: [1, 3]}
-  learning_rate:        {values: [1e-4, 2e-4, 3e-4]}
+  learning_rate:        { values: [1e-4, 2e-4, 3e-4, 5e-4]}
 
-  max_pretrain_batches:  {values: [150, 300]}
-  max_finetune_batches:  {value: 100}
+  max_pretrain_batches:  {values: [200, 400]}
+  max_finetune_batches:  {value: 200}
   
   devices:              {value: 1}
   num-workers:          {value: 4}
@@ -43,3 +42,5 @@ parameters:
   label_col:            {value: "measured log solubility in mols per litre"}
   sample_unlabeled:     {value: 10000}
   sample_labeled:       {value: 1000}
+
+  gnn_type:             {values: ["gine", dmpnn", "schnet3d"]}

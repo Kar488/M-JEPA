@@ -250,16 +250,16 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 340m
+          command_timeout: 1640m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,WANDB_ENTITY,WANDB_SWEEP_ID1,
             GRID_MODE,WANDB_COUNT, JEPA_SWEEP_SPEC,CONTRAST_SWEEP_SPEC,EXPORT_OUT_PATH,EXPORT_PHASE2_PATH,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR
           script: |
             bash "$APP_DIR/scripts/ci/run-grid-or-phase1.sh"
         env:
-          HARD_WALL_MINS: 320
+          HARD_WALL_MINS: 1620
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 16
+          WANDB_COUNT: 36
           GRID_MODE: "wandb"   # or "custom"
           JEPA_SWEEP_SPEC: ${{ env.APP_DIR }}/sweeps/sweep_phase1_jepa.yaml
           CONTRAST_SWEEP_SPEC: ${{ env.APP_DIR }}/sweeps/sweep_phase1_contrastive.yaml
@@ -285,7 +285,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 740m
+          command_timeout: 940m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,WANDB_ENTITY,
             GRID_MODE,WANDB_COUNT, TOPK_RECHECK,EXTRA_SEEDS,PHASE2_METRIC,PHASE2_DIRECTION,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR
@@ -293,7 +293,7 @@ jobs:
             bash "$APP_DIR/scripts/ci/run-grid-phase2.sh"
         env:
            # agent knobs (already have these)
-          HARD_WALL_MINS: 720
+          HARD_WALL_MINS: 920
           KILL_AFTER_SECS: 120
           WANDB_COUNT: 24
           # recheck knobs (separate budget)
