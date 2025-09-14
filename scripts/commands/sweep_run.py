@@ -30,15 +30,18 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         import wandb
     except Exception:
         wandb = None
-    wb = getattr(wandb, "run", None) or _wb_get_or_init(args)
+    cfg = {}
+    if wandb is not None:
+        wb = getattr(wandb, "run", None) or _wb_get_or_init(args)
+        try:
+            cfg = wandb.config.as_dict()
+        except Exception:
+            cfg = dict(getattr(wandb, "config", {}) or {})
+        
     
-    try:
-        cfg = wandb.config.as_dict()
-    except Exception:
-        cfg = dict(getattr(wandb, "config", {}) or {})
 
-    # flatten nested configs so "model.gnn_type" etc. are visible to _apply
-    def _flatten(d, parent_key="", sep="."):
+    # Flatten nested configs so "model.gnn_type" etc. are visible to _apply
+    def _flatten(d, parent_key: str = "", sep: str = "."):
         out = {}
         for k, v in (d or {}).items():
             nk = f"{parent_key}{sep}{k}" if parent_key else str(k)
@@ -47,10 +50,13 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             else:
                 out[nk] = v
                 out[k] = v  # also expose short key (last segment)
-            return out
-    cfg = _flatten(cfg)
-
-    print(f"[sweep-run] cfg keys sample: {sorted(list(cfg.keys()))[:10]}", flush=True)
+        return out
+    cfg = _flatten(cfg or {})
+    try:
+        sample_keys = sorted(list(cfg.keys()))[:10]
+    except Exception:
+        sample_keys = []
+    print(f"[sweep-run] cfg keys sample: {sample_keys}", flush=True)   
 
     def _as_bool(v):
         if isinstance(v, bool): return v
@@ -82,13 +88,13 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                "pretrain_batch_size", int)
     _apply_any(["finetune_bs", "finetune_batch_size", "train.finetune_bs"], 
                "finetune_batch_size", int)
+    
+    _apply_any(["hidden_dim", "model.hidden_dim", "width"], "hidden_dim", int)
+    _apply_any(["num_layers", "model.num_layers", "layers"], "num_layers", int)
+    _apply_any(["mask_ratio", "model.mask_ratio"], "mask_ratio", float)
 
-    _apply("gnn_type",             "gnn_type",             lambda s: str(s).lower())
-    _apply("hidden_dim",           "hidden_dim",           int)
-    _apply("num_layers",           "num_layers",           int)
+    
     _apply("add_3d",               "add_3d",               _as_bool)
-    _apply("contiguity",           "contiguity",           _as_bool)
-    _apply("mask_ratio",           "mask_ratio",           float)
     _apply("ema_decay",            "ema_decay",            float)
     _apply("temperature",          "temperature",          float)
     _apply("pretrain_epochs",      "pretrain_epochs",      int)
@@ -99,6 +105,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _apply("max_finetune_batches", "max_finetune_batches", int)
     _apply("sample_unlabeled",     "sample_unlabeled",     int)
     _apply("sample_labeled",       "sample_labeled",       int)
+    
     # learning rate may be named "learning_rate" or "lr"
     if "learning_rate" in cfg:
         args.learning_rate = float(cfg["learning_rate"])

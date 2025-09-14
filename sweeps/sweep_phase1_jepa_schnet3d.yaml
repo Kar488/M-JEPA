@@ -27,7 +27,7 @@ parameters:
 
   max_pretrain_batches:  {values: [200, 400]}
   max_finetune_batches:  {value: 200}
-  
+
   devices:              {value: 1}
   num-workers:          {value: 4}
   persistent-workers:   {value: 0} # 0 false
@@ -43,4 +43,4 @@ parameters:
   sample_unlabeled:     {value: 10000}
   sample_labeled:       {value: 1000}
 
-  gnn_type:             {values: ["gine", "dmpnn", "schnet3d"]}
+  gnn_type:             {value: "schnet3d"}
