@@ -66,7 +66,7 @@ env:
   WANDB_DIR: /data/mjepa/wandb
   WANDB_SWEEP_ID1: ey6pd85u
   WANDB_SWEEP_ID2: ongqx38g
-  WANDB_COUNT: 30
+  WANDB_COUNT: 10
   HARD_WALL_MINS: 120
   KILL_AFTER_SECS: 120
   GRID_MODE: wandb
@@ -82,7 +82,7 @@ env:
   LOG_DIR: /data/mjepa/experiments/${{ github.run_id }}/logs
   # as such this cache is used inside a single run only
   #Changing cache to be used across runs, change to fixed directory e.g. /data/mjepa/cache/grid
-  # either delete stamp (rm /data/mjepa/cache/grid/.stamp) or point to empty directory ("") for forced reruns 
+  # either delete stamp (rm /data/mjepa/cache/grid/.stamp) or point to empty directory ("") for forced reruns
   # GRID_CACHE_DIR: ${{ github.event.inputs.grid_cache_dir || '' }}
   # PRETRAIN_CACHE_DIR: ${{ github.event.inputs.pretrain_cache_dir || '' }}
   # FINETUNE_CACHE_DIR: ${{ github.event.inputs.finetune_cache_dir || '' }}
@@ -250,24 +250,22 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 1640m
+          command_timeout: 640m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,WANDB_ENTITY,WANDB_SWEEP_ID1,
-            GRID_MODE,WANDB_COUNT, JEPA_SWEEP_SPEC,CONTRAST_SWEEP_SPEC,EXPORT_OUT_PATH,EXPORT_PHASE2_PATH,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,WANDB_ENTITY,
+            GRID_MODE,WANDB_COUNT,EXPORT_OUT_PATH,EXPORT_PHASE2_PATH,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR
           script: |
             bash "$APP_DIR/scripts/ci/run-grid-or-phase1.sh"
         env:
-          HARD_WALL_MINS: 1620
+          HARD_WALL_MINS: 600
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 36
+          WANDB_COUNT: 10
           GRID_MODE: "wandb"   # or "custom"
-          JEPA_SWEEP_SPEC: ${{ env.APP_DIR }}/sweeps/sweep_phase1_jepa.yaml
-          CONTRAST_SWEEP_SPEC: ${{ env.APP_DIR }}/sweeps/sweep_phase1_contrastive.yaml
           EXPORT_OUT_PATH: ${{ env.GRID_DIR }}/best_grid_config.json
           EXPORT_PHASE2_PATH: ${{ env.APP_DIR }}/sweeps/grid_sweep_phase2.yaml
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
-        
+
 
   vast_sweep_phase2:
     if: ${{ (inputs.hyperparam_mode || 'wandb') == 'wandb' }}
@@ -303,7 +301,7 @@ jobs:
           PHASE2_DIRECTION: min
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
-                
+
   vast_pretrain:
     name: Pretain Model
     runs-on: ubuntu-latest
@@ -385,7 +383,7 @@ jobs:
           needs.vast_finetune.result == 'success' }}
     steps:
       - name: Benchmark on Vast
-        uses: appleboy/ssh-action@v1 
+        uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
