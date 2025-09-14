@@ -43,4 +43,4 @@ parameters:
   sample_unlabeled:     {value: 10000}
   sample_labeled:       {value: 1000}
 
-  gnn_type:             {values: ["gine", dmpnn", "schnet3d"]}
+  gnn_type:             {values: ["gine", "dmpnn", "schnet3d"]}
