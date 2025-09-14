@@ -292,7 +292,13 @@ class DMPNNLayer(nn.Module):
         e_hidden = self.edge_mlp(torch.cat([x[j], edge_attr], dim=-1))  # [E, H]
 
         # Aggregate incoming edge states to node i
-        agg = torch.zeros(x.size(0), e_hidden.size(1), device=x.device, dtype=x.dtype)
+        # Use e_hidden.dtype to match mixed‑precision (bf16/fp32) when autocast is enabled.
+        agg = torch.zeros(
+            x.size(0),
+            e_hidden.size(1),
+            device=x.device,
+            dtype=e_hidden.dtype,
+        )
         agg.index_add_(0, i, e_hidden)
 
         out = self.node_mlp(torch.cat([x, agg], dim=-1))
