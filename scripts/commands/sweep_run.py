@@ -119,8 +119,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     gnn = str(getattr(args, "gnn_type", "")).lower()
 
     import os
-    #TODO remove later
-    if os.environ.get("SWEEP_DUMP", "1") == "1":
+    if os.environ.get("SWEEP_DUMP", "0") == "1":
         print(f"[sweep-run] gnn_type={gnn} hidden_dim={args.hidden_dim} num_layers={args.num_layers} "
               f"add_3d={to_bool(getattr(args,'add_3d',0))} contiguity={to_bool(getattr(args,'contiguity',0))} "
                f"lr={getattr(args,'learning_rate',None)}",
