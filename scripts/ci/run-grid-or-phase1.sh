@@ -44,133 +44,90 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
   unset WANDB_NAME WANDB_RUN_ID
 
-  BACKBONES=(gine dmpnn schnet3d)
-  NUM_SWEEPS=$(( ${#BACKBONES[@]} * 2 ))
+  # Create a single sweep for JEPA and another for contrastive; reuse IDs
   : "${WANDB_COUNT:=30}"
-  COUNT_PER_SWEEP=$(( WANDB_COUNT / NUM_SWEEPS ))
-  [[ $COUNT_PER_SWEEP -lt 1 ]] && COUNT_PER_SWEEP=1
-  echo "[phase1] total WANDB_COUNT=${WANDB_COUNT} -> per-sweep=${COUNT_PER_SWEEP}"
-  for bb in "${BACKBONES[@]}"; do
-    echo "[phase1] === backbone: $bb ==="
-    export WANDB_RUN_GROUP="${GITHUB_RUN_ID:-pipeline-$(date -u +%Y%m%dT%H%M%SZ)}-$bb"
-    export WANDB_RESUME=allow
+  export WANDB_RUN_GROUP="${GITHUB_RUN_ID:-pipeline-$(date -u +%Y%m%dT%H%M%SZ)}"
+  export WANDB_RESUME=allow
 
-    JEPA_SPEC="$APP_DIR/sweeps/sweep_phase1_jepa_${bb}.yaml"
-    CONTRAST_SPEC="$APP_DIR/sweeps/sweep_phase1_contrastive_${bb}.yaml"
-    [[ -f "$JEPA_SPEC" ]] || { echo "[fatal] missing sweep spec $JEPA_SPEC" >&2; exit 1; }
-    [[ -f "$CONTRAST_SPEC" ]] || { echo "[fatal] missing sweep spec $CONTRAST_SPEC" >&2; exit 1; }
+  JEPA_SPEC="$APP_DIR/sweeps/sweep_phase1_jepa.yaml"
+  CONTRAST_SPEC="$APP_DIR/sweeps/sweep_phase1_contrastive.yaml"
+  [[ -f "$JEPA_SPEC" ]] || { echo "[fatal] missing sweep spec $JEPA_SPEC" >&2; exit 1; }
+  [[ -f "$CONTRAST_SPEC" ]] || { echo "[fatal] missing sweep spec $CONTRAST_SPEC" >&2; exit 1; }
 
-    TMP_JEPA="$(mktemp)";      yq ' .method = "grid" ' "$JEPA_SPEC" > "$TMP_JEPA"
-    TMP_CONTRAST="$(mktemp)";  yq ' .method = "grid" ' "$CONTRAST_SPEC" > "$TMP_CONTRAST"
+  TMP_JEPA="$(mktemp)";      yq ' .method = "grid" ' "$JEPA_SPEC" > "$TMP_JEPA"
+  TMP_CONTRAST="$(mktemp)";  yq ' .method = "grid" ' "$CONTRAST_SPEC" > "$TMP_CONTRAST"
 
-    check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
+  check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
 
-    JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
-    CONTRAST_ID="$(wandb_sweep_create "$TMP_CONTRAST")"
-    if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
-      echo "[phase1][fatal] bad sweep ids: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
-      exit 1
-    fi
+  JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
+  CONTRAST_ID="$(wandb_sweep_create "$TMP_CONTRAST")"
+  if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
+    echo "[phase1][fatal] bad sweep ids: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
+    exit 1
+  fi
 
-    cd "$APP_DIR"
-    export SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
-    export WANDB_COUNT="$COUNT_PER_SWEEP"
-    run_with_timeout wandb_agent || exit 1
+  cd "$APP_DIR"
+  export SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
+  run_with_timeout wandb_agent || exit 1
 
-    export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
-    export WANDB_COUNT="$COUNT_PER_SWEEP"
-    run_with_timeout wandb_agent || exit 1
+  export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
+  run_with_timeout wandb_agent || exit 1
 
-    PE_METRIC="val_rmse"
-    [[ "${TASK_FROM_PE:-regression}" == "classification" ]] && PE_METRIC="val_auc"
-    "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-      python -u "$APP_DIR/scripts/ci/paired_effect_from_wandb.py" \
-        --project "${WANDB_PROJECT}" \
-        --group   "${WANDB_RUN_GROUP}" \
-        --metric  "${PE_METRIC}" \
-        --aggregate pair-seed \
-        --seed "${CI_SEED:-42}" \
-        --strict \
-      2>&1 | tee "${LOG_DIR:-$APP_DIR/logs}/paired_effect_${bb}.log"
+  PE_METRIC="val_rmse"
+  [[ "${TASK_FROM_PE:-regression}" == "classification" ]] && PE_METRIC="val_auc"
+  "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
+    python -u "$APP_DIR/scripts/ci/paired_effect_from_wandb.py" \
+      --project "${WANDB_PROJECT}" \
+      --group   "${WANDB_RUN_GROUP}" \
+      --metric  "${PE_METRIC}" \
+      --aggregate pair-seed \
+      --seed "${CI_SEED:-42}" \
+      --strict \
+    2>&1 | tee "${LOG_DIR:-$APP_DIR/logs}/paired_effect.log"
 
-    PE_JSON="${GRID_DIR:-$APP_DIR/grid}/paired_effect.json"
-    if [[ -f "$PE_JSON" ]]; then
-      if command -v jq >/dev/null 2>&1; then
-        METHOD_WINNER="$(jq -r '.winner // "jepa"' "$PE_JSON")"
-        TASK_FROM_PE="$(jq -r '.task   // "regression"' "$PE_JSON")"
-      else
-        METHOD_WINNER="$(grep -o '"winner"\s*:\s*"[^"]*"' "$PE_JSON" | head -1 | sed 's/.*"winner"\s*:\s*"\([^"]*\)".*/\1/')"
-        TASK_FROM_PE="$(grep -o '"task"\s*:\s*"[^"]*"' "$PE_JSON" | head -1 | sed 's/.*"task"\s*:\s*"\([^"]*\)".*/\1/')"
-        : "${METHOD_WINNER:=jepa}"
-        : "${TASK_FROM_PE:=regression}"
-      fi
+  PE_JSON="${GRID_DIR:-$APP_DIR/grid}/paired_effect.json"
+  if [[ -f "$PE_JSON" ]]; then
+    if command -v jq >/dev/null 2>&1; then
+      METHOD_WINNER="$(jq -r '.winner // "jepa"' "$PE_JSON")"
+      TASK_FROM_PE="$(jq -r '.task   // "regression"' "$PE_JSON")"
     else
-      echo "[phase1][warn] ${PE_JSON} not found; falling back to defaults (winner=jepa, task=regression)"
-      METHOD_WINNER="jepa"
-      TASK_FROM_PE="regression"
+      METHOD_WINNER="$(grep -o '"winner"\s*:\s*"[^"]*"' "$PE_JSON" | head -1 | sed 's/.*"winner"\s*:\s*"\([^"]*\)".*/\1/')"
+      TASK_FROM_PE="$(grep -o '"task"\s*:\s*"[^"]*"' "$PE_JSON" | head -1 | sed 's/.*"task"\s*:\s*"\([^"]*\)".*/\1/')"
+      : "${METHOD_WINNER:=jepa}"
+      : "${TASK_FROM_PE:=regression}"
     fi
-    export METHOD_WINNER TASK_FROM_PE
-    echo "[phase1] paired-effect decided winner=${METHOD_WINNER} task=${TASK_FROM_PE}"
+  else
+    echo "[phase1][warn] ${PE_JSON} not found; falling back to defaults (winner=jepa, task=regression)"
+    METHOD_WINNER="jepa"
+    TASK_FROM_PE="regression"
+  fi
+  export METHOD_WINNER TASK_FROM_PE
+  echo "[phase1] paired-effect decided winner=${METHOD_WINNER} task=${TASK_FROM_PE}"
 
-    WINNER="$METHOD_WINNER"
-    BEST_ID="$JEPA_ID"; [[ "$WINNER" == "contrastive" ]] && BEST_ID="$CONTRAST_ID"
-    BEST_SWEEP="${WANDB_ENTITY}/${WANDB_PROJECT}/${BEST_ID}"
+  WINNER="$METHOD_WINNER"
+  BEST_ID="$JEPA_ID"; [[ "$WINNER" == "contrastive" ]] && BEST_ID="$CONTRAST_ID"
+  BEST_SWEEP="${WANDB_ENTITY}/${WANDB_PROJECT}/${BEST_ID}"
 
-    OUT_PATH="${GRID_DIR:-$APP_DIR/grid}/best_${bb}.json"
-    PHASE2_PATH="$APP_DIR/sweeps/grid_sweep_phase2_${bb}.yaml"
-    LOG_TMP="$(mktemp)"
-    PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-      "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-        python -u "$APP_DIR/scripts/ci/export_best_from_wandb.py" \
-          --sweep-id "$BEST_SWEEP" \
-          --task "$TASK_FROM_PE" \
-          --phase2-method bayes \
-          --emit-bounds \
-          --out "$OUT_PATH" \
-          --phase2-yaml "$PHASE2_PATH" \
-          --phase2-unlabeled-dir "${PHASE2_UNLABELED_DIR:-$APP_DIR/data/ZINC-canonicalized}" \
-          --phase2-labeled-dir   "${PHASE2_LABELED_DIR:-$APP_DIR/data/katielinkmoleculenet_benchmark/train}" \
-        2>&1 | tee "$LOG_TMP"
-
-    METRIC=$(grep -o 'val_rmse=[0-9.eE+-]*' "$LOG_TMP" | head -1 | sed 's/.*=//')
-    bb_uc=$(echo "$bb" | tr '[:lower:]' '[:upper:]')
-    export "METRIC_${bb_uc}=${METRIC:-nan}"
-    export "CFG_${bb_uc}=$OUT_PATH"
-    export "PHASE2_${bb_uc}=$PHASE2_PATH"
-  done
-
-  BEST_BACKBONE=$(python - <<'PY'
-import os, re, math
-vals={}
-for k,v in os.environ.items():
-    m=re.match(r'METRIC_(.*)',k)
-    if m:
-        try:
-            vals[m.group(1).lower()] = float(v)
-        except Exception:
-            pass
-print(min(vals, key=vals.get) if vals else 'gine')
-PY
-  )
-  echo "[phase1] overall best backbone=$BEST_BACKBONE"
-
-  BB_UC=$(echo "$BEST_BACKBONE" | tr '[:lower:]' '[:upper:]')
-  eval "BEST_CFG=\$CFG_${BB_UC}"
-  eval "BEST_P2=\$PHASE2_${BB_UC}"
+  OUT_PATH="${GRID_DIR:-$APP_DIR/grid}/best.json"
+  PHASE2_PATH="$APP_DIR/sweeps/grid_sweep_phase2.yaml"
+  LOG_TMP="$(mktemp)"
+  PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+    "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
+      python -u "$APP_DIR/scripts/ci/export_best_from_wandb.py" \
+        --sweep-id "$BEST_SWEEP" \
+        --task "$TASK_FROM_PE" \
+        --phase2-method bayes \
+        --emit-bounds \
+        --out "$OUT_PATH" \
+        --phase2-yaml "$PHASE2_PATH" \
+        --phase2-unlabeled-dir "${PHASE2_UNLABELED_DIR:-$APP_DIR/data/ZINC-canonicalized}" \
+        --phase2-labeled-dir   "${PHASE2_LABELED_DIR:-$APP_DIR/data/katielinkmoleculenet_benchmark/train}" \
+      2>&1 | tee "$LOG_TMP"
 
   FINAL_CFG="${EXPORT_OUT_PATH:-${GRID_DIR:-$APP_DIR/grid}/best_grid_config.json}"
   FINAL_P2="${EXPORT_PHASE2_PATH:-$APP_DIR/sweeps/grid_sweep_phase2.yaml}"
-  cp "$BEST_CFG" "$FINAL_CFG"
-  cp "$BEST_P2" "$FINAL_P2"
-
-  for bb in "${BACKBONES[@]}"; do
-    bb_uc=$(echo "$bb" | tr '[:lower:]' '[:upper:]')
-    eval "cfg=\$CFG_${bb_uc}"
-    eval "p2=\$PHASE2_${bb_uc}"
-    if [[ "$bb" != "$BEST_BACKBONE" ]]; then
-      rm -f "$cfg" "$p2"
-    fi
-  done
+  cp "$OUT_PATH" "$FINAL_CFG"
+  cp "$PHASE2_PATH" "$FINAL_P2"
 
   SWEEP_ID2="$(wandb_sweep_create "$FINAL_P2")"
   [[ "$SWEEP_ID2" =~ ^[a-z0-9]{8}$ ]] || { echo "[phase2][fatal] bad sweep id: '$SWEEP_ID2'" >&2; exit 1; }
