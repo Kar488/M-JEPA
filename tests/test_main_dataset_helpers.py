@@ -48,6 +48,7 @@ except Exception:  # pragma: no cover
 from data.mdataset import GraphData, GraphDataset
 from main import (
     _build_unlabeled_dataset_from_smiles,
+    _edge_dim_or_none,
     _ensure_labels_inplace_local,
 )
 from utils.dataset import load_directory_dataset, load_parquet_dataset
@@ -119,3 +120,20 @@ def test_graphdataset_interface():
 
     assert hasattr(GraphDataset, "from_directory")
     assert callable(GraphDataset.from_directory)
+
+
+def test_edge_dim_or_none():
+    g0 = GraphData(
+        x=np.ones((1, 1), dtype=np.float32),
+        edge_index=np.zeros((2, 0), dtype=np.int64),
+    )
+    ds0 = GraphDataset([g0])
+    assert _edge_dim_or_none(ds0) is None
+
+    g1 = GraphData(
+        x=np.ones((1, 1), dtype=np.float32),
+        edge_index=np.zeros((2, 0), dtype=np.int64),
+        edge_attr=np.ones((0, 3), dtype=np.float32),
+    )
+    ds1 = GraphDataset([g1])
+    assert _edge_dim_or_none(ds1) == 3

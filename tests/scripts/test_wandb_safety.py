@@ -21,6 +21,7 @@ def test_wb_summary_update_logs_val_rmse(monkeypatch):
     assert dummy_wandb.run.summary["val_rmse"] == 1.23
     assert logs["val_rmse"] == 1.23
 
+
 def test_wb_summary_update_no_run(monkeypatch):
     dummy_wandb = types.SimpleNamespace(run=None)
     monkeypatch.setitem(sys.modules, "wandb", dummy_wandb)
@@ -31,9 +32,11 @@ def test_wb_summary_update_no_run(monkeypatch):
 
 def test_wb_get_or_init_respects_disable(monkeypatch):
     calls = {"init": 0}
+
     def init(**kwargs):
         calls["init"] += 1
         return types.SimpleNamespace(id="run")
+
     dummy_wandb = types.SimpleNamespace(run=None, init=init)
     monkeypatch.setitem(sys.modules, "wandb", dummy_wandb)
     monkeypatch.setenv("WANDB_MODE", "disabled")
@@ -44,11 +47,57 @@ def test_wb_get_or_init_respects_disable(monkeypatch):
 
 def test_wb_finish_safely(monkeypatch):
     calls = {"finish": 0}
+
     def finish():
         calls["finish"] += 1
         raise RuntimeError("boom")
+
     dummy_wandb = types.SimpleNamespace(finish=finish)
     monkeypatch.setitem(sys.modules, "wandb", dummy_wandb)
     ws = importlib.reload(importlib.import_module("scripts.wandb_safety"))
     ws.wb_finish_safely()
     assert calls["finish"] == 1
+
+
+def test_wb_get_or_init_existing_run(monkeypatch):
+    dummy_run = types.SimpleNamespace(id="run1")
+    dummy_wandb = types.SimpleNamespace(run=dummy_run)
+    monkeypatch.setitem(sys.modules, "wandb", dummy_wandb)
+    ws = importlib.reload(importlib.import_module("scripts.wandb_safety"))
+    assert ws.wb_get_or_init(args=None) is dummy_run
+
+
+def test_wb_get_or_init_uses_helper(monkeypatch):
+    dummy_wandb = types.SimpleNamespace(run=None)
+    monkeypatch.setitem(sys.modules, "wandb", dummy_wandb)
+    calls = {"count": 0}
+
+    def helper(**kwargs):
+        calls["count"] += 1
+        dummy_wandb.run = types.SimpleNamespace(id="run2")
+        return dummy_wandb.run
+
+    monkeypatch.setitem(
+        sys.modules, "utils.logging", types.SimpleNamespace(maybe_init_wandb=helper)
+    )
+    ws = importlib.reload(importlib.import_module("scripts.wandb_safety"))
+    run = ws.wb_get_or_init(args=types.SimpleNamespace(foo=1))
+    assert run is dummy_wandb.run
+    assert calls["count"] == 1
+
+
+def test_wb_summary_update_aliases(monkeypatch, tmp_path):
+    class DummyRun:
+        def __init__(self):
+            self.summary = {}
+
+    logs = {}
+    dummy_wandb = types.SimpleNamespace(
+        run=DummyRun(), log=lambda data: logs.update(data)
+    )
+    monkeypatch.setitem(sys.modules, "wandb", dummy_wandb)
+    monkeypatch.setenv("LOG_DIR", str(tmp_path))
+    ws = importlib.reload(importlib.import_module("scripts.wandb_safety"))
+    ws.wb_summary_update({"mae_mean": 0.1, "auc": 0.9})
+    assert dummy_wandb.run.summary["val_mae"] == 0.1
+    assert dummy_wandb.run.summary["val_auc"] == 0.9
