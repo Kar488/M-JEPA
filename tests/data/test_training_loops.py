@@ -1,7 +1,7 @@
 import numpy as np
 
 from data.mdataset import GraphData
-from training.unsupervised import _batch_iter
+from training.unsupervised import _build_graph_dataloader
 from data.augment import mask_subgraph, generate_views
 
 
@@ -18,7 +18,15 @@ def _make_graph(n_nodes: int) -> GraphData:
 
 def test_batch_iter_and_mask_subgraph():
     graphs = [_make_graph(4), _make_graph(3), _make_graph(5)]
-    batches = list(_batch_iter(graphs, batch_size=2))
+    loader = _build_graph_dataloader(
+        graphs,
+        batch_size=2,
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+    )
+    batches = list(loader)
     assert len(batches) == 2
     assert sum(len(b) for b in batches) == len(graphs)
 

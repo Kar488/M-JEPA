@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import os
 import time as _t
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import tqdm
+from torch.utils.data import DataLoader
 
 try:
     from data.augment import (
@@ -48,9 +49,34 @@ from utils.logging import maybe_init_wandb
 from utils.schedule import cosine_with_warmup
 
 
-def _batch_iter(graphs: List[GraphData], batch_size: int):
-    for i in range(0, len(graphs), batch_size):
-        yield graphs[i : i + batch_size]
+def _collate_graph_batch(batch: Sequence[GraphData]) -> List[GraphData]:
+    """Return a shallow list copy so downstream code can mutate safely."""
+
+    return list(batch)
+
+
+def _build_graph_dataloader(
+    data_source: Sequence[GraphData],
+    *,
+    batch_size: int,
+    num_workers: int,
+    pin_memory: bool,
+    persistent_workers: bool,
+    prefetch_factor: int,
+) -> DataLoader:
+    """Construct a ``DataLoader`` that yields ``List[GraphData]`` batches."""
+
+    loader_kwargs = dict(
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        collate_fn=_collate_graph_batch,
+    )
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = persistent_workers
+        loader_kwargs["prefetch_factor"] = prefetch_factor
+    return DataLoader(data_source, **loader_kwargs)
 
 
 def _graph_to_tensors(
@@ -252,15 +278,23 @@ def train_jepa(
 
         ep_loss = 0.0
 
-        data_iter = (
+        data_source = (
             list(DistributedSamplerList(dataset.graphs))
             if distributed
             else dataset.graphs
         )
+        dataloader = _build_graph_dataloader(
+            data_source,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
+            prefetch_factor=prefetch_factor,
+        )
 
         batches_done = 0
         # Iterate over batches and update the outer progress bar each time
-        for batch in _batch_iter(data_iter, batch_size):
+        for batch in dataloader:
             if max_batches > 0 and batches_done >= max_batches:
                 break
             if not _time_left():
@@ -269,6 +303,8 @@ def train_jepa(
                         "Time budget exhausted during JEPA epoch; breaking."
                     )
                 break
+            if not batch:
+                continue
 
             ctx_nodes, tgt_nodes = [], []
             ctx_graphs, tgt_graphs = [], []
@@ -550,15 +586,21 @@ def train_contrastive(
         if pbar is not None:
             pbar.set_description(f"Epoch {ep}/{epochs}")
 
-        data_iter = (
+        data_source = (
             list(DistributedSamplerList(dataset.graphs))
             if distributed
             else dataset.graphs
         )
-        # Use a plain batch iterator; progress updates come from the outer bar.
-        batch_iter = _batch_iter(data_iter, batch_size)
+        dataloader = _build_graph_dataloader(
+            data_source,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
+            prefetch_factor=prefetch_factor,
+        )
         batches_done = 0
-        for batch in batch_iter:
+        for batch in dataloader:
             if max_batches > 0 and batches_done >= max_batches:
                 break
             if not _time_left():
@@ -567,6 +609,8 @@ def train_contrastive(
                         "Time budget exhausted during contrastive epoch; breaking."
                     )
                 break
+            if not batch:
+                continue
 
             z1_list, z2_list = [], []
             for g in batch:
