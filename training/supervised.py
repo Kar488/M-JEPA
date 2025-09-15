@@ -13,19 +13,21 @@ from __future__ import annotations
 import logging
 import random
 import time as _time
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 
 from data.mdataset import GraphDataset
 from data.scaffold_split import scaffold_split_indices
 from models.encoder import GNNEncoder
 from utils.early_stopping import EarlyStopping
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
-from utils.graph_ops import _encode_graph, _pool_graph_emb
+from utils.graph_ops import _encode_graph
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +105,69 @@ def _simple_pack_batch(dataset, batch_indices, task_type: str):
         torch.from_numpy(ptr_arr),         # (B+1,) int64
         batch_labels_t,                    # (B,) float32 or None
     )
+
+
+class _GraphBatchCollator:
+    """Callable that packs graph indices into batched tensors."""
+
+    def __init__(self, dataset, task_type: str):
+        self.dataset = dataset
+        self.task_type = task_type
+
+    def __call__(self, batch_indices):
+        indices = [int(i) for i in batch_indices]
+        if not indices:
+            raise ValueError("GraphBatchCollator received an empty batch")
+        if hasattr(self.dataset, "get_batch"):
+            batch = self.dataset.get_batch(indices)
+        else:
+            batch = _simple_pack_batch(self.dataset, indices, self.task_type)
+        if not isinstance(batch, (tuple, list)) or len(batch) != 4:
+            raise ValueError("get_batch must return (x, adj, ptr, labels)")
+        return batch
+
+
+def _move_batch_to_device(batch, device: torch.device, non_blocking: bool):
+    """Move a batched graph tuple returned by ``get_batch`` to ``device``."""
+
+    batch_x, batch_adj, batch_ptr, batch_labels = batch
+    batch_x = batch_x.to(device=device, non_blocking=non_blocking)
+    batch_adj = batch_adj.to(device=device, non_blocking=non_blocking)
+    batch_ptr = batch_ptr.to(device=device, non_blocking=non_blocking)
+    batch_labels = (
+        batch_labels.to(device=device, non_blocking=non_blocking)
+        if batch_labels is not None
+        else None
+    )
+    return batch_x, batch_adj, batch_ptr, batch_labels
+
+
+def _pool_batch_embeddings(node_embeddings: torch.Tensor, batch_ptr: torch.Tensor) -> torch.Tensor:
+    """Average node embeddings per graph using pointer offsets."""
+
+    if node_embeddings.numel() == 0:
+        return node_embeddings.new_zeros((0, node_embeddings.shape[-1]))
+
+    if batch_ptr.numel() <= 1:
+        return node_embeddings.mean(dim=0, keepdim=True)
+
+    lengths = batch_ptr[1:] - batch_ptr[:-1]
+    device = node_embeddings.device
+    lengths = lengths.to(device=device)
+    graph_ids = torch.arange(lengths.numel(), device=device).repeat_interleave(lengths)
+    graph_emb = torch.zeros(
+        (lengths.numel(), node_embeddings.shape[-1]),
+        dtype=node_embeddings.dtype,
+        device=device,
+    )
+    graph_emb.scatter_add_(
+        0,
+        graph_ids.unsqueeze(-1).expand_as(node_embeddings),
+        node_embeddings,
+    )
+    denom = lengths.unsqueeze(-1).clamp(min=1).to(node_embeddings.dtype)
+    graph_emb = graph_emb / denom
+    return graph_emb
 
 def stratified_split(
     indices: List[int], labels: np.ndarray, train_frac: float, val_frac: float
@@ -273,148 +338,141 @@ def train_linear_head(
     world = get_world_size() if distributed else 1
     train_idx_rank = train_idx[rank::world]
 
+    collate_fn = _GraphBatchCollator(dataset, task_type)
+    pin_memory_enabled = bool(pin_memory and device_t.type == "cuda")
+
+    def _build_loader(indices: List[int], shuffle: bool) -> Optional[DataLoader]:
+        if not indices:
+            return None
+        loader_kwargs = {
+            "batch_size": batch_size,
+            "shuffle": shuffle,
+            "num_workers": num_workers,
+            "pin_memory": pin_memory_enabled,
+            "collate_fn": collate_fn,
+            "drop_last": False,
+        }
+        if num_workers > 0:
+            loader_kwargs["persistent_workers"] = persistent_workers
+            loader_kwargs["prefetch_factor"] = prefetch_factor
+        return DataLoader(list(indices), **loader_kwargs)
+
+    train_loader = _build_loader(train_idx_rank, shuffle=True)
+    val_loader = _build_loader(val_idx, shuffle=False)
+    test_loader = _build_loader(test_idx, shuffle=False)
+
     _start_wall = _time.perf_counter()
 
     def _time_left() -> bool:
         return (time_budget_mins <= 0) or ((_time.perf_counter() - _start_wall) < time_budget_mins * 60)
 
     import contextlib
-    # default autocast context so evaluation code has a valid handle even if
-    # no training batches are processed (e.g. extremely small datasets)
-    _amp_ctx = contextlib.nullcontext()
-    
-    for epoch in range(epochs):
-        encoder.eval()
-        head.train()
-        batch_losses = []
+    use_amp = bf16 and device_t.type == "cuda"
 
-        batches_done = 0
-        for start in range(0, len(train_idx_rank), batch_size):
-            if max_batches > 0 and batches_done >= max_batches:
-                break
+    def _amp_context():
+        return (
+            torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+            if use_amp
+            else contextlib.nullcontext()
+        )
+
+    if train_loader is None:
+        logger.warning("No training samples available; skipping linear-head optimisation.")
+    else:
+        for epoch in range(epochs):
             if not _time_left():
-                logger.info("Time budget hit during linear-head train epoch=%d; breaking.", epoch)
+                logger.info("Time budget hit before epoch %d; stopping training.", epoch)
                 break
-       
-            batch_indices = train_idx_rank[start : start + batch_size]
-            assert getattr(dataset, "labels", None) is not None, "Dataset must have labels."            
-            # autocast for the forward path (bf16 on 4090; else full precision)
-            _amp_ctx = (
-                torch.autocast(device_type="cuda", dtype=torch.bfloat16)
-                if (bf16 and device_t.type == "cuda")
-                else contextlib.nullcontext()
-            )
 
-            with torch.no_grad():
-                with _amp_ctx:
-                    # Encode each graph in the batch. Prefer the faithful GraphData path
-                    # (keeps edge_attr); fall back to (x, adj) for stub graphs in tests.
-                    _embs = []
-                    for i in batch_indices:
-                        g_i = dataset.graphs[i]
-                        # Prefer the GraphData path (preserves edge_attr) first
-                        try:
-                            h_nodes = _encode_graph(encoder, g_i)                      # [Ni, D]
-                            g_vec   = _pool_graph_emb(h_nodes, g_i).reshape(1, -1)     # [1, D]
-                        except Exception:
-                            # Fallback for test stubs that expose to_tensors() and encoders that accept (x, adj)
-                            if hasattr(g_i, "to_tensors"):
-                                x_i, adj_i = g_i.to_tensors()
-                                x_i   = x_i.to(device_t, non_blocking=True)
-                                adj_i = adj_i.to(device_t, non_blocking=True)
-                                try:
-                                    h_nodes = encoder(x_i, adj_i)
-                                except TypeError:
-                                    h_nodes = encoder(x_i)
-                                g_vec = h_nodes.mean(dim=0, keepdim=True)
-                            else:
-                                # Re-raise if no tensor fallback exists
-                                raise
-                        _embs.append(g_vec.to(device_t))
-                    graph_emb = torch.cat(_embs, dim=0)                                 # [B, D]
-
-            
-            param = next(head.parameters(), None)
-            if param is not None and graph_emb.dtype != param.dtype:
-                # Option 1: cast the input tensor to the head’s dtype
-                graph_emb = graph_emb.to(param.dtype)
-                
-            preds = head(graph_emb).squeeze(1)
-            # Guard against any numerical issues in the head
-            if not torch.isfinite(preds).all():
-                preds = torch.nan_to_num(preds)
-
-            # Targets on the same device/dtype as preds
-            targets = torch.tensor(
-                dataset.labels[batch_indices],
-                dtype=preds.dtype,
-                device=device_t,
-            )
-           
-            # Guard: ensure preds and targets match in length
-            assert preds.shape[0] == targets.shape[0], (
-                f"Preds length {preds.shape[0]} != targets length {targets.shape[0]}; "
-                f"batch_indices={batch_indices}"
-            )
-            with _amp_ctx:
-                loss = loss_fn(preds.float(), targets.float())
-            batch_losses.append(loss.item())
-            optimiser.zero_grad()
-            loss.backward()
-            optimiser.step()
-            batches_done += 1
-
-        logger.debug("Epoch %d training loss %.4f", epoch, float(np.mean(batch_losses)))
-        if early_stopper is not None:
             encoder.eval()
-            head.eval()
-            val_losses = []
+            head.train()
+            batch_losses = []
+            batches_done = 0
 
-            for start in range(0, len(val_idx), batch_size):
-                batch_indices = val_idx[start : start + batch_size]
+            for batch in train_loader:
+                if max_batches > 0 and batches_done >= max_batches:
+                    break
+                if not _time_left():
+                    logger.info(
+                        "Time budget hit during linear-head train epoch=%d; breaking.",
+                        epoch,
+                    )
+                    break
+
+                batch_x, batch_adj, batch_ptr, batch_labels = _move_batch_to_device(
+                    batch, device_t, pin_memory_enabled
+                )
+                if batch_labels is None:
+                    raise ValueError("Dataset must have labels for supervised training.")
+
+                graph_obj = SimpleNamespace(x=batch_x, adj=batch_adj)
                 with torch.no_grad():
-                    with _amp_ctx:
-                        _embs = []
-                        for i in batch_indices:
-                            g_i = dataset.graphs[i]
-                            try:
-                                h_nodes = _encode_graph(encoder, g_i)
-                                g_vec   = _pool_graph_emb(h_nodes, g_i).reshape(1, -1)
-                            except Exception:
-                                if hasattr(g_i, "to_tensors"):
-                                    x_i, adj_i = g_i.to_tensors()
-                                    x_i   = x_i.to(device_t, non_blocking=True)
-                                    adj_i = adj_i.to(device_t, non_blocking=True)
-                                    try:
-                                        h_nodes = encoder(x_i, adj_i)
-                                    except TypeError:
-                                        h_nodes = encoder(x_i)
-                                    g_vec = h_nodes.mean(dim=0, keepdim=True)
-                                else:
-                                    raise
-                            _embs.append(g_vec.to(device_t))
-                        graph_emb = torch.cat(_embs, dim=0)
+                    with _amp_context():
+                        node_embeddings = _encode_graph(encoder, graph_obj)
 
-                with _amp_ctx:
+                graph_emb = _pool_batch_embeddings(node_embeddings, batch_ptr)
+                param = next(head.parameters(), None)
+                if param is not None and graph_emb.dtype != param.dtype:
+                    graph_emb = graph_emb.to(param.dtype)
+
+                with _amp_context():
                     preds = head(graph_emb).squeeze(1)
-                # Guard against any numerical issues in the head
-                preds = torch.nan_to_num(preds)
-                # Match target dtype/device to preds for MSE
-                targets = torch.tensor(
-                    dataset.labels[batch_indices],
-                    dtype=preds.dtype,
-                    device=device_t,
-                )   
-                vloss = loss_fn(preds, targets).item()
-                val_losses.append(vloss)
-            avg_val_loss = float(np.mean(val_losses)) if val_losses else 0.0
-            avg_t = torch.tensor([avg_val_loss], device=device_t)
-            if distributed:
-                torch.distributed.all_reduce(avg_t, op=torch.distributed.ReduceOp.AVG)
-            avg_val_loss = avg_t.item()
-            if early_stopper.step(avg_val_loss):
-                logger.info("Early stopping at epoch %d", epoch)
-                break
+
+                if not torch.isfinite(preds).all():
+                    preds = torch.nan_to_num(preds)
+
+                targets = batch_labels.to(dtype=preds.dtype)
+
+                with _amp_context():
+                    loss = loss_fn(preds.float(), targets.float())
+                batch_losses.append(loss.item())
+                optimiser.zero_grad()
+                loss.backward()
+                optimiser.step()
+                batches_done += 1
+
+            if batch_losses:
+                logger.debug("Epoch %d training loss %.4f", epoch, float(np.mean(batch_losses)))
+            else:
+                logger.debug("Epoch %d produced no training batches", epoch)
+
+            if early_stopper is not None and val_loader is not None:
+                encoder.eval()
+                head.eval()
+                val_losses = []
+
+                for batch in val_loader:
+                    batch_x, batch_adj, batch_ptr, batch_labels = _move_batch_to_device(
+                        batch, device_t, pin_memory_enabled
+                    )
+                    if batch_labels is None:
+                        raise ValueError("Validation loader returned samples without labels.")
+
+                    graph_obj = SimpleNamespace(x=batch_x, adj=batch_adj)
+                    with torch.no_grad():
+                        with _amp_context():
+                            node_embeddings = _encode_graph(encoder, graph_obj)
+
+                    graph_emb = _pool_batch_embeddings(node_embeddings, batch_ptr)
+                    param = next(head.parameters(), None)
+                    if param is not None and graph_emb.dtype != param.dtype:
+                        graph_emb = graph_emb.to(param.dtype)
+
+                    with _amp_context():
+                        preds = head(graph_emb).squeeze(1)
+                    preds = torch.nan_to_num(preds)
+                    targets = batch_labels.to(dtype=preds.dtype)
+                    vloss = loss_fn(preds, targets).item()
+                    val_losses.append(vloss)
+
+                avg_val_loss = float(np.mean(val_losses)) if val_losses else 0.0
+                avg_t = torch.tensor([avg_val_loss], device=device_t)
+                if distributed:
+                    torch.distributed.all_reduce(avg_t, op=torch.distributed.ReduceOp.AVG)
+                avg_val_loss = avg_t.item()
+                if early_stopper.step(avg_val_loss):
+                    logger.info("Early stopping at epoch %d", epoch)
+                    break
 
     metrics: Dict[str, float] = {}
     if is_main_process() or not distributed:
@@ -422,43 +480,37 @@ def train_linear_head(
         head.eval()
         all_targets = []
         all_preds = []
-       
-        for start in range(0, len(test_idx), batch_size):
-            batch_indices = test_idx[start : start + batch_size]
-            with torch.no_grad():
-                with _amp_ctx:
-                    _embs = []
-                    for i in batch_indices:
-                        g_i = dataset.graphs[i]
-                        try:
-                            h_nodes = _encode_graph(encoder, g_i)
-                            g_vec   = _pool_graph_emb(h_nodes, g_i).reshape(1, -1)
-                        except Exception:
-                            if hasattr(g_i, "to_tensors"):
-                                x_i, adj_i = g_i.to_tensors()
-                                x_i   = x_i.to(device_t, non_blocking=True)
-                                adj_i = adj_i.to(device_t, non_blocking=True)
-                                try:
-                                    h_nodes = encoder(x_i, adj_i)
-                                except TypeError:
-                                    h_nodes = encoder(x_i)
-                                g_vec = h_nodes.mean(dim=0, keepdim=True)
-                            else:
-                                raise
-                        _embs.append(g_vec.to(device_t))
-                    graph_emb = torch.cat(_embs, dim=0)
 
-            with _amp_ctx:
-                preds = head(graph_emb).squeeze(1)
-            # Cast BF16/FP16 → FP32 before numpy conversion to avoid TypeError
-            preds = preds.detach().to(torch.float32).cpu().numpy()
-            # Sanitize before aggregation to keep sklearn happy
-            preds = np.nan_to_num(preds, nan=0.0, posinf=0.0, neginf=0.0)
-            targets = dataset.labels[batch_indices]
-            all_targets.append(targets)
-            all_preds.append(preds)
-        y_true = np.concatenate(all_targets)
-        y_pred = np.concatenate(all_preds)
+        if test_loader is not None:
+            for batch in test_loader:
+                batch_x, batch_adj, batch_ptr, batch_labels = _move_batch_to_device(
+                    batch, device_t, pin_memory_enabled
+                )
+                if batch_labels is None:
+                    raise ValueError("Test loader returned samples without labels.")
+
+                graph_obj = SimpleNamespace(x=batch_x, adj=batch_adj)
+                with torch.no_grad():
+                    with _amp_context():
+                        node_embeddings = _encode_graph(encoder, graph_obj)
+
+                graph_emb = _pool_batch_embeddings(node_embeddings, batch_ptr)
+                param = next(head.parameters(), None)
+                if param is not None and graph_emb.dtype != param.dtype:
+                    graph_emb = graph_emb.to(param.dtype)
+
+                with _amp_context():
+                    preds = head(graph_emb).squeeze(1)
+                preds = torch.nan_to_num(preds)
+                all_preds.append(preds.detach().to(torch.float32).cpu().numpy())
+                all_targets.append(batch_labels.detach().to(torch.float32).cpu().numpy())
+
+        if all_targets and all_preds:
+            y_true = np.concatenate(all_targets)
+            y_pred = np.concatenate(all_preds)
+        else:
+            y_true = np.array([], dtype=np.float32)
+            y_pred = np.array([], dtype=np.float32)
         # Final safety net
         y_true = np.nan_to_num(y_true, nan=0.0, posinf=0.0, neginf=0.0)
         y_pred = np.nan_to_num(y_pred, nan=0.0, posinf=0.0, neginf=0.0)
