@@ -365,7 +365,8 @@ class GraphDataset:
         cache_path = None
         if cache_dir and n_rows is None:
             os.makedirs(cache_dir, exist_ok=True)
-            cache_name = os.path.basename(filepath).replace(".parquet", ".pkl")
+            cache_name = os.path.splitext(os.path.basename(filepath))[0]
+            cache_name = f"{cache_name}_3d{int(add_3d)}.pkl"  # clear old caches if needed
             cache_path = os.path.join(cache_dir, cache_name)
             if os.path.exists(cache_path):
                 logger.info("Loading graphs from cache %s", cache_path)
@@ -440,7 +441,8 @@ class GraphDataset:
         cache_path = None
         if cache_dir and n_rows is None:
             os.makedirs(cache_dir, exist_ok=True)
-            cache_name = os.path.basename(filepath).replace(".csv", ".pkl")
+            cache_name = os.path.splitext(os.path.basename(filepath))[0]
+            cache_name = f"{cache_name}_3d{int(add_3d)}.pkl"  # clear old caches if needed
             cache_path = os.path.join(cache_dir, cache_name)
             if os.path.exists(cache_path):
                 logger.info("Loading graphs from cache %s", cache_path)
@@ -521,7 +523,9 @@ class GraphDataset:
                         else (
                             None
                             if cache_dir is None
-                            else os.path.join(cache_dir, os.path.splitext(fname)[0])
+                            else os.path.join(
+                                cache_dir, f"{os.path.splitext(fname)[0]}_3d{int(add_3d)}"
+                            )
                         )
                     ),
                     add_3d=add_3d,
@@ -540,7 +544,9 @@ class GraphDataset:
                         else (
                             None
                             if cache_dir is None
-                            else os.path.join(cache_dir, os.path.splitext(fname)[0])
+                            else os.path.join(
+                                cache_dir, f"{os.path.splitext(fname)[0]}_3d{int(add_3d)}"
+                            )
                         )
                     ),
                     add_3d=add_3d,
