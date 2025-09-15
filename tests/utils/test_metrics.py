@@ -4,7 +4,13 @@ import pytest
 
 pytest.importorskip("sklearn")
 
-from utils.metrics import compute_classification_metrics, compute_regression_metrics
+from utils.metrics import (
+    compute_classification_metrics,
+    compute_regression_metrics,
+    _normalize_probs,
+    expected_calibration_error,
+)
+
 
 def test_compute_classification_metrics():
     y_true = np.array([0, 1] * 5)
@@ -19,7 +25,7 @@ def test_compute_classification_metrics_single_class():
     logits = np.zeros(5)
     m = compute_classification_metrics(y_true, logits)
     assert math.isnan(m["roc_auc"]) and m["pr_auc"] == 0.0
-    assert m["brier"] == pytest.approx(0.25, rel=1e-6)  # or whatever the known-good value is
+    assert m["brier"] == pytest.approx(0.25, rel=1e-6)
 
 
 def test_compute_regression_metrics():
@@ -27,3 +33,24 @@ def test_compute_regression_metrics():
     preds = np.array([0.0, 1.0, 2.0])
     m = compute_regression_metrics(y_true, preds)
     assert m["rmse"] == 0.0 and m["mae"] == 0.0 and m["r2"] == 1.0
+
+
+def test_normalize_probs_handles_logits():
+    logits = np.array([0.0, 2.0, -2.0])
+    probs = _normalize_probs(logits)
+    assert probs.shape == (3, 2)
+    assert np.allclose(probs.sum(axis=1), 1.0)
+
+
+def test_normalize_probs_multiclass_logits():
+    logits = np.array([[1.0, 0.0], [0.0, 1.0]])
+    probs = _normalize_probs(logits)
+    assert probs.shape == (2, 2)
+    assert np.allclose(probs.sum(axis=1), 1.0)
+
+
+def test_expected_calibration_error():
+    y_true = np.array([0, 1, 0, 1])
+    scores = np.array([0.1, 0.9, 0.2, 0.8])
+    ece = expected_calibration_error(scores, y_true, n_bins=2, strategy="uniform")
+    assert 0.0 <= ece <= 1.0
