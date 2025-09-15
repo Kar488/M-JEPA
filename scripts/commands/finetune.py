@@ -1,6 +1,8 @@
+# flake8: noqa
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import shutil
 import sys
@@ -9,9 +11,12 @@ from typing import Dict, List
 import numpy as np
 import torch
 import torch.nn as nn
+
 from data.mdataset import GraphData
 from utils.graph_ops import _encode_graph
 from utils.pooling import global_mean_pool
+
+logger = logging.getLogger(__name__)
 
 
 def cmd_finetune(args: argparse.Namespace) -> None:
@@ -19,13 +24,22 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     logger.info("Starting finetune with args: %s", args)
 
     from utils.checkpoint import load_checkpoint, save_checkpoint
+
     try:
-        from ..utils.checkpoint  import safe_load_checkpoint as _safe_load_checkpoint        # type: ignore[import-not-found]
-        from ..utils.checkpoint  import load_state_dict_forgiving as _load_state_dict_forgiving      # type: ignore[import-not-found]
+        from ..utils.checkpoint import (
+            load_state_dict_forgiving as _load_state_dict_forgiving,  # type: ignore[import-not-found]
+        )
+        from ..utils.checkpoint import (
+            safe_load_checkpoint as _safe_load_checkpoint,  # type: ignore[import-not-found]
+        )
     except ImportError:
         # Fallback: absolute imports when run from repo root with PYTHONPATH set
-        from utils.checkpoint import safe_load_checkpoint  as _safe_load_checkpoint        # type: ignore[import-not-found]
-        from utils.checkpoint import load_state_dict_forgiving as _load_state_dict_forgiving        # type: ignore[import-not-found]
+        from utils.checkpoint import (
+            load_state_dict_forgiving as _load_state_dict_forgiving,  # type: ignore[import-not-found]
+        )
+        from utils.checkpoint import (
+            safe_load_checkpoint as _safe_load_checkpoint,  # type: ignore[import-not-found]
+        )
 
     # Directories / resume
     args.ckpt_dir = getattr(args, "ckpt_dir", "ckpts/finetune")
@@ -111,10 +125,16 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     # --- choose metric & direction (maximize cls metrics, minimize losses/errors) ---
     metric_name = (getattr(args, "metric", "val_loss") or "").lower()
     higher_is_better = metric_name in {
-        "acc", "accuracy",
-        "auc", "auroc", "val_auc",
-        "f1", "f1_macro", "f1_micro",
-        "r2", "val_r2",
+        "acc",
+        "accuracy",
+        "auc",
+        "auroc",
+        "val_auc",
+        "f1",
+        "f1_macro",
+        "f1_micro",
+        "r2",
+        "val_r2",
     }
 
     def _lookup_metric(m: dict, name: str):
@@ -127,11 +147,11 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                 return None
         aliases = {
             "val_rmse": ["rmse_mean", "rmse"],
-            "val_mae":  ["mae_mean", "mae"],
-            "val_auc":  ["auc", "auroc"],
-            "acc":      ["accuracy", "val_acc"],
+            "val_mae": ["mae_mean", "mae"],
+            "val_auc": ["auc", "auroc"],
+            "acc": ["accuracy", "val_acc"],
             "accuracy": ["acc", "val_acc"],
-            "r2":       ["val_r2"],
+            "r2": ["val_r2"],
         }
         for k in aliases.get(name, []):
             v = m.get(k)
@@ -180,7 +200,10 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                 logger.info("[finetune] loaded encoder from %s", args.encoder)
                 _load_state_dict_forgiving(encoder, enc_weights)
             else:
-                logger.warning("[finetune] no encoder weights found in %s; using random init", args.encoder)
+                logger.warning(
+                    "[finetune] no encoder weights found in %s; using random init",
+                    args.encoder,
+                )
 
         # If resuming a fine-tune checkpoint, it may contain a fresher encoder
         if "encoder" in resume_state:
@@ -266,7 +289,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                 metrics = train_linear_head(
                     dataset=labeled,
                     encoder=encoder,
-                    #head_type=getattr(args, "head", "linear"),  # <- change innvalid param for supervised?
+                    # head_type=getattr(args, "head", "linear"),  # <- change innvalid param for supervised?
                     task_type=args.task_type,
                     epochs=1,
                     max_batches=getattr(
@@ -289,7 +312,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     prefetch_factor=getattr(args, "prefetch_factor", 4),
                     bf16=getattr(args, "bf16", False),
                 )
-                
+
                 current = _lookup_metric(metrics, metric_name)
 
                 if current is not None and _is_better(current, best_metric):
@@ -309,6 +332,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
 
                     try:
                         from utils.checkpoint import safe_link_or_copy
+
                         link = os.path.join(args.ckpt_dir, "head.pt")
                         mode = safe_link_or_copy(best_path, link)
                         logger.info("Updated head.pt (%s) -> %s", mode, best_path)
@@ -339,21 +363,33 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                 logger.info("Attempting to write best")
                 try:
                     # find latest epoch file we just wrote
-                    snaps = [p for p in os.listdir(seed_dir) if p.startswith("ft_epoch_") and p.endswith(".pt")]
+                    snaps = [
+                        p
+                        for p in os.listdir(seed_dir)
+                        if p.startswith("ft_epoch_") and p.endswith(".pt")
+                    ]
                     if snaps:
                         snaps.sort(key=lambda s: int(s.split("_")[-1].split(".")[0]))
                         last = os.path.join(seed_dir, snaps[-1])
                         best_path = os.path.join(seed_dir, "ft_best.pt")
-                       
+
                         shutil.copy2(last, best_path)
                         from utils.checkpoint import safe_link_or_copy
-                        mode = safe_link_or_copy(best_path, os.path.join(args.ckpt_dir, "head.pt"))
-                        logger.info("Fallback best: head.pt (%s) -> %s", mode, best_path)
-                        
-                        logger.warning("No metric '%s' found; promoted %s to ft_best.pt", metric_name, snaps[-1])
-                except Exception:
-                    logger.warning("Failed to create fallback ft_best.pt", exc_info=True) # type: ignore
 
+                        mode = safe_link_or_copy(
+                            best_path, os.path.join(args.ckpt_dir, "head.pt")
+                        )
+                        logger.info(
+                            "Fallback best: head.pt (%s) -> %s", mode, best_path
+                        )
+
+                        logger.warning(
+                            "No metric '%s' found; promoted %s to ft_best.pt",
+                            metric_name,
+                            snaps[-1],
+                        )
+                except Exception:
+                    logger.warning("Failed to create fallback ft_best.pt", exc_info=True)  # type: ignore
 
             wb.log({"phase": f"finetune_{seed}", "status": "success"})
             metrics_runs.append({k: v for k, v in metrics.items() if k != "head"})
@@ -366,6 +402,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     for k, v in agg.items():
         wb.log({f"metric/{k}": v})
     wb.finish()
+
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
     """Evaluate a pretrained encoder by training a linear probe across seeds."""
@@ -389,17 +426,22 @@ def evaluate_finetuned_head(
     from utils.metrics import compute_classification_metrics, compute_regression_metrics
 
     try:
-        from ..models.factory import build_encoder        # type: ignore[import-not-found]
-        from ..utils.pooling import global_mean_pool      # type: ignore[import-not-found]
-        from ..utils.checkpoint  import load_state_dict_forgiving as _load_state_dict_forgiving      # type: ignore[import-not-found]
+        from ..models.factory import build_encoder  # type: ignore[import-not-found]
+        from ..utils.checkpoint import (
+            load_state_dict_forgiving as _load_state_dict_forgiving,  # type: ignore[import-not-found]
+        )
+        from ..utils.pooling import global_mean_pool  # type: ignore[import-not-found]
     except ImportError:
         # Fallback: absolute imports when run from repo root with PYTHONPATH set
-        from models.factory import build_encoder          # type: ignore[import-not-found]
-        from utils.pooling import global_mean_pool        # type: ignore[import-not-found]
-        from utils.checkpoint import load_state_dict_forgiving as _load_state_dict_forgiving        # type: ignore[import-not-found]
+        from models.factory import build_encoder  # type: ignore[import-not-found]
+        from utils.checkpoint import (
+            load_state_dict_forgiving as _load_state_dict_forgiving,  # type: ignore[import-not-found]
+        )
+        from utils.pooling import global_mean_pool  # type: ignore[import-not-found]
 
     # module logger (safe even when run outside the injector)
     import logging
+
     logger = logging.getLogger(__name__)
 
     # local helper so there are zero naming conflicts with injected globals
@@ -408,23 +450,28 @@ def evaluate_finetuned_head(
             return x.to(dev)
         except Exception:
             return x
-        
+
     state = load_checkpoint(ckpt_path)
     if "encoder" not in state or "head" not in state:
         logger.warning("Checkpoint missing encoder or head: %s", ckpt_path)
         return {}
-    
+
     # 1) Try to get the exact encoder config from the finetune ckpt
     enc_cfg = {}
     if isinstance(state, dict):
-        enc_cfg = {k: v for k, v in (state.get("encoder_cfg") or {}).items() if v is not None}
+        enc_cfg = {
+            k: v for k, v in (state.get("encoder_cfg") or {}).items() if v is not None
+        }
 
     logger.info("Eval encoder cfg: %s", enc_cfg)
 
     # 2) If missing, look for a sidecar pretrain encoder next to the head
     #    (we often symlink encoder.pt into the finetune dir)
-    import os, collections
+    import collections
+    import os
+
     import torch
+
     sidecar = os.path.join(os.path.dirname(ckpt_path or ""), "encoder.pt")
     side_state = None
     if not enc_cfg and os.path.isfile(sidecar):
@@ -435,7 +482,8 @@ def evaluate_finetuned_head(
 
     # 3) If still missing, *attempt* to infer hidden_dim from state shapes (best-effort)
     def _infer_hidden_dim(sd):
-        if not isinstance(sd, dict): return None
+        if not isinstance(sd, dict):
+            return None
         c = collections.Counter()
         for k, v in sd.items():
             shp = getattr(v, "shape", None)
@@ -446,7 +494,9 @@ def evaluate_finetuned_head(
         return c.most_common(1)[0][0] if c else None
 
     if not enc_cfg:
-        hid = _infer_hidden_dim((state or {}).get("encoder", {})) or _infer_hidden_dim(side_state or {})
+        hid = _infer_hidden_dim((state or {}).get("encoder", {})) or _infer_hidden_dim(
+            side_state or {}
+        )
         if hid:
             enc_cfg["hidden_dim"] = hid
 
@@ -458,10 +508,14 @@ def evaluate_finetuned_head(
     # 4.1) Derive edge_dim from the dataset (needed for edge_mpnn)
     try:
         g0 = dataset.graphs[0]
-        _edge_dim = None if getattr(g0, "edge_attr", None) is None else int(g0.edge_attr.shape[1])
+        _edge_dim = (
+            None
+            if getattr(g0, "edge_attr", None) is None
+            else int(g0.edge_attr.shape[1])
+        )
     except Exception:
         _edge_dim = None
-    if _edge_dim <= 0:
+    if _edge_dim is None or _edge_dim <= 0:
         _edge_dim = 1
     enc_cfg.setdefault("edge_dim", _edge_dim)
 
@@ -484,11 +538,17 @@ def evaluate_finetuned_head(
     # 5) Finally build the encoder with the best config we have (filter unknown keys)
 
     import inspect
+
     enc_cfg = enc_cfg or {}
     try:
         sig_params = set(inspect.signature(build_encoder).parameters.keys())
     except (ValueError, TypeError):
-        sig_params = {"gnn_type", "hidden_dim", "num_layers", "input_dim"}  # conservative fallback
+        sig_params = {
+            "gnn_type",
+            "hidden_dim",
+            "num_layers",
+            "input_dim",
+        }  # conservative fallback
     # normalize & filter
     norm = dict(enc_cfg)
     gt = norm.get("gnn_type")
@@ -498,12 +558,14 @@ def evaluate_finetuned_head(
     if norm.get("gnn_type") == "edge_mpnn" and norm.get("edge_dim") is None:
         # Be permissive: default to a single constant edge feature instead of crashing
         norm["edge_dim"] = 1
-        if 'logger' in globals():
-            logger.warning("edge_dim missing for edge_mpnn; defaulting to 1 (no edge features found)")
+        if "logger" in globals():
+            logger.warning(
+                "edge_dim missing for edge_mpnn; defaulting to 1 (no edge features found)"
+            )
 
     filtered = {k: v for k, v in norm.items() if (v is not None and k in sig_params)}
     extra = [k for k in norm if k not in sig_params]
-    if extra and 'logger' in globals():
+    if extra and "logger" in globals():
         logger.debug("build_encoder: ignoring unsupported keys: %s", extra)
     enc = build_encoder(**filtered)
 
@@ -514,8 +576,10 @@ def evaluate_finetuned_head(
         Works whether g.x / g.edge_attr are numpy arrays or torch tensors.
         """
         import numpy as np
+
         try:
             import torch as _t
+
             _HAS_TORCH = True
         except Exception:
             _HAS_TORCH = False
@@ -575,15 +639,15 @@ def evaluate_finetuned_head(
 
         return g
 
-
     # load weights (prefer finetune's encoder substate; else sidecar)
     enc_sub = (state or {}).get("encoder", {})
     if not enc_sub and isinstance(side_state, dict):
         enc_sub = side_state
     _load_state_dict_forgiving(enc, enc_sub)
 
-       # ---- build & load HEAD from checkpoint (infer shape from saved weights) ----
+    # ---- build & load HEAD from checkpoint (infer shape from saved weights) ----
     import torch.nn as nn
+
     head_state = (state or {}).get("head", {})
     in_dim, out_dim = None, 1
 
@@ -595,7 +659,11 @@ def evaluate_finetuned_head(
 
     # best-effort fallback for in_dim if weight shape wasn’t found
     if in_dim is None:
-        in_dim = enc_cfg.get("hidden_dim") or getattr(enc, "hidden_dim", None) or getattr(enc, "out_dim", None)
+        in_dim = (
+            enc_cfg.get("hidden_dim")
+            or getattr(enc, "hidden_dim", None)
+            or getattr(enc, "out_dim", None)
+        )
     if in_dim is None:
         logger.error("Cannot infer head input dim; encoder_cfg=%s", enc_cfg)
         raise RuntimeError("Cannot infer head input dim")
@@ -605,29 +673,34 @@ def evaluate_finetuned_head(
         _load_state_dict_forgiving(head, head_state)
 
     # move to device & eval
-    enc  = _to_dev(enc, device)
+    enc = _to_dev(enc, device)
     head = _to_dev(head, device)
-    enc.eval(); head.eval()
-
+    enc.eval()
+    head.eval()
 
     # use probabilities for classification; raw scores for regression
-    task_is_cls = (getattr(args, "task_type", "regression") == "classification")
+    task_is_cls = getattr(args, "task_type", "regression") == "classification"
     all_preds: List[np.ndarray] = []
     all_targets: List[np.ndarray] = []
 
     for start in range(0, len(dataset), args.batch_size):
         batch_indices = list(range(start, min(start + args.batch_size, len(dataset))))
         batch_x, batch_adj, batch_ptr, batch_labels = dataset.get_batch(batch_indices)
-       
-        batch_x   = batch_x.to(device, non_blocking=True)
+
+        batch_x = batch_x.to(device, non_blocking=True)
         batch_adj = batch_adj.to(device, non_blocking=True)
         # batch_ptr may be None; when present, pooling indices should be long
-        batch_ptr = batch_ptr.to(device, non_blocking=True).long() if batch_ptr is not None else None
+        batch_ptr = (
+            batch_ptr.to(device, non_blocking=True).long()
+            if batch_ptr is not None
+            else None
+        )
 
         with torch.no_grad():
             edge_idx = batch_adj.nonzero().T.detach().cpu().numpy()
             if edge_idx.size == 0:
                 import numpy as _np
+
                 edge_idx = _np.zeros((2, 0), dtype=_np.int64)
             g = GraphData(
                 x=batch_x.detach().cpu().numpy(),
@@ -635,15 +708,16 @@ def evaluate_finetuned_head(
             )
 
             g = _ensure_edge_attr(g, int(enc_cfg["edge_dim"]), device=device)
-            node_emb  = _encode_graph(enc, g)  # [N, D]
+            node_emb = _encode_graph(enc, g)  # [N, D]
             # Guard against NaNs/Infs before pooling or batching
-            node_emb  = torch.nan_to_num(node_emb, nan=0.0, posinf=0.0, neginf=0.0)
+            node_emb = torch.nan_to_num(node_emb, nan=0.0, posinf=0.0, neginf=0.0)
             graph_emb = (
-                global_mean_pool(node_emb, batch_ptr) if batch_ptr is not None
+                global_mean_pool(node_emb, batch_ptr)
+                if batch_ptr is not None
                 else node_emb.mean(dim=0, keepdim=True)
             )
             logits = head(graph_emb).squeeze(1)
-             # Clamp any stray non-finite values in the head output
+            # Clamp any stray non-finite values in the head output
             logits = torch.nan_to_num(logits, nan=0.0, posinf=1e6, neginf=-1e6)
             preds_t = torch.sigmoid(logits) if task_is_cls else logits
             # And sanitize the post-activation tensor too (esp. regression path)
@@ -651,18 +725,16 @@ def evaluate_finetuned_head(
             all_preds.append(preds_t.detach().cpu().numpy())
             # targets: one value per graph in the batch (already aligned with graph_emb)
             all_targets.append(batch_labels.detach().cpu().numpy())
-    
+
     # concat & filter non-finite rows (both y_true and y_pred)
     y_pred = np.concatenate(all_preds).astype(np.float32)
     y_true = np.concatenate(all_targets).astype(np.float32)
     mask = np.isfinite(y_true) & np.isfinite(y_pred)
     y_true = y_true[mask]
     y_pred = y_pred[mask]
-    
+
     if task_is_cls:
         y_true = y_true.astype(np.int64, copy=False)
         # y_pred are probabilities in [0,1] for classification
         return compute_classification_metrics(y_true, y_pred)
     return compute_regression_metrics(y_true, y_pred)
-
-
