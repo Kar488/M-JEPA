@@ -67,8 +67,9 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   [[ -f "$JEPA_SPEC" ]] || { echo "[fatal] missing sweep spec $JEPA_SPEC" >&2; exit 1; }
   [[ -f "$CONTRAST_SPEC" ]] || { echo "[fatal] missing sweep spec $CONTRAST_SPEC" >&2; exit 1; }
 
-  TMP_JEPA="$(mktemp)";      yq ".method = \"random\" | .seed = ${SWEEP_SEED}" "$JEPA_SPEC" > "$TMP_JEPA"
-  TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\" | .seed = ${SWEEP_SEED}" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
+
+  TMP_JEPA="$(mktemp)";      yq ".method = \"random\" | .random_seed = ${SWEEP_SEED}" "$JEPA_SPEC" > "$TMP_JEPA"
+  TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\" | .random_seed = ${SWEEP_SEED}" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
 
   check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
 

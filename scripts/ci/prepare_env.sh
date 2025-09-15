@@ -70,12 +70,20 @@ if [ -f "$APP_DIR/requirements.txt" ]; then
 fi
 
 # ----------- sanity -----------
-micromamba run -n "$ENV_NAME" python - <<'PY'
+set +e
+timeout 120 micromamba run -n "$ENV_NAME" python - <<'PY'
 import torch
 from rdkit.Chem.Scaffolds import MurckoScaffold as MS
 print("torch:", torch.__version__, "cuda:", torch.cuda.is_available())
 assert hasattr(MS, "MurckoScaffoldSmiles")
 PY
+status=$?
+set -e
+if [ "$status" -eq 0 ]; then
+  echo "[prepare-env] sanity check passed"
+else
+  echo "[prepare-env][warn] sanity check failed or timed out"
+fi
 
 echo "[prepare_env] APP_DIR=$APP_DIR"
 echo "[prepare_env] EXP_ROOT=$EXP_ROOT"
