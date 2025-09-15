@@ -15,6 +15,7 @@ from data.augment import (
     generate_views,
     mask_random_angle,
     mask_random_atom,
+    mask_subgraph,
     perturb_dihedral,
     random_rotation,
     remove_random_subgraph,
@@ -196,6 +197,19 @@ def test_remove_random_subgraph_produces_valid_view():
     if view.edge_index.size > 0:
         assert view.edge_index.max() < view.num_nodes()
     view.to_tensors()
+
+
+def test_generate_views_preserves_pos():
+    pytest.importorskip("rdkit")
+    g = GraphDataset.smiles_to_graph("CCO", add_3d=True, random_seed=0)
+    np.random.seed(0)
+    views = generate_views(
+        g, structural_ops=[lambda x: mask_subgraph(x, mask_ratio=0.5, contiguous=False)]
+    )
+    assert len(views) == 2
+    for v in views:
+        assert v.pos is not None
+        assert v.pos.shape[0] == v.x.shape[0]
 
 
 def test_run_ablation_forwards_augment(monkeypatch):
