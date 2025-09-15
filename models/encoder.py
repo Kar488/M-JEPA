@@ -10,9 +10,43 @@ from the `utils` package.
 
 from __future__ import annotations
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+"""GNN encoder definitions with optional torch dependency.
+
+This module is imported by some tests simply to ensure that the file exists.
+Those tests do not require a real PyTorch installation, so we guard the import
+of ``torch`` and provide minimal stubs when it is unavailable.  The actual
+encoder implementation still requires real PyTorch; attempting to instantiate
+the classes without ``torch`` present will raise ``ModuleNotFoundError``.
+"""
+
+try:  # pragma: no cover - exercised only when torch is missing
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+except Exception:  # noqa: BLE001 - broad to catch import errors
+    class _MissingTorch:
+        """Stub module that raises if any attribute is accessed."""
+
+        def __getattr__(self, name: str) -> None:
+            raise ModuleNotFoundError("torch is required to use GNNEncoder")
+
+    torch = _MissingTorch()  # type: ignore[assignment]
+
+    class _MissingNN:  # minimal namespace with Module for subclassing
+        class Module:  # noqa: D401 - simple stub
+            """Placeholder base class when torch is unavailable."""
+
+        class Linear:  # pragma: no cover - used only without torch
+            def __init__(self, *a, **k):  # noqa: D401
+                raise ModuleNotFoundError("torch is required to use GNNEncoder")
+
+    nn = _MissingNN()  # type: ignore[assignment]
+
+    class _MissingF:
+        def __getattr__(self, name: str) -> None:  # pragma: no cover
+            raise ModuleNotFoundError("torch is required to use GNNEncoder")
+
+    F = _MissingF()  # type: ignore[assignment]
 
 
 class GNNEncoder(nn.Module):
