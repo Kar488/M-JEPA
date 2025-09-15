@@ -61,3 +61,32 @@ def test_pool_graph_emb_batch_and_single():
     single = _pool_graph_emb(h[:2], g2)
     expected_single = torch.tensor([2.0, 3.0])
     assert torch.allclose(single, expected_single)
+
+def test_ensure_edge_attr_np_or_torch(monkeypatch):
+    from utils.graph_ops import _ensure_edge_attr_np_or_torch
+    g = SimpleNamespace(x=torch.ones(2, 3), edge_index=torch.tensor([[0,1],[1,0]], dtype=torch.long))
+    g2 = _ensure_edge_attr_np_or_torch(g, need_dim=4)
+    assert g2.edge_attr.shape == (2, 4)
+    # now with existing smaller edge_attr
+    g3 = SimpleNamespace(x=torch.ones(2,3), edge_index=torch.tensor([[0,1],[1,0]], dtype=torch.long), edge_attr=torch.ones(2,2))
+    g3 = _ensure_edge_attr_np_or_torch(g3, need_dim=4)
+    assert g3.edge_attr.shape == (2,4)
+
+
+def test_encode_graph_flex_handles_factory_and_legacy():
+    from utils.graph_ops import _encode_graph_flex
+    g = SimpleNamespace(x=np.ones((2,3), dtype=np.float32), edge_index=np.array([[0,1],[1,0]], dtype=np.int64))
+    class Factory:
+        def __call__(self, graph):
+            self.graph = graph
+            return "ok"
+    out = _encode_graph_flex(Factory(), g)
+    assert out == "ok"
+    class Legacy(torch.nn.Module):
+        def forward(self, x, adj):
+            self.x, self.adj = x, adj
+            return x
+    enc = Legacy()
+    out2 = _encode_graph_flex(enc, g, device=torch.device("cpu"))
+    assert isinstance(out2, torch.Tensor)
+    assert enc.x.shape[0] == 2 and enc.adj.shape[0] == 2
