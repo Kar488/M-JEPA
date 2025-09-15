@@ -1,6 +1,10 @@
 from __future__ import annotations
 import argparse
 import hashlib, json
+import os
+import pathlib
+import pickle
+from typing import Optional
 
 def cmd_sweep_run(args: argparse.Namespace) -> None:
     """
@@ -26,7 +30,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                 "Could not import load_directory_dataset/resolve_device"
             ) from e
     # --- 0) Initialize W&B run FIRST (no config!), then read sampled config ---
-    import os
     try:
         import wandb
     except Exception:
@@ -239,31 +242,98 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         # minutes remaining
         return max(0.0, (_deadline - _t.perf_counter()) / 60.0)
     
-    import os, pathlib
     if args.cache_dir:
         pathlib.Path(args.cache_dir).mkdir(parents=True, exist_ok=True)
+
+    dataset_cache_dir = None
+    dataset_cache_enabled = bool(int(getattr(args, "cache_datasets", 0)))
+    if dataset_cache_enabled:
+        base_cache = args.cache_dir or os.path.join("cache", "graphs")
+        dataset_cache_dir = os.path.join(base_cache, "prebuilt_datasets")
+        pathlib.Path(dataset_cache_dir).mkdir(parents=True, exist_ok=True)
+
+    DATASET_CACHE_VERSION = "v1"
+
+    def _dataset_cache_path(kind: str, payload: dict) -> Optional[str]:
+        if not dataset_cache_dir:
+            return None
+        cache_key = {
+            "version": DATASET_CACHE_VERSION,
+            **payload,
+        }
+        digest = hashlib.sha1(
+            json.dumps(cache_key, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        return os.path.join(dataset_cache_dir, f"{kind}_{digest}.pkl")
+
+    def _load_or_build_dataset(kind: str, payload: dict, builder):
+        cache_path = _dataset_cache_path(kind, payload)
+        if cache_path and os.path.exists(cache_path):
+            try:
+                with open(cache_path, "rb") as fh:
+                    return pickle.load(fh)
+            except Exception:
+                pass
+
+        ds = builder()
+
+        if cache_path:
+            try:
+                with open(cache_path, "wb") as fh:
+                    pickle.dump(ds, fh)
+            except Exception:
+                pass
+
+        return ds
+
+    def _build_unlabeled_dataset(add3d: bool):
+        return load_directory_dataset(
+            dirpath=_unlabeled_dir,
+            label_col=None,  # unlabeled set
+            add_3d=add3d,
+            max_graphs=args.sample_unlabeled,
+            num_workers=args.num_workers,
+            cache_dir=args.cache_dir,
+        )
+
+    def _build_labeled_dataset(add3d: bool):
+        return load_directory_dataset(
+            dirpath=_labeled_dir,
+            label_col=args.label_col,  # labeled set
+            add_3d=add3d,
+            max_graphs=args.sample_labeled,
+            num_workers=args.num_workers,
+            cache_dir=args.cache_dir,
+        )
+
+    unlabeled_ds = _load_or_build_dataset(
+        "unlabeled",
+        {
+            "path": _unlabeled_dir,
+            "add_3d": bool(add_3d),
+            "sample": int(getattr(args, "sample_unlabeled", 0)),
+        },
+        lambda: _build_unlabeled_dataset(add_3d),
+    )
+    labeled_ds = _load_or_build_dataset(
+        "labeled",
+        {
+            "path": _labeled_dir,
+            "add_3d": bool(add_3d),
+            "sample": int(getattr(args, "sample_labeled", 0)),
+            "label_col": args.label_col,
+        },
+        lambda: _build_labeled_dataset(add_3d),
+    )
+
+    prebuilt_datasets = (unlabeled_ds, labeled_ds, labeled_ds)
 
     # One-config run
     row = _run_one_config_method(
         cfg=cfg,
         method=args.training_method,  # "jepa" or "contrastive"
-
-        unlabeled_dataset_fn=lambda add3d: load_directory_dataset(
-            dirpath=_unlabeled_dir,
-            label_col=None,                  # unlabeled set
-            add_3d=add3d,
-            max_graphs=args.sample_unlabeled,
-            num_workers=args.num_workers,
-            cache_dir=args.cache_dir,
-        ),
-        eval_dataset_fn=lambda add3d: load_directory_dataset(
-            dirpath=_labeled_dir,
-            label_col=args.label_col,        # labeled set
-            add_3d=add3d,
-            max_graphs=args.sample_labeled,
-            num_workers=args.num_workers,
-            cache_dir=args.cache_dir,
-        ),
+        unlabeled_dataset_fn=None,
+        eval_dataset_fn=None,
 
         task_type=args.task_type,
         seeds=[args.seed],
@@ -279,7 +349,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         baseline_label_col=args.label_col,
         use_scaffold=False,
         prebuilt_loaders=None,
-        prebuilt_datasets=None,
+        prebuilt_datasets=prebuilt_datasets,
         target_pretrain_samples=int(getattr(args, "target_pretrain_samples", 0)),
         max_pretrain_batches=int(getattr(args, "max_pretrain_batches", 0)),
         max_finetune_batches=int(getattr(args, "max_finetune_batches", 0)),

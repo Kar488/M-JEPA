@@ -839,8 +839,14 @@ def build_parser() -> argparse.ArgumentParser:
     sweep.add_argument("--max-pretrain-batches", "--max_pretrain_batches", dest="max_pretrain_batches", type=int, default=0)
     sweep.add_argument("--max-finetune-batches", "--max_finetune_batches", dest="max_finetune_batches", type=int, default=0)
     sweep.add_argument("--sample-unlabeled", "--sample_unlabeled", dest="sample_unlabeled", type=int, default=0)
-    sweep.add_argument("--sample-labeled", "--sample_labeled", dest="sample_labeled", type=int, default=0) 
+    sweep.add_argument("--sample-labeled", "--sample_labeled", dest="sample_labeled", type=int, default=0)
     sweep.add_argument("--time-budget-mins", type=int, default=0)
+    sweep.add_argument(
+        "--cache-datasets",
+        dest="cache_datasets",
+        action="store_true",
+        help="Serialize GraphDataset objects for reuse across sweep trials",
+    )
 
     # aug flags not covered by common (structural ones)
     sweep.add_argument("--aug-bond-deletion", "--aug_bond_deletion", dest="aug_bond_deletion", type=int, choices=[0,1], default=0)
