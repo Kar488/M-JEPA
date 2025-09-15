@@ -59,7 +59,6 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   TMP_JEPA="$(mktemp)";      yq ".method = \"random\" | .seed = ${SWEEP_SEED}" "$JEPA_SPEC" > "$TMP_JEPA"
   TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\" | .seed = ${SWEEP_SEED}" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
 
-
   check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
 
   JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
@@ -77,7 +76,6 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
   export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
   echo "[phase1] launching contrastive agent for sweep $SWEEP_ID"
-
   run_with_timeout wandb_agent || exit 1
 
   PE_METRIC="val_rmse"
