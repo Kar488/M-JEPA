@@ -47,6 +47,7 @@ class GraphData:
     x: np.ndarray  # [num_nodes, feat_dim]
     edge_index: np.ndarray  # [2, num_edges] (directed; add reverse edges)
     edge_attr: Optional[np.ndarray] = None  # [num_edges, edge_feat_dim]
+    pos: Optional[np.ndarray] = None  # [num_nodes, 3] 3D coordinates (optional)
 
     def num_nodes(self) -> int:
         """Return the number of nodes in the graph."""
@@ -262,7 +263,9 @@ class GraphDataset:
                             X = np.concatenate([X, coords], axis=1)
                 except Exception:
                     logger.debug("3D embedding failed for %s", smiles)
-                    coords = None  # just proceed without 3D
+                    coords = None
+                if coords is None:
+                    raise ValueError("3D embedding failed")
 
             # Edges + attrs
             edges: list[tuple[int, int]] = []
@@ -305,7 +308,7 @@ class GraphDataset:
                     # if augmentation fails, keep existing EA (may be None)
                     pass
 
-            return GraphData(x=X, edge_index=E, edge_attr=EA)
+            return GraphData(x=X, edge_index=E, edge_attr=EA, pos=coords)
 
         except Exception:
             # any unexpected RDKit error → robust fallback

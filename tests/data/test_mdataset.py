@@ -30,6 +30,12 @@ def _make_synthetic_dataset():
     return ds
 
 
+def test_smiles_to_graph_add_3d_provides_pos():
+    g = GraphDataset.smiles_to_graph("CCO", add_3d=True, random_seed=0)
+    assert g.pos is not None
+    assert g.pos.shape[1] == 3
+
+
 def test_smiles_to_graph_fallback_features_edges():
     ds = _make_synthetic_dataset()
     g0, g1 = ds.graphs
