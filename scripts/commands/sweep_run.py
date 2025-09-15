@@ -94,7 +94,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _apply_any(["mask_ratio", "model.mask_ratio"], "mask_ratio", float)
 
     
-    _apply("add_3d",               "add_3d",               _as_bool)
     _apply("ema_decay",            "ema_decay",            float)
     _apply("temperature",          "temperature",          float)
     _apply("pretrain_epochs",      "pretrain_epochs",      int)
@@ -114,26 +113,19 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     # booleans used below
     to_bool = _as_bool
-    add_3d         = to_bool(getattr(args, "add_3d", 0))
     aug_contiguity = to_bool(getattr(args, "contiguity", 0))
     gnn = str(getattr(args, "gnn_type", "")).lower()
+    add_3d = gnn in ("schnet3d", "schnet")
 
     import os
     if os.environ.get("SWEEP_DUMP", "0") == "1":
-        print(f"[sweep-run] gnn_type={gnn} hidden_dim={args.hidden_dim} num_layers={args.num_layers} "
-              f"add_3d={to_bool(getattr(args,'add_3d',0))} contiguity={to_bool(getattr(args,'contiguity',0))} "
-               f"lr={getattr(args,'learning_rate',None)}",
-              flush=True)
+        print(
+            f"[sweep-run] gnn_type={gnn} hidden_dim={args.hidden_dim} num_layers={args.num_layers} "
+            f"add_3d={int(add_3d)} contiguity={to_bool(getattr(args,'contiguity',0))} "
+            f"lr={getattr(args,'learning_rate',None)}",
+            flush=True,
+        )
         return
-
-    if gnn in ("schnet3d", "schnet"):
-        if not add_3d:
-            print("[guard] gnn_type=schnet3d requires --add-3d=1; enabling it.", flush=True)
-            add_3d = True
-    else:
-        if add_3d:
-            print(f"[guard] gnn_type={gnn} is a 2D backbone; forcing --add-3d=0.", flush=True)
-            add_3d = False
 
     import json
 
@@ -200,10 +192,12 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     }
 
     pair_id = hashlib.sha1(json.dumps(pid_cfg, sort_keys=True).encode()).hexdigest()[:8]
-    print(f"[sweep-run] pair_id={pair_id} | gnn_type={args.gnn_type} | "
-          f"hidden_dim={args.hidden_dim} | num_layers={args.num_layers} | "
-          f"contiguity={int(getattr(args,'contiguity',0))} | add_3d={int(bool(getattr(args,'add_3d',0)))}",
-          flush=True)
+    print(
+        f"[sweep-run] pair_id={pair_id} | gnn_type={args.gnn_type} | "
+        f"hidden_dim={args.hidden_dim} | num_layers={args.num_layers} | "
+        f"contiguity={int(getattr(args,'contiguity',0))} | add_3d={int(add_3d)}",
+        flush=True,
+    )
 
     if wb is not None:
         wb.config.update({

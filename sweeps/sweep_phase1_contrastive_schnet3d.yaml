@@ -15,7 +15,7 @@ parameters:
   hidden_dim:           {values: [128, 256]}
   num_layers:           {values: [3, 4]}
   ema_decay:            {values: [0.99, 0.996, 0.998]}
-  add_3d:               {values: [0, 1]}
+  add_3d:               {value: 1}
   pretrain_batch_size:  {values: [64, 128, 256]}
   pretrain_epochs:      {values: [5, 10, 15]}
   finetune_epochs:      {values: [1, 3]}
