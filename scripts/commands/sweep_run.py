@@ -31,13 +31,13 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         import wandb
     except Exception:
         wandb = None
-    cfg = {}
+    sweep_cfg = {}
     if wandb is not None:
         wb = getattr(wandb, "run", None) or _wb_get_or_init(args)
         try:
-            cfg = wandb.config.as_dict()
+            sweep_cfg = wandb.config.as_dict()
         except Exception:
-            cfg = dict(getattr(wandb, "config", {}) or {})
+            sweep_cfg = dict(getattr(wandb, "config", {}) or {})
 
     # Flatten nested configs so "model.gnn_type" etc. are visible to _apply
     def _flatten(d, parent_key: str = "", sep: str = "."):
@@ -50,9 +50,9 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                 out[nk] = v
                 out[k] = v  # also expose short key (last segment)
         return out
-    cfg = _flatten(cfg or {})
+    sweep_cfg = _flatten(sweep_cfg or {})
     try:
-        sample_keys = sorted(list(cfg.keys()))[:10]
+        sample_keys = sorted(list(sweep_cfg.keys()))[:10]
     except Exception:
         sample_keys = []
     print(f"[sweep-run] cfg keys sample: {sample_keys}", flush=True)
@@ -63,17 +63,17 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         except Exception: return bool(v)
 
     def _apply(src_key, dest_attr, cast=lambda x: x):
-        if src_key in cfg:
+        if src_key in sweep_cfg:
             try:
-                setattr(args, dest_attr, cast(cfg[src_key]))
+                setattr(args, dest_attr, cast(sweep_cfg[src_key]))
             except Exception:
                 pass
 
     def _apply_any(src_keys, dest_attr, cast=lambda x: x):
         for k in src_keys:
-            if k in cfg:
+            if k in sweep_cfg:
                 try:
-                    setattr(args, dest_attr, cast(cfg[k]))
+                    setattr(args, dest_attr, cast(sweep_cfg[k]))
                     return
                 except Exception:
                     pass
@@ -116,10 +116,10 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _apply("sample_labeled", "sample_labeled", int)
     
     # learning rate may be named "learning_rate" or "lr"
-    if "learning_rate" in cfg:
-        args.learning_rate = float(cfg["learning_rate"])
-    elif "lr" in cfg:
-        args.learning_rate = float(cfg["lr"])
+    if "learning_rate" in sweep_cfg:
+        args.learning_rate = float(sweep_cfg["learning_rate"])
+    elif "lr" in sweep_cfg:
+        args.learning_rate = float(sweep_cfg["lr"])
 
     # booleans used below
     to_bool = _as_bool
@@ -215,13 +215,13 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     if wb is not None:
         upd = {"pair_id": pair_id}
-        if "training_method" not in cfg:
+        if "training_method" not in sweep_cfg:
             upd["training_method"] = args.training_method
-        if "seed" not in cfg:
+        if "seed" not in sweep_cfg:
             upd["seed"] = getattr(args, "seed", None)
-        if "gnn_type" not in cfg:
+        if "gnn_type" not in sweep_cfg:
             upd["gnn_type"] = gnn
-        if "add_3d" not in cfg:
+        if "add_3d" not in sweep_cfg:
             upd["add_3d"] = int(add_3d)  # ensure Phase-2 sees the gated value
         if upd:
             wb.config.update(upd, allow_val_change=True)
