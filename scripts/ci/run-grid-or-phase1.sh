@@ -17,7 +17,7 @@ GRID_MODE_CLEAN="${GRID_MODE//[[:space:]]/}"
 GRID_MODE_CLEAN="${GRID_MODE_CLEAN//\"/}"
 GRID_MODE_CLEAN="${GRID_MODE_CLEAN//\'/}"
 
-# --- enforce pairing-friendly sweeps (grid + identical shared knobs) ---
+# --- enforce pairing-friendly sweeps (identical shared knobs) ---
 check_shared_equal() {
   local jepa="$1" ctr="$2"; shift 2
   local keys=(gnn_type hidden_dim num_layers contiguity seed)
@@ -46,16 +46,19 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
   # Create a single sweep for JEPA and another for contrastive; reuse IDs
   : "${WANDB_COUNT:=30}"
+  : "${SWEEP_SEED:=42}"
   export WANDB_RUN_GROUP="${GITHUB_RUN_ID:-pipeline-$(date -u +%Y%m%dT%H%M%SZ)}"
   export WANDB_RESUME=allow
+  echo "[phase1] WANDB_COUNT=$WANDB_COUNT SWEEP_SEED=$SWEEP_SEED group=$WANDB_RUN_GROUP"
 
   JEPA_SPEC="$APP_DIR/sweeps/sweep_phase1_jepa.yaml"
   CONTRAST_SPEC="$APP_DIR/sweeps/sweep_phase1_contrastive.yaml"
   [[ -f "$JEPA_SPEC" ]] || { echo "[fatal] missing sweep spec $JEPA_SPEC" >&2; exit 1; }
   [[ -f "$CONTRAST_SPEC" ]] || { echo "[fatal] missing sweep spec $CONTRAST_SPEC" >&2; exit 1; }
 
-  TMP_JEPA="$(mktemp)";      yq ' .method = "grid" ' "$JEPA_SPEC" > "$TMP_JEPA"
-  TMP_CONTRAST="$(mktemp)";  yq ' .method = "grid" ' "$CONTRAST_SPEC" > "$TMP_CONTRAST"
+  TMP_JEPA="$(mktemp)";      yq ".method = \"random\" | .seed = ${SWEEP_SEED}" "$JEPA_SPEC" > "$TMP_JEPA"
+  TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\" | .seed = ${SWEEP_SEED}" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
+
 
   check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
 
@@ -65,12 +68,16 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     echo "[phase1][fatal] bad sweep ids: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
     exit 1
   fi
+  echo "[phase1] JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
 
   cd "$APP_DIR"
   export SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
+  echo "[phase1] launching JEPA agent for sweep $SWEEP_ID"
   run_with_timeout wandb_agent || exit 1
 
   export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
+  echo "[phase1] launching contrastive agent for sweep $SWEEP_ID"
+
   run_with_timeout wandb_agent || exit 1
 
   PE_METRIC="val_rmse"
