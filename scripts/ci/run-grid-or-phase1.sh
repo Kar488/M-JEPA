@@ -20,7 +20,7 @@ GRID_MODE_CLEAN="${GRID_MODE_CLEAN//\'/}"
 # --- enforce pairing-friendly sweeps (identical shared knobs) ---
 check_shared_equal() {
   local jepa="$1" ctr="$2"; shift 2
-  local keys=(gnn_type hidden_dim num_layers contiguity random_seed)
+  local keys=(gnn_type hidden_dim num_layers contiguity)
   for k in "${keys[@]}"; do
     local a b
     a="$(yq ".parameters.${k}" "$jepa")"
@@ -32,6 +32,17 @@ check_shared_equal() {
       exit 1
     fi
   done
+
+  # ensure the sweep algorithm uses the same random seed
+  local a b
+  a="$(yq '.seed' "$jepa")"
+  b="$(yq '.seed' "$ctr")"
+  if [[ "$a" != "$b" ]]; then
+    echo "[fatal] sweep mismatch for 'seed':"
+    echo "  JEPA:        $a"
+    echo "  Contrastive: $b" >&2
+    exit 1
+  fi
 }
 
 if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
