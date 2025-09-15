@@ -83,12 +83,33 @@ echo "[prepare_env] EXP_ROOT=$EXP_ROOT"
 # --- Ensure yq is installed ---
 if ! command -v yq >/dev/null 2>&1; then
   echo "[prepare-env] Installing yq..."
+  installed_yq=0
   if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update && sudo apt-get install -y yq
+    for attempt in 1 2 3; do
+      if timeout 300 sudo apt-get update && timeout 300 sudo apt-get install -y yq; then
+        installed_yq=1
+        break
+      elif [ "$attempt" -lt 3 ]; then
+        echo "[prepare-env] apt-get install failed (attempt $attempt), retrying..."
+        sleep 5
+      fi
+    done
   elif command -v brew >/dev/null 2>&1; then
-    brew install yq
+    for attempt in 1 2 3; do
+      if brew install yq; then
+        installed_yq=1
+        break
+      elif [ "$attempt" -lt 3 ]; then
+        echo "[prepare-env] brew install failed (attempt $attempt), retrying..."
+        sleep 5
+      fi
+    done
   else
     echo "[prepare-env][warn] Could not install yq automatically."
     echo "Please install manually: https://github.com/mikefarah/yq"
+  fi
+
+  if [ "$installed_yq" -ne 1 ] && ! command -v yq >/dev/null 2>&1; then
+    echo "[prepare-env][warn] yq is not installed. Continuing without it."
   fi
 fi
