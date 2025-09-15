@@ -187,8 +187,21 @@ try:
     # If you later add a proper head somewhere, import it here:
     from models.heads import build_linear_head  # type: ignore
 except Exception:
-    def build_linear_head(*args, **kwargs):  # pragma: no cover - used only without torch
-        raise ModuleNotFoundError("torch is required for build_linear_head")
+    import torch.nn as nn
+
+    def build_linear_head(*args, **kwargs):
+        """Fallback linear head using a single ``nn.Linear`` layer.
+
+        This keeps unit tests lightweight while still exercising the
+        orchestration code when the optional ``models.heads`` module is
+        absent.  Requires PyTorch to be installed.
+        """
+
+        in_dim = kwargs.get("in_dim", args[0] if args else None)
+        num_classes = kwargs.get("num_classes", args[1] if len(args) > 1 else None)
+        if in_dim is None or num_classes is None:
+            raise TypeError("in_dim and num_classes are required")
+        return nn.Linear(in_dim, num_classes)
 
 
 try:
@@ -464,6 +477,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
 
 def cmd_grid_search(args: argparse.Namespace) -> None:
+    _grid_search = _load_cmd("grid_search")
     _inject_shared(_grid_search)
     # Propagate a monkeypatched run_grid_search into the command module.
     # CMD_CONTEXT captures run_grid_search at import time, so tests that
@@ -474,11 +488,13 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
 
 
 def cmd_pretrain(args: argparse.Namespace) -> None:
+    _pretrain = _load_cmd("pretrain")
     _inject_shared(_pretrain)
     _pretrain.cmd_pretrain(args)
 
 
 def cmd_finetune(args: argparse.Namespace) -> None:
+    _finetune = _load_cmd("finetune")
     _inject_shared(_finetune)
     _finetune.cmd_finetune(args)
 
@@ -490,11 +506,13 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
 
 
 def cmd_benchmark(args: argparse.Namespace) -> None:
+    _benchmark = _load_cmd("benchmark")
     _inject_shared(_benchmark)
     _benchmark.cmd_benchmark(args)
 
 
 def cmd_tox21(args: argparse.Namespace) -> None:
+    _tox21 = _load_cmd("tox21")
     _inject_shared(_tox21)
     _tox21.cmd_tox21(args)
 
