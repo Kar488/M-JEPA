@@ -434,12 +434,18 @@ class SchNetInteraction(nn.Module):
         """
         # Linear projection of source nodes
         Wxh = self.lin(x)                  # [N, D]
+        if Wxh.dtype != x.dtype:
+            Wxh = Wxh.to(x.dtype)
 
         # Produce edge-wise filters from RBFs via the filter network
         f_ij = self.filter(rbf)            # [E, D]
+        if f_ij.dtype != x.dtype:
+            f_ij = f_ij.to(x.dtype)
 
         # Edge messages: modulate source embedding with edge filter
         msg = f_ij * Wxh[j]                # [E, D]
+        if msg.dtype != x.dtype:
+            msg = msg.to(x.dtype)
 
         # Aggregate into destination nodes
         agg = torch.zeros_like(x)          # [N, D]
