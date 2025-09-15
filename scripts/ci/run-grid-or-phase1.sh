@@ -20,7 +20,7 @@ GRID_MODE_CLEAN="${GRID_MODE_CLEAN//\'/}"
 # --- enforce pairing-friendly sweeps (identical shared knobs) ---
 check_shared_equal() {
   local jepa="$1" ctr="$2"; shift 2
-  local keys=(gnn_type hidden_dim num_layers contiguity seed)
+  local keys=(gnn_type hidden_dim num_layers contiguity random_seed)
   for k in "${keys[@]}"; do
     local a b
     a="$(yq ".parameters.${k}" "$jepa")"
@@ -56,8 +56,9 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   [[ -f "$JEPA_SPEC" ]] || { echo "[fatal] missing sweep spec $JEPA_SPEC" >&2; exit 1; }
   [[ -f "$CONTRAST_SPEC" ]] || { echo "[fatal] missing sweep spec $CONTRAST_SPEC" >&2; exit 1; }
 
-  TMP_JEPA="$(mktemp)";      yq ".method = \"random\" | .seed = ${SWEEP_SEED}" "$JEPA_SPEC" > "$TMP_JEPA"
-  TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\" | .seed = ${SWEEP_SEED}" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
+
+  TMP_JEPA="$(mktemp)";      yq ".method = \"random\" | .random_seed = ${SWEEP_SEED}" "$JEPA_SPEC" > "$TMP_JEPA"
+  TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\" | .random_seed = ${SWEEP_SEED}" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
 
   check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
 
@@ -70,22 +71,13 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   echo "[phase1] JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
 
   cd "$APP_DIR"
-
-  # Launch JEPA agent and capture its exit status without aborting immediately
   export SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
   echo "[phase1] launching JEPA agent for sweep $SWEEP_ID"
-  run_with_timeout wandb_agent || JEPA_RC=$?
+  run_with_timeout wandb_agent || exit 1
 
-  # Launch contrastive agent regardless of JEPA result
   export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
   echo "[phase1] launching contrastive agent for sweep $SWEEP_ID"
-  run_with_timeout wandb_agent || CONTRAST_RC=$?
-
-  # If either agent failed, abort before paired-effect analysis
-  if [[ ${JEPA_RC:-0} -ne 0 || ${CONTRAST_RC:-0} -ne 0 ]]; then
-    echo "[phase1][error] sweep failures: JEPA=${JEPA_RC:-0} contrastive=${CONTRAST_RC:-0}" >&2
-    exit 1
-  fi
+  run_with_timeout wandb_agent || exit 1
 
   PE_METRIC="val_rmse"
   [[ "${TASK_FROM_PE:-regression}" == "classification" ]] && PE_METRIC="val_auc"
