@@ -43,6 +43,7 @@ def _to_pyg(g) -> PyGData:
     ei = getattr(g, "edge_index", None)
     ea = getattr(g, "edge_attr", None)
     y  = getattr(g, "y", None)
+    pos = getattr(g, "pos", None)
     if ei is None:
         adj = getattr(g, "adj", None)
         if adj is not None:
@@ -53,6 +54,7 @@ def _to_pyg(g) -> PyGData:
         edge_index=torch.as_tensor(ei, dtype=torch.long) if ei is not None else None,
         edge_attr=torch.as_tensor(ea, dtype=torch.float32) if ea is not None else None,
         y=(torch.as_tensor(y) if y is not None else None),
+        pos=torch.as_tensor(pos, dtype=torch.float32) if pos is not None else None,
     )
 
 # Safe AUC for binary or multi-class; returns NaN if undefined

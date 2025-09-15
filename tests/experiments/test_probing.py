@@ -52,6 +52,19 @@ def test_to_pyg_from_adj():
     assert out.y.item() == 0
 
 
+def test_to_pyg_preserves_pos():
+    x = np.ones((2, 4), dtype=np.float32)
+    edge_index = np.array([[0, 1], [1, 0]], dtype=np.int64)
+    pos = np.array([[0.0, 1.0, 2.0], [1.0, 0.5, -0.5]], dtype=np.float32)
+    g = types.SimpleNamespace(x=x, edge_index=edge_index, pos=pos)
+
+    out = _to_pyg(g)
+    assert isinstance(out, Data)
+    assert out.pos is not None
+    assert out.pos.shape == (2, 3)
+    assert torch.allclose(out.pos, torch.as_tensor(pos))
+
+
 def test_compute_embeddings():
     g1 = Data(x=torch.ones((3, 4)), edge_index=torch.tensor([[0, 1, 2], [1, 2, 0]]))
     g2 = Data(x=torch.zeros((2, 4)), edge_index=torch.tensor([[0, 1], [1, 0]]))
