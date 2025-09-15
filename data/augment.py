@@ -325,6 +325,8 @@ def remove_random_subgraph(g: GraphData) -> GraphData:
         return g
     mapping = {old: new for new, old in enumerate(keep)}
     g.x = g.x[keep]
+    if getattr(g, "pos", None) is not None:
+        g.pos = g.pos[keep]
     if g.edge_index.shape[1] > 0:
         edges = g.edge_index.T
         edge_mask = np.array(
@@ -357,7 +359,12 @@ def _subgraph(g: GraphData, idx: List[int]) -> GraphData:
             if g.edge_attr is None
             else np.zeros((0, g.edge_attr.shape[1]), dtype=np.float32)
         )
-        return GraphData(x=x, edge_index=e, edge_attr=ea)
+        pos = (
+            None
+            if getattr(g, "pos", None) is None
+            else np.zeros((0, g.pos.shape[1]), dtype=np.float32)
+        )
+        return GraphData(x=x, edge_index=e, edge_attr=ea, pos=pos)
     remap = {old: new for new, old in enumerate(idx)}
     mask = np.isin(g.edge_index[0], idx) & np.isin(g.edge_index[1], idx)
     e = g.edge_index[:, mask].copy()
@@ -366,7 +373,8 @@ def _subgraph(g: GraphData, idx: List[int]) -> GraphData:
         e[1, t] = remap[int(e[1, t])]
     x = g.x[idx]
     ea = g.edge_attr[mask] if g.edge_attr is not None else None
-    return GraphData(x=x, edge_index=e, edge_attr=ea)
+    pos = g.pos[idx] if getattr(g, "pos", None) is not None else None
+    return GraphData(x=x, edge_index=e, edge_attr=ea, pos=pos)
 
 
 def mask_subgraph(
@@ -405,10 +413,10 @@ def apply_graph_augmentations(
     attributes accordingly.
     """
     # --- Geometric transforms (coords) ---
-    have_geom = (Chem is not None) and (np is not None) and (g.x.shape[1] >= 7)
+    have_geom = (Chem is not None) and (np is not None) and (getattr(g, "pos", None) is not None)
     if have_geom:
         num_nodes = g.x.shape[0]
-        coords = g.x[:, -3:].copy()
+        coords = g.pos.copy()
 
         # Build a temporary RDKit molecule from GraphData
         mol = Chem.RWMol()
@@ -467,7 +475,10 @@ def apply_graph_augmentations(
         conf = mol.GetConformer()
         for i in range(num_nodes):
             p = conf.GetAtomPosition(i)
-            g.x[i, -3:] = [p.x, p.y, p.z]
+            coord = [p.x, p.y, p.z]
+            g.x[i, -3:] = coord
+            if getattr(g, "pos", None) is not None:
+                g.pos[i] = coord
             if g.edge_attr is not None and g.edge_attr.shape[1] >= 10:
                 # number of edges (E); handle E == 0 safely
                 try:
@@ -530,6 +541,7 @@ def _clone_graph(graph):
         x=_cp(getattr(graph, "x", None)),
         edge_index=_cp(getattr(graph, "edge_index", None)),
         edge_attr=_cp(getattr(graph, "edge_attr", None)),
+        pos=_cp(getattr(graph, "pos", None)),
     )
     # Carry optional attributes by assignment (NOT via constructor)
     for name in ("y", "mask", "batch", "smiles", "id"):
