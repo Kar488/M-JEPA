@@ -206,6 +206,11 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
                 device=device,
                 patience=args.patience,
                 devices=args.devices,
+                num_workers=getattr(args, "num_workers", 0),
+                pin_memory=getattr(args, "pin_memory", True),
+                persistent_workers=getattr(args, "persistent_workers", True),
+                prefetch_factor=getattr(args, "prefetch_factor", 4),
+                bf16=getattr(args, "bf16", False),
             )
             metrics_runs.append({k: v for k, v in mets.items() if k != "head"})
 

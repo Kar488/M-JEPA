@@ -5,20 +5,23 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-plt = types.SimpleNamespace(
-    figure=lambda *a, **k: None,
-    bar=lambda *a, **k: None,
-    xticks=lambda *a, **k: None,
-    title=lambda *a, **k: None,
-    tight_layout=lambda *a, **k: None,
-    savefig=lambda path, *a, **k: Path(path).touch(),
-    close=lambda *a, **k: None,
-    imshow=lambda *a, **k: None,
-    yticks=lambda *a, **k: None,
-    colorbar=lambda *a, **k: None,
-)
-sys.modules.setdefault("matplotlib", types.SimpleNamespace(pyplot=plt))
-sys.modules.setdefault("matplotlib.pyplot", plt)
+try:  # prefer real matplotlib when available
+    import matplotlib.pyplot as plt  # type: ignore
+except Exception:  # pragma: no cover - exercised only when matplotlib missing
+    plt = types.SimpleNamespace(
+        figure=lambda *a, **k: None,
+        bar=lambda *a, **k: None,
+        xticks=lambda *a, **k: None,
+        title=lambda *a, **k: None,
+        tight_layout=lambda *a, **k: None,
+        savefig=lambda path, *a, **k: Path(path).touch(),
+        close=lambda *a, **k: None,
+        imshow=lambda *a, **k: None,
+        yticks=lambda *a, **k: None,
+        colorbar=lambda *a, **k: None,
+    )
+    sys.modules.setdefault("matplotlib", types.SimpleNamespace(pyplot=plt))
+    sys.modules.setdefault("matplotlib.pyplot", plt)
 
 from experiments import reporting  # noqa: E402
 

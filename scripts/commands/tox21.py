@@ -56,6 +56,11 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             triage_pct=getattr(args, "triage_pct", 0.10),
             calibrate=not getattr(args, "no_calibrate", False),
             device=resolve_device(getattr(args, "device", "cpu")),
+            num_workers=getattr(args, "num_workers", 0),
+            pin_memory=getattr(args, "pin_memory", True),
+            persistent_workers=getattr(args, "persistent_workers", True),
+            prefetch_factor=getattr(args, "prefetch_factor", 4),
+            bf16=getattr(args, "bf16", False),
         )
         
         # Assemble a single metrics dictionary so all values appear on the same
