@@ -192,7 +192,7 @@ class GraphDataset:
             from rdkit.Chem import AllChem
         except Exception:
             logger.debug("RDKit not available; using fallback graph for %s", smiles)
-            return _fallback_graph_from_string(smiles)
+            return _fallback_graph_from_string(smiles, add_pos=add_3d)
 
         try:
             mol = Chem.MolFromSmiles(smiles, sanitize=False)
@@ -312,7 +312,7 @@ class GraphDataset:
 
         except Exception:
             # any unexpected RDKit error → robust fallback
-            return _fallback_graph_from_string(smiles)
+            return _fallback_graph_from_string(smiles, add_pos=add_3d)
 
     # ---------- Builders ---------- #
     @classmethod
@@ -656,7 +656,7 @@ def _append_geom_edge_attr(
     return geom if edge_attr is None else np.concatenate([edge_attr, geom], axis=1)
 
 
-def _fallback_graph_from_string(s: str) -> "GraphData":
+def _fallback_graph_from_string(s: str, add_pos: bool = False) -> "GraphData":
     """
     Deterministic tiny chain-graph from a string when RDKit isn't available.
     - N = max(2, min(10, len(s)))
@@ -666,12 +666,19 @@ def _fallback_graph_from_string(s: str) -> "GraphData":
     import numpy as _np
 
     n = max(2, min(10, len(s)))
+    arange = _np.arange(n, dtype=_np.float32)
     x = _np.stack(
-        [_np.arange(n, dtype=_np.float32), (_np.arange(n) % 3).astype(_np.float32)],
+        [arange, (arange % 3).astype(_np.float32)],
         axis=1,
     )  # [N,2]
     rows = _np.concatenate([_np.arange(n - 1), _np.arange(1, n)], axis=0)
     cols = _np.concatenate([_np.arange(1, n), _np.arange(n - 1)], axis=0)
     edge_index = _np.stack([rows.astype(_np.int64), cols.astype(_np.int64)], axis=0)
 
-    return GraphData(x=x, edge_index=edge_index, edge_attr=None)
+    pos = None
+    if add_pos:
+        pos = _np.zeros((n, 3), dtype=_np.float32)
+        pos[:, 0] = arange
+        x = _np.concatenate([x, pos], axis=1)
+
+    return GraphData(x=x, edge_index=edge_index, edge_attr=None, pos=pos)

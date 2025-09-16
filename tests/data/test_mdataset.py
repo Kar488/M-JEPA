@@ -7,9 +7,13 @@ import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
-pytest.importorskip("rdkit")
 
-RDKit_AVAILABLE = True
+try:  # Determine whether RDKit is available without skipping the whole module
+    import rdkit  # noqa: F401
+
+    RDKit_AVAILABLE = True
+except Exception:  # pragma: no cover - exercised when RDKit is absent
+    RDKit_AVAILABLE = False
 
 
 # training.supervised imports data.scaffold_split which requires RDKit. Provide a
@@ -20,6 +24,7 @@ sys.modules.setdefault("data.scaffold_split", dummy_scaffold)
 
 # import GraphDataset and GraphData
 from data import GraphDataset  # noqa: E402
+from data.mdataset import _fallback_graph_from_string  # noqa: E402
 from training.supervised import stratified_split  # noqa: E402
 
 
@@ -34,6 +39,18 @@ def test_smiles_to_graph_add_3d_provides_pos():
     g = GraphDataset.smiles_to_graph("CCO", add_3d=True, random_seed=0)
     assert g.pos is not None
     assert g.pos.shape[1] == 3
+
+
+def test_fallback_graph_adds_pos_when_requested():
+    word = "fallback"
+    g = _fallback_graph_from_string(word, add_pos=True)
+    n = max(2, min(10, len(word)))
+
+    assert g.pos is not None
+    assert g.pos.shape == (n, 3)
+    assert g.x.shape == (n, 5)
+    assert np.allclose(g.pos[:, 0], np.arange(n, dtype=np.float32))
+    assert np.allclose(g.x[:, -3:], g.pos)
 
 
 def test_smiles_to_graph_fallback_features_edges():
@@ -67,16 +84,24 @@ def test_smiles_to_graph_fallback_features_edges():
         # For "CCN" (ethylamine, C2H5NH2): 3 heavy atoms + 7 hydrogens = 10 nodes
         assert g1.x.shape == (10, 4), f"Expected [10, 4] for CCN, got {g1.x.shape}"
     else:
-        # Fallback: graph for "CCO" -> 2 nodes chain
-        expected_x0 = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
-        expected_e0 = np.array([[0, 1], [1, 0]], dtype=np.int64)
+        # Fallback graphs deterministically form linear chains whose size depends on the
+        # SMILES length.  Verify the construction for the two molecules we use here.
+        def _chain_expectations(length: int) -> tuple[np.ndarray, np.ndarray]:
+            n = max(2, min(10, length))
+            positions = np.arange(n, dtype=np.float32)
+            feats = np.stack([positions, (positions % 3).astype(np.float32)], axis=1)
+            rows = np.concatenate([np.arange(n - 1), np.arange(1, n)])
+            cols = np.concatenate([np.arange(1, n), np.arange(n - 1)])
+            edge_index = np.stack([rows.astype(np.int64), cols.astype(np.int64)], axis=0)
+            return feats, edge_index
+
+        expected_x0, expected_e0 = _chain_expectations(len("CCO"))
+        expected_x1, expected_e1 = _chain_expectations(len("CCN"))
+
         assert np.array_equal(g0.x, expected_x0)
         assert np.array_equal(g0.edge_index, expected_e0)
         assert g0.edge_attr is None
 
-        # Fallback: graph for "CCN" -> 3 nodes chain
-        expected_x1 = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]], dtype=np.float32)
-        expected_e1 = np.array([[0, 1, 1, 2], [1, 0, 2, 1]], dtype=np.int64)
         assert np.array_equal(g1.x, expected_x1)
         assert np.array_equal(g1.edge_index, expected_e1)
         assert g1.edge_attr is None
@@ -97,21 +122,23 @@ def test_get_batch_splitting_and_labels():
             labels, torch.tensor([0.0, 1.0])
         ), f"Expected [0.0, 1.0] labels, got {labels.tolist()}"
     else:
-        # Fallback: 2 nodes (CCO) + 3 nodes (CCN) = 5 nodes, 2 features
-        assert X.shape == (5, 2)
-        assert A.shape == (5, 5)
-        expected_A = torch.tensor(
-            [
-                [0, 1, 0, 0, 0],
-                [1, 0, 0, 0, 0],
-                [0, 0, 0, 1, 0],
-                [0, 0, 1, 0, 1],
-                [0, 0, 0, 1, 0],
-            ],
-            dtype=torch.float32,
-        )
+        n0 = max(2, min(10, len("CCO")))
+        n1 = max(2, min(10, len("CCN")))
+        total_nodes = n0 + n1
+
+        assert X.shape == (total_nodes, 2)
+        assert A.shape == (total_nodes, total_nodes)
+
+        expected_A = torch.zeros((total_nodes, total_nodes), dtype=torch.float32)
+        # Fill block-diagonal adjacency for each linear chain graph
+        offsets = [0, n0]
+        for offset, size in zip(offsets, (n0, n1)):
+            for idx in range(size - 1):
+                expected_A[offset + idx, offset + idx + 1] = 1.0
+                expected_A[offset + idx + 1, offset + idx] = 1.0
+
         assert torch.equal(A, expected_A)
-        assert torch.equal(ptr, torch.tensor([0, 2, 5], dtype=torch.long))
+        assert torch.equal(ptr, torch.tensor([0, n0, total_nodes], dtype=torch.long))
         assert torch.equal(labels, torch.tensor([0.0, 1.0]))
 
 
