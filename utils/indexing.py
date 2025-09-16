@@ -12,6 +12,10 @@ class _GatherNodes(torch.autograd.Function):
             index = index.to(dtype=torch.long)
         if index.device != x.device:
             index = index.to(device=x.device)
+        # ``ctx.needs_input_grad`` isn't safely traceable by ``torch.compile`` in
+        # some PyTorch builds. Cache the required information explicitly to avoid
+        # hitting Dynamo's unsupported ``__getitem__`` on the autograd context.
+        ctx._needs_grad_x = x.requires_grad
         ctx.index_shape = tuple(index.shape)
         ctx.rest_shape = tuple(x.shape[1:])
         flat_index = index.reshape(-1)
@@ -25,7 +29,7 @@ class _GatherNodes(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
         (flat_index,) = ctx.saved_tensors
-        if not ctx.needs_input_grad[0]:
+        if not ctx._needs_grad_x:
             return None, None
         grad_input = grad_output.reshape(flat_index.numel(), *ctx.rest_shape)
         grad_x = grad_output.new_zeros(ctx.x_shape)
