@@ -254,18 +254,22 @@ jobs:
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,
             GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,
-            GRID_MODE,WANDB_COUNT,EXPORT_OUT_PATH,EXPORT_PHASE2_PATH,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR
+            GRID_MODE,WANDB_COUNT,EXPORT_OUT_PATH,EXPORT_PHASE2_PATH,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR,
+            PE_MIN_PRETRAIN_EPOCHS,PE_MIN_FINETUNE_EPOCHS,PE_MIN_PRETRAIN_BATCHES
           script: |
             bash "$APP_DIR/scripts/ci/run-grid-or-phase1.sh"
         env:
           HARD_WALL_MINS: 600
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 10
+          WANDB_COUNT: 30
           GRID_MODE: "wandb"   # or "custom"
           EXPORT_OUT_PATH: ${{ env.GRID_DIR }}/best_grid_config.json
           EXPORT_PHASE2_PATH: ${{ env.APP_DIR }}/sweeps/grid_sweep_phase2.yaml
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
+          PE_MIN_PRETRAIN_EPOCHS: 5
+          PE_MIN_FINETUNE_EPOCHS: 1
+          PE_MIN_PRETRAIN_BATCHES: 200
 
 
   vast_sweep_phase2:

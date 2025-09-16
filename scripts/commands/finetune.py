@@ -303,6 +303,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     device=device,
                     patience=args.patience,
                     devices=args.devices,
+                    head=head,
                     optimizer=optimizer,
                     scheduler=scheduler,
                     # dataloader & AMP knobs
@@ -312,6 +313,10 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     prefetch_factor=getattr(args, "prefetch_factor", 4),
                     bf16=getattr(args, "bf16", False),
                 )
+
+                trained_head = metrics.pop("head", None)
+                if trained_head is not None:
+                    head = trained_head
 
                 current = _lookup_metric(metrics, metric_name)
 
@@ -353,11 +358,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                             os.path.join(seed_dir, f"ft_epoch_{epoch+1}.pt"),
                             **save_payload,
                         )
-                # advance LR schedule after the epoch
-                try:
-                    scheduler.step()
-                except Exception:
-                    pass
+                
             # Fallback: if no best was recorded, promote last snapshot to best + head.pt
             if not wrote_best:
                 logger.info("Attempting to write best")

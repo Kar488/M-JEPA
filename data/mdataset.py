@@ -6,7 +6,7 @@ import pickle
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 try:  # pragma: no cover - optional dependency
@@ -30,16 +30,26 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-def _safe_smiles_to_graph(smiles: str, func):
+def _safe_smiles_to_graph(smiles: str, func) -> Optional[Dict[str, Any]]:
     """Helper for multiprocessing to convert a SMILES string into a graph.
 
-    Any exception raised by ``func`` results in ``None`` so that callers can
-    skip failed conversions while preserving input order.
+    The returned object is a plain mapping that only contains NumPy arrays and
+    ``None`` values, making it trivially picklable when used with
+    :class:`concurrent.futures.ProcessPoolExecutor`.  Any exception raised by
+    ``func`` results in ``None`` so that callers can skip failed conversions
+    while preserving input order.
     """
     try:
-        return func(smiles)
+        g = func(smiles)
     except Exception:
         return None
+    
+    return {
+        "x": g.x,
+        "edge_index": g.edge_index,
+        "edge_attr": g.edge_attr,
+        "pos": g.pos,
+    }
 
 
 @dataclass
@@ -71,6 +81,17 @@ class GraphData:
             j = torch.as_tensor(self.edge_index[1], dtype=torch.long)
             adj[i, j] = 1.0
         return x, adj
+
+def _graph_from_state(state: Dict[str, Any]) -> GraphData:
+    """Recreate a :class:`GraphData` instance from a serialisable mapping."""
+
+    return GraphData(
+        x=state["x"],
+        edge_index=state["edge_index"],
+        edge_attr=state.get("edge_attr"),
+        pos=state.get("pos"),
+    )
+
 
 from typing import Optional, Sequence
 import numpy as np
@@ -396,16 +417,18 @@ class GraphDataset:
 
         if num_workers > 0:
             with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
-                for i, g in enumerate(ex.map(partial(_safe_smiles_to_graph, func=func), smiles)):
-                    if g is not None:
-                        graphs.append(g)
+                for i, g_state in enumerate(
+                    ex.map(partial(_safe_smiles_to_graph, func=func), smiles)
+                ):
+                    if g_state is not None:
+                        graphs.append(_graph_from_state(g_state))
                         smiles_out.append(smiles[i])
                         valid_indices.append(i)
         else:
             for i, sm in enumerate(smiles):
-                g = _safe_smiles_to_graph(sm, func)
-                if g is not None:
-                    graphs.append(g)
+                g_state = _safe_smiles_to_graph(sm, func)
+                if g_state is not None:
+                    graphs.append(_graph_from_state(g_state))
                     smiles_out.append(sm)
                     valid_indices.append(i)
         # Filter labels to match valid graphs

@@ -81,6 +81,32 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
   PE_METRIC="val_rmse"
   [[ "${TASK_FROM_PE:-regression}" == "classification" ]] && PE_METRIC="val_auc"
+
+  # Require that paired-effect analysis only considers runs that have reached
+  # the minimum training budgets that Phase-1 sweeps schedule.  Allow
+  # overrides via environment variables so CI callers can tighten or loosen the
+  # thresholds without editing this script.
+  if [[ -z "${PE_MIN_PRETRAIN_EPOCHS+x}" ]]; then
+    PE_MIN_PRETRAIN_EPOCHS=5
+  fi
+  if [[ -z "${PE_MIN_FINETUNE_EPOCHS+x}" ]]; then
+    PE_MIN_FINETUNE_EPOCHS=1
+  fi
+  if [[ -z "${PE_MIN_PRETRAIN_BATCHES+x}" ]]; then
+    PE_MIN_PRETRAIN_BATCHES=200
+  fi
+
+  PE_FILTER_FLAGS=()
+  if [[ -n "${PE_MIN_PRETRAIN_EPOCHS}" ]]; then
+    PE_FILTER_FLAGS+=("--min_pretrain_epochs" "${PE_MIN_PRETRAIN_EPOCHS}")
+  fi
+  if [[ -n "${PE_MIN_FINETUNE_EPOCHS}" ]]; then
+    PE_FILTER_FLAGS+=("--min_finetune_epochs" "${PE_MIN_FINETUNE_EPOCHS}")
+  fi
+  if [[ -n "${PE_MIN_PRETRAIN_BATCHES}" ]]; then
+    PE_FILTER_FLAGS+=("--min_pretrain_batches" "${PE_MIN_PRETRAIN_BATCHES}")
+  fi
+
   "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
     python -u "$APP_DIR/scripts/ci/paired_effect_from_wandb.py" \
       --project "${WANDB_PROJECT}" \
@@ -89,6 +115,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
       --aggregate pair-seed \
       --seed "${CI_SEED:-42}" \
       --strict \
+      "${PE_FILTER_FLAGS[@]}" \
     2>&1 | tee "${LOG_DIR:-$APP_DIR/logs}/paired_effect.log"
 
   PE_JSON="${GRID_DIR:-$APP_DIR/grid}/paired_effect.json"

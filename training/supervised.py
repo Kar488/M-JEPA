@@ -20,6 +20,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import DataLoader
 
 from data.mdataset import GraphDataset
@@ -496,12 +499,19 @@ def train_linear_head(
     batch_size: int = 32,
     device: str = "cuda",
     patience: int = 10,
-    num_workers=0, pin_memory=True, persistent_workers=True, prefetch_factor=4, bf16=False, 
+    num_workers=0,
+    pin_memory=True,
+    persistent_workers=True,
+    prefetch_factor=4,
+    bf16=False,
     use_scaffold: bool = False,
     devices: int = 1,
     *,
     max_batches: int = 0,
     time_budget_mins: int = 0,
+    head: Optional[nn.Module] = None,
+    optimizer: Optional[Optimizer] = None,
+    scheduler: Optional[_LRScheduler] = None,
     **unused,
 ) -> Dict[str, float]:
     """Train a linear head on a frozen encoder for classification or regression.
@@ -530,6 +540,13 @@ def train_linear_head(
         batch_indices: Optional list of indices for a single batch; if provided, overrides internal splitting.
         max batches: Maximum number of batches to train on; if set, overrides epochs
         time_budget_mins: Time budget in minutes for the training; if set, overrides epochs.
+        head: Optional linear head module to optimise.  When ``None`` a
+            single-layer head is constructed internally.
+        optimizer: Optional optimiser to use for the head (and any
+            unfrozen encoder parameters).  A new optimiser is created if
+            one is not supplied.
+        scheduler: Optional learning-rate scheduler that steps after
+            each epoch, provided at least one optimisation step ran.
     Returns:
         A dictionary of metrics on the test set (only populated on rank 0).
     """
@@ -578,23 +595,36 @@ def train_linear_head(
         val_idx = indices[train_end:val_end]
         test_idx = indices[val_end:]
 
-    in_dim = getattr(encoder, "hidden_dim", None) or getattr(encoder, "out_dim", None)
-    if in_dim is None:
-        # Fallback: infer embedding size from one sample
-        with torch.no_grad():
-            emb = _encode_graph(encoder, dataset.graphs[0])
-            in_dim = int(emb.shape[-1])
-    head = nn.Linear(in_dim, 1).to(device_t)
+    head_module = head
+    if head_module is None:
+        in_dim = getattr(encoder, "hidden_dim", None) or getattr(encoder, "out_dim", None)
+        if in_dim is None:
+            # Fallback: infer embedding size from one sample
+            with torch.no_grad():
+                emb = _encode_graph(encoder, dataset.graphs[0])
+                in_dim = int(emb.shape[-1])
+        head_module = nn.Linear(in_dim, 1)
+    head_module = head_module.to(device_t)
 
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
             encoder, device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None
         )
-        head = nn.parallel.DistributedDataParallel(
-            head, device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None
+        head_module = nn.parallel.DistributedDataParallel(
+            head_module, device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None
         )
+    head_param_source = (
+        head_module.module
+        if isinstance(head_module, nn.parallel.DistributedDataParallel)
+        else head_module
+    )
     loss_fn = nn.BCEWithLogitsLoss() if task_type == "classification" else nn.MSELoss()
-    optimiser = torch.optim.Adam(head.parameters(), lr=lr)
+    optimiser: Optimizer
+    if optimizer is not None:
+        optimiser = optimizer
+    else:
+        params = head_module.parameters()
+        optimiser = torch.optim.Adam(params, lr=lr)
     early_stopper = EarlyStopping(patience=patience) if patience > 0 else None
 
     rank = get_rank() if distributed else 0
@@ -648,7 +678,7 @@ def train_linear_head(
                 break
 
             encoder.eval()
-            head.train()
+            head_module.train()
             batch_losses = []
             batches_done = 0
 
@@ -674,12 +704,12 @@ def train_linear_head(
                         node_embeddings = _encode_graph(encoder, graph_obj)
 
                 graph_emb = _pool_batch_embeddings(node_embeddings, batch_ptr)
-                param = next(head.parameters(), None)
+                param = next(head_param_source.parameters(), None)
                 if param is not None and graph_emb.dtype != param.dtype:
                     graph_emb = graph_emb.to(param.dtype)
 
                 with _amp_context():
-                    preds = head(graph_emb).squeeze(1)
+                    preds = head_module(graph_emb).squeeze(1)
 
                 if not torch.isfinite(preds).all():
                     preds = torch.nan_to_num(preds)
@@ -701,7 +731,7 @@ def train_linear_head(
 
             if early_stopper is not None and val_loader is not None:
                 encoder.eval()
-                head.eval()
+                head_module.eval()
                 val_losses = []
 
                 for batch in val_loader:
@@ -717,12 +747,12 @@ def train_linear_head(
                             node_embeddings = _encode_graph(encoder, graph_obj)
 
                     graph_emb = _pool_batch_embeddings(node_embeddings, batch_ptr)
-                    param = next(head.parameters(), None)
+                    param = next(head_param_source.parameters(), None)
                     if param is not None and graph_emb.dtype != param.dtype:
                         graph_emb = graph_emb.to(param.dtype)
 
                     with _amp_context():
-                        preds = head(graph_emb).squeeze(1)
+                        preds = head_module(graph_emb).squeeze(1)
                     preds = torch.nan_to_num(preds)
                     targets = batch_labels.to(dtype=preds.dtype)
                     vloss = loss_fn(preds, targets).item()
@@ -736,11 +766,14 @@ def train_linear_head(
                 if early_stopper.step(avg_val_loss):
                     logger.info("Early stopping at epoch %d", epoch)
                     break
+            
+            if scheduler is not None and batches_done > 0:
+                scheduler.step()
 
     metrics: Dict[str, float] = {}
     if is_main_process() or not distributed:
         encoder.eval()
-        head.eval()
+        head_module.eval()
         all_targets = []
         all_preds = []
 
@@ -758,12 +791,12 @@ def train_linear_head(
                         node_embeddings = _encode_graph(encoder, graph_obj)
 
                 graph_emb = _pool_batch_embeddings(node_embeddings, batch_ptr)
-                param = next(head.parameters(), None)
+                param = next(head_param_source.parameters(), None)
                 if param is not None and graph_emb.dtype != param.dtype:
                     graph_emb = graph_emb.to(param.dtype)
 
-                with _amp_context():
-                    preds = head(graph_emb).squeeze(1)
+                    with _amp_context():
+                        preds = head_module(graph_emb).squeeze(1)
                 preds = torch.nan_to_num(preds)
                 all_preds.append(preds.detach().to(torch.float32).cpu().numpy())
                 all_targets.append(batch_labels.detach().to(torch.float32).cpu().numpy())
@@ -781,7 +814,7 @@ def train_linear_head(
             metrics = compute_classification_metrics(y_true, y_pred)
         else:
             metrics = compute_regression_metrics(y_true, y_pred)
-        metrics["head"] = head.module if isinstance(head, nn.parallel.DistributedDataParallel) else head
+        metrics["head"] = head_param_source
 
     if distributed:
         cleanup()

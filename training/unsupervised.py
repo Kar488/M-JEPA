@@ -511,6 +511,15 @@ def train_jepa(
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     distributed = (devices > 1) and init_distributed(ddp_backend)
     device_t = torch.device(device)
+    pin_memory_enabled = bool(
+        pin_memory and device_t.type == "cuda" and torch.cuda.is_available()
+    )
+    if pin_memory and not pin_memory_enabled:
+        warnings.warn(
+            "pin_memory=True requested but no CUDA device is active; disabling pinned-memory dataloader.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     can_compile = (
         compile_models and hasattr(torch, "compile") and device_t.type != "cpu"
     )
@@ -658,7 +667,7 @@ def train_jepa(
             pair_dataset,
             batch_size=batch_size,
             num_workers=num_workers,
-            pin_memory=pin_memory,
+            pin_memory=pin_memory_enabled,
             persistent_workers=persistent_workers,
             prefetch_factor=prefetch_factor,
             collate_fn=_collate_graph_pair,
@@ -820,6 +829,15 @@ def train_contrastive(
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     distributed = (devices > 1) and init_distributed(ddp_backend)
     device_t = torch.device(device)
+    pin_memory_enabled = bool(
+        pin_memory and device_t.type == "cuda" and torch.cuda.is_available()
+    )
+    if pin_memory and not pin_memory_enabled:
+        warnings.warn(
+            "pin_memory=True requested but no CUDA device is active; disabling pinned-memory dataloader.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
             encoder.to(device_t),
@@ -934,7 +952,7 @@ def train_contrastive(
             pair_dataset,
             batch_size=batch_size,
             num_workers=num_workers,
-            pin_memory=pin_memory,
+            pin_memory=pin_memory_enabled,
             persistent_workers=persistent_workers,
             prefetch_factor=prefetch_factor,
             collate_fn=_collate_graph_pair,

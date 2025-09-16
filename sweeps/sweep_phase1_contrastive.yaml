@@ -19,6 +19,7 @@ parameters:
   ema_decay:            {values: [0.99, 0.996, 0.998]}
   add_3d:               {values: [0, 1]}
   pretrain_batch_size:  {values: [64, 128, 256]}
+  # Keep budgets aligned with the paired-effect filter thresholds (see run-grid-or-phase1.sh).
   pretrain_epochs:      {values: [5, 10, 15]}
   finetune_epochs:      {values: [1, 3]}
   learning_rate:        { values: [1e-4, 2e-4, 3e-4, 5e-4]}
