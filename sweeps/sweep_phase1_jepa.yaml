@@ -8,6 +8,8 @@ early_terminate: {type: hyperband, min_iter: 3}
 parameters:
   labeled_dir:   {value: "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train"}
   unlabeled_dir: {value: "${env:APP_DIR}/data/ZINC-canonicalized"}
+  cache-datasets: {value: 1}
+  cache-dir:      {value: "${env:CACHE_DIR}"}
 
   training_method: {value: jepa}
 

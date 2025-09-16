@@ -1,11 +1,18 @@
 import argparse
-import numpy as np
+import json
 import pytest
 import types
 import sys
 
-# Skip tests if torch is not installed
-torch = pytest.importorskip("torch")
+try:  # pragma: no cover - optional dependency
+    import numpy as np
+except ModuleNotFoundError:  # pragma: no cover
+    np = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency
+    import torch  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    torch = None  # type: ignore[assignment]
 
 # Provide a minimal RDKit stub to satisfy imports
 try:  # pragma: no cover - optional dependency
@@ -62,6 +69,8 @@ def _make_dataset(n: int, labeled: bool) -> GraphDataset:
     return GraphDataset(graphs, labels=labels)
 
 
+@pytest.mark.skipif(np is None, reason="numpy is required")
+@pytest.mark.skipif(torch is None, reason="torch is required")
 def test_run_full_mode(monkeypatch, tmp_path):
     """Integration-style test for the full training pipeline."""
 
@@ -120,3 +129,53 @@ def test_run_full_mode(monkeypatch, tmp_path):
     )
 
     main.run_full(args)
+
+
+def test_run_grid_mode_cache_dir_env(monkeypatch, tmp_path):
+    """`run_grid_mode` should expand $CACHE_DIR placeholders from YAML specs."""
+
+    cache_root = tmp_path / "cache_root"
+    monkeypatch.setenv("CACHE_DIR", str(cache_root))
+
+    recorded = []
+
+    def _fake_loader(dirpath, *_, cache_dir=None, **__):  # type: ignore[override]
+        recorded.append(cache_dir)
+        return object()
+
+    monkeypatch.setattr(main, "load_directory_dataset", _fake_loader)
+
+    class _DummyFrame:
+        def __init__(self) -> None:
+            self.writes = []
+
+        def to_csv(self, path, index=False):
+            self.writes.append((path, index))
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("dummy")
+
+        def head(self):
+            return "dummy"
+
+    def _fake_run_grid_search(**kwargs):
+        kwargs["unlabeled_dataset_fn"](False)
+        kwargs["eval_dataset_fn"](False)
+        return _DummyFrame()
+
+    stub = types.ModuleType("grid_search")
+    stub.run_grid_search = _fake_run_grid_search
+    monkeypatch.setitem(sys.modules, "experiments.grid_search", stub)
+
+    spec_path = tmp_path / "spec.json"
+    output_csv = tmp_path / "grid.csv"
+    spec_path.write_text(
+        json.dumps({"cache_dir": "${CACHE_DIR}/zinc", "output_csv": str(output_csv)}),
+        encoding="utf-8",
+    )
+
+    args = argparse.Namespace(sweep=str(spec_path), use_scaffold=False)
+    main.run_grid_mode(args)
+
+    expected = tmp_path / "cache_root" / "zinc"
+    assert recorded == [str(expected), str(expected)]
+    assert output_csv.exists()
