@@ -511,7 +511,10 @@ def train_jepa(
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     distributed = (devices > 1) and init_distributed(ddp_backend)
     device_t = torch.device(device)
-    compile_fn = torch.compile if (compile_models and hasattr(torch, "compile")) else None
+    can_compile = (
+        compile_models and hasattr(torch, "compile") and device_t.type != "cpu"
+    )
+    compile_fn = torch.compile if can_compile else None
 
     def _maybe_compile(module: nn.Module, name: str) -> nn.Module:
         if compile_fn is None:
@@ -713,9 +716,6 @@ def train_jepa(
                 opt.step()
             if sch is not None:
                 sch.step()
-
-            _enc = encoder.module if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder
-            ema.update(_enc)
 
             lv = float(loss.detach().cpu().item())
             ep_loss += lv
