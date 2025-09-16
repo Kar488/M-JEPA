@@ -1,6 +1,6 @@
 unlabeled_dir: "data/ZINC_canonicalized"
 smiles_col: "smiles"
-cache_dir: "cache/zinc"
+cache_dir: "${CACHE_DIR}/zinc"
 prefix_filter: "train"
 device: "cuda"
 task_type: "classification"

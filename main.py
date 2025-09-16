@@ -583,6 +583,41 @@ def run_full(args: argparse.Namespace) -> None:
 # ----------------------------- Grid runner ----------------------------- #
 
 
+def _resolve_cache_dir(raw_value: Optional[str], default_dir: str) -> str:
+    """Resolve cache directory values that may reference ``$CACHE_DIR``.
+
+    Parameters
+    ----------
+    raw_value:
+        Value provided in the sweep specification.  It may include
+        environment-variable placeholders such as ``${CACHE_DIR}``.
+    default_dir:
+        Default directory to fall back to when ``raw_value`` is empty or the
+        placeholder cannot be expanded (e.g. ``CACHE_DIR`` unset).
+    """
+
+    if raw_value is None:
+        return default_dir
+
+    raw_str = str(raw_value).strip()
+    if not raw_str:
+        return default_dir
+
+    expanded = os.path.expanduser(os.path.expandvars(raw_str))
+    if "$" not in expanded:
+        return expanded
+
+    if raw_str.startswith("${CACHE_DIR}"):
+        suffix = raw_str[len("${CACHE_DIR}") :]
+    elif raw_str.startswith("$CACHE_DIR"):
+        suffix = raw_str[len("$CACHE_DIR") :]
+    else:
+        return default_dir
+
+    suffix = suffix.lstrip("/ ")
+    return os.path.join(default_dir, suffix) if suffix else default_dir
+
+
 def run_grid_mode(args: argparse.Namespace) -> None:
     """Run YAML/JSON sweep. Results CSV printed and saved to spec['output_csv']."""
 
@@ -603,7 +638,9 @@ def run_grid_mode(args: argparse.Namespace) -> None:
     # data factory
     unlabeled_dir = spec.get("unlabeled_dir", "data/ZINC_canonicalized")
     smiles_col = spec.get("smiles_col", "smiles")
-    cache_dir = spec.get("cache_dir", "cache/zinc")
+    default_cache_dir = os.environ.get("CACHE_DIR", "cache/zinc")
+    default_cache_dir = os.path.expanduser(os.path.expandvars(default_cache_dir))
+    cache_dir = _resolve_cache_dir(spec.get("cache_dir"), default_cache_dir)
     prefix_filter = spec.get("prefix_filter", "train")
     add_3d_default = bool(spec.get("add_3d_default", False))
 
