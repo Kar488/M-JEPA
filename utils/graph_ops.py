@@ -85,7 +85,26 @@ def _encode_graph(encoder: torch.nn.Module, g: Any):
         or (second_arg in {"batch", "g", "graph", "data"})
         or hasattr(mod, "encode_graph")
     ):
-        return encoder(g)
+        try:
+            return encoder(g)
+        except (TypeError, AttributeError) as exc:
+            graphs = getattr(g, "graphs", None)
+            if graphs is None:
+                raise
+            outputs = []
+            for graph in graphs:
+                out = encoder(graph)
+                if not isinstance(out, torch.Tensor):
+                    out = torch.as_tensor(out)
+                if out.dim() == 0:
+                    out = out.unsqueeze(0)
+                if out.dim() == 1:
+                    out = out.unsqueeze(0)
+                outputs.append(out)
+            try:
+                return torch.cat(outputs, dim=0)
+            except Exception:
+                raise exc
 
     # otherwise prepare tensors as before
     device = _ref_device(encoder)
@@ -145,14 +164,17 @@ def _pool_graph_emb(h: torch.Tensor, g: Any) -> torch.Tensor:
         h = torch.as_tensor(h)
 
     batch = getattr(g, "batch", None)
-    if batch is not None:
-        try:
-            from torch_geometric.nn import global_mean_pool  # type: ignore
+    if batch is not None and isinstance(batch, torch.Tensor):
+        if batch.numel() == h.size(0):
+            try:
+                from torch_geometric.nn import global_mean_pool  # type: ignore
 
-            return global_mean_pool(h, batch)
-        except Exception:
-            uniq = torch.unique(batch)
-            return torch.stack([h[batch == i].mean(dim=0) for i in uniq], dim=0)
+                return global_mean_pool(h, batch)
+            except Exception:
+                uniq = torch.unique(batch)
+                return torch.stack([h[batch == i].mean(dim=0) for i in uniq], dim=0)
+        else:
+            return h
 
     if h.dim() == 2:
         return h.mean(dim=0)
