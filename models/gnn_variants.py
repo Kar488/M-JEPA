@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 from data.mdataset import GraphData
 from models.base import EncoderBase
+from utils.indexing import gather_nodes
 from utils.pooling import global_mean_pool
 from utils.scatter import scatter_sum
 
@@ -22,8 +23,9 @@ class GraphSAGELayer(nn.Module):
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         i, j = edge_index[0], edge_index[1]
+        msg = gather_nodes(x, j)
         if self.agg == "mean":
-            agg = scatter_sum(i, x[j], dim_size=x.size(0))
+            agg = scatter_sum(i, msg, dim_size=x.size(0))
             deg = scatter_sum(
                 i,
                 i.new_ones(i.size(), dtype=x.dtype),
@@ -35,11 +37,11 @@ class GraphSAGELayer(nn.Module):
             agg = torch.zeros_like(x)
             agg.fill_(-1e9)
             agg = torch.max(
-                agg.index_copy(0, i, x[j]), dim=0
+                agg.index_copy(0, i, msg), dim=0
             ).values  # rough max; simple fallback
         else:
             # LSTM aggregator omitted; can be added later
-            agg = scatter_sum(i, x[j], dim_size=x.size(0))
+            agg = scatter_sum(i, msg, dim_size=x.size(0))
             deg = scatter_sum(
                 i,
                 i.new_ones(i.size(), dtype=x.dtype),
@@ -95,7 +97,7 @@ class GINLayer(nn.Module):
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         i, j = edge_index[0], edge_index[1]
-        agg = scatter_sum(i, x[j], dim_size=x.size(0))
+        agg = scatter_sum(i, gather_nodes(x, j), dim_size=x.size(0))
         out = self.mlp((1 + self.eps) * x + agg)
         out = self.drop(out)
         return self.norm(out)
@@ -148,7 +150,9 @@ class MultiHeadGATLayer(nn.Module):
         xh = self.lin(x).view(N, H, D)  # [N, H, D]
 
         # scores
-        alpha = (xh[i] * self.attn_dst).sum(-1) + (xh[j] * self.attn_src).sum(
+        xh_i = gather_nodes(xh, i)
+        xh_j = gather_nodes(xh, j)
+        alpha = (xh_i * self.attn_dst).sum(-1) + (xh_j * self.attn_src).sum(
             -1
         )  # [E, H]
         alpha = self.leaky(alpha)
@@ -164,11 +168,11 @@ class MultiHeadGATLayer(nn.Module):
         except Exception:
             # Manual softmax per target node
             denom = scatter_sum(i, alpha_exp, dim_size=N)
-            denom = denom[i]
+            denom = gather_nodes(denom, i)
         attn = alpha_exp / (denom + 1e-9)
 
         # aggregate
-        out = scatter_sum(i, attn.unsqueeze(-1) * xh[j], dim_size=N)
+        out = scatter_sum(i, attn.unsqueeze(-1) * xh_j, dim_size=N)
         out = out.reshape(N, H * D) if self.concat else out.mean(dim=1)
         out = self.out_proj(out)
         out = self.drop(out)
@@ -219,7 +223,7 @@ class GINELayer(nn.Module):
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
         i, j = edge_index[0], edge_index[1]
-        msg = x[j]
+        msg = gather_nodes(x, j)
         if self.edge_lin is not None:
             ea = self.edge_lin(edge_attr.to(x.dtype))
             msg = msg + ea
@@ -288,7 +292,8 @@ class DMPNNLayer(nn.Module):
         # Edge hidden states h_ij
         if edge_attr.dtype != x.dtype:
             edge_attr = edge_attr.to(x.dtype)
-        e_hidden = self.edge_mlp(torch.cat([x[j], edge_attr], dim=-1))  # [E, H]
+        src_x = gather_nodes(x, j)
+        e_hidden = self.edge_mlp(torch.cat([src_x, edge_attr], dim=-1))  # [E, H]
 
         # Aggregate incoming edge states to node i
         # Use e_hidden.dtype to match mixed‑precision (bf16/fp32) when autocast is enabled.
@@ -436,7 +441,8 @@ class SchNetInteraction(nn.Module):
             f_ij = f_ij.to(x.dtype)
 
         # Edge messages: modulate source embedding with edge filter
-        msg = f_ij * Wxh[j]                # [E, D]
+        Wxh_j = gather_nodes(Wxh, j)
+        msg = f_ij * Wxh_j                # [E, D]
         if msg.dtype != x.dtype:
             msg = msg.to(x.dtype)
 
@@ -463,7 +469,9 @@ class SchNet3D(EncoderBase):
         x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
         e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)
         i, j = e[0], e[1]
-        rij = pos[i] - pos[j]
+        pos_i = gather_nodes(pos, i)
+        pos_j = gather_nodes(pos, j)
+        rij = pos_i - pos_j
         dij = torch.linalg.norm(rij, dim=-1)        # [E]
         rbf = self.rbf(dij)                         # [E, K]
         x = self.proj(x)
