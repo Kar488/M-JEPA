@@ -848,8 +848,10 @@ def build_parser() -> argparse.ArgumentParser:
     sweep.add_argument("--time-budget-mins", type=int, default=0)
     sweep.add_argument(
         "--cache-datasets",
+        "--cache_datasets",
         dest="cache_datasets",
-        action="store_true",
+        action=BoolFlag,
+        default=False,
         help="Serialize GraphDataset objects for reuse across sweep trials",
     )
 
