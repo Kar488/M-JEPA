@@ -155,7 +155,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   if [[ "$FINAL_P2" != "$CANONICAL_P2" ]]; then
     mkdir -p "$(dirname "$FINAL_P2")"
     cp "$TMP_PHASE2" "$FINAL_P2"
-    
+  fi
 
   SWEEP_ID2="$(wandb_sweep_create "$FINAL_P2")"
   [[ "$SWEEP_ID2" =~ ^[a-z0-9]{8}$ ]] || { echo "[phase2][fatal] bad sweep id: '$SWEEP_ID2'" >&2; exit 1; }
