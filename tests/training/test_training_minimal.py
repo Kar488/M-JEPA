@@ -17,6 +17,7 @@ class GraphData:
     x: np.ndarray
     edge_index: np.ndarray
     edge_attr: np.ndarray | None = None
+    pos: np.ndarray | None = None
 
 
 class GraphDataset:
@@ -58,6 +59,18 @@ def apply_graph_augmentations(g, **kwargs):
     return g
 
 
+def delete_random_bond(g):
+    return g
+
+
+def mask_random_atom(g):
+    return g
+
+
+def remove_random_subgraph(g):
+    return g
+
+
 def mask_subgraph(g, mask_ratio, contiguous):
     return g, g
 
@@ -84,6 +97,9 @@ def stub_data_modules(monkeypatch):
 
     data_augment = types.ModuleType("data.augment")
     data_augment.apply_graph_augmentations = apply_graph_augmentations
+    data_augment.delete_random_bond = delete_random_bond
+    data_augment.mask_random_atom = mask_random_atom
+    data_augment.remove_random_subgraph = remove_random_subgraph
     data_augment.mask_subgraph = mask_subgraph
     data_augment.generate_views = generate_views
     data_augment.AugmentationConfig = AugmentationConfig
