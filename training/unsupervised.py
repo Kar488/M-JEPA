@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import os
 import time as _t
+import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, List, Optional, Sequence, Tuple
 
@@ -503,32 +504,47 @@ def train_jepa(
     pin_memory=True, 
     persistent_workers=True, 
     prefetch_factor=4, 
-    bf16=False, 
+    bf16=False,
+    compile_models: bool = True,
     **unused
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     distributed = (devices > 1) and init_distributed(ddp_backend)
     device_t = torch.device(device)
+    compile_fn = torch.compile if (compile_models and hasattr(torch, "compile")) else None
+
+    def _maybe_compile(module: nn.Module, name: str) -> nn.Module:
+        if compile_fn is None:
+            return module
+        try:
+            return compile_fn(module)
+        except Exception as exc:  # pragma: no cover - backend dependent
+            warnings.warn(
+                f"torch.compile failed for {name}: {exc}. Falling back to eager execution.",
+                RuntimeWarning,
+            )
+            return module
+
+    encoder = _maybe_compile(encoder.to(device_t), "encoder")
+    predictor = _maybe_compile(predictor.to(device_t), "predictor")
+    ema_encoder = ema_encoder.to(device_t).eval()
+
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
-            encoder.to(device_t),
+            encoder,
             device_ids=[torch.cuda.current_device()]
             if device_t.type == "cuda"
             else None,
         )
         predictor = nn.parallel.DistributedDataParallel(
-            predictor.to(device_t),
+            predictor,
             device_ids=[torch.cuda.current_device()]
             if device_t.type == "cuda"
             else None,
         )
-        ema_encoder = ema_encoder.to(device_t).eval()
-        encoder.train()
-        predictor.train()
-    else:
-        encoder.to(device_t).train()
-        ema_encoder.to(device_t).eval()
-        predictor.to(device_t).train()
+
+    encoder.train()
+    predictor.train()
 
     # --- Torch compatibility shim: some Torch builds (e.g., 1.13)
     # don't expose ``torch._dynamo``
