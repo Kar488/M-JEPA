@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from data.mdataset import GraphData
 from models.base import EncoderBase
 from utils.graph_ops import _pool_graph_emb, _to_tensor
+from utils.scatter import scatter_sum
 
 
 class EdgeMPNNLayer(nn.Module):
@@ -46,8 +47,7 @@ class EdgeMPNNLayer(nn.Module):
             m_ij = m_ij.to(x.dtype)
 
         # aggregate by target index i
-        agg = torch.zeros(x.size(0), m_ij.size(1), device=x.device, dtype=x.dtype)
-        agg.index_add_(0, i_idx, m_ij)
+        agg = scatter_sum(i_idx, m_ij, dim_size=x.size(0))
 
         # update + residual + norm
         out = self.upd(torch.cat([x, agg], dim=-1))

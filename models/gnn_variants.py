@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from data.mdataset import GraphData
 from models.base import EncoderBase
 from utils.pooling import global_mean_pool
+from utils.scatter import scatter_sum
 
 
 class GraphSAGELayer(nn.Module):
@@ -21,25 +22,29 @@ class GraphSAGELayer(nn.Module):
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         i, j = edge_index[0], edge_index[1]
-        agg = torch.zeros_like(x)
         if self.agg == "mean":
-            deg = torch.zeros(x.size(0), device=x.device).index_add_(
-                0, i, torch.ones_like(i, dtype=torch.float)
+            agg = scatter_sum(i, x[j], dim_size=x.size(0))
+            deg = scatter_sum(
+                i,
+                i.new_ones(i.size(), dtype=x.dtype),
+                dim_size=x.size(0),
             )
-            agg.index_add_(0, i, x[j])
             deg = deg.clamp(min=1.0).unsqueeze(-1)
             agg = agg / deg
         elif self.agg == "max":
+            agg = torch.zeros_like(x)
             agg.fill_(-1e9)
             agg = torch.max(
                 agg.index_copy(0, i, x[j]), dim=0
             ).values  # rough max; simple fallback
         else:
             # LSTM aggregator omitted; can be added later
-            deg = torch.zeros(x.size(0), device=x.device).index_add_(
-                0, i, torch.ones_like(i, dtype=torch.float)
+            agg = scatter_sum(i, x[j], dim_size=x.size(0))
+            deg = scatter_sum(
+                i,
+                i.new_ones(i.size(), dtype=x.dtype),
+                dim_size=x.size(0),
             )
-            agg.index_add_(0, i, x[j])
             deg = deg.clamp(min=1.0).unsqueeze(-1)
             agg = agg / deg
         out = self.lin(torch.cat([x, agg], dim=-1))
@@ -90,8 +95,7 @@ class GINLayer(nn.Module):
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         i, j = edge_index[0], edge_index[1]
-        agg = torch.zeros_like(x)
-        agg.index_add_(0, i, x[j])
+        agg = scatter_sum(i, x[j], dim_size=x.size(0))
         out = self.mlp((1 + self.eps) * x + agg)
         out = self.drop(out)
         return self.norm(out)
@@ -151,24 +155,20 @@ class MultiHeadGATLayer(nn.Module):
         # softmax by i (target)
         import torch_scatter  # if not installed, we fallback below
 
+        alpha_exp = torch.exp(alpha)
         try:
             # scatter softmax
             from torch_scatter import segment_softmax
 
-            alpha_exp = torch.exp(alpha)
-            denom = (
-                segment_softmax(alpha_exp, i) * 0 + alpha_exp
-            )  # not ideal; fallback below
+            denom = segment_softmax(alpha_exp, i) * 0 + alpha_exp
         except Exception:
             # Manual softmax per target node
-            denom = torch.zeros((N, H), device=x.device)
-            denom.index_add_(0, i, torch.exp(alpha))
+            denom = scatter_sum(i, alpha_exp, dim_size=N)
             denom = denom[i]
-        attn = torch.exp(alpha) / (denom + 1e-9)
+        attn = alpha_exp / (denom + 1e-9)
 
         # aggregate
-        out = torch.zeros((N, H, D), device=x.device)
-        out.index_add_(0, i, attn.unsqueeze(-1) * xh[j])
+        out = scatter_sum(i, attn.unsqueeze(-1) * xh[j], dim_size=N)
         out = out.reshape(N, H * D) if self.concat else out.mean(dim=1)
         out = self.out_proj(out)
         out = self.drop(out)
@@ -219,12 +219,11 @@ class GINELayer(nn.Module):
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
         i, j = edge_index[0], edge_index[1]
-        agg = torch.zeros_like(x)
         msg = x[j]
         if self.edge_lin is not None:
             ea = self.edge_lin(edge_attr.to(x.dtype))
             msg = msg + ea
-        agg.index_add_(0, i, msg)
+        agg = scatter_sum(i, msg, dim_size=x.size(0))
         out = self.mlp((1 + self.eps) * x + agg)
         out = self.drop(out)
         return self.norm(out)
@@ -293,13 +292,7 @@ class DMPNNLayer(nn.Module):
 
         # Aggregate incoming edge states to node i
         # Use e_hidden.dtype to match mixed‑precision (bf16/fp32) when autocast is enabled.
-        agg = torch.zeros(
-            x.size(0),
-            e_hidden.size(1),
-            device=x.device,
-            dtype=e_hidden.dtype,
-        )
-        agg.index_add_(0, i, e_hidden)
+        agg = scatter_sum(i, e_hidden, dim_size=x.size(0))
 
         out = self.node_mlp(torch.cat([x, agg], dim=-1))
         out = self.drop(out)
@@ -448,8 +441,7 @@ class SchNetInteraction(nn.Module):
             msg = msg.to(x.dtype)
 
         # Aggregate into destination nodes
-        agg = torch.zeros_like(x)          # [N, D]
-        agg.index_add_(0, i, msg)          # sum messages per node
+        agg = scatter_sum(i, msg, dim_size=x.size(0))
 
         # Residual + normalization
         return self.norm(x + agg)
