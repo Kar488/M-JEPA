@@ -167,16 +167,89 @@ def test_cmd_benchmark_eval_only_uses_test_dir(tmp_path, monkeypatch):
     assert calls["train_linear_head"] == 0
 
 
+def test_cmd_benchmark_passes_loader_knobs(tmp_path, monkeypatch):
+    dataset = DummyDataset()
+
+    monkeypatch.setattr(tj, "load_directory_dataset", lambda *a, **k: dataset)
+
+    class DummyEncoder:
+        def load_state_dict(self, state):
+            pass
+
+    monkeypatch.setattr(tj, "build_encoder", lambda **kwargs: DummyEncoder())
+    monkeypatch.setattr(tj.torch, "load", lambda *a, **k: {"encoder": {}})
+
+    captured = {}
+
+    def train_linear_head_stub(**kwargs):
+        captured.update(
+            {k: kwargs[k] for k in ("num_workers", "pin_memory", "persistent_workers", "prefetch_factor", "bf16")}
+        )
+        return {"roc_auc": 0.5}
+
+    monkeypatch.setattr(tj, "train_linear_head", train_linear_head_stub)
+
+    args = argparse.Namespace(
+        labeled_dir=str(tmp_path),
+        test_dir=None,
+        label_col="y",
+        task_type="classification",
+        epochs=1,
+        batch_size=1,
+        lr=0.01,
+        patience=1,
+        devices=1,
+        seeds=[0],
+        jepa_encoder="jepa.pt",
+        contrastive_encoder=None,
+        gnn_type="gcn",
+        hidden_dim=16,
+        num_layers=2,
+        device="cpu",
+        use_wandb=False,
+        wandb_project="test",
+        wandb_tags=[],
+        add_3d=False,
+        num_workers=3,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=6,
+        bf16=True,
+    )
+
+    tj.cmd_benchmark(args)
+
+    assert captured == {
+        "num_workers": 3,
+        "pin_memory": False,
+        "persistent_workers": False,
+        "prefetch_factor": 6,
+        "bf16": True,
+    }
+
+
 # ---------------------------------------------------------------------------
 # cmd_tox21 tests
 # ---------------------------------------------------------------------------
 
 
 def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
+    captures = {}
+
     def tox_stub(
-        *, csv_path, task_name, pretrain_epochs, finetune_epochs,
-        triage_pct=0.10, calibrate=True, device="cpu", **kwargs
+        *,
+        csv_path,
+        task_name,
+        pretrain_epochs,
+        finetune_epochs,
+        triage_pct=0.10,
+        calibrate=True,
+        device="cpu",
+        **kwargs,
     ):
+        captures.update(
+            {k: kwargs[k] for k in ("num_workers", "pin_memory", "persistent_workers", "prefetch_factor", "bf16")}
+        )
         return 0.3, 0.1, 0.5, {"baseline": 0.2}
 
     monkeypatch.setattr(tj, "run_tox21_case_study", tox_stub)
@@ -210,6 +283,11 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         use_wandb=True,
         wandb_project="test",
         wandb_tags=[],
+        num_workers=4,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=5,
+        bf16=True,
     )
 
     tj.cmd_tox21(args)
@@ -221,6 +299,14 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         and log.get("mean_true") == 0.3
         for log in logs
     )
+
+    assert captures == {
+        "num_workers": 4,
+        "pin_memory": False,
+        "persistent_workers": False,
+        "prefetch_factor": 5,
+        "bf16": True,
+    }
 
 
 def test_cmd_tox21_failure(tmp_path,monkeypatch):

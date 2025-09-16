@@ -106,6 +106,11 @@ def run_tox21_case_study(
     use_pos_weight: bool = True,    # pass pos_weight for imbalance if trainer supports it
     device: str = "cpu",
     baseline_embeddings: dict[str, str] | None = None,
+    num_workers: int = 0,
+    pin_memory: bool = True,
+    persistent_workers: bool = True,
+    prefetch_factor: int = 4,
+    bf16: bool = False,
 ) -> Tuple[float, float, float, dict[str, float]]:
     """Run a Tox21 ranking experiment using real labels.
 
@@ -123,6 +128,11 @@ def run_tox21_case_study(
         triage_pct: Fraction of TEST to exclude (e.g., 0.10 = 10%).
         calibrate: If True, fit Platt scaling on VAL logits and apply to TEST.
         device: Device on which to run computations.
+        num_workers: Number of worker processes for DataLoader construction.
+        pin_memory: Whether to enable pinned host memory for CUDA pipelines.
+        persistent_workers: Keep data-loader workers alive across epochs.
+        prefetch_factor: Batches prefetched per worker when ``num_workers > 0``.
+        bf16: Enable bfloat16 mixed precision during training when supported.
         baseline_embeddings: Optional mapping of baseline name to a file
             containing precomputed embeddings (``.npy`` or ``.csv``) in the
             same order as ``csv_path``.
@@ -294,6 +304,11 @@ def run_tox21_case_study(
         lr=lr,
         device=device,
         reg_lambda=1e-4,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
+        bf16=bf16,
     )
 
 
@@ -333,6 +348,11 @@ def run_tox21_case_study(
         batch_size=32,
         device=device,
         patience=5,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
+        bf16=bf16,
         **extra_args,
         # selection_metric="val_auc",  # uncomment when supported
     )
