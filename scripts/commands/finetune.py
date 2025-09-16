@@ -687,6 +687,20 @@ def evaluate_finetuned_head(
         batch_indices = list(range(start, min(start + args.batch_size, len(dataset))))
         batch_x, batch_adj, batch_ptr, batch_labels = dataset.get_batch(batch_indices)
 
+        batch_pos_np = None
+        if hasattr(dataset, "graphs"):
+            pos_blocks = []
+            all_have_pos = True
+            for idx in batch_indices:
+                g_single = dataset.graphs[idx]
+                pos_arr = getattr(g_single, "pos", None)
+                if pos_arr is None:
+                    all_have_pos = False
+                    break
+                pos_blocks.append(np.asarray(pos_arr, dtype=np.float32))
+            if all_have_pos and pos_blocks:
+                batch_pos_np = np.concatenate(pos_blocks, axis=0)
+
         batch_x = batch_x.to(device, non_blocking=True)
         batch_adj = batch_adj.to(device, non_blocking=True)
         # batch_ptr may be None; when present, pooling indices should be long
@@ -699,13 +713,15 @@ def evaluate_finetuned_head(
         with torch.no_grad():
             edge_idx = batch_adj.nonzero().T.detach().cpu().numpy()
             if edge_idx.size == 0:
-                import numpy as _np
-
-                edge_idx = _np.zeros((2, 0), dtype=_np.int64)
+                edge_idx = np.zeros((2, 0), dtype=np.int64)
             g = GraphData(
                 x=batch_x.detach().cpu().numpy(),
                 edge_index=edge_idx,
+                pos=batch_pos_np,
             )
+
+            if batch_ptr is not None:
+                g.graph_ptr = batch_ptr.detach().cpu()
 
             g = _ensure_edge_attr(g, int(enc_cfg["edge_dim"]), device=device)
             node_emb = _encode_graph(enc, g)  # [N, D]

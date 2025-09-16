@@ -47,6 +47,9 @@ def _simple_pack_batch(dataset, batch_indices, task_type: str):
     """
     xs, edges_np, ptr = [], [], [0]
     node_offset = 0
+    edge_blocks: List[torch.Tensor] = []  # type: ignore[var-annotated]
+    pos_blocks: List[torch.Tensor] = []  # type: ignore[var-annotated]
+    all_have_pos = True
 
     for idx in batch_indices:
         g = dataset.graphs[idx]
@@ -72,7 +75,17 @@ def _simple_pack_batch(dataset, batch_indices, task_type: str):
         else:
             ei_np = np.asarray(ei)
         if ei_np.size > 0:
-            edges_np.append(ei_np + node_offset)
+            shifted = ei_np + node_offset
+            edges_np.append(shifted)
+            edge_blocks.append(torch.from_numpy(shifted.astype(np.int64, copy=False)))
+        else:
+            edge_blocks.append(torch.zeros((2, 0), dtype=torch.long))
+
+        pos = getattr(g, "pos", None)
+        if pos is None:
+            all_have_pos = False
+        else:
+            pos_blocks.append(torch.as_tensor(pos, dtype=torch.float32))
 
         node_offset += n
         ptr.append(node_offset)
@@ -99,11 +112,22 @@ def _simple_pack_batch(dataset, batch_indices, task_type: str):
         lbl = lab[sel].astype(np.float32, copy=False)  # BCE expects float
         batch_labels_t = torch.from_numpy(lbl)
 
+    batch_edge_index = (
+        torch.cat(edge_blocks, dim=1)
+        if edge_blocks and any(e.numel() for e in edge_blocks)
+        else torch.zeros((2, 0), dtype=torch.long)
+    )
+
+    batch_pos = None
+    if all_have_pos and pos_blocks:
+        batch_pos = torch.cat(pos_blocks, dim=0)
+
     return (
         torch.from_numpy(X),               # (N,F) float32
         torch.from_numpy(adj),             # (N,N) float32
         torch.from_numpy(ptr_arr),         # (B+1,) int64
         batch_labels_t,                    # (B,) float32 or None
+        {"edge_index": batch_edge_index, "pos": batch_pos},
     )
 
 
@@ -122,15 +146,94 @@ class _GraphBatchCollator:
             batch = self.dataset.get_batch(indices)
         else:
             batch = _simple_pack_batch(self.dataset, indices, self.task_type)
-        if not isinstance(batch, (tuple, list)) or len(batch) != 4:
-            raise ValueError("get_batch must return (x, adj, ptr, labels)")
-        return batch
+        if not isinstance(batch, (tuple, list)):
+            raise ValueError("get_batch must return a tuple or list")
+
+        if len(batch) == 5:
+            batch_x, batch_adj, batch_ptr, batch_labels, extras = batch
+        elif len(batch) == 4:
+            batch_x, batch_adj, batch_ptr, batch_labels = batch
+            extras = self._build_extras(indices)
+        else:
+            raise ValueError(
+                "get_batch must return (x, adj, ptr, labels) optionally followed by extras"
+            )
+        return batch_x, batch_adj, batch_ptr, batch_labels, extras
+
+    def _build_extras(self, indices):
+        edge_blocks: List[torch.Tensor] = []  # type: ignore[var-annotated]
+        pos_blocks: List[torch.Tensor] = []  # type: ignore[var-annotated]
+        all_have_pos = True
+        node_offset = 0
+
+        for idx in indices:
+            g = self.dataset.graphs[idx]
+
+            n_i = None
+            if hasattr(g, "num_nodes"):
+                try:
+                    n_i = int(g.num_nodes())
+                except Exception:
+                    n_i = None
+            if n_i is None:
+                x_attr = getattr(g, "x", None)
+                if x_attr is not None:
+                    n_i = int(np.asarray(x_attr).shape[0])
+            if n_i is None:
+                try:
+                    x_i, _ = g.to_tensors()
+                    n_i = int(x_i.shape[0])
+                except Exception:
+                    n_i = 0
+
+            edge_index = getattr(g, "edge_index", None)
+            if edge_index is None:
+                try:
+                    _, adj_i = g.to_tensors()
+                except Exception:
+                    adj_i = None
+                if adj_i is not None:
+                    adj_t = torch.as_tensor(adj_i)
+                    idxs = (adj_t > 0).nonzero(as_tuple=False).T
+                    edge_blocks.append(idxs.to(dtype=torch.long) + node_offset)
+                else:
+                    edge_blocks.append(torch.zeros((2, 0), dtype=torch.long))
+            else:
+                ei_t = torch.as_tensor(edge_index, dtype=torch.long)
+                edge_blocks.append(ei_t + node_offset)
+
+            pos = getattr(g, "pos", None)
+            if pos is None:
+                all_have_pos = False
+            else:
+                pos_blocks.append(torch.as_tensor(pos, dtype=torch.float32))
+
+            node_offset += n_i if n_i is not None else 0
+
+        batch_edge_index = (
+            torch.cat(edge_blocks, dim=1)
+            if edge_blocks and any(e.numel() for e in edge_blocks)
+            else torch.zeros((2, 0), dtype=torch.long)
+        )
+
+        batch_pos = None
+        if all_have_pos and pos_blocks:
+            batch_pos = torch.cat(pos_blocks, dim=0)
+
+        return {"edge_index": batch_edge_index, "pos": batch_pos}
 
 
 def _move_batch_to_device(batch, device: torch.device, non_blocking: bool):
     """Move a batched graph tuple returned by ``get_batch`` to ``device``."""
 
-    batch_x, batch_adj, batch_ptr, batch_labels = batch
+    if len(batch) == 5:
+        batch_x, batch_adj, batch_ptr, batch_labels, extras = batch
+    elif len(batch) == 4:
+        batch_x, batch_adj, batch_ptr, batch_labels = batch
+        extras = {}
+    else:
+        raise ValueError("Expected batch of length 4 or 5")
+
     batch_x = batch_x.to(device=device, non_blocking=non_blocking)
     batch_adj = batch_adj.to(device=device, non_blocking=non_blocking)
     batch_ptr = batch_ptr.to(device=device, non_blocking=non_blocking)
@@ -139,7 +242,19 @@ def _move_batch_to_device(batch, device: torch.device, non_blocking: bool):
         if batch_labels is not None
         else None
     )
-    return batch_x, batch_adj, batch_ptr, batch_labels
+
+    edge_index = None
+    pos = None
+    if isinstance(extras, dict):
+        edge_index = extras.get("edge_index")
+        pos = extras.get("pos")
+    if edge_index is not None:
+        edge_index = edge_index.to(device=device, non_blocking=non_blocking)
+    if pos is not None:
+        pos = pos.to(device=device, non_blocking=non_blocking)
+
+    moved_extras = {"edge_index": edge_index, "pos": pos}
+    return batch_x, batch_adj, batch_ptr, batch_labels, moved_extras
 
 
 def _pool_batch_embeddings(node_embeddings: torch.Tensor, batch_ptr: torch.Tensor) -> torch.Tensor:
@@ -399,13 +514,21 @@ def train_linear_head(
                     )
                     break
 
-                batch_x, batch_adj, batch_ptr, batch_labels = _move_batch_to_device(
+                batch_x, batch_adj, batch_ptr, batch_labels, batch_meta = _move_batch_to_device(
                     batch, device_t, pin_memory_enabled
                 )
                 if batch_labels is None:
                     raise ValueError("Dataset must have labels for supervised training.")
 
-                graph_obj = SimpleNamespace(x=batch_x, adj=batch_adj)
+                edge_index = batch_meta.get("edge_index") if isinstance(batch_meta, dict) else None
+                pos = batch_meta.get("pos") if isinstance(batch_meta, dict) else None
+                graph_obj = SimpleNamespace(
+                    x=batch_x,
+                    adj=batch_adj,
+                    edge_index=edge_index,
+                    pos=pos,
+                    graph_ptr=batch_ptr,
+                )
                 with torch.no_grad():
                     with _amp_context():
                         node_embeddings = _encode_graph(encoder, graph_obj)
@@ -442,13 +565,21 @@ def train_linear_head(
                 val_losses = []
 
                 for batch in val_loader:
-                    batch_x, batch_adj, batch_ptr, batch_labels = _move_batch_to_device(
+                    batch_x, batch_adj, batch_ptr, batch_labels, batch_meta = _move_batch_to_device(
                         batch, device_t, pin_memory_enabled
                     )
                     if batch_labels is None:
                         raise ValueError("Validation loader returned samples without labels.")
 
-                    graph_obj = SimpleNamespace(x=batch_x, adj=batch_adj)
+                    edge_index = batch_meta.get("edge_index") if isinstance(batch_meta, dict) else None
+                    pos = batch_meta.get("pos") if isinstance(batch_meta, dict) else None
+                    graph_obj = SimpleNamespace(
+                        x=batch_x,
+                        adj=batch_adj,
+                        edge_index=edge_index,
+                        pos=pos,
+                        graph_ptr=batch_ptr,
+                    )
                     with torch.no_grad():
                         with _amp_context():
                             node_embeddings = _encode_graph(encoder, graph_obj)
@@ -483,13 +614,21 @@ def train_linear_head(
 
         if test_loader is not None:
             for batch in test_loader:
-                batch_x, batch_adj, batch_ptr, batch_labels = _move_batch_to_device(
+                batch_x, batch_adj, batch_ptr, batch_labels, batch_meta = _move_batch_to_device(
                     batch, device_t, pin_memory_enabled
                 )
                 if batch_labels is None:
                     raise ValueError("Test loader returned samples without labels.")
 
-                graph_obj = SimpleNamespace(x=batch_x, adj=batch_adj)
+                edge_index = batch_meta.get("edge_index") if isinstance(batch_meta, dict) else None
+                pos = batch_meta.get("pos") if isinstance(batch_meta, dict) else None
+                graph_obj = SimpleNamespace(
+                    x=batch_x,
+                    adj=batch_adj,
+                    edge_index=edge_index,
+                    pos=pos,
+                    graph_ptr=batch_ptr,
+                )
                 with torch.no_grad():
                     with _amp_context():
                         node_embeddings = _encode_graph(encoder, graph_obj)
