@@ -49,6 +49,8 @@ def _simple_pack_batch(dataset, batch_indices, task_type: str):
     node_offset = 0
     edge_blocks: List[torch.Tensor] = []  # type: ignore[var-annotated]
     pos_blocks: List[torch.Tensor] = []  # type: ignore[var-annotated]
+    edge_attr_blocks: List[Optional[torch.Tensor]] = []  # type: ignore[var-annotated]
+    edge_counts: List[int] = []
     all_have_pos = True
 
     for idx in batch_indices:
@@ -80,6 +82,25 @@ def _simple_pack_batch(dataset, batch_indices, task_type: str):
             edge_blocks.append(torch.from_numpy(shifted.astype(np.int64, copy=False)))
         else:
             edge_blocks.append(torch.zeros((2, 0), dtype=torch.long))
+        edge_counts.append(int(ei_np.shape[1]))
+
+        edge_attr = getattr(g, "edge_attr", None)
+        if edge_attr is None:
+            edge_attr_blocks.append(None)
+        else:
+            if torch.is_tensor(edge_attr):
+                edge_attr_t = edge_attr.detach().cpu()
+            else:
+                edge_attr_t = torch.as_tensor(edge_attr)
+            if edge_attr_t.shape[0] != edge_counts[-1]:
+                try:
+                    edge_attr_t = edge_attr_t.reshape(edge_counts[-1], *edge_attr_t.shape[1:])
+                except Exception:
+                    edge_attr_t = None
+            if edge_attr_t is not None and edge_attr_t.shape[0] == edge_counts[-1]:
+                edge_attr_blocks.append(edge_attr_t)
+            else:
+                edge_attr_blocks.append(None)
 
         pos = getattr(g, "pos", None)
         if pos is None:
@@ -122,12 +143,29 @@ def _simple_pack_batch(dataset, batch_indices, task_type: str):
     if all_have_pos and pos_blocks:
         batch_pos = torch.cat(pos_blocks, dim=0)
 
+    batch_edge_attr = None
+    edge_attr_template = next((ea for ea in edge_attr_blocks if ea is not None), None)
+    if edge_attr_template is not None:
+        attr_dtype = edge_attr_template.dtype
+        attr_suffix = tuple(edge_attr_template.shape[1:])
+        filled_attrs: List[torch.Tensor] = []
+        for edge_count, edge_attr in zip(edge_counts, edge_attr_blocks):
+            if edge_attr is None:
+                zero_shape = (edge_count,) + attr_suffix
+                filled_attrs.append(torch.zeros(zero_shape, dtype=attr_dtype))
+            else:
+                filled_attrs.append(edge_attr.to(dtype=attr_dtype))
+        if filled_attrs:
+            batch_edge_attr = torch.cat(filled_attrs, dim=0)
+        else:
+            batch_edge_attr = torch.zeros((0,) + attr_suffix, dtype=attr_dtype)
+
     return (
         torch.from_numpy(X),               # (N,F) float32
         torch.from_numpy(adj),             # (N,N) float32
         torch.from_numpy(ptr_arr),         # (B+1,) int64
         batch_labels_t,                    # (B,) float32 or None
-        {"edge_index": batch_edge_index, "pos": batch_pos},
+        {"edge_index": batch_edge_index, "pos": batch_pos, "edge_attr": batch_edge_attr},
     )
 
 
@@ -163,6 +201,8 @@ class _GraphBatchCollator:
     def _build_extras(self, indices):
         edge_blocks: List[torch.Tensor] = []  # type: ignore[var-annotated]
         pos_blocks: List[torch.Tensor] = []  # type: ignore[var-annotated]
+        edge_attr_blocks: List[Optional[torch.Tensor]] = []  # type: ignore[var-annotated]
+        edge_counts: List[int] = []
         all_have_pos = True
         node_offset = 0
 
@@ -187,6 +227,7 @@ class _GraphBatchCollator:
                     n_i = 0
 
             edge_index = getattr(g, "edge_index", None)
+            current_edge_count = 0
             if edge_index is None:
                 try:
                     _, adj_i = g.to_tensors()
@@ -195,12 +236,35 @@ class _GraphBatchCollator:
                 if adj_i is not None:
                     adj_t = torch.as_tensor(adj_i)
                     idxs = (adj_t > 0).nonzero(as_tuple=False).T
-                    edge_blocks.append(idxs.to(dtype=torch.long) + node_offset)
+                    idxs = idxs.to(dtype=torch.long)
+                    current_edge_count = int(idxs.shape[1])
+                    edge_blocks.append(idxs + node_offset)
                 else:
                     edge_blocks.append(torch.zeros((2, 0), dtype=torch.long))
+                    current_edge_count = 0
             else:
                 ei_t = torch.as_tensor(edge_index, dtype=torch.long)
+                current_edge_count = int(ei_t.shape[1])
                 edge_blocks.append(ei_t + node_offset)
+            edge_counts.append(current_edge_count)
+
+            edge_attr = getattr(g, "edge_attr", None)
+            if edge_attr is None:
+                edge_attr_blocks.append(None)
+            else:
+                if torch.is_tensor(edge_attr):
+                    edge_attr_t = edge_attr.detach().cpu()
+                else:
+                    edge_attr_t = torch.as_tensor(edge_attr)
+                if edge_attr_t.shape[0] != current_edge_count:
+                    try:
+                        edge_attr_t = edge_attr_t.reshape(current_edge_count, *edge_attr_t.shape[1:])
+                    except Exception:
+                        edge_attr_t = None
+                if edge_attr_t is not None and edge_attr_t.shape[0] == current_edge_count:
+                    edge_attr_blocks.append(edge_attr_t)
+                else:
+                    edge_attr_blocks.append(None)
 
             pos = getattr(g, "pos", None)
             if pos is None:
@@ -220,7 +284,24 @@ class _GraphBatchCollator:
         if all_have_pos and pos_blocks:
             batch_pos = torch.cat(pos_blocks, dim=0)
 
-        return {"edge_index": batch_edge_index, "pos": batch_pos}
+        batch_edge_attr = None
+        edge_attr_template = next((ea for ea in edge_attr_blocks if ea is not None), None)
+        if edge_attr_template is not None:
+            attr_dtype = edge_attr_template.dtype
+            attr_suffix = tuple(edge_attr_template.shape[1:])
+            filled_attrs: List[torch.Tensor] = []
+            for edge_count, edge_attr in zip(edge_counts, edge_attr_blocks):
+                if edge_attr is None:
+                    zero_shape = (edge_count,) + attr_suffix
+                    filled_attrs.append(torch.zeros(zero_shape, dtype=attr_dtype))
+                else:
+                    filled_attrs.append(edge_attr.to(dtype=attr_dtype))
+            if filled_attrs:
+                batch_edge_attr = torch.cat(filled_attrs, dim=0)
+            else:
+                batch_edge_attr = torch.zeros((0,) + attr_suffix, dtype=attr_dtype)
+
+        return {"edge_index": batch_edge_index, "pos": batch_pos, "edge_attr": batch_edge_attr}
 
 
 def _move_batch_to_device(batch, device: torch.device, non_blocking: bool):
@@ -245,15 +326,23 @@ def _move_batch_to_device(batch, device: torch.device, non_blocking: bool):
 
     edge_index = None
     pos = None
+    edge_attr = None
     if isinstance(extras, dict):
         edge_index = extras.get("edge_index")
         pos = extras.get("pos")
+        edge_attr = extras.get("edge_attr")
     if edge_index is not None:
         edge_index = edge_index.to(device=device, non_blocking=non_blocking)
     if pos is not None:
         pos = pos.to(device=device, non_blocking=non_blocking)
 
-    moved_extras = {"edge_index": edge_index, "pos": pos}
+    if edge_attr is not None:
+        if torch.is_tensor(edge_attr):
+            edge_attr = edge_attr.to(device=device, non_blocking=non_blocking)
+        else:
+            edge_attr = torch.as_tensor(edge_attr, device=device)
+
+    moved_extras = {"edge_index": edge_index, "pos": pos, "edge_attr": edge_attr}
     return batch_x, batch_adj, batch_ptr, batch_labels, moved_extras
 
 def _build_graph_view(
