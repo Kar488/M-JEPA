@@ -65,13 +65,26 @@ def _encode_graph(encoder: torch.nn.Module, g: Any):
         mod = encoder
 
     sig = inspect.signature(mod.forward)
-    params = [p.name for p in sig.parameters.values()
-              if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
-                            inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+    params = [
+        p.name
+        for p in sig.parameters.values()
+        if p.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
     pset = set(params)
 
+    first_arg = params[0] if params else None
+    second_arg = params[1] if len(params) > 1 else None
+
     # --- if the encoder wants a graph/batch object, give it the graph ---
-    if (params and params[0] in {"batch", "g", "graph", "data"}) or hasattr(mod, "encode_graph"):
+    if (
+        (first_arg in {"batch", "g", "graph", "data"})
+        or (second_arg in {"batch", "g", "graph", "data"})
+        or hasattr(mod, "encode_graph")
+    ):
         return encoder(g)
 
     # otherwise prepare tensors as before
@@ -79,6 +92,9 @@ def _encode_graph(encoder: torch.nn.Module, g: Any):
     x_t   = _to_tensor(getattr(g, "x", None), dtype=torch.float32, device=device)
     ei_t  = _to_tensor(getattr(g, "edge_index", None), dtype=torch.long, device=device)
     edge_t= _to_tensor(getattr(g, "edge_attr", None), dtype=torch.float32, device=device)
+    pos_t = _to_tensor(getattr(g, "pos", None), dtype=torch.float32, device=device)
+    batch_t = _to_tensor(getattr(g, "batch", None), dtype=torch.long, device=device)
+    ptr_t = _to_tensor(getattr(g, "ptr", None), dtype=torch.long, device=device)
     adj_t = None
     if getattr(g, "adj", None) is not None:
         adj = getattr(g, "adj")
@@ -97,6 +113,23 @@ def _encode_graph(encoder: torch.nn.Module, g: Any):
         adj_t = _edge_index_to_dense(ei_t, num_nodes, device=device, add_self_loops=True)
 
     # --- call according to signature ---
+    if "batch" in pset and batch_t is not None:
+        call_kwargs = {}
+        if "x" in pset and x_t is not None:
+            call_kwargs["x"] = x_t
+        if "edge_index" in pset and ei_t is not None:
+            call_kwargs["edge_index"] = ei_t
+        if "edge_attr" in pset and edge_t is not None:
+            call_kwargs["edge_attr"] = edge_t
+        if "adj" in pset and "edge_index" not in pset and adj_t is not None:
+            call_kwargs["adj"] = adj_t
+        if "pos" in pset and pos_t is not None:
+            call_kwargs["pos"] = pos_t
+        if "ptr" in pset and ptr_t is not None:
+            call_kwargs["ptr"] = ptr_t
+        call_kwargs["batch"] = batch_t
+        return encoder(**call_kwargs)
+
     if {"x", "edge_index"}.issubset(pset) and ei_t is not None:
         return encoder(x_t, ei_t, edge_t) if "edge_attr" in pset and edge_t is not None else encoder(x_t, ei_t)
     if {"x", "adj"}.issubset(pset) and adj_t is not None:
