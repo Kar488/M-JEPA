@@ -795,8 +795,8 @@ def train_linear_head(
                 if param is not None and graph_emb.dtype != param.dtype:
                     graph_emb = graph_emb.to(param.dtype)
 
-                    with _amp_context():
-                        preds = head_module(graph_emb).squeeze(1)
+                with _amp_context():
+                    preds = head_module(graph_emb).squeeze(1)
                 preds = torch.nan_to_num(preds)
                 all_preds.append(preds.detach().to(torch.float32).cpu().numpy())
                 all_targets.append(batch_labels.detach().to(torch.float32).cpu().numpy())
