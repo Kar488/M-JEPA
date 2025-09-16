@@ -256,6 +256,65 @@ def _move_batch_to_device(batch, device: torch.device, non_blocking: bool):
     moved_extras = {"edge_index": edge_index, "pos": pos}
     return batch_x, batch_adj, batch_ptr, batch_labels, moved_extras
 
+def _build_graph_view(
+    batch_x: torch.Tensor,
+    batch_adj: torch.Tensor,
+    batch_ptr: Optional[torch.Tensor],
+    batch_meta: object,
+) -> SimpleNamespace:
+    """Assemble a lightweight graph object for ``_encode_graph``.
+
+    The encoder APIs in :mod:`models.gnn_variants` expect ``g.edge_index`` to
+    exist even when the downstream dataset only materialises dense adjacencies.
+    This helper promotes the optional metadata returned by
+    :func:`_move_batch_to_device` into attributes on a ``SimpleNamespace`` and
+    synthesises a zero‑edge ``edge_index`` tensor when the loader cannot
+    provide one.  3D coordinates (``pos``) are normalised to ``float32`` on the
+    same device as ``batch_x`` so encoders such as :class:`SchNet3D` receive
+    consistent geometry information.  ``batch_ptr`` is carried through when
+    present so pooled readouts continue to function for batched graphs.
+    """
+
+    extras = batch_meta if isinstance(batch_meta, dict) else {}
+
+    edge_index = extras.get("edge_index") if isinstance(extras, dict) else None
+    device = batch_x.device
+    if edge_index is not None:
+        if not torch.is_tensor(edge_index):
+            edge_index = torch.as_tensor(edge_index, dtype=torch.long, device=device)
+        else:
+            edge_index = edge_index.to(device=device, dtype=torch.long)
+    else:
+        if isinstance(batch_adj, torch.Tensor) and batch_adj.numel() > 0:
+            idx = (batch_adj > 0).nonzero(as_tuple=False).T
+            edge_index = idx.to(device=device, dtype=torch.long)
+        else:
+            edge_index = torch.zeros((2, 0), dtype=torch.long, device=device)
+
+    pos = extras.get("pos") if isinstance(extras, dict) else None
+    if pos is not None:
+        if not torch.is_tensor(pos):
+            pos = torch.as_tensor(pos, dtype=torch.float32, device=device)
+        else:
+            pos = pos.to(device=device, dtype=torch.float32)
+
+    graph_obj = SimpleNamespace(
+        x=batch_x,
+        adj=batch_adj,
+        edge_index=edge_index,
+        pos=pos,
+        graph_ptr=batch_ptr,
+    )
+
+    edge_attr = extras.get("edge_attr") if isinstance(extras, dict) else None
+    if edge_attr is not None:
+        if not torch.is_tensor(edge_attr):
+            edge_attr = torch.as_tensor(edge_attr, dtype=torch.float32, device=device)
+        else:
+            edge_attr = edge_attr.to(device=device)
+        graph_obj.edge_attr = edge_attr
+
+    return graph_obj
 
 def _pool_batch_embeddings(node_embeddings: torch.Tensor, batch_ptr: torch.Tensor) -> torch.Tensor:
     """Average node embeddings per graph using pointer offsets."""
@@ -520,15 +579,7 @@ def train_linear_head(
                 if batch_labels is None:
                     raise ValueError("Dataset must have labels for supervised training.")
 
-                edge_index = batch_meta.get("edge_index") if isinstance(batch_meta, dict) else None
-                pos = batch_meta.get("pos") if isinstance(batch_meta, dict) else None
-                graph_obj = SimpleNamespace(
-                    x=batch_x,
-                    adj=batch_adj,
-                    edge_index=edge_index,
-                    pos=pos,
-                    graph_ptr=batch_ptr,
-                )
+                graph_obj = _build_graph_view(batch_x, batch_adj, batch_ptr, batch_meta)
                 with torch.no_grad():
                     with _amp_context():
                         node_embeddings = _encode_graph(encoder, graph_obj)
@@ -571,15 +622,7 @@ def train_linear_head(
                     if batch_labels is None:
                         raise ValueError("Validation loader returned samples without labels.")
 
-                    edge_index = batch_meta.get("edge_index") if isinstance(batch_meta, dict) else None
-                    pos = batch_meta.get("pos") if isinstance(batch_meta, dict) else None
-                    graph_obj = SimpleNamespace(
-                        x=batch_x,
-                        adj=batch_adj,
-                        edge_index=edge_index,
-                        pos=pos,
-                        graph_ptr=batch_ptr,
-                    )
+                    graph_obj = _build_graph_view(batch_x, batch_adj, batch_ptr, batch_meta)
                     with torch.no_grad():
                         with _amp_context():
                             node_embeddings = _encode_graph(encoder, graph_obj)
@@ -620,15 +663,7 @@ def train_linear_head(
                 if batch_labels is None:
                     raise ValueError("Test loader returned samples without labels.")
 
-                edge_index = batch_meta.get("edge_index") if isinstance(batch_meta, dict) else None
-                pos = batch_meta.get("pos") if isinstance(batch_meta, dict) else None
-                graph_obj = SimpleNamespace(
-                    x=batch_x,
-                    adj=batch_adj,
-                    edge_index=edge_index,
-                    pos=pos,
-                    graph_ptr=batch_ptr,
-                )
+                graph_obj = _build_graph_view(batch_x, batch_adj, batch_ptr, batch_meta)
                 with torch.no_grad():
                     with _amp_context():
                         node_embeddings = _encode_graph(encoder, graph_obj)
