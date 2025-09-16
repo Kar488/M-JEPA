@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import torch
 
+try:  # pragma: no cover - exercised in integration tests when available
+    from torch_scatter import scatter_add as _TORCH_SCATTER_ADD
+except Exception:  # pragma: no cover - optional dependency
+    _TORCH_SCATTER_ADD = None
+
 
 def scatter_sum(
     index: torch.Tensor,
@@ -38,10 +43,9 @@ def scatter_sum(
     if dim_size < 0:
         raise ValueError("dim_size must be non-negative")
 
-    # Normalise the optional ``out`` tensor to match ``src``.
     expected_shape = (dim_size, *src.shape[1:])
     if out is None:
-        out = src.new_zeros(expected_shape)
+        out_tensor = src.new_zeros(expected_shape)
     else:
         if out.shape != expected_shape:
             raise ValueError(
@@ -51,9 +55,10 @@ def scatter_sum(
         if out.dtype != src.dtype:
             src = src.to(out.dtype)
         out.zero_()
+        out_tensor = out
 
     if src.numel() == 0:
-        return out
+        return out_tensor
 
     flat_index = index.reshape(-1).to(device=src.device, dtype=torch.long)
     if flat_index.numel() != src.shape[0]:
@@ -62,7 +67,11 @@ def scatter_sum(
             f"got {flat_index.numel()} and {src.shape[0]}"
         )
 
+    if _TORCH_SCATTER_ADD is not None:
+        _TORCH_SCATTER_ADD(src, flat_index, dim=0, out=out_tensor)
+        return out_tensor
+
     view_shape = (flat_index.numel(),) + (1,) * (src.dim() - 1)
     expanded_index = flat_index.view(view_shape).expand_as(src)
-    out.scatter_add_(0, expanded_index, src)
-    return out
+    out_tensor.scatter_add_(0, expanded_index, src)
+    return out_tensor
