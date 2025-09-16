@@ -748,7 +748,12 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--force-tqdm", action="store_true", help="Force-enable tqdm progress bars even when not attached to a TTY")
     pre.add_argument("--sample-unlabeled", type=int, default=0, help="If >0, load at most N graphs from the unlabeled dataset.")
     pre.add_argument("--n-rows-per-file", type=int, default=None, help="If set, limit rows read per file when loading datasets.")
-    
+    pre.add_argument(
+        "--no-compile",
+        action="store_true",
+        help="Disable torch.compile wrappers for the encoder and predictor.",
+    )
+
     _add_common_args(pre, "pretrain")
     _add_model_args(pre)
     pre.set_defaults(func=cmd_pretrain)

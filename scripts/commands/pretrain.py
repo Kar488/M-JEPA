@@ -206,6 +206,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     persistent_workers=getattr(args, "persistent_workers", True),
                     prefetch_factor=getattr(args, "prefetch_factor", 4),
                     bf16=getattr(args, "bf16", False),
+                    compile_models=not getattr(args, "no_compile", False),
                     # forward augmentation flags only when enabled
                     **kwargs,
                 )
