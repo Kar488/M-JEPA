@@ -4,7 +4,7 @@ import math
 import os
 import time as _t
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -207,14 +207,212 @@ def _collate_graph_batch(batch: Sequence[GraphData] | GraphBatch) -> GraphBatch:
     )
 
 
+def _clone_graph_data(graph: GraphData) -> GraphData:
+    """Deep copy a :class:`GraphData` instance (numpy or torch backed)."""
+
+    try:  # pragma: no cover - optional dependency
+        import torch as _t
+
+        has_torch = True
+    except Exception:  # pragma: no cover - torch not available in light stubs
+        has_torch = False
+        _t = None  # type: ignore
+
+    def _cp(arr):
+        if arr is None:
+            return None
+        if has_torch and isinstance(arr, _t.Tensor):
+            return arr.detach().clone()
+        if hasattr(arr, "copy"):
+            return arr.copy()
+        return np.array(arr, copy=True)
+
+    g2 = GraphData(
+        x=_cp(getattr(graph, "x", None)),
+        edge_index=_cp(getattr(graph, "edge_index", None)),
+        edge_attr=_cp(getattr(graph, "edge_attr", None)),
+        pos=_cp(getattr(graph, "pos", None)),
+    )
+    for name in ("y", "mask", "batch", "smiles", "id"):
+        if hasattr(graph, name):
+            try:
+                setattr(g2, name, _cp(getattr(graph, name)))
+            except Exception:
+                setattr(g2, name, getattr(graph, name))
+    return g2
+
+
+class _MaskSubgraphPairOp:
+    """Callable wrapper that returns context and target graphs."""
+
+    def __init__(self, mask_ratio: float, contiguous: bool) -> None:
+        self.mask_ratio = mask_ratio
+        self.contiguous = contiguous
+
+    def __call__(self, graph: GraphData) -> Tuple[GraphData, GraphData]:
+        return mask_subgraph(graph, self.mask_ratio, self.contiguous)
+
+
+class _MaskSubgraphContextOp:
+    """Callable wrapper returning only the context portion of ``mask_subgraph``."""
+
+    def __init__(self, mask_ratio: float, contiguous: bool = False) -> None:
+        self.mask_ratio = mask_ratio
+        self.contiguous = contiguous
+
+    def __call__(self, graph: GraphData) -> GraphData:
+        ctx, _ = mask_subgraph(graph, self.mask_ratio, self.contiguous)
+        return ctx
+
+
+class _ApplyGraphAugmentationsOp:
+    """Callable applying geometric augmentations in ``generate_views``."""
+
+    def __init__(self, random_rotate: bool, mask_angle: bool, perturb_dihedral: bool) -> None:
+        self.random_rotate = random_rotate
+        self.mask_angle = mask_angle
+        self.perturb_dihedral = perturb_dihedral
+
+    def __call__(self, graph: GraphData) -> GraphData:
+        return apply_graph_augmentations(
+            graph,
+            rotate=self.random_rotate,
+            random_rotate=self.random_rotate,
+            mask_angle=self.mask_angle,
+            perturb_dihedral=self.perturb_dihedral,
+        )
+
+
+class _JEPAAugmentor:
+    """Generate context/target graph pairs for JEPA training."""
+
+    def __init__(self, mask_ratio: float, contiguous: bool) -> None:
+        self._structural_ops = (_MaskSubgraphPairOp(mask_ratio, contiguous),)
+
+    def __call__(self, graph: GraphData) -> Tuple[GraphData, GraphData]:
+        views = generate_views(graph, structural_ops=self._structural_ops)
+        if len(views) >= 2 and views[0] is not views[1]:
+            return views[0], views[1]
+        ctx_source = views[0] if views else graph
+        ctx_graph = _clone_graph_data(ctx_source)
+        tgt_graph = self._fallback_target(ctx_graph)
+        return ctx_graph, tgt_graph
+
+    @staticmethod
+    def _fallback_target(ctx_graph: GraphData) -> GraphData:
+        x = np.asarray(ctx_graph.x, dtype=np.float32)
+        x_tgt = np.array(x + 1.0, copy=True)
+
+        edge_index_src = getattr(ctx_graph, "edge_index", None)
+        if edge_index_src is None:
+            edge_index = np.zeros((2, 0), dtype=np.int64)
+        else:
+            edge_index = np.array(np.asarray(edge_index_src, dtype=np.int64), copy=True)
+
+        edge_attr_src = getattr(ctx_graph, "edge_attr", None)
+        edge_attr = (
+            None
+            if edge_attr_src is None
+            else np.array(np.asarray(edge_attr_src, dtype=np.float32), copy=True)
+        )
+
+        pos_src = getattr(ctx_graph, "pos", None)
+        pos = (
+            None
+            if pos_src is None
+            else np.array(np.asarray(pos_src, dtype=np.float32), copy=True)
+        )
+
+        return GraphData(x=x_tgt, edge_index=edge_index, edge_attr=edge_attr, pos=pos)
+
+
+class _ContrastiveAugmentor:
+    """Produce two augmented graph views for contrastive training."""
+
+    def __init__(
+        self,
+        *,
+        mask_ratio: float,
+        random_rotate: bool,
+        mask_angle: bool,
+        perturb_dihedral: bool,
+        bond_deletion: bool,
+        atom_masking: bool,
+        subgraph_removal: bool,
+    ) -> None:
+        structural_ops: List[Callable[[GraphData], GraphData]] = []
+        if bond_deletion:
+            structural_ops.append(delete_random_bond)
+        if atom_masking:
+            structural_ops.append(mask_random_atom)
+        if subgraph_removal:
+            structural_ops.append(remove_random_subgraph)
+        if mask_ratio and mask_ratio > 0.0:
+            structural_ops.append(_MaskSubgraphContextOp(mask_ratio, contiguous=False))
+        self._structural_ops: Tuple[Callable[[GraphData], GraphData], ...] = tuple(structural_ops)
+
+        geom_ops: List[Callable[[GraphData], GraphData]] = []
+        if random_rotate or mask_angle or perturb_dihedral:
+            geom_ops.append(
+                _ApplyGraphAugmentationsOp(
+                    random_rotate=random_rotate,
+                    mask_angle=mask_angle,
+                    perturb_dihedral=perturb_dihedral,
+                )
+            )
+        self._geometric_ops: Tuple[Callable[[GraphData], GraphData], ...] = tuple(geom_ops)
+
+    def __call__(self, graph: GraphData) -> Tuple[GraphData, GraphData]:
+        return self._generate_view(graph), self._generate_view(graph)
+
+    def _generate_view(self, graph: GraphData) -> GraphData:
+        views = generate_views(
+            graph,
+            structural_ops=self._structural_ops,
+            geometric_ops=self._geometric_ops,
+        )
+        if views:
+            return views[0]
+        return _clone_graph_data(graph)
+
+
+class _AugmentedPairDataset(Sequence[Tuple[GraphData, GraphData]]):
+    """Wrap a sequence of graphs to yield augmented pairs per sample."""
+
+    def __init__(
+        self,
+        graphs: Sequence[GraphData],
+        augmenter: Callable[[GraphData], Tuple[GraphData, GraphData]],
+    ) -> None:
+        self._graphs = graphs
+        self._augmenter = augmenter
+
+    def __len__(self) -> int:
+        return len(self._graphs)
+
+    def __getitem__(self, idx: int) -> Tuple[GraphData, GraphData]:
+        return self._augmenter(self._graphs[idx])
+
+
+def _collate_graph_pair(
+    batch: Sequence[Tuple[GraphData, GraphData]]
+) -> Tuple[GraphBatch, GraphBatch]:
+    if not batch:
+        empty = _collate_graph_batch([])
+        return empty, empty
+    ctx_graphs, tgt_graphs = zip(*batch)
+    return _collate_graph_batch(ctx_graphs), _collate_graph_batch(tgt_graphs)
+
+
 def _build_graph_dataloader(
-    data_source: Sequence[GraphData],
+    data_source: Sequence[Any],
     *,
     batch_size: int,
     num_workers: int,
     pin_memory: bool,
     persistent_workers: bool,
     prefetch_factor: int,
+    collate_fn: Optional[Callable[[Sequence[Any]], Any]] = None,
 ) -> DataLoader:
     """Construct a ``DataLoader`` that yields ``GraphBatch`` batches."""
 
@@ -223,7 +421,7 @@ def _build_graph_dataloader(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        collate_fn=_collate_graph_batch,
+        collate_fn=collate_fn or _collate_graph_batch,
     )
     if num_workers > 0:
         loader_kwargs["persistent_workers"] = persistent_workers
@@ -435,18 +633,21 @@ def train_jepa(
             if distributed
             else dataset.graphs
         )
+        augmenter = _JEPAAugmentor(mask_ratio=mask_ratio, contiguous=contiguous)
+        pair_dataset = _AugmentedPairDataset(data_source, augmenter)
         dataloader = _build_graph_dataloader(
-            data_source,
+            pair_dataset,
             batch_size=batch_size,
             num_workers=num_workers,
             pin_memory=pin_memory,
             persistent_workers=persistent_workers,
             prefetch_factor=prefetch_factor,
+            collate_fn=_collate_graph_pair,
         )
 
         batches_done = 0
         # Iterate over batches and update the outer progress bar each time
-        for batch in dataloader:
+        for ctx_batch, tgt_batch in dataloader:
             if max_batches > 0 and batches_done >= max_batches:
                 break
             if not _time_left():
@@ -455,54 +656,11 @@ def train_jepa(
                         "Time budget exhausted during JEPA epoch; breaking."
                     )
                 break
-            if not batch:
+            if ctx_batch.num_graphs == 0 or tgt_batch.num_graphs == 0:
                 continue
 
-            graphs_in_batch = (
-                list(batch.graphs)
-                if isinstance(batch, GraphBatch)
-                else list(batch)
-            )
-            if not graphs_in_batch:
-                continue
-
-            ctx_graphs, tgt_graphs = [], []
-            for g in graphs_in_batch:
-                views = generate_views(
-                    g,
-                    structural_ops=[
-                        lambda x, mr=mask_ratio, c=contiguous: mask_subgraph(x, mr, c)
-                    ],
-                )
-                # Be defensive: some generators/stubs may yield a single view.
-                if not isinstance(views, (list, tuple)):
-                    views = [views]
-                if len(views) >= 2:
-                    g_ctx, g_tgt = views[0], views[1]
-                else:
-                    # Fallback: duplicate the graph for context,
-                    # synthesize a simple, deterministic target so MSE ≈ 1.0
-                    g_ctx = views[0] if views else g
-
-                    # Build g_tgt with x shifted by +1 (same edges/edge_attr)
-                    import numpy as _np
-                    from data.mdataset import GraphData  # adjust import if GraphData is elsewhere
-
-                    x = _np.asarray(g_ctx.x, dtype=_np.float32)
-                    x_tgt = (x + 1.0).copy()
-
-                    edge_attr = getattr(g_ctx, "edge_attr", None)
-                    g_tgt = GraphData(
-                        x=x_tgt,
-                        edge_index=g_ctx.edge_index.copy(),
-                        edge_attr=(None if edge_attr is None else edge_attr.copy()),
-                    )
-
-                ctx_graphs.append(g_ctx)
-                tgt_graphs.append(g_tgt)
-
-            ctx_batch = _collate_graph_batch(ctx_graphs).to(device_t)
-            tgt_batch = _collate_graph_batch(tgt_graphs).to(device_t)
+            ctx_batch = ctx_batch.to(device_t)
+            tgt_batch = tgt_batch.to(device_t)
 
             with torch.cuda.amp.autocast(
                 enabled=amp_enabled,
@@ -746,16 +904,27 @@ def train_contrastive(
             if distributed
             else dataset.graphs
         )
+        augmenter = _ContrastiveAugmentor(
+            mask_ratio=mask_ratio,
+            random_rotate=random_rotate,
+            mask_angle=mask_angle,
+            perturb_dihedral=perturb_dihedral,
+            bond_deletion=bond_deletion,
+            atom_masking=atom_masking,
+            subgraph_removal=subgraph_removal,
+        )
+        pair_dataset = _AugmentedPairDataset(data_source, augmenter)
         dataloader = _build_graph_dataloader(
-            data_source,
+            pair_dataset,
             batch_size=batch_size,
             num_workers=num_workers,
             pin_memory=pin_memory,
             persistent_workers=persistent_workers,
             prefetch_factor=prefetch_factor,
+            collate_fn=_collate_graph_pair,
         )
         batches_done = 0
-        for batch in dataloader:
+        for view1_batch, view2_batch in dataloader:
             if max_batches > 0 and batches_done >= max_batches:
                 break
             if not _time_left():
@@ -764,59 +933,27 @@ def train_contrastive(
                         "Time budget exhausted during contrastive epoch; breaking."
                     )
                 break
-            if not batch:
+            if view1_batch.num_graphs == 0 or view2_batch.num_graphs == 0:
                 continue
 
-            z1_list, z2_list = [], []
-            for g in batch:
-                struct_ops = [] 
-                if bond_deletion:
-                    struct_ops.append(delete_random_bond)
-                if atom_masking:
-                    struct_ops.append(mask_random_atom)
-                if subgraph_removal:
-                    struct_ops.append(remove_random_subgraph)
-                # keep subgraph masking as a function of mask_ratio (contrastive view)
-                if mask_ratio and mask_ratio > 0:
-                    struct_ops.append(
-                        lambda x, mr=mask_ratio: mask_subgraph(x, mr, contiguous=False)[0]
-                    )
-               
-                geom_ops = []
-                if random_rotate or mask_angle or perturb_dihedral:
-                    geom_ops.append(
-                        lambda x: apply_graph_augmentations(
-                            x,
-                            rotate=random_rotate,
-                            mask_angle=mask_angle,
-                            perturb_dihedral=perturb_dihedral,
-                        )
-                    )
-                v1 = generate_views(g, structural_ops=struct_ops, geometric_ops=geom_ops)[0]
-                v2 = generate_views(g, structural_ops=struct_ops, geometric_ops=geom_ops)[0]
-                with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
+            view1_batch = view1_batch.to(device_t)
+            view2_batch = view2_batch.to(device_t)
 
-                    # node features for each view
-                    # move graphs to the model's device if they support .to(), then encode
-                    g1 = v1.to(device_t) if hasattr(v1, "to") else v1
-                    g2 = v2.to(device_t) if hasattr(v2, "to") else v2
-                    h1_nodes = _ensure_2d(_encode_graph(encoder, g1))   # [N1, D]
-                    h2_nodes = _ensure_2d(_encode_graph(encoder, g2))   # [N2, D]
+            with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
+                # Encode both augmented views and pool to graph-level embeddings.
+                h1_nodes = _ensure_2d(_encode_graph(encoder, view1_batch))   # [*, D]
+                h2_nodes = _ensure_2d(_encode_graph(encoder, view2_batch))   # [*, D]
 
-                    # pool to **graph-level** embeddings (one vector per graph)
-                    g1_pool = _ensure_2d(_pool_graph_emb(h1_nodes, v1))                 # [1, D]
-                    g2_pool = _ensure_2d(_pool_graph_emb(h2_nodes, v2))                 # [1, D]
+                g1_pool = _ensure_2d(_pool_graph_emb(h1_nodes, view1_batch))  # [B, D]
+                g2_pool = _ensure_2d(_pool_graph_emb(h2_nodes, view2_batch))  # [B, D]
 
-                    # projector expects the pooled feature dim
-                    if isinstance(proj[0], nn.Linear) and proj[0].in_features != g1_pool.size(1):
-                        proj[0] = nn.Linear(g1_pool.size(1), proj[0].out_features).to(device_t)
-                        opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
-                    z1_list.append(proj(g1_pool))                                      # [1, P]
-                    z2_list.append(proj(g2_pool))                                      # [1, P]
+                # projector expects the pooled feature dim
+                if isinstance(proj[0], nn.Linear) and proj[0].in_features != g1_pool.size(1):
+                    proj[0] = nn.Linear(g1_pool.size(1), proj[0].out_features).to(device_t)
+                    opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
 
-            # stack to [B, P] and normalize
-            z1 = torch.nan_to_num(F.normalize(torch.cat(z1_list, dim=0), dim=-1))
-            z2 = torch.nan_to_num(F.normalize(torch.cat(z2_list, dim=0), dim=-1))
+                z1 = torch.nan_to_num(F.normalize(proj(g1_pool), dim=-1))
+                z2 = torch.nan_to_num(F.normalize(proj(g2_pool), dim=-1))
 
 
             # --- new safety + symmetric loss logic ---
