@@ -33,16 +33,6 @@ check_shared_equal() {
     fi
   done
 
-  # ensure the sweep algorithm uses the same random seed
-  local a b
-  a="$(yq '.seed' "$jepa")"
-  b="$(yq '.seed' "$ctr")"
-  if [[ "$a" != "$b" ]]; then
-    echo "[fatal] sweep mismatch for 'seed':"
-    echo "  JEPA:        $a"
-    echo "  Contrastive: $b" >&2
-    exit 1
-  fi
 }
 
 if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
@@ -57,10 +47,9 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
   # Create a single sweep for JEPA and another for contrastive; reuse IDs
   : "${WANDB_COUNT:=30}"
-  : "${SWEEP_SEED:=42}"
   export WANDB_RUN_GROUP="${GITHUB_RUN_ID:-pipeline-$(date -u +%Y%m%dT%H%M%SZ)}"
   export WANDB_RESUME=allow
-  echo "[phase1] WANDB_COUNT=$WANDB_COUNT SWEEP_SEED=$SWEEP_SEED group=$WANDB_RUN_GROUP"
+  echo "[phase1] WANDB_COUNT=$WANDB_COUNT group=$WANDB_RUN_GROUP"
 
   JEPA_SPEC="$APP_DIR/sweeps/sweep_phase1_jepa.yaml"
   CONTRAST_SPEC="$APP_DIR/sweeps/sweep_phase1_contrastive.yaml"
@@ -68,8 +57,8 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   [[ -f "$CONTRAST_SPEC" ]] || { echo "[fatal] missing sweep spec $CONTRAST_SPEC" >&2; exit 1; }
 
 
-  TMP_JEPA="$(mktemp)";      yq ".method = \"random\" | .random_seed = ${SWEEP_SEED}" "$JEPA_SPEC" > "$TMP_JEPA"
-  TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\" | .random_seed = ${SWEEP_SEED}" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
+  TMP_JEPA="$(mktemp)";      yq ".method = \"random\"" "$JEPA_SPEC" > "$TMP_JEPA"
+  TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\"" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
 
   check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
 
