@@ -3,6 +3,7 @@
 
 common: &common
   cache_dir: ${CACHE_DIR}
+  cache_datasets: true
   num_workers: 8
   prefetch_factor: 4
   persistent_workers: true
