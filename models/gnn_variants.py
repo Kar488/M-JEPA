@@ -463,8 +463,44 @@ class SchNet3D(EncoderBase):
 
     def _encode_nodes(self, g: GraphData, device: torch.device) -> torch.Tensor:
         pos = getattr(g, "pos", None)
+        if pos is None and hasattr(g, "graphs"):
+            # ``GraphBatch`` stores the individual graphs when collating.
+            # Attempt to rebuild the concatenated coordinate tensor on-the-fly
+            # so SchNet3D can operate on DataLoader batches even when the
+            # collate function skipped populating ``batch.pos``.
+            pos_list = []
+            pos_width = None
+            missing = False
+            for graph in getattr(g, "graphs", []):
+                coords = getattr(graph, "pos", None)
+                if coords is None:
+                    missing = True
+                    break
+                coords_t = torch.as_tensor(
+                    coords, dtype=torch.float32, device=device
+                )
+                if coords_t.ndim != 2:
+                    coords_t = coords_t.view(coords_t.size(0), -1)
+                if pos_width is None:
+                    pos_width = int(coords_t.size(-1))
+                pos_list.append(coords_t)
+
+            if not missing:
+                if pos_list:
+                    pos = torch.cat(pos_list, dim=0)
+                else:
+                    width = pos_width or 3
+                    pos = torch.zeros((0, width), dtype=torch.float32, device=device)
+                try:
+                    setattr(g, "pos", pos)
+                except Exception:
+                    # ``g`` may be a lightweight shim; cache best-effort only.
+                    pass
+        
         if pos is None:
-            raise ValueError("SchNet3D requires 3D coordinates `pos`. Enable --add-3d and ensure loader populates g.pos.")
+            raise ValueError(
+                "SchNet3D requires 3D coordinates `pos`. Enable --add-3d and ensure loader populates g.pos."
+            )
         pos = torch.as_tensor(pos, dtype=torch.float32, device=device)
         x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
         e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)

@@ -115,7 +115,12 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   BEST_SWEEP="${WANDB_ENTITY}/${WANDB_PROJECT}/${BEST_ID}"
 
   OUT_PATH="${GRID_DIR:-$APP_DIR/grid}/best.json"
-  PHASE2_PATH="$APP_DIR/sweeps/grid_sweep_phase2.yaml"
+  
+  TMP_BEST="$(mktemp)"
+  TMP_PHASE2="$(mktemp)"
+  LOG_TMP="$(mktemp)"
+  trap 'rm -f "$TMP_BEST" "$TMP_PHASE2"' EXIT
+
   LOG_TMP="$(mktemp)"
   PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
     "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
@@ -124,16 +129,33 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
         --task "$TASK_FROM_PE" \
         --phase2-method bayes \
         --emit-bounds \
-        --out "$OUT_PATH" \
-        --phase2-yaml "$PHASE2_PATH" \
+        --out "$TMP_BEST" \
+        --phase2-yaml "$TMP_PHASE2" \
         --phase2-unlabeled-dir "${PHASE2_UNLABELED_DIR:-$APP_DIR/data/ZINC-canonicalized}" \
         --phase2-labeled-dir   "${PHASE2_LABELED_DIR:-$APP_DIR/data/katielinkmoleculenet_benchmark/train}" \
       2>&1 | tee "$LOG_TMP"
 
+  mkdir -p "$(dirname "$OUT_PATH")"
+  cp "$TMP_BEST" "$OUT_PATH"
+  echo "[phase1] staged best config to $OUT_PATH"
+
   FINAL_CFG="${EXPORT_OUT_PATH:-${GRID_DIR:-$APP_DIR/grid}/best_grid_config.json}"
-  FINAL_P2="${EXPORT_PHASE2_PATH:-$APP_DIR/sweeps/grid_sweep_phase2.yaml}"
-  cp "$OUT_PATH" "$FINAL_CFG"
-  cp "$PHASE2_PATH" "$FINAL_P2"
+  if [[ "$FINAL_CFG" != "$OUT_PATH" ]]; then
+    mkdir -p "$(dirname "$FINAL_CFG")"
+    cp "$TMP_BEST" "$FINAL_CFG"
+    echo "[phase1] exported best config to $FINAL_CFG"
+  fi
+
+  CANONICAL_P2="$APP_DIR/sweeps/grid_sweep_phase2.yaml"
+  mkdir -p "$(dirname "$CANONICAL_P2")"
+  cp "$TMP_PHASE2" "$CANONICAL_P2"
+  echo "[phase1] staged Phase-2 sweep YAML to $CANONICAL_P2"
+
+  FINAL_P2="${EXPORT_PHASE2_PATH:-$CANONICAL_P2}"
+  if [[ "$FINAL_P2" != "$CANONICAL_P2" ]]; then
+    mkdir -p "$(dirname "$FINAL_P2")"
+    cp "$TMP_PHASE2" "$FINAL_P2"
+    
 
   SWEEP_ID2="$(wandb_sweep_create "$FINAL_P2")"
   [[ "$SWEEP_ID2" =~ ^[a-z0-9]{8}$ ]] || { echo "[phase2][fatal] bad sweep id: '$SWEEP_ID2'" >&2; exit 1; }

@@ -33,17 +33,23 @@ class _GatherNodes(torch.autograd.Function):
             return None, None
         grad_input = grad_output.reshape(flat_index.numel(), *ctx.rest_shape)
         grad_x = grad_output.new_zeros(ctx.x_shape)
-        grad_x.index_add_(0, flat_index, grad_input)
+        if grad_input.numel() == 0:
+            return grad_x, None
+
+        view_shape = (flat_index.numel(),) + (1,) * (grad_input.dim() - 1)
+        expanded_index = flat_index.view(view_shape).expand_as(grad_input)
+        grad_x.scatter_add_(0, expanded_index, grad_input)
+
         return grad_x, None
 
 
 def gather_nodes(x: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
-    """Gather ``x[index]`` with a backward pass implemented via ``index_add_``.
+    """Gather ``x[index]`` with a backward pass implemented via ``scatter_add_``.
 
     PyTorch's advanced indexing dispatches to ``aten::_index_put_impl_`` in the
     backward pass, which prevents CUDA graph capture. This helper mirrors the
     behaviour of ``x[index]`` while providing a cudagraph-friendly backward based
-    on ``index_add_``.
+    on ``scatter_add_``.
     """
-
+    
     return _GatherNodes.apply(x, index)
