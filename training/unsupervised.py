@@ -3,7 +3,8 @@ from __future__ import annotations
 import math
 import os
 import time as _t
-from typing import List, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -49,10 +50,161 @@ from utils.logging import maybe_init_wandb
 from utils.schedule import cosine_with_warmup
 
 
-def _collate_graph_batch(batch: Sequence[GraphData]) -> List[GraphData]:
-    """Return a shallow list copy so downstream code can mutate safely."""
+@dataclass
+class GraphBatch:
+    """Simple container that mimics a PyG ``Batch`` for ``GraphData`` objects."""
 
-    return list(batch)
+    graphs: List[GraphData]
+    x: torch.Tensor
+    edge_index: torch.Tensor
+    batch: torch.Tensor
+    ptr: torch.Tensor
+    edge_attr: Optional[torch.Tensor] = None
+    pos: Optional[torch.Tensor] = None
+
+    def __iter__(self) -> Iterable[GraphData]:
+        return iter(self.graphs)
+
+    def __len__(self) -> int:
+        return len(self.graphs)
+
+    def __getitem__(self, idx: int) -> GraphData:
+        return self.graphs[idx]
+
+    @property
+    def num_graphs(self) -> int:
+        return len(self.graphs)
+
+    def to(self, device: torch.device | str) -> "GraphBatch":
+        device = torch.device(device)
+        edge_attr = (
+            self.edge_attr.to(device)
+            if isinstance(self.edge_attr, torch.Tensor)
+            else self.edge_attr
+        )
+        pos = self.pos.to(device) if isinstance(self.pos, torch.Tensor) else self.pos
+        return GraphBatch(
+            graphs=self.graphs,
+            x=self.x.to(device),
+            edge_index=self.edge_index.to(device),
+            batch=self.batch.to(device),
+            ptr=self.ptr.to(device),
+            edge_attr=edge_attr,
+            pos=pos,
+        )
+
+
+def _collate_graph_batch(batch: Sequence[GraphData] | GraphBatch) -> GraphBatch:
+    """Collate a sequence of ``GraphData`` objects into a ``GraphBatch``."""
+
+    if isinstance(batch, GraphBatch):
+        return batch
+
+    graphs = list(batch)
+    if not graphs:
+        zero = torch.zeros(0, dtype=torch.long)
+        zero_mat = torch.zeros((0, 0), dtype=torch.float32)
+        zero_edge = torch.zeros((2, 0), dtype=torch.long)
+        ptr = torch.zeros(1, dtype=torch.long)
+        return GraphBatch([], zero_mat, zero_edge, zero, ptr)
+
+    x_blocks: List[torch.Tensor] = []
+    batch_index: List[torch.Tensor] = []
+    edge_blocks: List[torch.Tensor] = []
+    ptr: List[int] = [0]
+    node_offset = 0
+
+    all_have_pos = True
+    edge_attr_dim = 0
+    has_edge_attr = False
+    edge_attr_blocks: List[Optional[torch.Tensor]] = []
+    edge_counts: List[int] = []
+
+    for idx, g in enumerate(graphs):
+        x = torch.as_tensor(getattr(g, "x"), dtype=torch.float32)
+        if x.dim() != 2:
+            raise ValueError("GraphData.x must be a 2D array/tensor")
+        x_blocks.append(x)
+        n_i = int(x.size(0))
+        batch_index.append(torch.full((n_i,), idx, dtype=torch.long))
+        ptr.append(ptr[-1] + n_i)
+
+        pos = getattr(g, "pos", None)
+        if pos is None:
+            all_have_pos = False
+
+        edge_index = getattr(g, "edge_index", None)
+        if edge_index is None:
+            ei = torch.zeros((2, 0), dtype=torch.long)
+        else:
+            ei = torch.as_tensor(edge_index, dtype=torch.long)
+            if ei.dim() == 2 and ei.size(0) != 2 and ei.size(1) == 2:
+                ei = ei.t()
+            if ei.dim() != 2 or ei.size(0) != 2:
+                raise ValueError("edge_index must have shape [2, E]")
+        edge_blocks.append(ei + node_offset if ei.numel() else ei)
+        edge_count = int(ei.size(1))
+        edge_counts.append(edge_count)
+
+        edge_attr = getattr(g, "edge_attr", None)
+        if edge_attr is not None:
+            ea = torch.as_tensor(edge_attr, dtype=torch.float32)
+            if ea.dim() == 1:
+                ea = ea.unsqueeze(-1)
+            edge_attr_dim = max(edge_attr_dim, int(ea.size(-1)))
+            has_edge_attr = True
+            edge_attr_blocks.append(ea)
+        else:
+            edge_attr_blocks.append(None)
+
+        node_offset += n_i
+
+    x_cat = torch.cat(x_blocks, dim=0)
+    batch_vec = torch.cat(batch_index, dim=0)
+    ptr_tensor = torch.tensor(ptr, dtype=torch.long)
+    edge_index_cat = (
+        torch.cat(edge_blocks, dim=1)
+        if edge_blocks
+        else torch.zeros((2, 0), dtype=torch.long)
+    )
+
+    batch_edge_attr = None
+    if has_edge_attr:
+        filled: List[torch.Tensor] = []
+        for ea, edge_count in zip(edge_attr_blocks, edge_counts):
+            if ea is None:
+                filled.append(
+                    torch.zeros((edge_count, edge_attr_dim), dtype=torch.float32)
+                )
+            else:
+                if ea.size(-1) != edge_attr_dim:
+                    pad_dim = edge_attr_dim - ea.size(-1)
+                    if pad_dim > 0:
+                        pad = torch.zeros((ea.size(0), pad_dim), dtype=ea.dtype)
+                        ea = torch.cat([ea, pad], dim=-1)
+                    else:
+                        ea = ea[:, :edge_attr_dim]
+                filled.append(ea)
+        batch_edge_attr = (
+            torch.cat(filled, dim=0)
+            if filled
+            else torch.zeros((0, edge_attr_dim), dtype=torch.float32)
+        )
+
+    batch_pos = None
+    if all_have_pos:
+        pos_blocks = [torch.as_tensor(g.pos, dtype=torch.float32) for g in graphs]
+        batch_pos = torch.cat(pos_blocks, dim=0) if pos_blocks else None
+
+    return GraphBatch(
+        graphs=graphs,
+        x=x_cat,
+        edge_index=edge_index_cat,
+        batch=batch_vec,
+        ptr=ptr_tensor,
+        edge_attr=batch_edge_attr,
+        pos=batch_pos,
+    )
 
 
 def _build_graph_dataloader(
@@ -64,7 +216,7 @@ def _build_graph_dataloader(
     persistent_workers: bool,
     prefetch_factor: int,
 ) -> DataLoader:
-    """Construct a ``DataLoader`` that yields ``List[GraphData]`` batches."""
+    """Construct a ``DataLoader`` that yields ``GraphBatch`` batches."""
 
     loader_kwargs = dict(
         batch_size=batch_size,
@@ -306,9 +458,16 @@ def train_jepa(
             if not batch:
                 continue
 
-            ctx_nodes, tgt_nodes = [], []
+            graphs_in_batch = (
+                list(batch.graphs)
+                if isinstance(batch, GraphBatch)
+                else list(batch)
+            )
+            if not graphs_in_batch:
+                continue
+
             ctx_graphs, tgt_graphs = [], []
-            for g in batch:
+            for g in graphs_in_batch:
                 views = generate_views(
                     g,
                     structural_ops=[
@@ -339,26 +498,22 @@ def train_jepa(
                         edge_attr=(None if edge_attr is None else edge_attr.copy()),
                     )
 
-
-                with torch.cuda.amp.autocast(
-                    enabled=amp_enabled,
-                    dtype=_amp_dtype,
-                ):
-                    h_c = _encode_graph(encoder, g_ctx)
-                    with torch.no_grad():
-                        h_t = _encode_graph(ema_encoder, g_tgt)
-                ctx_nodes.append(_ensure_2d(h_c))
-                tgt_nodes.append(_ensure_2d(h_t))
                 ctx_graphs.append(g_ctx)
                 tgt_graphs.append(g_tgt)
 
-            # pool **per-graph**, then concatenate to a [B, D] batch
-            h_c_g_list, h_t_g_list = [], []
-            for h_c_i, g_ctx_i, h_t_i, g_tgt_i in zip(ctx_nodes, ctx_graphs, tgt_nodes, tgt_graphs):
-                h_c_g_list.append(_ensure_2d(_pool_graph_emb(h_c_i, g_ctx_i)))
-                h_t_g_list.append(_ensure_2d(_pool_graph_emb(h_t_i, g_tgt_i)))
-            h_c_g = torch.cat(h_c_g_list, dim=0).to(device_t)  # [B, D]
-            h_t_g = torch.cat(h_t_g_list, dim=0).to(device_t)  # [B, D]
+            ctx_batch = _collate_graph_batch(ctx_graphs).to(device_t)
+            tgt_batch = _collate_graph_batch(tgt_graphs).to(device_t)
+
+            with torch.cuda.amp.autocast(
+                enabled=amp_enabled,
+                dtype=_amp_dtype,
+            ):
+                h_c_nodes = _ensure_2d(_encode_graph(encoder, ctx_batch))
+                with torch.no_grad():
+                    h_t_nodes = _ensure_2d(_encode_graph(ema_encoder, tgt_batch))
+
+            h_c_g = _ensure_2d(_pool_graph_emb(h_c_nodes, ctx_batch))
+            h_t_g = _ensure_2d(_pool_graph_emb(h_t_nodes, tgt_batch))
 
             with torch.cuda.amp.autocast(
                 enabled=amp_enabled,
