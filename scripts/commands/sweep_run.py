@@ -191,6 +191,10 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _labeled_dir   = _resolve_env_path(args.labeled_dir)
     _unlabeled_dir = _resolve_env_path(args.unlabeled_dir)
 
+    cache_dir = getattr(args, "cache_dir", None)
+    if cache_dir:
+        args.cache_dir = _resolve_env_path(str(cache_dir))
+        
     # NOTE: run already initialized; do NOT re-init here. If a prior path closed it,
     # the agent will re-launch this process with a fresh sweep context.
     wb = wandb.run if wandb is not None else None

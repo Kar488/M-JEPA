@@ -12,8 +12,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.optim.lr_scheduler import _LRScheduler
 import tqdm
 from torch.utils.data import DataLoader
+import logging
 
 try:
     from data.augment import (
@@ -48,6 +50,7 @@ from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.ddp import DistributedSamplerList, cleanup, init_distributed, is_main_process
 from utils.graph_ops import _encode_graph, _pool_graph_emb
 from utils.logging import maybe_init_wandb
+logger = logging.getLogger(__name__)
 from utils.schedule import cosine_with_warmup
 
 
@@ -93,6 +96,40 @@ class GraphBatch:
             edge_attr=edge_attr,
             pos=pos,
         )
+
+def _step_optimizer(
+    loss: torch.Tensor,
+    optimizer: optim.Optimizer,
+    *,
+    scaler: Optional["torch.cuda.amp.GradScaler"] = None,
+    scheduler: Optional[_LRScheduler] = None,
+) -> None:
+    """Backpropagate ``loss`` and update ``optimizer``/``scheduler`` safely.
+
+    When ``GradScaler`` skips an optimiser step due to inf/NaN gradients we avoid
+    stepping the scheduler so PyTorch does not warn about the order of
+    operations.  ``GradScaler`` is optional and treated as disabled when not
+    provided or not enabled.
+    """
+
+    step_executed = True
+    grad_scaler_cls = getattr(torch.cuda, "amp", None)
+    grad_scaler_cls = getattr(grad_scaler_cls, "GradScaler", None)
+    if grad_scaler_cls is not None and isinstance(scaler, grad_scaler_cls):
+        scaler_enabled = bool(getattr(scaler, "is_enabled", lambda: True)())
+        prev_scale = scaler.get_scale() if scaler_enabled else None
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        if scaler_enabled and prev_scale is not None:
+            step_executed = scaler.get_scale() >= prev_scale
+    else:
+        loss.backward()
+        optimizer.step()
+
+    if scheduler is not None and step_executed:
+        scheduler.step()
+
 
 
 def _collate_graph_batch(batch: Sequence[GraphData] | GraphBatch) -> GraphBatch:
@@ -642,6 +679,12 @@ def train_jepa(
         if is_main_process() and not disable_bar
         else None
     )
+    if pbar is None and is_main_process():
+        logger.info(
+            "Starting JEPA training for %d epochs (%d steps/epoch)",
+            epochs,
+            steps_per_epoch,
+        )
     for ep in range(start_epoch, epochs + 1):
         if not _time_left():
             if is_main_process():
@@ -716,15 +759,7 @@ def train_jepa(
                 loss = mse(pred, h_t_g) + reg_lambda * l2_reg
 
             opt.zero_grad(set_to_none=True)
-            if isinstance(scaler, torch.cuda.amp.GradScaler):
-                scaler.scale(loss).backward()
-                scaler.step(opt)
-                scaler.update()
-            else:
-                loss.backward()
-                opt.step()
-            if sch is not None:
-                sch.step()
+            _step_optimizer(loss, opt, scaler=scaler, scheduler=sch)
 
             lv = float(loss.detach().cpu().item())
             ep_loss += lv
@@ -759,6 +794,13 @@ def train_jepa(
             losses.append(ep_loss)
             if wb:
                 wb.log({"epoch/jepa_loss": ep_loss, "epoch": ep})
+            if pbar is None:
+                logger.info(
+                    "Epoch %d/%d finished: JEPA loss %.6f",
+                    ep,
+                    epochs,
+                    ep_loss,
+                )
             if ckpt_path and (ep % ckpt_every == 0 or ep == epochs):
                 save_checkpoint(
                     os.path.join(ckpt_path, f"jepa_ep{ep:04d}.pt"),
@@ -925,6 +967,12 @@ def train_contrastive(
         if is_main_process() and not disable_bar
         else None
     )
+    if pbar is None and is_main_process():
+        logger.info(
+            "Starting contrastive training for %d epochs (%d steps/epoch)",
+            epochs,
+            steps_per_epoch,
+        )
 
     for ep in range(start_epoch, epochs + 1):
         ep_loss = 0.0
@@ -1017,15 +1065,8 @@ def train_contrastive(
 
             opt.zero_grad(set_to_none=True)
             
-            if isinstance(scaler, torch.cuda.amp.GradScaler):
-                scaler.scale(loss).backward()
-                scaler.step(opt)
-                scaler.update()
-            else:
-                loss.backward()
-                opt.step()
-            if sch is not None:
-                sch.step()
+            _step_optimizer(loss, opt, scaler=scaler, scheduler=sch)
+
             lv = float(loss.detach().cpu().item())
             ep_loss += lv
             step += 1
@@ -1047,6 +1088,13 @@ def train_contrastive(
             losses.append(ep_loss)
             if wb:
                 wb.log({"epoch/contrastive_loss": ep_loss, "epoch": ep})
+            if pbar is None:
+                logger.info(
+                    "Epoch %d/%d finished: contrastive loss %.6f",
+                    ep,
+                    epochs,
+                    ep_loss,
+                )
             if ckpt_path and (ep % ckpt_every == 0 or ep == epochs):
                 save_checkpoint(
                     os.path.join(ckpt_path, f"contrastive_ep{ep:04d}.pt"),
