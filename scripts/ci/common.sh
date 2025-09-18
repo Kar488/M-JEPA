@@ -11,6 +11,7 @@ set -euo pipefail
 : "${RUN_ID:=$(date +%s)}"
 : "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
 : "${WANDB_DIR:=/data/mjepa/wandb}"
+: "${LOG_DIR:=${APP_DIR}/logs}"
 
 if [[ -z "${APP_DIR:-}" ]]; then
   _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"      # .../scripts/ci
