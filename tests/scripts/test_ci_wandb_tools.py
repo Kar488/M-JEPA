@@ -1,8 +1,10 @@
 import json
 import sys
 import types
-import yaml
+from pathlib import Path
+
 import pytest
+import yaml
 
 from scripts.ci import export_best_from_wandb as eb
 from scripts.ci import paired_effect_from_wandb as pe
@@ -113,6 +115,50 @@ def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
         "--out", str(out_json), "--phase2-yaml", str(out_yaml)
     ])
     with pytest.raises(RuntimeError):
+        eb.main()
+
+
+def test_export_best_rejects_tracked_template(monkeypatch, tmp_path):
+    repo_root = Path(__file__).resolve().parents[2]
+
+    monkeypatch.setenv("APP_DIR", str(repo_root))
+    monkeypatch.setenv("GRID_DIR", str(tmp_path))
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setenv("WANDB_PROJECT", "proj")
+
+    runs = [
+        FakeRun("r1", {"mask_ratio": 0.1}, {"val_rmse": 0.4, "val_mae": 0.3}, "1"),
+    ]
+
+    class FakeApi:
+        def sweep(self, sweep_id):
+            return FakeSweep(runs)
+
+    monkeypatch.setattr(eb, "wandb", types.SimpleNamespace(Api=lambda: FakeApi()))
+    monkeypatch.setattr(eb, "maybe_init_wandb", lambda *a, **k: None)
+
+    out_json = tmp_path / "best.json"
+    tracked_yaml = repo_root / "sweeps" / "grid_sweep_phase2.yaml"
+
+    monkeypatch.setenv("METHOD_WINNER", "jepa")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eb",
+            "--sweep-id",
+            "ent/proj/sw1",
+            "--task",
+            "regression",
+            "--out",
+            str(out_json),
+            "--phase2-yaml",
+            str(tracked_yaml),
+            "--emit-bounds",
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="Refusing to overwrite tracked Phase-2 template"):
         eb.main()
 
 

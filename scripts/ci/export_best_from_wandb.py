@@ -370,6 +370,25 @@ def main():
             wb.summary.update(s)
             wb.finish()
 
+        tpl_phase2 = os.path.realpath(
+            os.path.join(APP_DIR, "sweeps", "grid_sweep_phase2.yaml")
+        )
+        target_phase2 = os.path.realpath(args.phase2_yaml)
+        same_as_template = target_phase2 == tpl_phase2
+        try:
+            same_as_template = same_as_template or os.path.samefile(
+                target_phase2, tpl_phase2
+            )
+        except FileNotFoundError:
+            same_as_template = False
+        sweeps_suffix = os.sep + os.path.join("sweeps", "grid_sweep_phase2.yaml")
+        if same_as_template or target_phase2.endswith(sweeps_suffix):
+            raise RuntimeError(
+                "Refusing to overwrite tracked Phase-2 template at "
+                f"{tpl_phase2}. Set GRID_DIR or pass --phase2-yaml to a "
+                "writable workspace (e.g., $GRID_DIR/grid_sweep_phase2.yaml)."
+            )
+
         os.makedirs(os.path.dirname(args.phase2_yaml) or ".", exist_ok=True)
         with open(args.phase2_yaml, "w", encoding="utf-8") as f:
             yaml.safe_dump(spec, f, sort_keys=False)
