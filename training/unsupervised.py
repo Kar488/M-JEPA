@@ -109,7 +109,9 @@ def _step_optimizer(
     When ``GradScaler`` skips an optimiser step due to inf/NaN gradients we avoid
     stepping the scheduler so PyTorch does not warn about the order of
     operations.  ``GradScaler`` is optional and treated as disabled when not
-    provided or not enabled.
+    provided or not enabled.  We also guard against the scheduler being advanced
+    before the optimiser's internal step counter increases (e.g. after resume)
+    to suppress the PyTorch warning about an out-of-order call sequence.
     """
 
     step_executed = True
@@ -128,6 +130,19 @@ def _step_optimizer(
         optimizer.step()
 
     if scheduler is not None and step_executed:
+        opt_steps = getattr(optimizer, "_step_count", None)
+        sched_steps = getattr(scheduler, "_step_count", None)
+        if (
+            opt_steps is not None
+            and sched_steps is not None
+            and opt_steps <= sched_steps
+        ):
+            logger.debug(
+                "Skipping scheduler.step() because optimizer has not advanced: opt=%s sched=%s",
+                opt_steps,
+                sched_steps,
+            )
+            return
         scheduler.step()
 
 
