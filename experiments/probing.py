@@ -157,14 +157,25 @@ def linear_probe_regression(
         val_end = int(0.9 * n)
         tr, te = idx[:train_end], idx[val_end:]
 
+    X_train = np.asarray(X[tr], dtype=np.float64)
+    X_test = np.asarray(X[te], dtype=np.float64)
+
+    # Ridge does not handle NaNs, so impute with training-set means.
+    with np.errstate(invalid="ignore"):
+        col_means = np.nanmean(X_train, axis=0)
+    # Replace columns that are entirely NaN with zeros to avoid NaN means.
+    col_means = np.where(np.isnan(col_means), 0.0, col_means)
+    X_train = np.where(np.isnan(X_train), col_means, X_train)
+    X_test = np.where(np.isnan(X_test), col_means, X_test)
+
     reg = Ridge(alpha=1.0, random_state=42)
-    reg.fit(X[tr], y[tr])
-    pred = reg.predict(X[te])
+    reg.fit(X_train, y[tr])
+    pred = reg.predict(X_test)
     yt = y[te]
     return {
         "probe_rmse": float(np.sqrt(mean_squared_error(yt, pred))),
         "probe_mae": float(mean_absolute_error(yt, pred)),
-        "probe_r2": float(reg.score(X[te], yt)),
+        "probe_r2": float(reg.score(X_test, yt)),
     }
 
 
