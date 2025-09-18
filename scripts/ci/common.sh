@@ -7,6 +7,7 @@ set -euo pipefail
 : "${VENV_DIR:=/srv/mjepa/.venv}"
 : "${MAMBA_ROOT_PREFIX:=/data/mjepa/micromamba}"
 : "${CACHE_DIR:=/data/mjepa/cache/graphs}"
+: "${SWEEP_CACHE_DIR:=$CACHE_DIR}"
 : "${RUN_ID:=$(date +%s)}"
 : "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
 : "${WANDB_DIR:=/data/mjepa/wandb}"
@@ -20,6 +21,8 @@ if [[ -z "${APP_DIR:-}" ]]; then
 fi
 export APP_DIR
 export PYTHONPATH="${APP_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+export CACHE_DIR
+export SWEEP_CACHE_DIR
 
 # Determine an available Python interpreter. Prefer 'python', fallback to 'python3'.
 python_bin() {
@@ -39,7 +42,7 @@ python_bin() {
 : "${BENCH_DIR:=${BENCH_CACHE_DIR:-$EXP_ROOT/bench}}"
 : "${TOX21_DIR:=${TOX21_CACHE_DIR:-$EXP_ROOT/tox21}}"
 
-mkdir -p "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR" "$WANDB_DIR"
+mkdir -p "$CACHE_DIR" "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" "$TOX21_DIR" "$LOG_DIR" "$WANDB_DIR"
 export GRID_DIR PRETRAIN_DIR FINETUNE_DIR BENCH_DIR TOX21_DIR LOG_DIR
 
 # --- micromamba bootstrap ---

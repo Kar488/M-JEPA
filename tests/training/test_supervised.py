@@ -111,3 +111,42 @@ def test_train_linear_head_regression():
     )
     assert {"rmse", "mae", "head"} <= metrics.keys()
     assert isinstance(metrics["head"], nn.Module)
+
+
+def test_train_linear_head_respects_max_batches(monkeypatch):
+    np.random.seed(0)
+    torch.manual_seed(0)
+
+    labels = [0, 1] * 10
+    dataset = DummyDataset(labels)
+    enc = DummyEncoder(4)
+
+    step_counter = {"count": 0}
+    real_adam = torch.optim.Adam
+
+    def counting_adam(params, lr=0.01, *args, **kwargs):
+        opt = real_adam(params, lr=lr, *args, **kwargs)
+        original_step = opt.step
+
+        def _wrapped_step(*a, **k):
+            step_counter["count"] += 1
+            return original_step(*a, **k)
+
+        opt.step = _wrapped_step  # type: ignore[assignment]
+        return opt
+
+    monkeypatch.setattr(torch.optim, "Adam", counting_adam)
+
+    train_linear_head(
+        dataset,
+        enc,
+        "classification",
+        epochs=3,
+        batch_size=2,
+        lr=0.01,
+        patience=0,
+        device="cpu",
+        max_batches=3,
+    )
+
+    assert step_counter["count"] == 3
