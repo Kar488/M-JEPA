@@ -76,6 +76,21 @@ class EMA:
             for p, ema_p in zip(model.parameters(), self.params):
                 p.data.copy_(ema_p.to(p.dtype).to(p.device))
 
+    def copy_from(self, model: nn.Module) -> None:
+        """Overwrite EMA buffers with parameters from ``model``."""
+
+        with _NO_GRAD():
+            for i, src in enumerate(model.parameters()):
+                if i >= len(self.params):
+                    break
+                buf = self.params[i]
+                tensor = src.detach()
+                if self.use_fp32:
+                    tensor = tensor.to(torch.float32)
+                else:
+                    tensor = tensor.to(buf.dtype)
+                self.params[i].copy_(tensor.to(buf.device))
+
     def to(self, device: torch.device) -> None:
         """Move EMA buffers to a device."""
         with _NO_GRAD():
