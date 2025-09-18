@@ -54,6 +54,27 @@ logger = logging.getLogger(__name__)
 from utils.schedule import cosine_with_warmup
 
 
+_COMPILE_WARMUP_BATCHES = 128
+
+
+def _should_compile_models(
+    compile_requested: bool,
+    device: torch.device,
+    planned_batches: int,
+) -> bool:
+    """Return ``True`` when ``torch.compile`` is worth the warm-up cost."""
+
+    if not compile_requested:
+        return False
+    if planned_batches <= 0:
+        return False
+    if device.type == "cpu":
+        return False
+    if planned_batches < _COMPILE_WARMUP_BATCHES:
+        return False
+    return True
+
+
 @dataclass
 class GraphBatch:
     """Simple container that mimics a PyG ``Batch`` for ``GraphData`` objects."""
@@ -557,6 +578,23 @@ def train_jepa(
             RuntimeWarning,
             stacklevel=2,
         )
+    steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
+    total_steps = epochs * steps_per_epoch
+    planned_batches = total_steps
+    if max_batches > 0:
+        planned_batches = min(planned_batches, max_batches)
+    compile_requested = compile_models
+    compile_models = _should_compile_models(
+        compile_models,
+        device_t,
+        planned_batches,
+    )
+    if compile_requested and not compile_models and device_t.type != "cpu":
+        logger.debug(
+            "Skipping torch.compile because planned batch budget (%d) is below the warm-up threshold (%d).",
+            planned_batches,
+            _COMPILE_WARMUP_BATCHES,
+        )
     can_compile = (
         compile_models and hasattr(torch, "compile") and device_t.type != "cpu"
     )
@@ -621,8 +659,6 @@ def train_jepa(
     scaler = torch.cuda.amp.GradScaler(enabled=(use_amp and (not bf16) and device_t.type == "cuda"))
 
 
-    steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
-    total_steps = epochs * steps_per_epoch
     sch = cosine_with_warmup(opt, warmup_steps, total_steps) if use_scheduler else None
     # EMA momentum schedule: start from current decay, finish near 1.0 for a stable target
     ema_start = float(getattr(ema, "decay", 0.996))
@@ -685,7 +721,15 @@ def train_jepa(
             epochs,
             steps_per_epoch,
         )
+    total_batches_done = 0
     for ep in range(start_epoch, epochs + 1):
+        if max_batches > 0 and total_batches_done >= max_batches:
+            if is_main_process():
+                logger.info(
+                    "Max JEPA batches reached (%d); stopping pretraining.",
+                    max_batches,
+                )
+            break
         if not _time_left():
             if is_main_process():
                 wb and wb.log({"early/stop_reason": "time_budget"})
@@ -716,10 +760,12 @@ def train_jepa(
             collate_fn=_collate_graph_pair,
         )
 
-        batches_done = 0
+        epoch_batches = 0
+        hit_batch_cap = False
         # Iterate over batches and update the outer progress bar each time
         for ctx_batch, tgt_batch in dataloader:
-            if max_batches > 0 and batches_done >= max_batches:
+            if max_batches > 0 and total_batches_done >= max_batches:
+                hit_batch_cap = True
                 break
             if not _time_left():
                 if is_main_process():
@@ -784,12 +830,13 @@ def train_jepa(
                         "epoch": ep,
                     }
                 )
-            batches_done += 1
+            epoch_batches += 1
+            total_batches_done += 1
             # Update our single progress bar after processing each batch
             if pbar is not None:
                 pbar.update(1)
 
-        ep_loss /= max(1, min(steps_per_epoch, batches_done))
+        ep_loss /= max(1, epoch_batches)
         if is_main_process():
             losses.append(ep_loss)
             if wb:
@@ -815,6 +862,14 @@ def train_jepa(
                     ),
                     epoch=ep,
                 )
+
+        if hit_batch_cap and max_batches > 0 and total_batches_done >= max_batches:
+            if is_main_process():
+                logger.info(
+                    "Max JEPA batches reached (%d); stopping pretraining.",
+                    max_batches,
+                )
+            break
 
     try:
         if wb and is_main_process():
@@ -974,7 +1029,16 @@ def train_contrastive(
             steps_per_epoch,
         )
 
+    total_batches_done = 0
+
     for ep in range(start_epoch, epochs + 1):
+        if max_batches > 0 and total_batches_done >= max_batches:
+            if is_main_process():
+                logger.info(
+                    "Max contrastive batches reached (%d); stopping pretraining.",
+                    max_batches,
+                )
+            break
         ep_loss = 0.0
 
         # Update the bar description when the epoch changes
@@ -1005,9 +1069,11 @@ def train_contrastive(
             prefetch_factor=prefetch_factor,
             collate_fn=_collate_graph_pair,
         )
-        batches_done = 0
+        epoch_batches = 0
+        hit_batch_cap = False
         for view1_batch, view2_batch in dataloader:
-            if max_batches > 0 and batches_done >= max_batches:
+            if max_batches > 0 and total_batches_done >= max_batches:
+                hit_batch_cap = True
                 break
             if not _time_left():
                 if is_main_process():
@@ -1079,11 +1145,12 @@ def train_contrastive(
                         "epoch": ep,
                     }
                 )
-            batches_done += 1
+            epoch_batches += 1
+            total_batches_done += 1
             # Update our single progress bar after processing each batch
             if pbar is not None:
                 pbar.update(1)
-        ep_loss /= max(1, min(steps_per_epoch, batches_done))
+        ep_loss /= max(1, epoch_batches)
         if is_main_process():
             losses.append(ep_loss)
             if wb:
@@ -1108,6 +1175,13 @@ def train_contrastive(
                     ),
                     epoch=ep,
                 )
+        if hit_batch_cap and max_batches > 0 and total_batches_done >= max_batches:
+            if is_main_process():
+                logger.info(
+                    "Max contrastive batches reached (%d); stopping pretraining.",
+                    max_batches,
+                )
+            break
     if pbar is not None:
         pbar.close()
     # Close the progress bar after training

@@ -672,7 +672,14 @@ def train_linear_head(
     if train_loader is None:
         logger.warning("No training samples available; skipping linear-head optimisation.")
     else:
+        total_batches_done = 0
         for epoch in range(epochs):
+            if max_batches > 0 and total_batches_done >= max_batches:
+                logger.info(
+                    "Max linear-head batches reached (%d); stopping training.",
+                    max_batches,
+                )
+                break
             if not _time_left():
                 logger.info("Time budget hit before epoch %d; stopping training.", epoch)
                 break
@@ -680,10 +687,12 @@ def train_linear_head(
             encoder.eval()
             head_module.train()
             batch_losses = []
-            batches_done = 0
+            epoch_batches = 0
+            hit_batch_cap = False
 
             for batch in train_loader:
-                if max_batches > 0 and batches_done >= max_batches:
+                if max_batches > 0 and total_batches_done >= max_batches:
+                    hit_batch_cap = True
                     break
                 if not _time_left():
                     logger.info(
@@ -722,7 +731,8 @@ def train_linear_head(
                 optimiser.zero_grad()
                 loss.backward()
                 optimiser.step()
-                batches_done += 1
+                epoch_batches += 1
+                total_batches_done += 1
 
             if batch_losses:
                 logger.debug("Epoch %d training loss %.4f", epoch, float(np.mean(batch_losses)))
@@ -767,8 +777,15 @@ def train_linear_head(
                     logger.info("Early stopping at epoch %d", epoch)
                     break
             
-            if scheduler is not None and batches_done > 0:
+            if scheduler is not None and epoch_batches > 0:
                 scheduler.step()
+
+            if hit_batch_cap and max_batches > 0 and total_batches_done >= max_batches:
+                logger.info(
+                    "Max linear-head batches reached (%d); stopping training.",
+                    max_batches,
+                )
+                break
 
     metrics: Dict[str, float] = {}
     if is_main_process() or not distributed:
