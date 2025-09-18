@@ -216,6 +216,8 @@ jobs:
             mkdir -p "$APP_DIR"
             git config --global --add safe.directory "$APP_DIR"
             if [ -d "$APP_DIR/.git" ]; then
+              git -C "$APP_DIR" reset --hard HEAD
+              git -C "$APP_DIR" clean -fd
               git -C "$APP_DIR" remote set-url origin "$AUTH_URL"
               timeout 300 git -C "$APP_DIR" fetch --progress --verbose --prune --depth=1 --filter=blob:none origin "$BRANCH"
               git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
