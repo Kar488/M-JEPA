@@ -3,7 +3,7 @@
 Step #2 helper:
 - Read a W&B sweep (Phase-1 by default), pick best run with task-aware tie-breaks
 - Write best config to $GRID_DIR/best_grid_config.json (for pretrain)
-- Emit/overwrite $APP_DIR/sweeps/grid_sweep_phase2.yaml with narrowed Bayes spec
+- Emit/overwrite $GRID_DIR/grid_sweep_phase2.yaml with the narrowed Bayes spec
   (derived from top-K Phase-1 runs)
 
 Notes:
@@ -165,8 +165,8 @@ def main():
                 default=os.path.join(GRID_DIR, "best_grid_config.json"),
                 help="Write best run CONFIG to this JSON")
     ap.add_argument("--phase2_yaml", "--phase2-yaml", dest="phase2_yaml",
-                    default=os.path.join(APP_DIR, "sweeps", "grid_sweep_phase2.yaml"),
-                    help="Emit/overwrite Phase-2 sweep YAML here (default: $APP_DIR/sweeps/grid_sweep_phase2.yaml)")
+                    default=os.path.join(GRID_DIR, "grid_sweep_phase2.yaml"),
+                    help="Emit/overwrite Phase-2 sweep YAML here (default: $GRID_DIR/grid_sweep_phase2.yaml)")
     # phase-2 data roots (externalizable via CI YAML/env)
     ap.add_argument("--phase2_unlabeled_dir", "--phase2-unlabeled-dir",
                     dest="phase2_unlabeled_dir",

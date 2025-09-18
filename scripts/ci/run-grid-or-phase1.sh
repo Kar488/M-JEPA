@@ -176,7 +176,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     echo "[phase1] exported best config to $FINAL_CFG"
   fi
 
-  CANONICAL_P2="$APP_DIR/sweeps/grid_sweep_phase2.yaml"
+  CANONICAL_P2="${GRID_DIR:-$APP_DIR/grid}/grid_sweep_phase2.yaml"
   mkdir -p "$(dirname "$CANONICAL_P2")"
   cp "$TMP_PHASE2" "$CANONICAL_P2"
   echo "[phase1] staged Phase-2 sweep YAML to $CANONICAL_P2"
