@@ -358,6 +358,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                             os.path.join(seed_dir, f"ft_epoch_{epoch+1}.pt"),
                             **save_payload,
                         )
+
             # Fallback: if no best was recorded, promote last snapshot to best + head.pt
             if not wrote_best:
                 logger.info("Attempting to write best")

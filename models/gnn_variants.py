@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -460,6 +462,7 @@ class SchNet3D(EncoderBase):
         self.rbf = RBF(num_kernels=num_kernels, cutoff=cutoff)
         self.layers = nn.ModuleList([SchNetInteraction(hidden_dim, num_kernels) for _ in range(num_layers)])
         self.out_norm = nn.LayerNorm(hidden_dim)
+        self._missing_pos_warned = False
 
     def _encode_nodes(self, g: GraphData, device: torch.device) -> torch.Tensor:
         pos = getattr(g, "pos", None)
@@ -467,35 +470,71 @@ class SchNet3D(EncoderBase):
             # ``GraphBatch`` stores the individual graphs when collating.
             # Attempt to rebuild the concatenated coordinate tensor on-the-fly
             # so SchNet3D can operate on DataLoader batches even when the
-            # collate function skipped populating ``batch.pos``.
+            # collate function skipped populating ``batch.pos``. When some
+            # graphs are missing coordinates, fall back to zeros for those
+            # entries to avoid hard failures during sweeps.
             pos_list = []
-            pos_width = None
-            missing = False
+            pos_width = 0
+            used_fallback = False
             for graph in getattr(g, "graphs", []):
                 coords = getattr(graph, "pos", None)
                 if coords is None:
-                    missing = True
-                    break
-                coords_t = torch.as_tensor(
-                    coords, dtype=torch.float32, device=device
-                )
-                if coords_t.ndim != 2:
-                    coords_t = coords_t.view(coords_t.size(0), -1)
-                if pos_width is None:
-                    pos_width = int(coords_t.size(-1))
+                    used_fallback = True
+                    try:
+                        num_nodes = int(graph.num_nodes())
+                    except Exception:
+                        x_field = getattr(graph, "x", None)
+                        if x_field is None:
+                            num_nodes = 0
+                        else:
+                            shape = getattr(x_field, "shape", None)
+                            if shape is not None and len(shape) > 0:
+                                num_nodes = int(shape[0])
+                            else:
+                                try:
+                                    num_nodes = int(len(x_field))
+                                except Exception:
+                                    num_nodes = 0
+                    width = pos_width or 3
+                    coords_t = torch.zeros((num_nodes, width), dtype=torch.float32, device=device)
+                else:
+                    coords_t = torch.as_tensor(coords, dtype=torch.float32, device=device)
+                    if coords_t.ndim != 2:
+                        coords_t = coords_t.view(coords_t.size(0), -1)
+                    width = int(coords_t.size(-1))
+
+                if width > pos_width:
+                    # Expand previously collected tensors to the new width.
+                    diff = width - pos_width
+                    for idx, existing in enumerate(pos_list):
+                        pad = torch.zeros((existing.size(0), diff), dtype=existing.dtype, device=existing.device)
+                        pos_list[idx] = torch.cat([existing, pad], dim=-1)
+                    pos_width = width
+
+                if width < pos_width:
+                    pad = torch.zeros((coords_t.size(0), pos_width - width), dtype=coords_t.dtype, device=device)
+                    coords_t = torch.cat([coords_t, pad], dim=-1)
+
+
                 pos_list.append(coords_t)
 
-            if not missing:
-                if pos_list:
-                    pos = torch.cat(pos_list, dim=0)
-                else:
-                    width = pos_width or 3
-                    pos = torch.zeros((0, width), dtype=torch.float32, device=device)
-                try:
-                    setattr(g, "pos", pos)
-                except Exception:
-                    # ``g`` may be a lightweight shim; cache best-effort only.
-                    pass
+            if pos_list:
+                pos = torch.cat(pos_list, dim=0)
+            else:
+                width = pos_width or 3
+                pos = torch.zeros((0, width), dtype=torch.float32, device=device)
+
+            if used_fallback and not self._missing_pos_warned:
+                logging.getLogger(__name__).warning(
+                    "SchNet3D received graphs without `pos`; filled zeros as fallback."
+                )
+                self._missing_pos_warned = True
+
+            try:
+                setattr(g, "pos", pos)
+            except Exception:
+                # ``g`` may be a lightweight shim; cache best-effort only.
+                pass
         
         if pos is None:
             raise ValueError(

@@ -1,6 +1,16 @@
 from collections import defaultdict
 import numpy as np, wandb, os, argparse, json, re, sys
 
+def _coerce_to_float(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+    
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--project", default=os.getenv("WANDB_PROJECT","mjepa"))
@@ -16,6 +26,12 @@ def main():
         "fallback to mean per method if no shared seeds.")
     ap.add_argument("--strict", action="store_true",
         help="Exit non-zero when no runs or no matched pairs are found.")
+    ap.add_argument("--min_pretrain_epochs", type=int, default=None,
+        help="Minimum pretraining epochs (config: pretrain_epochs, units: epochs) required to include a run.")
+    ap.add_argument("--min_finetune_epochs", type=int, default=None,
+        help="Minimum fine-tuning epochs (config: finetune_epochs, units: epochs) required to include a run.")
+    ap.add_argument("--min_pretrain_batches", type=int, default=None,
+        help="Minimum pretraining batches (config: max_pretrain_batches, units: batches) required to include a run.")
     args = ap.parse_args()
 
     api = wandb.Api()
@@ -39,6 +55,25 @@ def main():
         v   = r.summary.get(args.metric)
         if not pid or mid not in ("jepa","contrastive") or v is None:
             continue
+
+        thresholds = (
+            ("pretrain_epochs", args.min_pretrain_epochs),
+            ("finetune_epochs", args.min_finetune_epochs),
+            ("max_pretrain_batches", args.min_pretrain_batches),
+        )
+        skip = False
+        for key, minimum in thresholds:
+            if minimum is None:
+                continue
+            conf_val = _coerce_to_float(r.config.get(key))
+            # Phase-1 sweeps often terminate early while phase-2 sweeps rely on mature metrics;
+            # filtering prevents these under-trained runs from biasing the phase-1/phase-2 workflow.
+            if conf_val is None or conf_val < minimum:
+                skip = True
+                break
+        if skip:
+            continue
+        
         try:
             val = float(v)
         except Exception:

@@ -207,6 +207,107 @@ def test_train_jepa_minimal_epoch(stub_data_modules):
     assert losses == [pytest.approx(1.0)]
 
 
+def test_train_jepa_respects_max_batches(stub_data_modules):
+    from training.unsupervised import train_jepa
+
+    graphs = [make_graph() for _ in range(4)]
+    dataset = GraphDataset(graphs)
+
+    class DummyEncoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.eye(2))
+            self.bias = torch.nn.Parameter(torch.zeros(2))
+
+        def forward(self, x, adj, edge_attr=None):
+            return x @ self.weight + self.bias
+
+    encoder = DummyEncoder()
+    ema_encoder = DummyEncoder()
+
+    class CountingPredictor(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.eye(2))
+            self.bias = torch.nn.Parameter(torch.zeros(2))
+            self.calls = 0
+
+        def forward(self, h):
+            self.calls += 1
+            return h @ self.weight + self.bias
+
+    predictor = CountingPredictor()
+
+    class DummyEMA:
+        def update(self, model):
+            pass
+
+    ema = DummyEMA()
+
+    losses = train_jepa(
+        dataset=dataset,
+        encoder=encoder,
+        ema_encoder=ema_encoder,
+        predictor=predictor,
+        ema=ema,
+        epochs=3,
+        batch_size=1,
+        lr=0.0,
+        reg_lambda=0.0,
+        mask_ratio=0.5,
+        device="cpu",
+        use_scheduler=False,
+        use_amp=False,
+        max_batches=2,
+    )
+
+    assert predictor.calls == 2
+    assert len(losses) == 1
+
+
+def test_should_compile_models_requires_budget():
+    import importlib
+
+    unsup = importlib.import_module("training.unsupervised")
+    device_cuda = torch.device("cuda")
+    small_budget = max(1, unsup._COMPILE_WARMUP_BATCHES // 2)
+    large_budget = max(1, unsup._COMPILE_WARMUP_BATCHES * 2)
+
+    assert not unsup._should_compile_models(True, device_cuda, small_budget)
+    assert unsup._should_compile_models(True, device_cuda, large_budget)
+    assert not unsup._should_compile_models(False, device_cuda, large_budget)
+    assert not unsup._should_compile_models(True, torch.device("cpu"), large_budget)
+
+
+def test_train_contrastive_respects_max_batches(stub_data_modules):
+    from training.unsupervised import train_contrastive
+
+    graphs = [make_graph() for _ in range(6)]
+    dataset = GraphDataset(graphs)
+
+    class DummyEncoder(torch.nn.Module):
+        def forward(self, x, adj, edge_attr=None):  # noqa: ARG002
+            return torch.as_tensor(x, dtype=torch.float32)
+
+    encoder = DummyEncoder()
+
+    losses = train_contrastive(
+        dataset=dataset,
+        encoder=encoder,
+        epochs=3,
+        batch_size=2,
+        mask_ratio=0.1,
+        lr=0.0,
+        temperature=0.1,
+        device="cpu",
+        use_amp=False,
+        use_scheduler=False,
+        max_batches=2,
+    )
+
+    assert len(losses) == 1
+
+
 def test_train_linear_on_embeddings():
     X = np.array([[0.0], [1.0], [0.0], [1.0]], dtype=np.float32)
     y = np.array([0, 1, 0, 1])

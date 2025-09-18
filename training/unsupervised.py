@@ -5,15 +5,17 @@ import os
 import time as _t
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.optim.lr_scheduler import _LRScheduler
 import tqdm
 from torch.utils.data import DataLoader
+import logging
 
 try:
     from data.augment import (
@@ -48,7 +50,29 @@ from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.ddp import DistributedSamplerList, cleanup, init_distributed, is_main_process
 from utils.graph_ops import _encode_graph, _pool_graph_emb
 from utils.logging import maybe_init_wandb
+logger = logging.getLogger(__name__)
 from utils.schedule import cosine_with_warmup
+
+
+_COMPILE_WARMUP_BATCHES = 128
+
+
+def _should_compile_models(
+    compile_requested: bool,
+    device: torch.device,
+    planned_batches: int,
+) -> bool:
+    """Return ``True`` when ``torch.compile`` is worth the warm-up cost."""
+
+    if not compile_requested:
+        return False
+    if planned_batches <= 0:
+        return False
+    if device.type == "cpu":
+        return False
+    if planned_batches < _COMPILE_WARMUP_BATCHES:
+        return False
+    return True
 
 
 @dataclass
@@ -93,6 +117,55 @@ class GraphBatch:
             edge_attr=edge_attr,
             pos=pos,
         )
+
+def _step_optimizer(
+    loss: torch.Tensor,
+    optimizer: optim.Optimizer,
+    *,
+    scaler: Optional["torch.cuda.amp.GradScaler"] = None,
+    scheduler: Optional[_LRScheduler] = None,
+) -> None:
+    """Backpropagate ``loss`` and update ``optimizer``/``scheduler`` safely.
+
+    When ``GradScaler`` skips an optimiser step due to inf/NaN gradients we avoid
+    stepping the scheduler so PyTorch does not warn about the order of
+    operations.  ``GradScaler`` is optional and treated as disabled when not
+    provided or not enabled.  We also guard against the scheduler being advanced
+    before the optimiser's internal step counter increases (e.g. after resume)
+    to suppress the PyTorch warning about an out-of-order call sequence.
+    """
+
+    step_executed = True
+    grad_scaler_cls = getattr(torch.cuda, "amp", None)
+    grad_scaler_cls = getattr(grad_scaler_cls, "GradScaler", None)
+    if grad_scaler_cls is not None and isinstance(scaler, grad_scaler_cls):
+        scaler_enabled = bool(getattr(scaler, "is_enabled", lambda: True)())
+        prev_scale = scaler.get_scale() if scaler_enabled else None
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        if scaler_enabled and prev_scale is not None:
+            step_executed = scaler.get_scale() >= prev_scale
+    else:
+        loss.backward()
+        optimizer.step()
+
+    if scheduler is not None and step_executed:
+        opt_steps = getattr(optimizer, "_step_count", None)
+        sched_steps = getattr(scheduler, "_step_count", None)
+        if (
+            opt_steps is not None
+            and sched_steps is not None
+            and opt_steps <= sched_steps
+        ):
+            logger.debug(
+                "Skipping scheduler.step() because optimizer has not advanced: opt=%s sched=%s",
+                opt_steps,
+                sched_steps,
+            )
+            return
+        scheduler.step()
+
 
 
 def _collate_graph_batch(batch: Sequence[GraphData] | GraphBatch) -> GraphBatch:
@@ -511,6 +584,32 @@ def train_jepa(
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     distributed = (devices > 1) and init_distributed(ddp_backend)
     device_t = torch.device(device)
+    pin_memory_enabled = bool(
+        pin_memory and device_t.type == "cuda" and torch.cuda.is_available()
+    )
+    if pin_memory and not pin_memory_enabled:
+        warnings.warn(
+            "pin_memory=True requested but no CUDA device is active; disabling pinned-memory dataloader.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
+    total_steps = epochs * steps_per_epoch
+    planned_batches = total_steps
+    if max_batches > 0:
+        planned_batches = min(planned_batches, max_batches)
+    compile_requested = compile_models
+    compile_models = _should_compile_models(
+        compile_models,
+        device_t,
+        planned_batches,
+    )
+    if compile_requested and not compile_models and device_t.type != "cpu":
+        logger.debug(
+            "Skipping torch.compile because planned batch budget (%d) is below the warm-up threshold (%d).",
+            planned_batches,
+            _COMPILE_WARMUP_BATCHES,
+        )
     can_compile = (
         compile_models and hasattr(torch, "compile") and device_t.type != "cpu"
     )
@@ -575,8 +674,6 @@ def train_jepa(
     scaler = torch.cuda.amp.GradScaler(enabled=(use_amp and (not bf16) and device_t.type == "cuda"))
 
 
-    steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
-    total_steps = epochs * steps_per_epoch
     sch = cosine_with_warmup(opt, warmup_steps, total_steps) if use_scheduler else None
     # EMA momentum schedule: start from current decay, finish near 1.0 for a stable target
     ema_start = float(getattr(ema, "decay", 0.996))
@@ -589,6 +686,7 @@ def train_jepa(
     )
 
     start_epoch = 1
+    ckpt: Optional[Dict[str, Any]] = None
     if resume_from and os.path.exists(resume_from):
         ckpt = load_checkpoint(resume_from)
         if "encoder" in ckpt:
@@ -603,6 +701,51 @@ def train_jepa(
             scaler.load_state_dict(ckpt["scaler"])
         if "epoch" in ckpt:
             start_epoch = int(ckpt["epoch"]) + 1
+
+    def _unwrap_encoder_module() -> nn.Module:
+        return (
+            encoder.module
+            if isinstance(encoder, nn.parallel.DistributedDataParallel)
+            else encoder
+        )
+
+    def _refresh_ema_from(model: nn.Module) -> None:
+        copy_from_fn = getattr(ema, "copy_from", None)
+        if callable(copy_from_fn):
+            copy_from_fn(model)
+            return
+        params = getattr(ema, "params", None)
+        if params is None:
+            return
+        with torch.no_grad():
+            for buf, src in zip(params, model.parameters()):
+                tensor = src.detach()
+                if getattr(ema, "use_fp32", False):
+                    tensor = tensor.to(torch.float32)
+                else:
+                    tensor = tensor.to(buf.dtype)
+                buf.copy_(tensor.to(buf.device))
+
+    def _sync_ema_encoder() -> None:
+        copy_fn = getattr(ema, "copy_to", None)
+        if callable(copy_fn):
+            copy_fn(ema_encoder)
+            return
+        params = getattr(ema, "params", None)
+        if params is not None:
+            with torch.no_grad():
+                for target, buf in zip(ema_encoder.parameters(), params):
+                    target.data.copy_(buf.to(target.dtype).to(target.device))
+            return
+        src_model = _unwrap_encoder_module()
+        with torch.no_grad():
+            ema_encoder.load_state_dict(src_model.state_dict())
+
+    if ckpt is not None and "ema_encoder" in ckpt:
+        _refresh_ema_from(ema_encoder)
+    else:
+        _refresh_ema_from(_unwrap_encoder_module())
+    _sync_ema_encoder()
 
     losses: List[float] = []
     mse = nn.MSELoss()
@@ -633,7 +776,21 @@ def train_jepa(
         if is_main_process() and not disable_bar
         else None
     )
+    if pbar is None and is_main_process():
+        logger.info(
+            "Starting JEPA training for %d epochs (%d steps/epoch)",
+            epochs,
+            steps_per_epoch,
+        )
+    total_batches_done = 0
     for ep in range(start_epoch, epochs + 1):
+        if max_batches > 0 and total_batches_done >= max_batches:
+            if is_main_process():
+                logger.info(
+                    "Max JEPA batches reached (%d); stopping pretraining.",
+                    max_batches,
+                )
+            break
         if not _time_left():
             if is_main_process():
                 wb and wb.log({"early/stop_reason": "time_budget"})
@@ -658,16 +815,18 @@ def train_jepa(
             pair_dataset,
             batch_size=batch_size,
             num_workers=num_workers,
-            pin_memory=pin_memory,
+            pin_memory=pin_memory_enabled,
             persistent_workers=persistent_workers,
             prefetch_factor=prefetch_factor,
             collate_fn=_collate_graph_pair,
         )
 
-        batches_done = 0
+        epoch_batches = 0
+        hit_batch_cap = False
         # Iterate over batches and update the outer progress bar each time
         for ctx_batch, tgt_batch in dataloader:
-            if max_batches > 0 and batches_done >= max_batches:
+            if max_batches > 0 and total_batches_done >= max_batches:
+                hit_batch_cap = True
                 break
             if not _time_left():
                 if is_main_process():
@@ -707,15 +866,7 @@ def train_jepa(
                 loss = mse(pred, h_t_g) + reg_lambda * l2_reg
 
             opt.zero_grad(set_to_none=True)
-            if isinstance(scaler, torch.cuda.amp.GradScaler):
-                scaler.scale(loss).backward()
-                scaler.step(opt)
-                scaler.update()
-            else:
-                loss.backward()
-                opt.step()
-            if sch is not None:
-                sch.step()
+            _step_optimizer(loss, opt, scaler=scaler, scheduler=sch)
 
             lv = float(loss.detach().cpu().item())
             ep_loss += lv
@@ -731,6 +882,7 @@ def train_jepa(
             # Update target with the scheduled momentum
             _enc = encoder.module if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder
             ema.update(_enc)
+            _sync_ema_encoder()
             if wb and is_main_process():
                 wb.log(
                     {
@@ -740,16 +892,24 @@ def train_jepa(
                         "epoch": ep,
                     }
                 )
-            batches_done += 1
+            epoch_batches += 1
+            total_batches_done += 1
             # Update our single progress bar after processing each batch
             if pbar is not None:
                 pbar.update(1)
 
-        ep_loss /= max(1, min(steps_per_epoch, batches_done))
+        ep_loss /= max(1, epoch_batches)
         if is_main_process():
             losses.append(ep_loss)
             if wb:
                 wb.log({"epoch/jepa_loss": ep_loss, "epoch": ep})
+            if pbar is None:
+                logger.info(
+                    "Epoch %d/%d finished: JEPA loss %.6f",
+                    ep,
+                    epochs,
+                    ep_loss,
+                )
             if ckpt_path and (ep % ckpt_every == 0 or ep == epochs):
                 save_checkpoint(
                     os.path.join(ckpt_path, f"jepa_ep{ep:04d}.pt"),
@@ -764,6 +924,14 @@ def train_jepa(
                     ),
                     epoch=ep,
                 )
+
+        if hit_batch_cap and max_batches > 0 and total_batches_done >= max_batches:
+            if is_main_process():
+                logger.info(
+                    "Max JEPA batches reached (%d); stopping pretraining.",
+                    max_batches,
+                )
+            break
 
     try:
         if wb and is_main_process():
@@ -820,6 +988,15 @@ def train_contrastive(
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     distributed = (devices > 1) and init_distributed(ddp_backend)
     device_t = torch.device(device)
+    pin_memory_enabled = bool(
+        pin_memory and device_t.type == "cuda" and torch.cuda.is_available()
+    )
+    if pin_memory and not pin_memory_enabled:
+        warnings.warn(
+            "pin_memory=True requested but no CUDA device is active; disabling pinned-memory dataloader.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
             encoder.to(device_t),
@@ -907,8 +1084,23 @@ def train_contrastive(
         if is_main_process() and not disable_bar
         else None
     )
+    if pbar is None and is_main_process():
+        logger.info(
+            "Starting contrastive training for %d epochs (%d steps/epoch)",
+            epochs,
+            steps_per_epoch,
+        )
+
+    total_batches_done = 0
 
     for ep in range(start_epoch, epochs + 1):
+        if max_batches > 0 and total_batches_done >= max_batches:
+            if is_main_process():
+                logger.info(
+                    "Max contrastive batches reached (%d); stopping pretraining.",
+                    max_batches,
+                )
+            break
         ep_loss = 0.0
 
         # Update the bar description when the epoch changes
@@ -934,14 +1126,16 @@ def train_contrastive(
             pair_dataset,
             batch_size=batch_size,
             num_workers=num_workers,
-            pin_memory=pin_memory,
+            pin_memory=pin_memory_enabled,
             persistent_workers=persistent_workers,
             prefetch_factor=prefetch_factor,
             collate_fn=_collate_graph_pair,
         )
-        batches_done = 0
+        epoch_batches = 0
+        hit_batch_cap = False
         for view1_batch, view2_batch in dataloader:
-            if max_batches > 0 and batches_done >= max_batches:
+            if max_batches > 0 and total_batches_done >= max_batches:
+                hit_batch_cap = True
                 break
             if not _time_left():
                 if is_main_process():
@@ -999,15 +1193,8 @@ def train_contrastive(
 
             opt.zero_grad(set_to_none=True)
             
-            if isinstance(scaler, torch.cuda.amp.GradScaler):
-                scaler.scale(loss).backward()
-                scaler.step(opt)
-                scaler.update()
-            else:
-                loss.backward()
-                opt.step()
-            if sch is not None:
-                sch.step()
+            _step_optimizer(loss, opt, scaler=scaler, scheduler=sch)
+
             lv = float(loss.detach().cpu().item())
             ep_loss += lv
             step += 1
@@ -1020,15 +1207,23 @@ def train_contrastive(
                         "epoch": ep,
                     }
                 )
-            batches_done += 1
+            epoch_batches += 1
+            total_batches_done += 1
             # Update our single progress bar after processing each batch
             if pbar is not None:
                 pbar.update(1)
-        ep_loss /= max(1, min(steps_per_epoch, batches_done))
+        ep_loss /= max(1, epoch_batches)
         if is_main_process():
             losses.append(ep_loss)
             if wb:
                 wb.log({"epoch/contrastive_loss": ep_loss, "epoch": ep})
+            if pbar is None:
+                logger.info(
+                    "Epoch %d/%d finished: contrastive loss %.6f",
+                    ep,
+                    epochs,
+                    ep_loss,
+                )
             if ckpt_path and (ep % ckpt_every == 0 or ep == epochs):
                 save_checkpoint(
                     os.path.join(ckpt_path, f"contrastive_ep{ep:04d}.pt"),
@@ -1042,6 +1237,13 @@ def train_contrastive(
                     ),
                     epoch=ep,
                 )
+        if hit_batch_cap and max_batches > 0 and total_batches_done >= max_batches:
+            if is_main_process():
+                logger.info(
+                    "Max contrastive batches reached (%d); stopping pretraining.",
+                    max_batches,
+                )
+            break
     if pbar is not None:
         pbar.close()
     # Close the progress bar after training
