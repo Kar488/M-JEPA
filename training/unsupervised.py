@@ -5,7 +5,7 @@ import os
 import time as _t
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -686,6 +686,7 @@ def train_jepa(
     )
 
     start_epoch = 1
+    ckpt: Optional[Dict[str, Any]] = None
     if resume_from and os.path.exists(resume_from):
         ckpt = load_checkpoint(resume_from)
         if "encoder" in ckpt:
@@ -700,6 +701,51 @@ def train_jepa(
             scaler.load_state_dict(ckpt["scaler"])
         if "epoch" in ckpt:
             start_epoch = int(ckpt["epoch"]) + 1
+
+    def _unwrap_encoder_module() -> nn.Module:
+        return (
+            encoder.module
+            if isinstance(encoder, nn.parallel.DistributedDataParallel)
+            else encoder
+        )
+
+    def _refresh_ema_from(model: nn.Module) -> None:
+        copy_from_fn = getattr(ema, "copy_from", None)
+        if callable(copy_from_fn):
+            copy_from_fn(model)
+            return
+        params = getattr(ema, "params", None)
+        if params is None:
+            return
+        with torch.no_grad():
+            for buf, src in zip(params, model.parameters()):
+                tensor = src.detach()
+                if getattr(ema, "use_fp32", False):
+                    tensor = tensor.to(torch.float32)
+                else:
+                    tensor = tensor.to(buf.dtype)
+                buf.copy_(tensor.to(buf.device))
+
+    def _sync_ema_encoder() -> None:
+        copy_fn = getattr(ema, "copy_to", None)
+        if callable(copy_fn):
+            copy_fn(ema_encoder)
+            return
+        params = getattr(ema, "params", None)
+        if params is not None:
+            with torch.no_grad():
+                for target, buf in zip(ema_encoder.parameters(), params):
+                    target.data.copy_(buf.to(target.dtype).to(target.device))
+            return
+        src_model = _unwrap_encoder_module()
+        with torch.no_grad():
+            ema_encoder.load_state_dict(src_model.state_dict())
+
+    if ckpt is not None and "ema_encoder" in ckpt:
+        _refresh_ema_from(ema_encoder)
+    else:
+        _refresh_ema_from(_unwrap_encoder_module())
+    _sync_ema_encoder()
 
     losses: List[float] = []
     mse = nn.MSELoss()
@@ -836,6 +882,7 @@ def train_jepa(
             # Update target with the scheduled momentum
             _enc = encoder.module if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder
             ema.update(_enc)
+            _sync_ema_encoder()
             if wb and is_main_process():
                 wb.log(
                     {
