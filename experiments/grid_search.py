@@ -1047,6 +1047,10 @@ def run_grid_search(
 
     logger.info("Running grid search over %d configs", len(cfgs))
 
+    # Materialise expensive dataset_fn outputs once per configuration family
+    dataset_cache: Dict[Tuple[Any, ...], Tuple[Any, Any, Any, Any]] = {}
+    loader_cache: Dict[Tuple[Any, int, int], Tuple[Any, Any, Any]] = {}
+
     rows: List[Dict[str, Any]] = []
     if (
         time_budget_mins
@@ -1081,23 +1085,31 @@ def run_grid_search(
         prebuilt_loaders = None
         if use_single_builder:
             pre_bs = cfg.pretrain_bs
-            ft_bs  = cfg.finetune_bs
+            ft_bs = cfg.finetune_bs
 
-            # get datasets straight from dataset_fn
-            try:
-                ds = dataset_fn(add_3d=add_3d)
-            except TypeError:
-                ds = dataset_fn(add_3d)
+            cache_key = (bool(add_3d),)
+            cached = dataset_cache.get(cache_key)
+            if cached is None:
+                try:
+                    ds = dataset_fn(add_3d=add_3d)
+                except TypeError:
+                    ds = dataset_fn(add_3d)
 
-            # datasets (train/val/test)
-            tr_ds, va_ds, te_ds = _normalize_ds(ds)
+                tr_ds, va_ds, te_ds = _normalize_ds(ds)
+                dataset_cache[cache_key] = (ds, tr_ds, va_ds, te_ds)
+            else:
+                ds, tr_ds, va_ds, te_ds = cached
 
-            # loaders built from ds (as we already had)
-            train_loader, val_loader, test_loader = _normalize_ds_to_loaders(
-                ds, pre_bs, ft_bs
-            )
+            loader_key = (cache_key, int(pre_bs), int(ft_bs))
+            cached_loaders = loader_cache.get(loader_key)
+            if cached_loaders is None:
+                train_loader, val_loader, test_loader = _normalize_ds_to_loaders(
+                    ds, pre_bs, ft_bs
+                )
+                cached_loaders = (train_loader, val_loader, test_loader)
+                loader_cache[loader_key] = cached_loaders
 
-            prebuilt_loaders = (train_loader, val_loader, test_loader)
+            prebuilt_loaders = cached_loaders
             prebuilt_datasets = (tr_ds, va_ds, te_ds)
         else:
             prebuilt_loaders = None
