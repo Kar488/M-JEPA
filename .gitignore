@@ -20,10 +20,11 @@ build/
 dist/
 *.egg-info/
 docs/_build/
-reports/ 
+reports/
 ckpts/
 ouputs/
 analysis/
+grid/
 
 #logs
 wandb/

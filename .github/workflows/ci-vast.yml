@@ -269,7 +269,7 @@ jobs:
           WANDB_COUNT: 30
           GRID_MODE: "wandb"   # or "custom"
           EXPORT_OUT_PATH: ${{ env.GRID_DIR }}/best_grid_config.json
-          EXPORT_PHASE2_PATH: ${{ env.APP_DIR }}/sweeps/grid_sweep_phase2.yaml
+          EXPORT_PHASE2_PATH: ${{ env.GRID_DIR }}/grid_sweep_phase2.yaml
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
           PE_MIN_PRETRAIN_EPOCHS: 5
