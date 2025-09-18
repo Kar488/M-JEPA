@@ -50,8 +50,8 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   export WANDB_RUN_GROUP="${GITHUB_RUN_ID:-pipeline-$(date -u +%Y%m%dT%H%M%SZ)}"
   export WANDB_RESUME=allow
   echo "[phase1] WANDB_COUNT=$WANDB_COUNT group=$WANDB_RUN_GROUP"
-  if [[ -n "${CACHE_DIR:-}" ]]; then
-    echo "[phase1] dataset cache root: $CACHE_DIR"
+  if [[ -n "${SWEEP_CACHE_DIR:-}" ]]; then
+    echo "[phase1] dataset cache root: $SWEEP_CACHE_DIR"
   fi
 
   JEPA_SPEC="$APP_DIR/sweeps/sweep_phase1_jepa.yaml"

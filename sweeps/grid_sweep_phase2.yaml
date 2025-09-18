@@ -16,7 +16,7 @@ parameters:
   labeled-dir:
     { value: "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train" }
   cache-datasets: { value: 1 }
-  cache-dir:      { value: "${env:CACHE_DIR}" }
+  cache-dir:      { value: "${env:SWEEP_CACHE_DIR}" }
 
   # Contrastive only in this sweep
   training_method: { value: contrastive }
