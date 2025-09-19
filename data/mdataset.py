@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import pickle
 from concurrent.futures import ProcessPoolExecutor
-from functools import partial
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from functools import lru_cache
+from itertools import repeat
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 try:  # pragma: no cover - optional dependency
@@ -30,26 +32,15 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-def _safe_smiles_to_graph(smiles: str, func) -> Optional[Dict[str, Any]]:
-    """Helper for multiprocessing to convert a SMILES string into a graph.
+@lru_cache(maxsize=None)
+def _resolve_graphdataset_cls(module_name: str, qualname: str) -> type["GraphDataset"]:
+    """Return a GraphDataset subclass given its module and qualified name."""
 
-    The returned object is a plain mapping that only contains NumPy arrays and
-    ``None`` values, making it trivially picklable when used with
-    :class:`concurrent.futures.ProcessPoolExecutor`.  Any exception raised by
-    ``func`` results in ``None`` so that callers can skip failed conversions
-    while preserving input order.
-    """
-    try:
-        g = func(smiles)
-    except Exception:
-        return None
-    
-    return {
-        "x": g.x,
-        "edge_index": g.edge_index,
-        "edge_attr": g.edge_attr,
-        "pos": g.pos,
-    }
+    module = importlib.import_module(module_name)
+    attr = module
+    for part in qualname.split("."):
+        attr = getattr(attr, part)
+    return attr
 
 
 @dataclass
@@ -93,8 +84,35 @@ def _graph_from_state(state: Dict[str, Any]) -> GraphData:
     )
 
 
-from typing import Optional, Sequence
-import numpy as np
+def _graph_to_state(g: GraphData) -> Dict[str, Any]:
+    """Convert a :class:`GraphData` instance into a picklable mapping."""
+
+    return {
+        "x": g.x,
+        "edge_index": g.edge_index,
+        "edge_attr": g.edge_attr,
+        "pos": g.pos,
+    }
+
+
+def _safe_smiles_to_graph(
+    smiles: str,
+    add_3d: bool,
+    random_seed: Optional[int],
+    cls_module: str,
+    cls_qualname: str,
+) -> Optional[Dict[str, Any]]:
+    """Helper for multiprocessing to convert a SMILES string into a graph."""
+
+    try:
+        dataset_cls = _resolve_graphdataset_cls(cls_module, cls_qualname)
+        graph = dataset_cls.smiles_to_graph(
+            smiles, add_3d=add_3d, random_seed=random_seed
+        )
+    except Exception:
+        return None
+
+    return _graph_to_state(graph)
 
 class GraphDataset:
     def __init__(
@@ -411,26 +429,39 @@ class GraphDataset:
 
         graphs: List[GraphData] = []
         smiles_out: List[str] = []
-        valid_indices = []
+        valid_indices: List[int] = []
 
-        func = partial(cls.smiles_to_graph, add_3d=add_3d, random_seed=random_seed)
+        # Resolve the dataset class lazily in worker processes to avoid
+        # pickling GraphData/GraphDataset objects when spawning the pool.
+        cls_module = cls.__module__
+        cls_qualname = cls.__qualname__
 
         if num_workers > 0:
             with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
-                for i, g_state in enumerate(
-                    ex.map(partial(_safe_smiles_to_graph, func=func), smiles)
-                ):
+                iterator = ex.map(
+                    _safe_smiles_to_graph,
+                    smiles,
+                    repeat(add_3d),
+                    repeat(random_seed),
+                    repeat(cls_module),
+                    repeat(cls_qualname),
+                )
+                for i, g_state in enumerate(iterator):
                     if g_state is not None:
                         graphs.append(_graph_from_state(g_state))
                         smiles_out.append(smiles[i])
                         valid_indices.append(i)
         else:
             for i, sm in enumerate(smiles):
-                g_state = _safe_smiles_to_graph(sm, func)
-                if g_state is not None:
-                    graphs.append(_graph_from_state(g_state))
-                    smiles_out.append(sm)
-                    valid_indices.append(i)
+                try:
+                    graph = cls.smiles_to_graph(
+                        sm, add_3d=add_3d, random_seed=random_seed
+                    )
+                except Exception:
+                    continue
+                graphs.append(graph)
+                smiles_out.append(sm)
+                valid_indices.append(i)
         # Filter labels to match valid graphs
         if labels is not None:
             labels = labels[valid_indices]
