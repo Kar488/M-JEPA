@@ -726,20 +726,35 @@ def train_jepa(
                     tensor = tensor.to(buf.dtype)
                 buf.copy_(tensor.to(buf.device))
 
-    def _sync_ema_encoder() -> None:
+    def _copy_ema_to(target: nn.Module, *, fallback: Optional[nn.Module] = None) -> None:
         copy_fn = getattr(ema, "copy_to", None)
         if callable(copy_fn):
-            copy_fn(ema_encoder)
+            copy_fn(target)
             return
         params = getattr(ema, "params", None)
         if params is not None:
             with torch.no_grad():
-                for target, buf in zip(ema_encoder.parameters(), params):
-                    target.data.copy_(buf.to(target.dtype).to(target.device))
+                for dest, buf in zip(target.parameters(), params):
+                    dest.data.copy_(buf.to(dest.dtype).to(dest.device))
             return
+        if fallback is not None:
+            try:
+                with torch.no_grad():
+                    target.load_state_dict(fallback.state_dict(), strict=False)
+            except Exception:
+                with torch.no_grad():
+                    for dest, src in zip(target.parameters(), fallback.parameters()):
+                        dest.data.copy_(src.data.to(dest.dtype).to(dest.device))
+
+    def _sync_ema_encoder() -> None:
         src_model = _unwrap_encoder_module()
-        with torch.no_grad():
-            ema_encoder.load_state_dict(src_model.state_dict())
+        _copy_ema_to(ema_encoder, fallback=src_model)
+
+    if ckpt is not None and "ema_encoder" in ckpt:
+        _refresh_ema_from(ema_encoder)
+    else:
+        _refresh_ema_from(_unwrap_encoder_module())
+    _sync_ema_encoder()
 
     if ckpt is not None and "ema_encoder" in ckpt:
         _refresh_ema_from(ema_encoder)
@@ -932,6 +947,11 @@ def train_jepa(
                     max_batches,
                 )
             break
+
+    # Expose the averaged weights to downstream consumers (fine-tuning, checkpointing)
+    _copy_ema_to(_unwrap_encoder_module(), fallback=ema_encoder)
+    _sync_ema_encoder()
+
 
     try:
         if wb and is_main_process():
