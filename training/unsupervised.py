@@ -503,6 +503,26 @@ def _build_graph_dataloader(
     return DataLoader(data_source, **loader_kwargs)
 
 
+def _is_pin_memory_failure(exc: BaseException) -> bool:
+    """Return ``True`` when ``exc`` came from the pin-memory worker."""
+
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        message = " ".join(str(arg) for arg in getattr(cur, "args", ()))
+        if (
+            "Pin memory thread exited unexpectedly" in message
+            or "received 0 items of ancdata" in message
+        ):
+            return True
+        next_exc = getattr(cur, "__cause__", None)
+        if next_exc is None:
+            next_exc = getattr(cur, "__context__", None)
+        cur = next_exc
+    return False
+
+
 def _graph_to_tensors(
     g: GraphData, device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -593,6 +613,7 @@ def train_jepa(
             RuntimeWarning,
             stacklevel=2,
         )
+    active_persistent_workers = bool(num_workers) and persistent_workers
     steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
     total_steps = epochs * steps_per_epoch
     planned_batches = total_steps
@@ -826,92 +847,116 @@ def train_jepa(
         )
         augmenter = _JEPAAugmentor(mask_ratio=mask_ratio, contiguous=contiguous)
         pair_dataset = _AugmentedPairDataset(data_source, augmenter)
-        dataloader = _build_graph_dataloader(
-            pair_dataset,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            pin_memory=pin_memory_enabled,
-            persistent_workers=persistent_workers,
-            prefetch_factor=prefetch_factor,
-            collate_fn=_collate_graph_pair,
-        )
+        loader_pin_memory = pin_memory_enabled
+        loader_persistent_workers = active_persistent_workers
+        while True:
+            ep_loss = 0.0
+            epoch_batches = 0
+            hit_batch_cap = False
+            dataloader = _build_graph_dataloader(
+                pair_dataset,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                pin_memory=loader_pin_memory,
+                persistent_workers=loader_persistent_workers,
+                prefetch_factor=prefetch_factor,
+                collate_fn=_collate_graph_pair,
+            )
 
-        epoch_batches = 0
-        hit_batch_cap = False
-        # Iterate over batches and update the outer progress bar each time
-        for ctx_batch, tgt_batch in dataloader:
-            if max_batches > 0 and total_batches_done >= max_batches:
-                hit_batch_cap = True
-                break
-            if not _time_left():
-                if is_main_process():
-                    tqdm.tqdm.write(
-                        "Time budget exhausted during JEPA epoch; breaking."
+            try:
+                for ctx_batch, tgt_batch in dataloader:
+                    if max_batches > 0 and total_batches_done >= max_batches:
+                        hit_batch_cap = True
+                        break
+                    if not _time_left():
+                        if is_main_process():
+                            tqdm.tqdm.write(
+                                "Time budget exhausted during JEPA epoch; breaking."
+                            )
+                        break
+                    if ctx_batch.num_graphs == 0 or tgt_batch.num_graphs == 0:
+                        continue
+
+                    ctx_batch = ctx_batch.to(device_t)
+                    tgt_batch = tgt_batch.to(device_t)
+
+                    with torch.cuda.amp.autocast(
+                        enabled=amp_enabled,
+                        dtype=_amp_dtype,
+                    ):
+                        h_c_nodes = _ensure_2d(_encode_graph(encoder, ctx_batch))
+                        with torch.no_grad():
+                            h_t_nodes = _ensure_2d(_encode_graph(ema_encoder, tgt_batch))
+
+                    h_c_g = _ensure_2d(_pool_graph_emb(h_c_nodes, ctx_batch))
+                    h_t_g = _ensure_2d(_pool_graph_emb(h_t_nodes, tgt_batch))
+
+                    with torch.cuda.amp.autocast(
+                        enabled=amp_enabled,
+                        dtype=_amp_dtype,
+                    ):
+                        pred = predictor(h_c_g)
+
+                        if pred.dim() == 1 and h_t_g.dim() == 2 and h_t_g.size(0) == 1:
+                            pred = pred.unsqueeze(0)
+                        if h_t_g.dim() == 1 and pred.dim() == 2 and pred.size(0) == 1:
+                            h_t_g = h_t_g.unsqueeze(0)
+
+                        l2_reg = sum((p**2).sum() for p in predictor.parameters())
+                        loss = mse(pred, h_t_g) + reg_lambda * l2_reg
+
+                    opt.zero_grad(set_to_none=True)
+                    _step_optimizer(loss, opt, scaler=scaler, scheduler=sch)
+
+                    lv = float(loss.detach().cpu().item())
+                    ep_loss += lv
+                    step += 1
+                    if hasattr(ema, "set_decay"):
+                        alpha = min(1.0, step / float(total_steps)) if total_steps > 0 else 1.0
+                        w = 0.5 * (1.0 - math.cos(math.pi * alpha))
+                        ema_now = ema_start + (ema_end - ema_start) * w
+                        ema.set_decay(ema_now)
+                    _enc = (
+                        encoder.module
+                        if isinstance(encoder, nn.parallel.DistributedDataParallel)
+                        else encoder
                     )
-                break
-            if ctx_batch.num_graphs == 0 or tgt_batch.num_graphs == 0:
-                continue
+                    ema.update(_enc)
+                    _sync_ema_encoder()
+                    if wb and is_main_process():
+                        wb.log(
+                            {
+                                "train/jepa_loss": lv,
+                                "lr": float(opt.param_groups[0]["lr"]),
+                                "step": step,
+                                "epoch": ep,
+                            }
+                        )
+                    epoch_batches += 1
+                    total_batches_done += 1
+                    if pbar is not None:
+                        pbar.update(1)
+            except RuntimeError as exc:
+                if (
+                    epoch_batches == 0
+                    and loader_pin_memory
+                    and _is_pin_memory_failure(exc)
+                ):
+                    if is_main_process():
+                        logger.warning(
+                            "Pinned-memory DataLoader failed; retrying without pinned memory. %s",
+                            exc,
+                        )
+                    loader_pin_memory = False
+                    loader_persistent_workers = False
+                    pin_memory_enabled = False
+                    active_persistent_workers = False
+                    continue
+                raise
+            break
 
-            ctx_batch = ctx_batch.to(device_t)
-            tgt_batch = tgt_batch.to(device_t)
-
-            with torch.cuda.amp.autocast(
-                enabled=amp_enabled,
-                dtype=_amp_dtype,
-            ):
-                h_c_nodes = _ensure_2d(_encode_graph(encoder, ctx_batch))
-                with torch.no_grad():
-                    h_t_nodes = _ensure_2d(_encode_graph(ema_encoder, tgt_batch))
-
-            h_c_g = _ensure_2d(_pool_graph_emb(h_c_nodes, ctx_batch))
-            h_t_g = _ensure_2d(_pool_graph_emb(h_t_nodes, tgt_batch))
-
-            with torch.cuda.amp.autocast(
-                enabled=amp_enabled,
-                dtype=_amp_dtype,
-            ):
-                pred = predictor(h_c_g)
-
-                if pred.dim() == 1 and h_t_g.dim() == 2 and h_t_g.size(0) == 1:
-                    pred = pred.unsqueeze(0)
-                if h_t_g.dim() == 1 and pred.dim() == 2 and pred.size(0) == 1:
-                    h_t_g = h_t_g.unsqueeze(0)
-
-                l2_reg = sum((p**2).sum() for p in predictor.parameters())
-                loss = mse(pred, h_t_g) + reg_lambda * l2_reg
-
-            opt.zero_grad(set_to_none=True)
-            _step_optimizer(loss, opt, scaler=scaler, scheduler=sch)
-
-            lv = float(loss.detach().cpu().item())
-            ep_loss += lv
-            # ---- Cosine EMA momentum ramp: ema.decay = ema_start → ema_end over total_steps ----
-            step += 1
-            if hasattr(ema, "set_decay"):
-                # alpha ∈ [0,1]
-                alpha = min(1.0, step / float(total_steps)) if total_steps > 0 else 1.0
-                # smooth 0→1
-                w = 0.5 * (1.0 - math.cos(math.pi * alpha))
-                ema_now = ema_start + (ema_end - ema_start) * w
-                ema.set_decay(ema_now)
-            # Update target with the scheduled momentum
-            _enc = encoder.module if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder
-            ema.update(_enc)
-            _sync_ema_encoder()
-            if wb and is_main_process():
-                wb.log(
-                    {
-                        "train/jepa_loss": lv,
-                        "lr": float(opt.param_groups[0]["lr"]),
-                        "step": step,
-                        "epoch": ep,
-                    }
-                )
-            epoch_batches += 1
-            total_batches_done += 1
-            # Update our single progress bar after processing each batch
-            if pbar is not None:
-                pbar.update(1)
+        pin_memory_enabled = loader_pin_memory
+        active_persistent_workers = loader_persistent_workers
 
         ep_loss /= max(1, epoch_batches)
         if is_main_process():
@@ -1142,96 +1187,126 @@ def train_contrastive(
             subgraph_removal=subgraph_removal,
         )
         pair_dataset = _AugmentedPairDataset(data_source, augmenter)
-        dataloader = _build_graph_dataloader(
-            pair_dataset,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            pin_memory=pin_memory_enabled,
-            persistent_workers=persistent_workers,
-            prefetch_factor=prefetch_factor,
-            collate_fn=_collate_graph_pair,
-        )
-        epoch_batches = 0
-        hit_batch_cap = False
-        for view1_batch, view2_batch in dataloader:
-            if max_batches > 0 and total_batches_done >= max_batches:
-                hit_batch_cap = True
-                break
-            if not _time_left():
-                if is_main_process():
-                    tqdm.tqdm.write(
-                        "Time budget exhausted during contrastive epoch; breaking."
-                    )
-                break
-            if view1_batch.num_graphs == 0 or view2_batch.num_graphs == 0:
-                continue
+        loader_pin_memory = pin_memory_enabled
+        loader_persistent_workers = active_persistent_workers
+        while True:
+            ep_loss = 0.0
+            epoch_batches = 0
+            hit_batch_cap = False
+            dataloader = _build_graph_dataloader(
+                pair_dataset,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                pin_memory=loader_pin_memory,
+                persistent_workers=loader_persistent_workers,
+                prefetch_factor=prefetch_factor,
+                collate_fn=_collate_graph_pair,
+            )
 
-            view1_batch = view1_batch.to(device_t)
-            view2_batch = view2_batch.to(device_t)
+            try:
+                for view1_batch, view2_batch in dataloader:
+                    if max_batches > 0 and total_batches_done >= max_batches:
+                        hit_batch_cap = True
+                        break
+                    if not _time_left():
+                        if is_main_process():
+                            tqdm.tqdm.write(
+                                "Time budget exhausted during contrastive epoch; breaking."
+                            )
+                        break
+                    if view1_batch.num_graphs == 0 or view2_batch.num_graphs == 0:
+                        continue
 
-            with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
-                # Encode both augmented views and pool to graph-level embeddings.
-                h1_nodes = _ensure_2d(_encode_graph(encoder, view1_batch))   # [*, D]
-                h2_nodes = _ensure_2d(_encode_graph(encoder, view2_batch))   # [*, D]
+                    view1_batch = view1_batch.to(device_t)
+                    view2_batch = view2_batch.to(device_t)
 
-                g1_pool = _ensure_2d(_pool_graph_emb(h1_nodes, view1_batch))  # [B, D]
-                g2_pool = _ensure_2d(_pool_graph_emb(h2_nodes, view2_batch))  # [B, D]
+                    with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
+                        h1_nodes = _ensure_2d(_encode_graph(encoder, view1_batch))
+                        h2_nodes = _ensure_2d(_encode_graph(encoder, view2_batch))
 
-                # projector expects the pooled feature dim
-                if isinstance(proj[0], nn.Linear) and proj[0].in_features != g1_pool.size(1):
-                    proj[0] = nn.Linear(g1_pool.size(1), proj[0].out_features).to(device_t)
-                    opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
+                        g1_pool = _ensure_2d(_pool_graph_emb(h1_nodes, view1_batch))
+                        g2_pool = _ensure_2d(_pool_graph_emb(h2_nodes, view2_batch))
 
-                z1 = torch.nan_to_num(F.normalize(proj(g1_pool), dim=-1))
-                z2 = torch.nan_to_num(F.normalize(proj(g2_pool), dim=-1))
+                        if (
+                            isinstance(proj[0], nn.Linear)
+                            and proj[0].in_features != g1_pool.size(1)
+                        ):
+                            proj[0] = nn.Linear(g1_pool.size(1), proj[0].out_features).to(device_t)
+                            opt = optim.Adam(
+                                list(encoder.parameters()) + list(proj.parameters()),
+                                lr=lr,
+                            )
 
+                        z1 = torch.nan_to_num(F.normalize(proj(g1_pool), dim=-1))
+                        z2 = torch.nan_to_num(F.normalize(proj(g2_pool), dim=-1))
 
-            # --- new safety + symmetric loss logic ---
-            N = z1.size(0)
-            if N < 2:
-                raise ValueError(
-                    "Contrastive loss requires at least two graphs per batch"
-                )
+                    N = z1.size(0)
+                    if N < 2:
+                        raise ValueError(
+                            "Contrastive loss requires at least two graphs per batch"
+                        )
 
-            with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
-                logits_12 = (z1 @ z2.t()) / float(temperature)   # [N, N]
-                with torch.no_grad():
-                    pos = logits_12.diag().mean().item()
-                    neg = ((logits_12.sum() - logits_12.diag().sum()) / (N*(N-1))).item()
-                    wb and wb.log({"diag/pos_minus_neg": pos - neg, "diag/lnN": math.log(N)}, commit=False)
-                logits_21 = logits_12.t()
+                    with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
+                        logits_12 = (z1 @ z2.t()) / float(temperature)
+                        with torch.no_grad():
+                            pos = logits_12.diag().mean().item()
+                            neg = (
+                                (logits_12.sum() - logits_12.diag().sum())
+                                / (N * (N - 1))
+                            ).item()
+                            wb and wb.log(
+                                {"diag/pos_minus_neg": pos - neg, "diag/lnN": math.log(N)},
+                                commit=False,
+                            )
+                        logits_21 = logits_12.t()
 
-                # NOTE: Do NOT mask the diagonal here.
-                # In the N×N (z1 @ z2.T) setup, the diagonal entries are the positives.
+                        labels = torch.arange(N, device=device_t)
 
-                labels = torch.arange(N, device=device_t)
+                        loss = 0.5 * (
+                            F.cross_entropy(logits_12, labels)
+                            + F.cross_entropy(logits_21, labels)
+                        )
 
-                loss = 0.5 * (
-                    F.cross_entropy(logits_12, labels) +
-                    F.cross_entropy(logits_21, labels)
-                )
+                    opt.zero_grad(set_to_none=True)
+                    _step_optimizer(loss, opt, scaler=scaler, scheduler=sch)
 
-            opt.zero_grad(set_to_none=True)
-            
-            _step_optimizer(loss, opt, scaler=scaler, scheduler=sch)
+                    lv = float(loss.detach().cpu().item())
+                    ep_loss += lv
+                    step += 1
+                    if wb and is_main_process():
+                        wb.log(
+                            {
+                                "train/contrastive_loss": lv,
+                                "lr": float(opt.param_groups[0]["lr"]),
+                                "step": step,
+                                "epoch": ep,
+                            }
+                        )
+                    epoch_batches += 1
+                    total_batches_done += 1
+                    if pbar is not None:
+                        pbar.update(1)
+            except RuntimeError as exc:
+                if (
+                    epoch_batches == 0
+                    and loader_pin_memory
+                    and _is_pin_memory_failure(exc)
+                ):
+                    if is_main_process():
+                        logger.warning(
+                            "Pinned-memory DataLoader failed; retrying without pinned memory. %s",
+                            exc,
+                        )
+                    loader_pin_memory = False
+                    loader_persistent_workers = False
+                    pin_memory_enabled = False
+                    active_persistent_workers = False
+                    continue
+                raise
+            break
 
-            lv = float(loss.detach().cpu().item())
-            ep_loss += lv
-            step += 1
-            if wb and is_main_process():
-                wb.log(
-                    {
-                        "train/contrastive_loss": lv,
-                        "lr": float(opt.param_groups[0]["lr"]),
-                        "step": step,
-                        "epoch": ep,
-                    }
-                )
-            epoch_batches += 1
-            total_batches_done += 1
-            # Update our single progress bar after processing each batch
-            if pbar is not None:
-                pbar.update(1)
+        pin_memory_enabled = loader_pin_memory
+        active_persistent_workers = loader_persistent_workers
         ep_loss /= max(1, epoch_batches)
         if is_main_process():
             losses.append(ep_loss)
