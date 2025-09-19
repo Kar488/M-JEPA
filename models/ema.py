@@ -8,7 +8,7 @@ changing target encoder in self‑supervised JEPA training.
 from __future__ import annotations
 
 from contextlib import nullcontext
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -138,3 +138,50 @@ class EMA:
                 self.params[i] = ema_p.to(device)
             for i, ema_buf in enumerate(self.buffers):
                 self.buffers[i] = ema_buf.to(device)
+
+    def state_dict(self) -> Dict[str, Any]:
+        """Return a serialisable snapshot of the EMA helper."""
+
+        return {
+            "decay": float(self.decay),
+            "use_fp32": bool(self.use_fp32),
+            "params": [p.detach().clone() for p in self.params],
+            "buffers": [b.detach().clone() for b in self.buffers],
+        }
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Restore EMA parameters/buffers from ``state``."""
+
+        if "decay" in state:
+            try:
+                self.decay = float(state["decay"])
+            except Exception:
+                pass
+        if "use_fp32" in state:
+            self.use_fp32 = bool(state["use_fp32"])
+
+        if "params" in state:
+            src_params = state["params"]
+            if len(src_params) != len(self.params):
+                raise ValueError(
+                    "EMA checkpoint has a different number of parameters than the current model"
+                )
+            new_params = []
+            for dst, src in zip(self.params, src_params):
+                tensor = src.detach().clone()
+                tensor = tensor.to(dst.device)
+                new_params.append(tensor)
+            self.params = new_params
+
+        if "buffers" in state:
+            src_buffers = state["buffers"]
+            if len(src_buffers) != len(self.buffers):
+                raise ValueError(
+                    "EMA checkpoint has a different number of buffers than the current model"
+                )
+            new_buffers = []
+            for dst, src in zip(self.buffers, src_buffers):
+                tensor = src.detach().clone()
+                tensor = tensor.to(dst.device)
+                new_buffers.append(tensor)
+            self.buffers = new_buffers

@@ -44,3 +44,55 @@ def test_ema_copies_batchnorm_buffers() -> None:
     torch.testing.assert_close(target.bn.running_mean, model.bn.running_mean)
     torch.testing.assert_close(target.bn.running_var, model.bn.running_var)
     assert target.bn.num_batches_tracked == model.bn.num_batches_tracked
+
+
+def test_ema_copy_from_syncs_buffers() -> None:
+    """EMA.copy_from should mirror buffer updates from the source model."""
+
+    torch.manual_seed(1)
+    source = _TinyBatchNormNet().train()
+    ema = EMA(source, decay=0.8)
+
+    with torch.no_grad():
+        for _ in range(4):
+            source(torch.randn(8, 4))
+
+    ema.copy_from(source)
+
+    target = _TinyBatchNormNet()
+    ema.copy_to(target)
+
+    torch.testing.assert_close(target.bn.running_mean, source.bn.running_mean)
+    torch.testing.assert_close(target.bn.running_var, source.bn.running_var)
+    assert target.bn.num_batches_tracked == source.bn.num_batches_tracked
+
+
+def test_ema_state_dict_roundtrip_preserves_buffers() -> None:
+    """Serialising and restoring EMA should preserve parameter and buffer snapshots."""
+
+    torch.manual_seed(2)
+    model = _TinyBatchNormNet().train()
+    ema = EMA(model, decay=0.6, use_fp32=True)
+
+    with torch.no_grad():
+        for _ in range(6):
+            model(torch.randn(10, 4))
+
+    ema.update(model)
+    snapshot = ema.state_dict()
+
+    # Load into an EMA helper initialised with different settings to ensure state controls behaviour
+    other_model = _TinyBatchNormNet()
+    restored = EMA(other_model, decay=0.2, use_fp32=False)
+    restored.load_state_dict(snapshot)
+
+    assert restored.decay == snapshot["decay"]
+    assert restored.use_fp32 == snapshot["use_fp32"]
+
+    probe = _TinyBatchNormNet()
+    restored.copy_to(probe)
+
+    torch.testing.assert_close(probe.bn.running_mean, model.bn.running_mean)
+    torch.testing.assert_close(probe.bn.running_var, model.bn.running_var)
+    assert probe.bn.num_batches_tracked == model.bn.num_batches_tracked
+
