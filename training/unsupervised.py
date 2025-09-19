@@ -1062,6 +1062,7 @@ def train_contrastive(
             RuntimeWarning,
             stacklevel=2,
         )
+    active_persistent_workers = bool(num_workers) and persistent_workers
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
             encoder.to(device_t),
