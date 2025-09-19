@@ -6,6 +6,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+# Provide a lightweight stub so modules can import wandb during test collection.
+sys.modules.setdefault("wandb", types.SimpleNamespace(Api=lambda: None))
+
 from scripts.ci import export_best_from_wandb as eb
 from scripts.ci import paired_effect_from_wandb as pe
 from scripts.ci import recheck_topk_from_wandb as rc
@@ -82,6 +85,8 @@ def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     out_json = tmp_path / "best.json"
     out_yaml = tmp_path / "phase2.yaml"
 
+    monkeypatch.setenv("SWEEP_CACHE_DIR", "/tmp/cache")
+
     # winner jepa
     monkeypatch.setenv("METHOD_WINNER", "jepa")
     monkeypatch.setattr(sys, "argv", [
@@ -92,6 +97,15 @@ def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     data = yaml.safe_load(out_yaml.read_text())
     assert data["parameters"]["training_method"]["value"] == "jepa"
     assert "aug_rotate" not in data["parameters"]
+    assert data["parameters"]["cache-datasets"]["value"] == 1
+    assert data["parameters"]["cache-dir"]["value"] == "${env:SWEEP_CACHE_DIR}"
+    assert data["parameters"]["num-workers"]["value"] == 4
+    assert data["parameters"]["prefetch-factor"]["value"] == 2
+    assert data["parameters"]["persistent-workers"]["value"] == 0
+    assert data["parameters"]["pin-memory"]["value"] == 0
+    assert data["parameters"]["bf16"]["value"] == 1
+    assert data["parameters"]["devices"]["value"] == 1
+    assert data["parameters"]["use-wandb"]["value"] == 1
 
     # winner contrastive
     monkeypatch.setenv("METHOD_WINNER", "contrastive")

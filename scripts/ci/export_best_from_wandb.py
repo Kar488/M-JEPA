@@ -93,19 +93,67 @@ def collect_topk(runs, primary: str, maximize: bool, k: int):
 
 # ---------- bounds helpers ----------
 
+def _config_lookup(config: Dict[str, Any], key: str):
+    """Return a configuration value matching ``key`` with hyphen/underscore fallbacks."""
+
+    candidates = [key]
+    if "-" in key:
+        candidates.append(key.replace("-", "_"))
+    if "_" in key:
+        candidates.append(key.replace("_", "-"))
+
+    seen = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        if cand in config:
+            val = config[cand]
+            if isinstance(val, dict) and "value" in val:
+                val = val["value"]
+            return val
+    return None
+
+
+def _normalize_config_value(val: Any) -> Any:
+    """Convert sweep config values into JSON-serialisable primitives."""
+
+    if isinstance(val, dict) and "value" in val:
+        return _normalize_config_value(val["value"])
+
+    if isinstance(val, bool):
+        return int(val)
+
+    if isinstance(val, str):
+        raw = val.strip()
+        lower = raw.lower()
+        if lower in {"true", "t", "yes", "y", "on"}:
+            return 1
+        if lower in {"false", "f", "no", "n", "off"}:
+            return 0
+        if lower in {"none", "null"}:
+            return None
+        try:
+            if any(ch in raw for ch in (".", "e", "E")):
+                fval = float(raw)
+                return int(fval) if fval.is_integer() else fval
+            return int(raw)
+        except Exception:
+            return val
+
+    return val
+
+
 def grab_cfg_vals(runs: List[Any], key: str) -> List[Any]:
     out = []
     for r in runs:
-        v = r.config.get(key, None)
+        v = _config_lookup(r.config, key)
         if v is None:
             continue
-        if isinstance(v, (int, float)):
-            out.append(v)
-        else:
-            try:
-                out.append(float(v))
-            except Exception:
-                out.append(v)
+        norm = _normalize_config_value(v)
+        if norm is None:
+            continue
+        out.append(norm)
     return out
 
 
@@ -120,17 +168,10 @@ def percentile_band(arr: List[Any]) -> Optional[Tuple[float, float]]:
 def uniq_vals(arr: List[Any]) -> List[Any]:
     s = set()
     for v in arr:
-        if isinstance(v, str):
-            if v in ("0", "1"):
-                s.add(int(v))
-            else:
-                try:
-                    f = float(v)
-                    s.add(int(f) if f.is_integer() else f)
-                except Exception:
-                    s.add(v)
-        else:
-            s.add(v)
+        norm = _normalize_config_value(v)
+        if norm is None:
+            continue
+        s.add(norm)
     return sorted(s, key=lambda x: (str(type(x)), str(x)))
 
 # Task + metric plan (robust to missing val_rmse)
@@ -248,6 +289,10 @@ def main():
             "task_type","label_col",
             # dataset caps (if used in Phase-1)
             "sample_unlabeled","sample_labeled","n_rows_per_file",
+            # caching + loader performance knobs
+            "cache-datasets","cache-dir",
+            "num-workers","prefetch-factor","persistent-workers",
+            "pin-memory","bf16","devices","use-wandb",
         ]
 
         params: Dict[str, Any] = {}
@@ -273,6 +318,34 @@ def main():
 
         params["labeled_dir"]      = {"value": "${env:PHASE2_LABELED_DIR}"}
         params["unlabeled_dir"]    = {"value": "${env:PHASE2_UNLABELED_DIR}"}
+
+        # Normalise caching/performance knobs if the sweep logs were sparse.
+        def _ensure_param(key: str, default=None):
+            if key in params:
+                return
+            v = _config_lookup(best.config, key)
+            if v is None and "-" in key:
+                v = _config_lookup(best.config, key.replace("-", "_"))
+            if v is None:
+                v = default
+            if v is None:
+                return
+            params[key] = {"value": _normalize_config_value(v)}
+
+        env_cache_root = os.environ.get("SWEEP_CACHE_DIR")
+        if env_cache_root:
+            params["cache-dir"] = {"value": "${env:SWEEP_CACHE_DIR}"}
+        else:
+            _ensure_param("cache-dir", default=_config_lookup(best.config, "cache-dir") or _config_lookup(best.config, "cache_dir"))
+
+        _ensure_param("cache-datasets", default=1)
+        _ensure_param("num-workers", default=4)
+        _ensure_param("prefetch-factor", default=2)
+        _ensure_param("persistent-workers", default=0)
+        _ensure_param("pin-memory", default=0)
+        _ensure_param("bf16", default=1)
+        _ensure_param("devices", default=1)
+        _ensure_param("use-wandb", default=1)
 
         # safety in case Schnet is chosen and 3D is not set
         try:
