@@ -95,3 +95,4 @@ def test_ema_state_dict_roundtrip_preserves_buffers() -> None:
     torch.testing.assert_close(probe.bn.running_mean, model.bn.running_mean)
     torch.testing.assert_close(probe.bn.running_var, model.bn.running_var)
     assert probe.bn.num_batches_tracked == model.bn.num_batches_tracked
+
