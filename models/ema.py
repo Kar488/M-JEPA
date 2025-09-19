@@ -8,7 +8,7 @@ changing target encoder in self‑supervised JEPA training.
 from __future__ import annotations
 
 from contextlib import nullcontext
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -41,10 +41,21 @@ class EMA:
         self.params = []
         for p in model.parameters():
             buf = p.detach().clone()
-            if self.use_fp32:
+            if self.use_fp32 and torch.is_floating_point(buf):
                 buf = buf.float()
             buf = buf.to(p.device)
             self.params.append(buf)
+
+        # Buffers (e.g., BatchNorm running stats) must also be tracked. They do
+        # not participate in gradient updates but strongly influence model
+        # behaviour, so we keep an exact copy instead of an EMA average.
+        self.buffers = []
+        for buf in model.buffers():
+            clone = buf.detach().clone()
+            if self.use_fp32 and torch.is_floating_point(clone):
+                clone = clone.float()
+            clone = clone.to(buf.device)
+            self.buffers.append(clone)
 
     def set_decay(self, decay: float) -> None:
         """Dynamically update EMA decay/momentum during training."""
@@ -68,13 +79,31 @@ class EMA:
                     src = src.to(ema_p.dtype)
                 # ema = decay*ema + (1-decay)*param  (stable in-place)
                 ema_p.lerp_(src, float(1.0 - float(self.decay)))
- 
+
+            # Buffers are copied directly without decay to keep running stats in
+            # sync with the source model.
+            for i, buf in enumerate(model.buffers()):
+                if i >= len(self.buffers):
+                    break
+                ema_buf = self.buffers[i]
+                if ema_buf.device != buf.device:
+                    ema_buf = ema_buf.to(buf.device)
+                    self.buffers[i] = ema_buf
+                tensor = buf.detach()
+                if self.use_fp32 and torch.is_floating_point(tensor):
+                    tensor = tensor.to(torch.float32)
+                else:
+                    tensor = tensor.to(ema_buf.dtype)
+                ema_buf.copy_(tensor)
+
 
     def copy_to(self, model: nn.Module) -> None:
         """Copy EMA parameters into the target model."""
         with _NO_GRAD():
             for p, ema_p in zip(model.parameters(), self.params):
                 p.data.copy_(ema_p.to(p.dtype).to(p.device))
+            for buf, ema_buf in zip(model.buffers(), self.buffers):
+                buf.data.copy_(ema_buf.to(buf.dtype).to(buf.device))
 
     def copy_from(self, model: nn.Module) -> None:
         """Overwrite EMA buffers with parameters from ``model``."""
@@ -85,14 +114,74 @@ class EMA:
                     break
                 buf = self.params[i]
                 tensor = src.detach()
-                if self.use_fp32:
+                if self.use_fp32 and torch.is_floating_point(tensor):
                     tensor = tensor.to(torch.float32)
                 else:
                     tensor = tensor.to(buf.dtype)
                 self.params[i].copy_(tensor.to(buf.device))
+
+            for i, src in enumerate(model.buffers()):
+                if i >= len(self.buffers):
+                    break
+                buf = self.buffers[i]
+                tensor = src.detach()
+                if self.use_fp32 and torch.is_floating_point(tensor):
+                    tensor = tensor.to(torch.float32)
+                else:
+                    tensor = tensor.to(buf.dtype)
+                self.buffers[i].copy_(tensor.to(buf.device))
 
     def to(self, device: torch.device) -> None:
         """Move EMA buffers to a device."""
         with _NO_GRAD():
             for i, ema_p in enumerate(self.params):
                 self.params[i] = ema_p.to(device)
+            for i, ema_buf in enumerate(self.buffers):
+                self.buffers[i] = ema_buf.to(device)
+
+    def state_dict(self) -> Dict[str, Any]:
+        """Return a serialisable snapshot of the EMA helper."""
+
+        return {
+            "decay": float(self.decay),
+            "use_fp32": bool(self.use_fp32),
+            "params": [p.detach().clone() for p in self.params],
+            "buffers": [b.detach().clone() for b in self.buffers],
+        }
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Restore EMA parameters/buffers from ``state``."""
+
+        if "decay" in state:
+            try:
+                self.decay = float(state["decay"])
+            except Exception:
+                pass
+        if "use_fp32" in state:
+            self.use_fp32 = bool(state["use_fp32"])
+
+        if "params" in state:
+            src_params = state["params"]
+            if len(src_params) != len(self.params):
+                raise ValueError(
+                    "EMA checkpoint has a different number of parameters than the current model"
+                )
+            new_params = []
+            for dst, src in zip(self.params, src_params):
+                tensor = src.detach().clone()
+                tensor = tensor.to(dst.device)
+                new_params.append(tensor)
+            self.params = new_params
+
+        if "buffers" in state:
+            src_buffers = state["buffers"]
+            if len(src_buffers) != len(self.buffers):
+                raise ValueError(
+                    "EMA checkpoint has a different number of buffers than the current model"
+                )
+            new_buffers = []
+            for dst, src in zip(self.buffers, src_buffers):
+                tensor = src.detach().clone()
+                tensor = tensor.to(dst.device)
+                new_buffers.append(tensor)
+            self.buffers = new_buffers
