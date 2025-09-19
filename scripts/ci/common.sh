@@ -7,6 +7,7 @@ set -euo pipefail
 : "${VENV_DIR:=/srv/mjepa/.venv}"
 : "${MAMBA_ROOT_PREFIX:=/data/mjepa/micromamba}"
 : "${CACHE_DIR:=/data/mjepa/cache/graphs}"
+# Allow sweeps to reuse the standard graph cache unless the workflow overrides it.
 : "${SWEEP_CACHE_DIR:=$CACHE_DIR}"
 : "${RUN_ID:=$(date +%s)}"
 : "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
