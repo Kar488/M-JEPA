@@ -137,7 +137,10 @@ def test_build_configs_cartesian_product(gs_module):
 def test_run_grid_search_integration(gs_module, monkeypatch, caplog):
     g = _make_graph()
 
+    dataset_calls = []
+
     def dataset_fn(add_3d=False):
+        dataset_calls.append(add_3d)
         return ([g], [g], None)
 
     calls = []
@@ -160,7 +163,7 @@ def test_run_grid_search_integration(gs_module, monkeypatch, caplog):
             seeds=(1,),
             mask_ratios=(0.1,),
             contiguities=(False,),
-            hidden_dims=(16,),
+            hidden_dims=(16, 32),
             num_layers_list=(2,),
             gnn_types=("gcn",),
             ema_decays=(0.9,),
@@ -176,10 +179,51 @@ def test_run_grid_search_integration(gs_module, monkeypatch, caplog):
             disable_tqdm=True,
         )
 
-    assert len(calls) == 2
-    assert list(df["method"]) == ["m1", "m2"]
+    assert len(calls) == 4  # 2 configs × 2 methods
+    assert list(df["method"]) == ["m1", "m2", "m1", "m2"]
     assert "metric" in df.columns
-    assert "Running grid search over 1 configs" in caplog.text
+    assert "Running grid search over 2 configs" in caplog.text
+    assert dataset_calls == [False]
+
+
+def test_dataset_fn_cached_per_add3d(gs_module, monkeypatch):
+    g = _make_graph()
+
+    dataset_calls = []
+
+    def dataset_fn(add_3d=False):
+        dataset_calls.append(add_3d)
+        return ([g], [g], None)
+
+    def fake_run_one_config_method(cfg, method, *args):
+        return {"metric": 0.5}
+
+    monkeypatch.setattr(gs_module, "_run_one_config_method", fake_run_one_config_method)
+
+    gs_module.run_grid_search(
+        dataset_fn=dataset_fn,
+        methods=("m1",),
+        seeds=(1,),
+        mask_ratios=(0.1,),
+        contiguities=(False,),
+        hidden_dims=(16,),
+        num_layers_list=(2,),
+        gnn_types=("gcn",),
+        ema_decays=(0.9,),
+        add_3d_options=(False, True),
+        augmentation_options=(AugmentationConfig(False, False, False),),
+        pretrain_batch_sizes=(1,),
+        finetune_batch_sizes=(1,),
+        pretrain_epochs_options=(1,),
+        finetune_epochs_options=(1,),
+        lrs=(1e-3,),
+        temperatures=(0.1,),
+        device="cpu",
+        disable_tqdm=True,
+    )
+
+    assert dataset_calls.count(False) == 1
+    assert dataset_calls.count(True) == 1
 
 
 def test_target_pretrain_samples_caps_batches(gs_module, monkeypatch):

@@ -787,6 +787,9 @@ def train_linear_head(
                 )
                 break
 
+            if scheduler is not None and batches_done > 0:
+                scheduler.step()
+
     metrics: Dict[str, float] = {}
     if is_main_process() or not distributed:
         encoder.eval()
@@ -811,6 +814,7 @@ def train_linear_head(
                 param = next(head_param_source.parameters(), None)
                 if param is not None and graph_emb.dtype != param.dtype:
                     graph_emb = graph_emb.to(param.dtype)
+
 
                 with _amp_context():
                     preds = head_module(graph_emb).squeeze(1)

@@ -63,7 +63,10 @@ Once a winner is selected, a second sweep explores a wider set of
 hyper‑parameters using Bayesian optimisation. The top‑K configurations
 from phase 1 provide seed points for the phase‑2 search. These sweeps
 are defined in sweeps/grid_sweep_phase2*.yaml and launched by
-run-grid-or-phase2.sh.
+run-grid-or-phase2.sh. Automated pipelines materialise the derived
+Phase‑2 spec in the experiment workspace under
+GRID_DIR/grid_sweep_phase2.yaml so the tracked template is never
+overwritten.
 
 Phase 2 focuses on optimising model capacity (hidden dimension, number
 of layers), masking strategy, learning rate schedules and other knobs

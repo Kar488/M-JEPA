@@ -3,7 +3,7 @@
 Step #2 helper:
 - Read a W&B sweep (Phase-1 by default), pick best run with task-aware tie-breaks
 - Write best config to $GRID_DIR/best_grid_config.json (for pretrain)
-- Emit/overwrite $APP_DIR/sweeps/grid_sweep_phase2.yaml with narrowed Bayes spec
+- Emit/overwrite $GRID_DIR/grid_sweep_phase2.yaml with the narrowed Bayes spec
   (derived from top-K Phase-1 runs)
 
 Notes:
@@ -165,8 +165,8 @@ def main():
                 default=os.path.join(GRID_DIR, "best_grid_config.json"),
                 help="Write best run CONFIG to this JSON")
     ap.add_argument("--phase2_yaml", "--phase2-yaml", dest="phase2_yaml",
-                    default=os.path.join(APP_DIR, "sweeps", "grid_sweep_phase2.yaml"),
-                    help="Emit/overwrite Phase-2 sweep YAML here (default: $APP_DIR/sweeps/grid_sweep_phase2.yaml)")
+                    default=os.path.join(GRID_DIR, "grid_sweep_phase2.yaml"),
+                    help="Emit/overwrite Phase-2 sweep YAML here (default: $GRID_DIR/grid_sweep_phase2.yaml)")
     # phase-2 data roots (externalizable via CI YAML/env)
     ap.add_argument("--phase2_unlabeled_dir", "--phase2-unlabeled-dir",
                     dest="phase2_unlabeled_dir",
@@ -369,6 +369,25 @@ def main():
 
             wb.summary.update(s)
             wb.finish()
+
+        tpl_phase2 = os.path.realpath(
+            os.path.join(APP_DIR, "sweeps", "grid_sweep_phase2.yaml")
+        )
+        target_phase2 = os.path.realpath(args.phase2_yaml)
+        same_as_template = target_phase2 == tpl_phase2
+        try:
+            same_as_template = same_as_template or os.path.samefile(
+                target_phase2, tpl_phase2
+            )
+        except FileNotFoundError:
+            same_as_template = False
+        sweeps_suffix = os.sep + os.path.join("sweeps", "grid_sweep_phase2.yaml")
+        if same_as_template or target_phase2.endswith(sweeps_suffix):
+            raise RuntimeError(
+                "Refusing to overwrite tracked Phase-2 template at "
+                f"{tpl_phase2}. Set GRID_DIR or pass --phase2-yaml to a "
+                "writable workspace (e.g., $GRID_DIR/grid_sweep_phase2.yaml)."
+            )
 
         os.makedirs(os.path.dirname(args.phase2_yaml) or ".", exist_ok=True)
         with open(args.phase2_yaml, "w", encoding="utf-8") as f:

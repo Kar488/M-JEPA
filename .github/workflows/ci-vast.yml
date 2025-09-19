@@ -216,6 +216,8 @@ jobs:
             mkdir -p "$APP_DIR"
             git config --global --add safe.directory "$APP_DIR"
             if [ -d "$APP_DIR/.git" ]; then
+              git -C "$APP_DIR" reset --hard HEAD
+              git -C "$APP_DIR" clean -fd
               git -C "$APP_DIR" remote set-url origin "$AUTH_URL"
               timeout 300 git -C "$APP_DIR" fetch --progress --verbose --prune --depth=1 --filter=blob:none origin "$BRANCH"
               git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
@@ -269,7 +271,7 @@ jobs:
           WANDB_COUNT: 30
           GRID_MODE: "wandb"   # or "custom"
           EXPORT_OUT_PATH: ${{ env.GRID_DIR }}/best_grid_config.json
-          EXPORT_PHASE2_PATH: ${{ env.APP_DIR }}/sweeps/grid_sweep_phase2.yaml
+          EXPORT_PHASE2_PATH: ${{ env.GRID_DIR }}/grid_sweep_phase2.yaml
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
           PE_MIN_PRETRAIN_EPOCHS: 5
