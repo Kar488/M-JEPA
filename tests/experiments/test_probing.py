@@ -119,3 +119,19 @@ def test_clustering_quality_branches():
     res = clustering_quality(X, n_clusters=2)
     sil = res["cluster_silhouette"]
     assert 0.0 <= sil <= 1.0
+
+
+def test_clustering_quality_handles_missing_values():
+    X = np.array(
+        [
+            [np.nan, 0.0],
+            [0.1, 0.2],
+            [1.0, np.nan],
+            [1.1, 1.0],
+            [2.0, 2.2],
+        ]
+    )
+
+    res = clustering_quality(X, n_clusters=3)
+    sil = res["cluster_silhouette"]
+    assert np.isfinite(sil)

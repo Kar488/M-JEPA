@@ -180,10 +180,27 @@ def linear_probe_regression(
 
 
 def clustering_quality(X: np.ndarray, n_clusters: int = 10) -> Dict[str, float]:
+    X = np.asarray(X, dtype=np.float64)
     n = len(X)
     # need at least 3 samples for a valid silhouette
     if n < 3:
         return {"cluster_silhouette": 0.0}
+
+    # Impute any NaNs/Infs with column means (falling back to zero if a column
+    # is entirely missing) so downstream sklearn estimators receive finite
+    # values.
+    if not np.isfinite(X).all():
+        X = X.copy()
+        invalid_mask = ~np.isfinite(X)
+        if invalid_mask.any():
+            X[invalid_mask] = np.nan
+        if np.isnan(X).any():
+            with np.errstate(invalid="ignore"):
+                col_means = np.nanmean(X, axis=0)
+            col_means = np.where(np.isnan(col_means), 0.0, col_means)
+            inds = np.where(np.isnan(X))
+            if inds[0].size:
+                X[inds] = np.take(col_means, inds[1])
 
     # cap clusters to at most n-1 to satisfy silhouette constraints
     k = min(n_clusters, n - 1)
