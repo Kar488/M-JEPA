@@ -194,6 +194,9 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     cache_dir = getattr(args, "cache_dir", None)
     if cache_dir:
         args.cache_dir = _resolve_env_path(str(cache_dir))
+        print(f"[sweep-run] resolved cache_dir={args.cache_dir}", flush=True)
+    else:
+        print("[sweep-run] cache_dir not provided; using default cache roots", flush=True)
         
     # NOTE: run already initialized; do NOT re-init here. If a prior path closed it,
     # the agent will re-launch this process with a fresh sweep context.
@@ -255,6 +258,12 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         base_cache = args.cache_dir or os.path.join("cache", "graphs")
         dataset_cache_dir = os.path.join(base_cache, "prebuilt_datasets")
         pathlib.Path(dataset_cache_dir).mkdir(parents=True, exist_ok=True)
+        print(
+            f"[sweep-run] dataset caching enabled (root={dataset_cache_dir})",
+            flush=True,
+        )
+    else:
+        print("[sweep-run] dataset caching disabled", flush=True)
 
     DATASET_CACHE_VERSION = "v1"
 
@@ -273,11 +282,28 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     def _load_or_build_dataset(kind: str, payload: dict, builder):
         cache_path = _dataset_cache_path(kind, payload)
         if cache_path and os.path.exists(cache_path):
+            print(
+                f"[sweep-run] cache hit for {kind} dataset → {cache_path}",
+                flush=True,
+            )
             try:
                 with open(cache_path, "rb") as fh:
                     return pickle.load(fh)
-            except Exception:
-                pass
+            except Exception as exc:
+                print(
+                    f"[sweep-run] failed to load {kind} cache {cache_path}: {exc}; rebuilding",
+                    flush=True,
+                )
+                try:
+                    os.remove(cache_path)
+                except OSError:
+                    pass
+
+        if cache_path and not os.path.exists(cache_path):
+            print(
+                f"[sweep-run] cache miss for {kind} dataset; will store at {cache_path}",
+                flush=True,
+            )
 
         ds = builder()
 
@@ -285,8 +311,15 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             try:
                 with open(cache_path, "wb") as fh:
                     pickle.dump(ds, fh)
-            except Exception:
-                pass
+                print(
+                    f"[sweep-run] cached {kind} dataset at {cache_path}",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(
+                    f"[sweep-run] failed to persist {kind} cache {cache_path}: {exc}",
+                    flush=True,
+                )
 
         return ds
 
