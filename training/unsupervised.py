@@ -360,44 +360,74 @@ class _ApplyGraphAugmentationsOp:
 class _JEPAAugmentor:
     """Generate context/target graph pairs for JEPA training."""
 
-    def __init__(self, mask_ratio: float, contiguous: bool) -> None:
-        self._structural_ops = (_MaskSubgraphPairOp(mask_ratio, contiguous),)
+    def __init__(
+        self,
+        mask_ratio: float,
+        contiguous: bool,
+        *,
+        random_rotate: bool = False,
+        mask_angle: bool = False,
+        perturb_dihedral: bool = False,
+        bond_deletion: bool = False,
+        atom_masking: bool = False,
+        subgraph_removal: bool = False,
+        max_retries: int = 4,
+    ) -> None:
+        structural_ops: List[Callable[[GraphData], GraphData | tuple[GraphData, ...]]] = []
+        pre_mask_ops: List[Callable[[GraphData], GraphData]] = []
+        if bond_deletion:
+            structural_ops.append(delete_random_bond)
+            pre_mask_ops.append(delete_random_bond)
+        if atom_masking:
+            structural_ops.append(mask_random_atom)
+            pre_mask_ops.append(mask_random_atom)
+        if subgraph_removal:
+            structural_ops.append(remove_random_subgraph)
+            pre_mask_ops.append(remove_random_subgraph)
+        structural_ops.append(_MaskSubgraphPairOp(mask_ratio, contiguous))
+        self._structural_ops = tuple(structural_ops)
+        self._pre_mask_ops = tuple(pre_mask_ops)
+        geom_ops: List[Callable[[GraphData], GraphData]] = []
+        if random_rotate or mask_angle or perturb_dihedral:
+            geom_ops.append(
+                _ApplyGraphAugmentationsOp(
+                    random_rotate=random_rotate,
+                    mask_angle=mask_angle,
+                    perturb_dihedral=perturb_dihedral,
+                )
+            )
+        self._geometric_ops = tuple(geom_ops)
+        self._mask_ratio = mask_ratio
+        self._contiguous = contiguous
+        self._max_retries = max(1, int(max_retries))
 
     def __call__(self, graph: GraphData) -> Tuple[GraphData, GraphData]:
-        views = generate_views(graph, structural_ops=self._structural_ops)
-        if len(views) >= 2 and views[0] is not views[1]:
-            return views[0], views[1]
-        ctx_source = views[0] if views else graph
-        ctx_graph = _clone_graph_data(ctx_source)
-        tgt_graph = self._fallback_target(ctx_graph)
+        for _ in range(self._max_retries):
+            views = generate_views(
+                graph,
+                structural_ops=self._structural_ops,
+                geometric_ops=self._geometric_ops,
+            )
+            if len(views) >= 2:
+                ctx, tgt = views[0], views[1]
+                x_ctx = getattr(ctx, "x", None)
+                x_tgt = getattr(tgt, "x", None)
+                if x_ctx is not None and x_tgt is not None:
+                    if getattr(x_ctx, "shape", (0,))[0] > 0 and getattr(x_tgt, "shape", (0,))[0] > 0:
+                        return ctx, tgt
+
+        base = _clone_graph_data(graph)
+        for op in self._pre_mask_ops:
+            base = op(base)
+        ctx_graph, tgt_graph = mask_subgraph(
+            base, self._mask_ratio, self._contiguous
+        )
+        ctx_graph = _clone_graph_data(ctx_graph)
+        tgt_graph = _clone_graph_data(tgt_graph)
+        for op in self._geometric_ops:
+            ctx_graph = op(ctx_graph)
+            tgt_graph = op(tgt_graph)
         return ctx_graph, tgt_graph
-
-    @staticmethod
-    def _fallback_target(ctx_graph: GraphData) -> GraphData:
-        x = np.asarray(ctx_graph.x, dtype=np.float32)
-        x_tgt = np.array(x + 1.0, copy=True)
-
-        edge_index_src = getattr(ctx_graph, "edge_index", None)
-        if edge_index_src is None:
-            edge_index = np.zeros((2, 0), dtype=np.int64)
-        else:
-            edge_index = np.array(np.asarray(edge_index_src, dtype=np.int64), copy=True)
-
-        edge_attr_src = getattr(ctx_graph, "edge_attr", None)
-        edge_attr = (
-            None
-            if edge_attr_src is None
-            else np.array(np.asarray(edge_attr_src, dtype=np.float32), copy=True)
-        )
-
-        pos_src = getattr(ctx_graph, "pos", None)
-        pos = (
-            None
-            if pos_src is None
-            else np.array(np.asarray(pos_src, dtype=np.float32), copy=True)
-        )
-
-        return GraphData(x=x_tgt, edge_index=edge_index, edge_attr=edge_attr, pos=pos)
 
 
 class _ContrastiveAugmentor:
@@ -588,6 +618,9 @@ def train_jepa(
     random_rotate: bool = False,
     mask_angle: bool = False,
     perturb_dihedral: bool = False,
+    bond_deletion: bool = False,
+    atom_masking: bool = False,
+    subgraph_removal: bool = False,
     resume_from: Optional[str] = None,
     *,
     max_batches: int = 0,
@@ -845,7 +878,16 @@ def train_jepa(
             if distributed
             else dataset.graphs
         )
-        augmenter = _JEPAAugmentor(mask_ratio=mask_ratio, contiguous=contiguous)
+        augmenter = _JEPAAugmentor(
+            mask_ratio=mask_ratio,
+            contiguous=contiguous,
+            random_rotate=random_rotate,
+            mask_angle=mask_angle,
+            perturb_dihedral=perturb_dihedral,
+            bond_deletion=bond_deletion,
+            atom_masking=atom_masking,
+            subgraph_removal=subgraph_removal,
+        )
         pair_dataset = _AugmentedPairDataset(data_source, augmenter)
         loader_pin_memory = pin_memory_enabled
         loader_persistent_workers = active_persistent_workers

@@ -15,8 +15,14 @@ parameters:
 
   # model + hparams
   mask_ratio:           {values: [0.15, 0.30, 0.50]}
-  #masks a connected subgraph (functional group/ring/chain) - 1, avoid scattered nodes that is also used in literature but can leak info via nearby nodes
+  # masks a connectivity-respecting subgraph (functional group/ring/chain)
   contiguity:           {value: 1}
+  aug_rotate:           {values: [0, 1]}
+  aug_mask_angle:       {values: [0, 1]}
+  aug_dihedral:         {values: [0, 1]}
+  aug_bond_deletion:    {values: [0, 1]}
+  aug_atom_masking:     {values: [0, 1]}
+  aug_subgraph_removal: {values: [0, 1]}
   hidden_dim:           {values: [128, 256] }
   num_layers:           {values: [3, 4]}
   ema_decay:            {values: [0.995, 0.996, 0.998]}
@@ -28,7 +34,7 @@ parameters:
   finetune_epochs:      {values: [1, 3]}
   learning_rate:        { values: [1e-4, 2e-4, 3e-4, 5e-4]}
 
-  max_pretrain_batches:  {values: [200, 400]}
+  max_pretrain_batches:  {values: [400, 800]}
   max_finetune_batches:  {value: 200}
   
   devices:              {value: 1}
@@ -38,7 +44,7 @@ parameters:
   pin-memory:           {value: 0} # 0 false
   bf16:                 {value: 1} #1 true
 
-  # JEPA ignores temperature and all aug_* → omit them here
+  # Temperature applies only to contrastive runs, so it remains absent here.
   seed:                 {values: [1, 2, 3]}
 
   task_type:            {value: regression}

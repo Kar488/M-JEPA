@@ -649,6 +649,12 @@ def _run_one_config_method(
                 break
             _tb = 0 if math.isinf(remaining) else remaining
             try:
+                _rot = getattr(cfg.augmentations, "random_rotate", getattr(cfg.augmentations, "rotate", False))
+                _dih = getattr(cfg.augmentations, "perturb_dihedral", getattr(cfg.augmentations, "dihedral", False))
+                _ang = getattr(cfg.augmentations, "mask_angle", False)
+                _bond = getattr(cfg.augmentations, "bond_deletion", False)
+                _atom = getattr(cfg.augmentations, "atom_masking", False)
+                _subg = getattr(cfg.augmentations, "subgraph_removal", False)
                 train_jepa(
                     dataset=ds_pre,
                     encoder=encoder,
@@ -667,6 +673,12 @@ def _run_one_config_method(
                     ckpt_every=ckpt_every,
                     use_scheduler=use_scheduler,
                     warmup_steps=warmup_steps,
+                    random_rotate=_rot,
+                    mask_angle=_ang,
+                    perturb_dihedral=_dih,
+                    bond_deletion=_bond,
+                    atom_masking=_atom,
+                    subgraph_removal=_subg,
                     max_batches=max_batches_for_trial,
                     time_budget_mins=_tb,
                     # perf knobs

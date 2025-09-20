@@ -20,7 +20,7 @@ from data.augment import (
     random_rotation,
     remove_random_subgraph,
 )
-from data.mdataset import GraphDataset
+from data.mdataset import GraphDataset, GraphData
 
 
 @pytest.fixture(autouse=True)
@@ -210,6 +210,39 @@ def test_generate_views_preserves_pos():
     for v in views:
         assert v.pos is not None
         assert v.pos.shape[0] == v.x.shape[0]
+
+
+def test_mask_subgraph_contiguous_respects_connectivity():
+    x = np.stack(
+        [np.ones(5, dtype=np.float32), np.arange(5, dtype=np.float32)], axis=1
+    )
+    edge_index = np.array(
+        [[0, 1, 1, 2, 2, 3, 3, 4], [1, 0, 2, 1, 3, 2, 4, 3]], dtype=np.int64
+    )
+    g = GraphData(x=x, edge_index=edge_index, edge_attr=None, pos=None)
+    adjacency = {
+        0: {1},
+        1: {0, 2},
+        2: {1, 3},
+        3: {2, 4},
+        4: {3},
+    }
+
+    for seed in range(5):
+        np.random.seed(seed)
+        _, tgt = mask_subgraph(g, mask_ratio=0.4, contiguous=True)
+        original_nodes = {int(v) for v in np.asarray(tgt.x)[:, 1]}
+        assert len(original_nodes) == 2
+        start = next(iter(original_nodes))
+        reachable = {start}
+        stack = [start]
+        while stack:
+            cur = stack.pop()
+            for nb in adjacency[cur]:
+                if nb in original_nodes and nb not in reachable:
+                    reachable.add(nb)
+                    stack.append(nb)
+        assert reachable == original_nodes
 
 
 def test_run_ablation_forwards_augment(monkeypatch):

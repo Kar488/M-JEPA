@@ -384,11 +384,77 @@ def mask_subgraph(
     n = int(g.x.shape[0])
     if n == 0:
         return g, g
-    k = max(1, int(np.ceil(mask_ratio * n)))
+    k = min(n, max(1, int(np.ceil(mask_ratio * n))))
     if contiguous:
-        start = np.random.randint(0, n)
-        tgt = [(start + j) % n for j in range(k)]
-    else:
+        edge_index = getattr(g, "edge_index", None)
+        edges: Optional[np.ndarray]
+        if edge_index is None:
+            edges = None
+        else:
+            try:
+                edges = np.asarray(edge_index, dtype=np.int64)
+            except Exception:
+                edges = None
+            if edges is None:
+                try:  # pragma: no cover - torch optional during import
+                    import torch as _t  # type: ignore
+
+                    if isinstance(edge_index, _t.Tensor):
+                        edges = edge_index.detach().cpu().numpy().astype(np.int64, copy=False)
+                except Exception:  # pragma: no cover - torch missing
+                    edges = None
+            if edges is None:
+                try:
+                    edges = np.array(edge_index, dtype=np.int64, copy=False)
+                except Exception:
+                    edges = None
+
+        adjacency: Optional[List[set[int]]] = None
+        if edges is not None and edges.size > 0:
+            if edges.ndim != 2:
+                edges = edges.reshape(2, -1)
+            if edges.shape[0] != 2 and edges.shape[1] == 2:
+                edges = edges.T
+            if edges.shape[0] == 2:
+                adjacency = [set() for _ in range(n)]
+                for u, v in edges.T:
+                    uu = int(u)
+                    vv = int(v)
+                    if 0 <= uu < n and 0 <= vv < n:
+                        adjacency[uu].add(vv)
+                        adjacency[vv].add(uu)
+
+        if adjacency is None or not any(adjacency):
+            contiguous = False
+        else:
+            start_candidates = [idx for idx, nb in enumerate(adjacency) if nb]
+            if not start_candidates:
+                start_candidates = list(range(n))
+            start = int(np.random.choice(start_candidates))
+            tgt_set: set[int] = {start}
+            tgt = [start]
+            frontier: set[int] = set(adjacency[start]) - tgt_set
+            while len(tgt) < k:
+                if frontier:
+                    nxt = int(np.random.choice(tuple(frontier)))
+                    frontier.discard(nxt)
+                    if nxt in tgt_set:
+                        continue
+                    tgt_set.add(nxt)
+                    tgt.append(nxt)
+                    frontier.update(adjacency[nxt] - tgt_set)
+                    continue
+                remaining = [idx for idx in range(n) if idx not in tgt_set]
+                if not remaining:
+                    break
+                new_start = int(np.random.choice(remaining))
+                tgt_set.add(new_start)
+                tgt.append(new_start)
+                frontier.update(adjacency[new_start] - tgt_set)
+            if len(tgt) > k:
+                tgt = tgt[:k]
+
+    if not contiguous:
         tgt = np.random.choice(n, size=k, replace=False).tolist()
     ctx = [i for i in range(n) if i not in set(tgt)]
     return _subgraph(g, ctx), _subgraph(g, tgt)
