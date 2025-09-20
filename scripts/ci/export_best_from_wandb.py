@@ -13,7 +13,7 @@ Notes:
 """
 
 import argparse, json, math, os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from utils.logging import maybe_init_wandb
 
 import numpy as np
@@ -157,6 +157,179 @@ def grab_cfg_vals(runs: List[Any], key: str) -> List[Any]:
     return out
 
 
+# ---------- sweep spec helpers ----------
+
+NUMERIC_CLAMP_BOUNDS: Dict[str, Tuple[Optional[float], Optional[float]]] = {
+    "mask_ratio": (0.0, 0.95),
+    "ema_decay": (0.0, 0.9999),
+    "learning_rate": (1e-6, None),
+}
+
+CATEGORICAL_FALLBACK_OPTIONS: Dict[str, Sequence[Any]] = {
+    "hidden_dim": (128, 256, 512),
+    "num_layers": (2, 3, 4),
+}
+
+
+def _sweep_param_map(sweep: Any) -> Dict[str, Any]:
+    try:
+        cfg = getattr(sweep, "config", None) or {}
+        params = cfg.get("parameters", {}) if isinstance(cfg, dict) else {}
+        return params if isinstance(params, dict) else {}
+    except Exception:
+        return {}
+
+
+def _load_phase2_template_params(app_dir: str) -> Dict[str, Any]:
+    tpl = os.path.join(app_dir, "sweeps", "grid_sweep_phase2.yaml")
+    try:
+        with open(tpl, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+    params = data.get("parameters", {}) if isinstance(data, dict) else {}
+    return params if isinstance(params, dict) else {}
+
+
+def _lookup_param_spec(parameters: Dict[str, Any], key: str) -> Optional[Dict[str, Any]]:
+    if not parameters:
+        return None
+    candidates: Iterable[str] = [key]
+    if "-" in key:
+        candidates = list(candidates) + [key.replace("-", "_")]
+    if "_" in key:
+        candidates = list(candidates) + [key.replace("_", "-")]
+    seen: Set[str] = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        spec = parameters.get(cand)
+        if isinstance(spec, dict):
+            return spec
+    return None
+
+
+def _extend_numeric_constant(value: float, key: str, spec: Optional[Dict[str, Any]]) -> Tuple[float, float]:
+    base = float(value)
+    delta = abs(base) * 0.2
+    if delta == 0.0:
+        delta = max(abs(base) * 0.1, 1e-6)
+    lo = base - delta
+    hi = base + delta
+
+    if spec:
+        try:
+            if "min" in spec:
+                lo = max(lo, float(spec["min"]))
+            if "max" in spec:
+                hi = min(hi, float(spec["max"]))
+        except Exception:
+            pass
+
+    clamp = NUMERIC_CLAMP_BOUNDS.get(key)
+    if clamp:
+        min_v, max_v = clamp
+        if min_v is not None:
+            lo = max(lo, float(min_v))
+        if max_v is not None:
+            hi = min(hi, float(max_v))
+
+    if hi <= lo:
+        eps = max(abs(base) * 0.05, 1e-6)
+        hi = lo + eps
+    return float(lo), float(hi)
+
+
+def _dedupe_options(options: Iterable[Any]) -> List[Any]:
+    seen = set()
+    out: List[Any] = []
+    for opt in options:
+        norm = _normalize_config_value(opt)
+        if norm is None or norm in seen:
+            continue
+        seen.add(norm)
+        out.append(opt)
+    return out
+
+
+def _maybe_sort_numeric_options(options: List[Any]) -> List[Any]:
+    if not options:
+        return options
+    try:
+        norms = [_normalize_config_value(o) for o in options]
+        if all(isinstance(n, (int, float)) for n in norms):
+            pairs = sorted(zip(norms, options), key=lambda t: float(t[0]))
+            return [opt for _norm, opt in pairs]
+    except Exception:
+        return options
+    return options
+
+
+def _iterable_from_option(value: Any) -> Optional[Iterable[Any]]:
+    if isinstance(value, (list, tuple)):
+        return value
+    if isinstance(value, (set, frozenset)):
+        return list(value)
+    return None
+
+
+def _extend_categorical_constant(
+    value: Any,
+    key: str,
+    specs: Sequence[Optional[Dict[str, Any]]],
+) -> List[Any]:
+    norm_value = _normalize_config_value(value)
+    option_sources: List[Iterable[Any]] = []
+    for spec in specs:
+        if not spec:
+            continue
+        vals = None
+        if "values" in spec:
+            vals = _iterable_from_option(spec["values"])
+        elif "value" in spec:
+            vals = _iterable_from_option(spec["value"])
+        if vals is not None:
+            option_sources.append(vals)
+
+    fallback = CATEGORICAL_FALLBACK_OPTIONS.get(key)
+    if fallback:
+        option_sources.append(fallback)
+
+    options: List[Any] = _dedupe_options(opt for src in option_sources for opt in src)
+
+    normalized_options = {_normalize_config_value(o) for o in options}
+    if norm_value not in normalized_options:
+        options.insert(0, value)
+        options = _dedupe_options(options)
+        normalized_options = {_normalize_config_value(o) for o in options}
+
+    if not options:
+        if norm_value in (0, 1):
+            options = [norm_value, 1 - norm_value]
+        else:
+            return [value]
+
+    options = _maybe_sort_numeric_options(options)
+
+    norm_options_list = [_normalize_config_value(o) for o in options]
+    try:
+        idx = norm_options_list.index(norm_value)
+    except ValueError:
+        idx = 0
+
+    chosen: List[Any] = [options[idx]]
+    if idx + 1 < len(options):
+        chosen.append(options[idx + 1])
+    elif idx - 1 >= 0:
+        chosen.append(options[idx - 1])
+
+    deduped = _dedupe_options(chosen)
+    return deduped if deduped else [value]
+
+
 def percentile_band(arr: List[Any]) -> Optional[Tuple[float, float]]:
     xs = [x for x in arr if isinstance(x, (int, float))]
     if not xs:
@@ -234,6 +407,19 @@ def main():
     ap.add_argument("--phase2_method", "--phase2-method", dest="phase2_method", default="bayes", choices=["bayes","random"])
     ap.add_argument("--phase2_metric", "--phase2-metric", dest="phase2_metric", default=None,
                     help="Override Phase-2 metric name; defaults to task primary")
+    ap.add_argument(
+        "--extend-fixed",
+        dest="extend_fixed",
+        action="store_true",
+        default=True,
+        help="Expand parameters that are fixed across top-K runs into small ranges/lists (default: enabled)",
+    )
+    ap.add_argument(
+        "--no-extend-fixed",
+        dest="extend_fixed",
+        action="store_false",
+        help="Disable automatic expansion of fixed top-K parameters",
+    )
 
     args = ap.parse_args()
 
@@ -273,6 +459,8 @@ def main():
     # Optionally derive narrowed Phase-2 ranges and write YAML for Step #3
     if args.emit_bounds:
         top = collect_topk(runs, primary, maximize, args.topk)
+        sweep_params = _sweep_param_map(sweep)
+        template_params = _load_phase2_template_params(APP_DIR) if args.extend_fixed else {}
 
         # Numeric → p10–p90; discrete → unique sets
         numeric_keys = ["mask_ratio", "ema_decay", "learning_rate"]
@@ -302,8 +490,12 @@ def main():
             if band:
                 lo, hi = band
                 if lo == hi:
-                    lo = float(lo) * 0.9
-                    hi = max(float(hi) * 1.1, 1e-6)
+                    if args.extend_fixed:
+                        spec = _lookup_param_spec(sweep_params, k) or _lookup_param_spec(template_params, k)
+                        lo, hi = _extend_numeric_constant(float(lo), k, spec)
+                    else:
+                        lo = float(lo) * 0.9
+                        hi = max(float(hi) * 1.1, 1e-6)
                 params[k] = {"min": float(lo), "max": float(hi)}
 
         for k in set_keys:
@@ -312,7 +504,18 @@ def main():
                 continue
             vals = uniq_vals(arr)
             if len(vals) == 1:
-                params[k] = {"value": vals[0]}
+                if args.extend_fixed:
+                    specs = (
+                        _lookup_param_spec(sweep_params, k),
+                        _lookup_param_spec(template_params, k),
+                    )
+                    extended = _extend_categorical_constant(vals[0], k, specs)
+                    if len(extended) == 1:
+                        params[k] = {"value": extended[0]}
+                    else:
+                        params[k] = {"values": extended}
+                else:
+                    params[k] = {"value": vals[0]}
             else:
                 params[k] = {"values": vals}
 
