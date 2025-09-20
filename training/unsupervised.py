@@ -595,9 +595,6 @@ class _JEPAAugmentor:
                 x_tgt = getattr(tgt, "x", None)
                 if x_ctx is not None and x_tgt is not None:
                     if getattr(x_ctx, "shape", (0,))[0] > 0 and getattr(x_tgt, "shape", (0,))[0] > 0:
-                        for op in self._geometric_ops:
-                            ctx = op(ctx)
-                            tgt = op(tgt)
                         return ctx, tgt
 
         base = _clone_graph_data(graph)
