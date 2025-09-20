@@ -207,21 +207,31 @@ try:
     # If you later add a proper head somewhere, import it here:
     from models.heads import build_linear_head  # type: ignore
 except Exception:
-    import torch.nn as nn
+    try:  # pragma: no cover - exercised when torch is installed
+        import torch.nn as nn
+    except ModuleNotFoundError as exc:  # pragma: no cover - torch missing in tests
+        # When PyTorch is unavailable we still want this module to be importable
+        # so that unit tests can skip themselves cleanly.  Delaying the error
+        # until the fallback head is *used* keeps the import side‑effect free.
 
-    def build_linear_head(*args, **kwargs):
-        """Fallback linear head using a single ``nn.Linear`` layer.
+        def build_linear_head(*args, **kwargs):  # type: ignore[return-type]
+            raise ModuleNotFoundError("torch is required for build_linear_head") from exc
 
-        This keeps unit tests lightweight while still exercising the
-        orchestration code when the optional ``models.heads`` module is
-        absent.  Requires PyTorch to be installed.
-        """
+    else:
 
-        in_dim = kwargs.get("in_dim", args[0] if args else None)
-        num_classes = kwargs.get("num_classes", args[1] if len(args) > 1 else None)
-        if in_dim is None or num_classes is None:
-            raise TypeError("in_dim and num_classes are required")
-        return nn.Linear(in_dim, num_classes)
+        def build_linear_head(*args, **kwargs):
+            """Fallback linear head using a single ``nn.Linear`` layer.
+
+            This keeps unit tests lightweight while still exercising the
+            orchestration code when the optional ``models.heads`` module is
+            absent.  Requires PyTorch to be installed.
+            """
+
+            in_dim = kwargs.get("in_dim", args[0] if args else None)
+            num_classes = kwargs.get("num_classes", args[1] if len(args) > 1 else None)
+            if in_dim is None or num_classes is None:
+                raise TypeError("in_dim and num_classes are required")
+            return nn.Linear(in_dim, num_classes)
 
 
 try:
