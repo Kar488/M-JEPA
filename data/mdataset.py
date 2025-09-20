@@ -54,6 +54,17 @@ class GraphData:
         """Return the number of nodes in the graph."""
         return int(self.x.shape[0])
 
+    @classmethod
+    def _from_state(cls, state: Dict[str, Any]) -> "GraphData":
+        """Recreate an instance from its pickled state mapping."""
+
+        return cls(
+            x=state["x"],
+            edge_index=state["edge_index"],
+            edge_attr=state.get("edge_attr"),
+            pos=state.get("pos"),
+        )
+
     def to_tensors(self) -> Tuple[torch.Tensor, torch.Tensor]: # type: ignore
         """Convert the graph to PyTorch tensors.
 
@@ -79,9 +90,9 @@ class GraphData:
     # then compares it with the class referenced by each instance.  Any module
     # reload or aliasing (common in tests) confuses that identity check and
     # raises ``PicklingError``.  Implementing ``__reduce__`` sidesteps the lookup
-    # by serialising to a lightweight mapping that ``_graph_from_state``
-    # reconstructs.  ``__getstate__``/``__setstate__`` mirror the helpers so the
-    # objects remain compatible with caches written by older versions.
+    # by serialising to a lightweight mapping that ``GraphData._from_state``
+    # reconstructs.  ``_graph_from_state`` proxies to the classmethod so cached
+    # payloads from older versions remain compatible.
 
     def __getstate__(self) -> Dict[str, Any]:
         return _graph_to_state(self)
@@ -93,17 +104,12 @@ class GraphData:
         self.pos = state.get("pos")
 
     def __reduce__(self):
-        return (_graph_from_state, (self.__getstate__(),))
+        return (self.__class__._from_state, (self.__getstate__(),))
 
 def _graph_from_state(state: Dict[str, Any]) -> GraphData:
     """Recreate a :class:`GraphData` instance from a serialisable mapping."""
 
-    return GraphData(
-        x=state["x"],
-        edge_index=state["edge_index"],
-        edge_attr=state.get("edge_attr"),
-        pos=state.get("pos"),
-    )
+    return GraphData._from_state(state)
 
 
 def _graph_to_state(g: GraphData) -> Dict[str, Any]:
