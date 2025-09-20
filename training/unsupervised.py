@@ -699,6 +699,7 @@ def _build_graph_dataloader(
     persistent_workers: bool,
     prefetch_factor: int,
     collate_fn: Optional[Callable[[Sequence[Any]], Any]] = None,
+    multiprocessing_context: Optional[Any] = None,
 ) -> DataLoader:
     """Construct a ``DataLoader`` that yields ``GraphBatch`` batches."""
 
@@ -712,6 +713,8 @@ def _build_graph_dataloader(
     if num_workers > 0:
         loader_kwargs["persistent_workers"] = persistent_workers
         loader_kwargs["prefetch_factor"] = prefetch_factor
+        if multiprocessing_context is not None:
+            loader_kwargs["multiprocessing_context"] = multiprocessing_context
     return DataLoader(data_source, **loader_kwargs)
 
 

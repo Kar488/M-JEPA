@@ -73,6 +73,28 @@ class GraphData:
             adj[i, j] = 1.0
         return x, adj
 
+    # ``torch.utils.data`` uses ``ForkingPickler`` to serialise dataset items when
+    # ``num_workers > 0`` (particularly under the ``spawn`` start method).
+    # ``ForkingPickler`` first resolves ``GraphData`` from ``data.mdataset`` and
+    # then compares it with the class referenced by each instance.  Any module
+    # reload or aliasing (common in tests) confuses that identity check and
+    # raises ``PicklingError``.  Implementing ``__reduce__`` sidesteps the lookup
+    # by serialising to a lightweight mapping that ``_graph_from_state``
+    # reconstructs.  ``__getstate__``/``__setstate__`` mirror the helpers so the
+    # objects remain compatible with caches written by older versions.
+
+    def __getstate__(self) -> Dict[str, Any]:
+        return _graph_to_state(self)
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        self.x = state["x"]
+        self.edge_index = state["edge_index"]
+        self.edge_attr = state.get("edge_attr")
+        self.pos = state.get("pos")
+
+    def __reduce__(self):
+        return (_graph_from_state, (self.__getstate__(),))
+
 def _graph_from_state(state: Dict[str, Any]) -> GraphData:
     """Recreate a :class:`GraphData` instance from a serialisable mapping."""
 
