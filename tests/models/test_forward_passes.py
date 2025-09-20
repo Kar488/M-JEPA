@@ -155,13 +155,14 @@ def test_schnet3d_forward(stub_graph_dataset):
 
 def test_schnet3d_handles_missing_batch_pos(stub_graph_dataset):
     from models.gnn_variants import SchNet3D
-    from training.unsupervised import _collate_graph_batch
+    from training.unsupervised import GraphBatch, _collate_graph_batch
 
     g_with = make_graph_3d()
     g_without = make_graph()
     g_without.pos = None
 
-    batch = _collate_graph_batch([g_with, g_without])
+    packed = _collate_graph_batch([g_with, g_without])
+    batch = GraphBatch.from_packed(packed)
     assert getattr(batch, "pos", None) is None  # guard that collate dropped coords
 
     model = SchNet3D(input_dim=4, hidden_dim=8, num_layers=2)

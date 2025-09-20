@@ -5,7 +5,7 @@ import os
 import time as _t
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -82,9 +82,56 @@ def _should_compile_models(
     return True
 
 
+def _maybe_pin(tensor: Optional[torch.Tensor], device: Optional[str | torch.device] = None) -> Optional[torch.Tensor]:
+    if not isinstance(tensor, torch.Tensor):
+        return tensor
+    try:
+        return tensor.pin_memory(device)
+    except NotImplementedError:  # pragma: no cover - backend dependent
+        return tensor
+
+
+def _graph_to_serialisable(graph: GraphData) -> Dict[str, Any]:
+    state: Dict[str, Any] = {
+        "x": _to_numpy(getattr(graph, "x", None)),
+        "edge_index": _to_numpy(getattr(graph, "edge_index", None)),
+        "edge_attr": _to_numpy(getattr(graph, "edge_attr", None)),
+        "pos": _to_numpy(getattr(graph, "pos", None)),
+    }
+    extras: Dict[str, Any] = {}
+    for name, value in vars(graph).items():
+        if name in state:
+            continue
+        converted = value
+        try:
+            import torch as _t  # local import to avoid hard dependency in stubs
+
+            if isinstance(value, _t.Tensor):
+                converted = _to_numpy(value)
+        except Exception:  # pragma: no cover - torch optional in some stubs
+            pass
+        extras[name] = converted
+    if extras:
+        state["extras"] = extras
+    return state
+
+
+def _graph_from_serialisable(state: Mapping[str, Any]) -> GraphData:
+    g = GraphData(
+        x=state.get("x"),
+        edge_index=state.get("edge_index"),
+        edge_attr=state.get("edge_attr"),
+        pos=state.get("pos"),
+    )
+    extras = state.get("extras", {})
+    for name, value in extras.items():
+        setattr(g, name, value)
+    return g
+
+
 @dataclass
 class GraphBatch:
-    """Simple container that mimics a PyG ``Batch`` for ``GraphData`` objects."""
+    """Container mirroring a PyG ``Batch`` with serialisation helpers."""
 
     graphs: List[GraphData]
     x: torch.Tensor
@@ -123,6 +170,42 @@ class GraphBatch:
             ptr=self.ptr.to(device),
             edge_attr=edge_attr,
             pos=pos,
+        )
+
+    def pin_memory(self, device: Optional[str | torch.device] = None) -> "GraphBatch":
+        return GraphBatch(
+            graphs=self.graphs,
+            x=_maybe_pin(self.x, device),
+            edge_index=_maybe_pin(self.edge_index, device),
+            batch=_maybe_pin(self.batch, device),
+            ptr=_maybe_pin(self.ptr, device),
+            edge_attr=_maybe_pin(self.edge_attr, device),
+            pos=_maybe_pin(self.pos, device),
+        )
+
+    def pack(self) -> Dict[str, Any]:
+        return {
+            "graphs": [_graph_to_serialisable(g) for g in self.graphs],
+            "x": self.x,
+            "edge_index": self.edge_index,
+            "batch": self.batch,
+            "ptr": self.ptr,
+            "edge_attr": self.edge_attr,
+            "pos": self.pos,
+        }
+
+    @staticmethod
+    def from_packed(state: Mapping[str, Any]) -> "GraphBatch":
+        graphs_state = state.get("graphs", [])
+        graphs = [_graph_from_serialisable(gs) for gs in graphs_state]
+        return GraphBatch(
+            graphs=graphs,
+            x=state["x"],
+            edge_index=state["edge_index"],
+            batch=state["batch"],
+            ptr=state["ptr"],
+            edge_attr=state.get("edge_attr"),
+            pos=state.get("pos"),
         )
 
 def _step_optimizer(
@@ -175,11 +258,11 @@ def _step_optimizer(
 
 
 
-def _collate_graph_batch(batch: Sequence[GraphData] | GraphBatch) -> GraphBatch:
-    """Collate a sequence of ``GraphData`` objects into a ``GraphBatch``."""
+def _collate_graph_batch(batch: Sequence[GraphData] | GraphBatch) -> Dict[str, Any]:
+    """Collate a sequence of ``GraphData`` objects into a packed batch state."""
 
     if isinstance(batch, GraphBatch):
-        return batch
+        return batch.pack()
 
     graphs = list(batch)
     if not graphs:
@@ -187,7 +270,8 @@ def _collate_graph_batch(batch: Sequence[GraphData] | GraphBatch) -> GraphBatch:
         zero_mat = torch.zeros((0, 0), dtype=torch.float32)
         zero_edge = torch.zeros((2, 0), dtype=torch.long)
         ptr = torch.zeros(1, dtype=torch.long)
-        return GraphBatch([], zero_mat, zero_edge, zero, ptr)
+        empty = GraphBatch([], zero_mat, zero_edge, zero, ptr)
+        return empty.pack()
 
     x_blocks: List[torch.Tensor] = []
     batch_index: List[torch.Tensor] = []
@@ -277,7 +361,7 @@ def _collate_graph_batch(batch: Sequence[GraphData] | GraphBatch) -> GraphBatch:
         pos_blocks = [torch.as_tensor(g.pos, dtype=torch.float32) for g in graphs]
         batch_pos = torch.cat(pos_blocks, dim=0) if pos_blocks else None
 
-    return GraphBatch(
+    batch_obj = GraphBatch(
         graphs=graphs,
         x=x_cat,
         edge_index=edge_index_cat,
@@ -286,6 +370,7 @@ def _collate_graph_batch(batch: Sequence[GraphData] | GraphBatch) -> GraphBatch:
         edge_attr=batch_edge_attr,
         pos=batch_pos,
     )
+    return batch_obj.pack()
 
 
 def _clone_graph_data(graph: GraphData) -> GraphData:
@@ -682,7 +767,7 @@ class _AugmentedPairDataset(Sequence[Tuple[GraphData, GraphData]]):
 
 def _collate_graph_pair(
     batch: Sequence[Tuple[GraphData, GraphData]]
-) -> Tuple[GraphBatch, GraphBatch]:
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     if not batch:
         empty = _collate_graph_batch([])
         return empty, empty
@@ -700,7 +785,7 @@ def _build_graph_dataloader(
     prefetch_factor: int,
     collate_fn: Optional[Callable[[Sequence[Any]], Any]] = None,
 ) -> DataLoader:
-    """Construct a ``DataLoader`` that yields ``GraphBatch`` batches."""
+    """Construct a ``DataLoader`` that yields packed ``GraphBatch`` states."""
 
     loader_kwargs = dict(
         batch_size=batch_size,
@@ -1088,7 +1173,9 @@ def train_jepa(
             )
 
             try:
-                for ctx_batch, tgt_batch in dataloader:
+                for ctx_state, tgt_state in dataloader:
+                    ctx_batch = GraphBatch.from_packed(ctx_state)
+                    tgt_batch = GraphBatch.from_packed(tgt_state)
                     if max_batches > 0 and total_batches_done >= max_batches:
                         hit_batch_cap = True
                         break
@@ -1429,7 +1516,9 @@ def train_contrastive(
             )
 
             try:
-                for view1_batch, view2_batch in dataloader:
+                for view1_state, view2_state in dataloader:
+                    view1_batch = GraphBatch.from_packed(view1_state)
+                    view2_batch = GraphBatch.from_packed(view2_state)
                     if max_batches > 0 and total_batches_done >= max_batches:
                         hit_batch_cap = True
                         break
