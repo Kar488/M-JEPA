@@ -128,6 +128,24 @@ def _graph_from_serialisable(state: Mapping[str, Any]) -> GraphData:
         setattr(g, name, value)
     return g
 
+class PackedGraphBatch(dict):
+    """Dictionary subclass that reports the number of graphs in the batch."""
+
+    __slots__ = ()
+
+    def __len__(self) -> int:  # pragma: no cover - trivial
+        graphs = self.get("graphs")
+        if isinstance(graphs, Sequence):
+            return len(graphs)
+        return 0
+
+    @property
+    def num_graphs(self) -> int:
+        graphs = self.get("graphs")
+        if isinstance(graphs, Sequence):
+            return len(graphs)
+        return 0
+
 
 @dataclass
 class GraphBatch:
@@ -183,16 +201,18 @@ class GraphBatch:
             pos=_maybe_pin(self.pos, device),
         )
 
-    def pack(self) -> Dict[str, Any]:
-        return {
-            "graphs": [_graph_to_serialisable(g) for g in self.graphs],
-            "x": self.x,
-            "edge_index": self.edge_index,
-            "batch": self.batch,
-            "ptr": self.ptr,
-            "edge_attr": self.edge_attr,
-            "pos": self.pos,
-        }
+    def pack(self) -> PackedGraphBatch:
+        return PackedGraphBatch(
+            {
+                "graphs": [_graph_to_serialisable(g) for g in self.graphs],
+                "x": self.x,
+                "edge_index": self.edge_index,
+                "batch": self.batch,
+                "ptr": self.ptr,
+                "edge_attr": self.edge_attr,
+                "pos": self.pos,
+            }
+        )
 
     @staticmethod
     def from_packed(state: Mapping[str, Any]) -> "GraphBatch":
