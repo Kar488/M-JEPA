@@ -13,6 +13,7 @@ Here you can explore the modules that make up the project.
    :caption: Overview
 
    kid_friendly_overview
+   dataset_caching
 
 .. toctree::
    :maxdepth: 2
