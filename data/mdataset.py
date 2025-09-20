@@ -104,7 +104,10 @@ class GraphData:
         self.pos = state.get("pos")
 
     def __reduce__(self):
-        return (self.__class__._from_state, (self.__getstate__(),))
+        return (_graph_from_state, (self.__getstate__(),))
+
+    def __reduce_ex__(self, protocol):
+        return self.__reduce__()
 
 def _graph_from_state(state: Dict[str, Any]) -> GraphData:
     """Recreate a :class:`GraphData` instance from a serialisable mapping."""
