@@ -1,11 +1,12 @@
 from __future__ import annotations
+import random
+
 import numpy as np
 import torch
 import torch.nn as nn
 import pytest
 
 torch = pytest.importorskip("torch")
-pytest.importorskip("rdkit")
 
 from training.supervised import stratified_split, train_linear_head
 
@@ -150,3 +151,43 @@ def test_train_linear_head_respects_max_batches(monkeypatch):
     )
 
     assert step_counter["count"] == 3
+
+
+def test_train_linear_head_caches_embeddings(monkeypatch):
+    import training.supervised as sup_mod
+
+    original_encode = sup_mod._encode_graph
+    call_counter = {"count": 0}
+
+    def counting_encode(*args, **kwargs):
+        call_counter["count"] += 1
+        return original_encode(*args, **kwargs)
+
+    monkeypatch.setattr(sup_mod, "_encode_graph", counting_encode)
+
+    labels = [0, 1] * 8  # Balanced dataset with enough samples
+
+    def _run(cache_flag: bool) -> int:
+        random.seed(0)
+        np.random.seed(0)
+        torch.manual_seed(0)
+        call_counter["count"] = 0
+        dataset = DummyDataset(labels)
+        encoder = DummyEncoder(4)
+        train_linear_head(
+            dataset,
+            encoder,
+            "classification",
+            epochs=2,
+            batch_size=4,
+            lr=0.01,
+            patience=0,
+            device="cpu",
+            cache_graph_embeddings=cache_flag,
+        )
+        return call_counter["count"]
+
+    calls_without_cache = _run(False)
+    calls_with_cache = _run(True)
+
+    assert calls_with_cache < calls_without_cache
