@@ -29,6 +29,8 @@ except Exception as e:
 
 import pandas as pd
 
+from ._graph_pickle import register_graph_class, rebuild_graph_data
+
 logger = logging.getLogger(__name__)
 
 
@@ -126,7 +128,7 @@ class GraphData:
         self.pos = restored.pos
 
     def __reduce__(self):
-        return (_graph_from_state, (self.__getstate__(),))
+        return (rebuild_graph_data, (self.__getstate__(),))
 
     def __reduce_ex__(self, protocol):
         return self.__reduce__()
@@ -137,6 +139,7 @@ class GraphData:
 # tests). ``__qualname__`` already resolves to ``"GraphData"`` but setting the
 # module guards against ``GraphData`` being re-exported through helper modules.
 GraphData.__module__ = "data.mdataset"
+register_graph_class(GraphData)
 
 __all__ = [
     "GraphData",
