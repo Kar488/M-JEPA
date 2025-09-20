@@ -43,6 +43,20 @@ def _resolve_graphdataset_cls(module_name: str, qualname: str) -> type["GraphDat
     return attr
 
 
+GraphDataState = Dict[str, Any]
+
+
+def _graph_to_state(g: "GraphData") -> GraphDataState:
+    """Convert a :class:`GraphData` instance into a picklable mapping."""
+
+    return {
+        "x": g.x,
+        "edge_index": g.edge_index,
+        "edge_attr": g.edge_attr,
+        "pos": g.pos,
+    }
+
+
 @dataclass
 class GraphData:
     x: np.ndarray  # [num_nodes, feat_dim]
@@ -55,7 +69,7 @@ class GraphData:
         return int(self.x.shape[0])
 
     @classmethod
-    def _from_state(cls, state: Dict[str, Any]) -> "GraphData":
+    def _from_state(cls, state: GraphDataState) -> "GraphData":
         """Recreate an instance from its pickled state mapping."""
 
         return cls(
@@ -87,43 +101,41 @@ class GraphData:
     # ``torch.utils.data`` uses ``ForkingPickler`` to serialise dataset items when
     # ``num_workers > 0`` (particularly under the ``spawn`` start method).
     # ``ForkingPickler`` first resolves ``GraphData`` from ``data.mdataset`` and
-    # then compares it with the class referenced by each instance.  Any module
+    # then compares it with the class referenced by each instance. Any module
     # reload or aliasing (common in tests) confuses that identity check and
-    # raises ``PicklingError``.  Implementing ``__reduce__`` sidesteps the lookup
-    # by serialising to a lightweight mapping that ``GraphData._from_state``
-    # reconstructs.  ``_graph_from_state`` proxies to the classmethod so cached
-    # payloads from older versions remain compatible.
+    # raises ``PicklingError``. Implementing ``__reduce__`` sidesteps the lookup
+    # by serialising to a lightweight mapping that the classmethod
+    # ``_from_state`` rebuilds (also exposed as ``_graph_from_state`` for cached
+    # payload compatibility).
 
-    def __getstate__(self) -> Dict[str, Any]:
+    def __getstate__(self) -> GraphDataState:
         return _graph_to_state(self)
 
-    def __setstate__(self, state: Dict[str, Any]) -> None:
-        self.x = state["x"]
-        self.edge_index = state["edge_index"]
-        self.edge_attr = state.get("edge_attr")
-        self.pos = state.get("pos")
+    def __setstate__(self, state: GraphDataState) -> None:
+        restored = self.__class__._from_state(state)
+        self.x = restored.x
+        self.edge_index = restored.edge_index
+        self.edge_attr = restored.edge_attr
+        self.pos = restored.pos
 
     def __reduce__(self):
-        return (_graph_from_state, (self.__getstate__(),))
+        return (self.__class__._from_state, (self.__getstate__(),))
 
     def __reduce_ex__(self, protocol):
         return self.__reduce__()
 
-def _graph_from_state(state: Dict[str, Any]) -> GraphData:
+
+def _graph_from_state(state: GraphDataState) -> "GraphData":
     """Recreate a :class:`GraphData` instance from a serialisable mapping."""
 
     return GraphData._from_state(state)
 
-
-def _graph_to_state(g: GraphData) -> Dict[str, Any]:
-    """Convert a :class:`GraphData` instance into a picklable mapping."""
-
-    return {
-        "x": g.x,
-        "edge_index": g.edge_index,
-        "edge_attr": g.edge_attr,
-        "pos": g.pos,
-    }
+__all__ = [
+    "GraphData",
+    "GraphDataset",
+    "_graph_from_state",
+    "_graph_to_state",
+]
 
 
 def _safe_smiles_to_graph(
@@ -132,7 +144,7 @@ def _safe_smiles_to_graph(
     random_seed: Optional[int],
     cls_module: str,
     cls_qualname: str,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[GraphDataState]:
     """Helper for multiprocessing to convert a SMILES string into a graph."""
 
     try:
