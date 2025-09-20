@@ -616,6 +616,9 @@ class CommonArgDefaults:
     aug_rotate: bool
     aug_mask_angle: bool
     aug_dihedral: bool
+    aug_bond_deletion: bool
+    aug_atom_masking: bool
+    aug_subgraph_removal: bool
     epochs: int
     batch_size: int
     lr: float
@@ -647,6 +650,9 @@ class CommonArgDefaults:
             aug_rotate=DEFAULT_AUG.rotate,
             aug_mask_angle=DEFAULT_AUG.mask_angle,
             aug_dihedral=DEFAULT_AUG.dihedral,
+            aug_bond_deletion=DEFAULT_AUG.bond_deletion,
+            aug_atom_masking=DEFAULT_AUG.atom_masking,
+            aug_subgraph_removal=DEFAULT_AUG.subgraph_removal,
             epochs=sec_cfg.get("epochs", 1),
             batch_size=sec_cfg.get("batch_size", 32),
             lr=sec_cfg.get("lr", 1e-3),
@@ -695,6 +701,9 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     p.add_argument("--aug-rotate", "--aug_rotate",dest="aug_rotate", action=BoolFlag, default=d.aug_rotate, help="Randomly rotate coordinates during pretraining")
     p.add_argument("--aug-mask-angle", "--aug_mask_angle", dest="aug_mask_angle", action=BoolFlag, default=d.aug_mask_angle, help="Mask bond angles during pretraining")
     p.add_argument("--aug-dihedral", "--aug_dihedral", dest="aug_dihedral", action=BoolFlag, default=d.aug_dihedral, help="Perturb dihedral angles during pretraining")
+    p.add_argument("--aug-bond-deletion", "--aug_bond_deletion", dest="aug_bond_deletion", action=BoolFlag, default=d.aug_bond_deletion, help="Randomly delete bonds during pretraining")
+    p.add_argument("--aug-atom-masking", "--aug_atom_masking", dest="aug_atom_masking", action=BoolFlag, default=d.aug_atom_masking, help="Mask random atom features during pretraining")
+    p.add_argument("--aug-subgraph-removal", "--aug_subgraph_removal", dest="aug_subgraph_removal", action=BoolFlag, default=d.aug_subgraph_removal, help="Remove small subgraphs during pretraining")
     p.add_argument("--epochs", type=int, default=d.epochs, help="Number of training epochs")
     p.add_argument("--batch-size", type=int, default=d.batch_size, help="Batch size")
     p.add_argument("--lr", type=float, default=d.lr, help="Learning rate")

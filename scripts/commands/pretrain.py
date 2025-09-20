@@ -164,12 +164,18 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
         # Augmentation kwargs for JEPA pretraining
         kwargs: Dict[str, bool] = {}
-        if args.aug_rotate:
+        if getattr(args, "aug_rotate", False):
             kwargs["random_rotate"] = True
-        if args.aug_mask_angle:
+        if getattr(args, "aug_mask_angle", False):
             kwargs["mask_angle"] = True
-        if args.aug_dihedral:
+        if getattr(args, "aug_dihedral", False):
             kwargs["perturb_dihedral"] = True
+        if getattr(args, "aug_bond_deletion", False):
+            kwargs["bond_deletion"] = True
+        if getattr(args, "aug_atom_masking", False):
+            kwargs["atom_masking"] = True
+        if getattr(args, "aug_subgraph_removal", False):
+            kwargs["subgraph_removal"] = True
 
         # Pretrain JEPA
         pretrain_losses: List[float] = []
@@ -234,9 +240,12 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             sys.exit(2)
 
         aug_cfg = AugmentationConfig(
-            rotate=args.aug_rotate,
-            mask_angle=args.aug_mask_angle,
-            dihedral=args.aug_dihedral,
+            rotate=getattr(args, "aug_rotate", False),
+            mask_angle=getattr(args, "aug_mask_angle", False),
+            dihedral=getattr(args, "aug_dihedral", False),
+            bond_deletion=getattr(args, "aug_bond_deletion", False),
+            atom_masking=getattr(args, "aug_atom_masking", False),
+            subgraph_removal=getattr(args, "aug_subgraph_removal", False),
         )
 
         # Optionally run contrastive baseline
@@ -264,6 +273,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     random_rotate=aug_cfg.rotate,
                     mask_angle=aug_cfg.mask_angle,
                     perturb_dihedral=aug_cfg.dihedral,
+                    bond_deletion=aug_cfg.bond_deletion,
+                    atom_masking=aug_cfg.atom_masking,
+                    subgraph_removal=aug_cfg.subgraph_removal,
                     wandb_project=args.wandb_project,
                     wandb_tags=args.wandb_tags,
                     disable_tqdm=(not getattr(args, "force_tqdm", False))
