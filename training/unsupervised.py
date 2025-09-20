@@ -323,6 +323,178 @@ def _clone_graph_data(graph: GraphData) -> GraphData:
     return g2
 
 
+def _graph_num_nodes(graph: GraphData) -> int:
+    x = getattr(graph, "x", None)
+    if x is None:
+        return 0
+    try:
+        return int(x.shape[0])
+    except Exception:
+        return int(len(x)) if hasattr(x, "__len__") else 0
+
+
+def _to_numpy(arr):
+    if arr is None:
+        return None
+    if isinstance(arr, np.ndarray):
+        return arr
+    try:
+        import torch as _t  # type: ignore
+
+        if isinstance(arr, _t.Tensor):
+            return arr.detach().cpu().numpy()
+    except Exception:
+        pass
+    return np.asarray(arr)
+
+
+def _match_type(data, template):
+    if data is None:
+        return None
+    if template is None:
+        return data
+    try:
+        import torch as _t  # type: ignore
+
+        if isinstance(template, _t.Tensor):
+            device = template.device if hasattr(template, "device") else None
+            return _t.as_tensor(data, dtype=template.dtype, device=device)
+    except Exception:
+        pass
+    if isinstance(template, np.ndarray):
+        return np.asarray(data, dtype=template.dtype)
+    return data
+
+
+def _slice_first_dim(arr, indices: List[int]):
+    if arr is None:
+        return None
+    try:
+        import torch as _t  # type: ignore
+
+        if isinstance(arr, _t.Tensor):
+            idx = _t.as_tensor(indices, dtype=_t.long, device=arr.device)
+            if idx.numel() == 0:
+                shape = list(arr.shape)
+                shape[0] = 0
+                return arr.new_empty(shape)
+            return arr.index_select(0, idx)
+    except Exception:
+        pass
+    arr_np = np.asarray(arr)
+    if not indices:
+        shape = list(arr_np.shape)
+        shape[0] = 0
+        return np.zeros(shape, dtype=arr_np.dtype)
+    return arr_np[np.array(indices, dtype=np.int64)]
+
+
+def _graph_select_nodes(graph: GraphData, node_indices: List[int]) -> GraphData:
+    node_indices = sorted({int(i) for i in node_indices})
+    x = getattr(graph, "x", None)
+    pos = getattr(graph, "pos", None)
+    edge_index = getattr(graph, "edge_index", None)
+    edge_attr = getattr(graph, "edge_attr", None)
+
+    x_sel = _slice_first_dim(x, node_indices)
+    pos_sel = _slice_first_dim(pos, node_indices)
+
+    edge_index_sel = None
+    edge_attr_sel = None
+    if edge_index is not None:
+        ei_np = _to_numpy(edge_index)
+        if ei_np.ndim != 2:
+            ei_np = ei_np.reshape(2, -1)
+        if ei_np.shape[0] != 2 and ei_np.shape[1] == 2:
+            ei_np = ei_np.T
+        node_map = {int(old): idx for idx, old in enumerate(node_indices)}
+        kept_edges: List[Tuple[int, int]] = []
+        kept_cols: List[int] = []
+        for col in range(ei_np.shape[1]):
+            u = int(ei_np[0, col])
+            v = int(ei_np[1, col])
+            if u in node_map and v in node_map:
+                kept_edges.append((node_map[u], node_map[v]))
+                kept_cols.append(col)
+        if kept_edges:
+            edges_np = np.asarray(kept_edges, dtype=np.int64).T
+        else:
+            edges_np = np.zeros((2, 0), dtype=np.int64)
+        edge_index_sel = _match_type(edges_np, edge_index)
+        if edge_attr is not None:
+            ea_np = _to_numpy(edge_attr)
+            if kept_cols:
+                new_attr = ea_np[kept_cols]
+            else:
+                if ea_np.ndim == 2:
+                    new_attr = np.zeros((0, ea_np.shape[1]), dtype=ea_np.dtype)
+                else:
+                    new_attr = np.zeros((0,), dtype=ea_np.dtype)
+            edge_attr_sel = _match_type(new_attr, edge_attr)
+
+    GraphCls = graph.__class__
+    try:
+        new_graph = GraphCls(
+            x=_match_type(x_sel, x),
+            edge_index=edge_index_sel,
+            edge_attr=edge_attr_sel,
+            pos=_match_type(pos_sel, pos),
+        )
+    except Exception:
+        from types import SimpleNamespace
+
+        new_graph = SimpleNamespace(
+            x=_match_type(x_sel, x),
+            edge_index=edge_index_sel,
+            edge_attr=edge_attr_sel,
+            pos=_match_type(pos_sel, pos),
+        )
+    for name in ("y", "mask", "batch", "smiles", "id"):
+        if hasattr(graph, name):
+            setattr(new_graph, name, getattr(graph, name))
+    return new_graph
+
+
+def _looks_like_mask_pair(original: GraphData, ctx, tgt) -> bool:
+    orig_nodes = _graph_num_nodes(original)
+    ctx_nodes = _graph_num_nodes(ctx)
+    tgt_nodes = _graph_num_nodes(tgt)
+    if ctx_nodes <= 0 or tgt_nodes <= 0:
+        return False
+    if orig_nodes <= 0:
+        return True
+    if ctx_nodes + tgt_nodes != orig_nodes:
+        return False
+    if ctx_nodes == orig_nodes and tgt_nodes == orig_nodes:
+        return False
+    return True
+
+
+def _fallback_mask_pair(graph: GraphData, mask_ratio: float) -> Tuple[GraphData, GraphData]:
+    total_nodes = _graph_num_nodes(graph)
+    if total_nodes <= 1:
+        return _clone_graph_data(graph), _clone_graph_data(graph)
+    k = int(math.ceil(float(mask_ratio) * total_nodes))
+    if k <= 0:
+        k = 1
+    if k >= total_nodes:
+        k = total_nodes - 1
+    tgt_indices = list(range(k))
+    ctx_indices = [i for i in range(total_nodes) if i not in tgt_indices]
+    if not ctx_indices:
+        ctx_indices = [total_nodes - 1]
+        tgt_indices = [i for i in range(total_nodes) if i not in ctx_indices]
+    ctx_graph = _graph_select_nodes(graph, ctx_indices)
+    tgt_graph = _graph_select_nodes(graph, tgt_indices)
+    return ctx_graph, tgt_graph
+
+
+def _ensure_mask_pair(graph: GraphData, ctx, tgt, mask_ratio: float) -> Tuple[GraphData, GraphData]:
+    if _looks_like_mask_pair(graph, ctx, tgt):
+        return ctx, tgt
+    return _fallback_mask_pair(graph, mask_ratio)
+
+
 class _MaskSubgraphPairOp:
     """Callable wrapper that returns context and target graphs."""
 
@@ -416,11 +588,16 @@ class _JEPAAugmentor:
                 geometric_ops=self._geometric_ops,
             )
             if len(views) >= 2:
-                ctx, tgt = views[0], views[1]
+                ctx, tgt = _ensure_mask_pair(graph, views[0], views[1], self._mask_ratio)
+                ctx = _clone_graph_data(ctx)
+                tgt = _clone_graph_data(tgt)
                 x_ctx = getattr(ctx, "x", None)
                 x_tgt = getattr(tgt, "x", None)
                 if x_ctx is not None and x_tgt is not None:
                     if getattr(x_ctx, "shape", (0,))[0] > 0 and getattr(x_tgt, "shape", (0,))[0] > 0:
+                        for op in self._geometric_ops:
+                            ctx = op(ctx)
+                            tgt = op(tgt)
                         return ctx, tgt
 
         base = _clone_graph_data(graph)
@@ -429,6 +606,7 @@ class _JEPAAugmentor:
         ctx_graph, tgt_graph = mask_subgraph(
             base, self._mask_ratio, self._contiguous
         )
+        ctx_graph, tgt_graph = _ensure_mask_pair(base, ctx_graph, tgt_graph, self._mask_ratio)
         ctx_graph = _clone_graph_data(ctx_graph)
         tgt_graph = _clone_graph_data(tgt_graph)
         for op in self._geometric_ops:
