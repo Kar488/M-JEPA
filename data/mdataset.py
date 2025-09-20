@@ -111,11 +111,9 @@ class GraphData:
     # reload or aliasing (common in tests) confuses that identity check and
     # raises ``PicklingError``. Implementing ``__reduce__`` sidesteps the lookup
     # by serialising to a lightweight mapping that ``_graph_from_state`` rebuilds.
-    # The classmethod ``_from_state`` simply delegates to this helper so cached
-    # payloads from older versions remain compatible. ``__reduce__`` now returns
-    # the classmethod directly instead of a module-level function so the
-    # reloader only needs to resolve ``GraphData`` itself, avoiding fragile
-    # attribute lookups under ``spawn`` workers.
+    # Returning the module-level helper keeps the pickler from needing to
+    # serialise the ``GraphData`` class itself, so stale class objects created
+    # before a module reload remain picklable.
 
     def __getstate__(self) -> GraphDataState:
         return _graph_to_state(self)
@@ -128,10 +126,17 @@ class GraphData:
         self.pos = restored.pos
 
     def __reduce__(self):
-        return (self.__class__._from_state, (self.__getstate__(),))
+        return (_graph_from_state, (self.__getstate__(),))
 
     def __reduce_ex__(self, protocol):
         return self.__reduce__()
+
+
+# Explicitly anchor the public module path to avoid confusing ``spawn`` workers
+# that import ``data`` via different aliases (e.g. after monkeypatching during
+# tests). ``__qualname__`` already resolves to ``"GraphData"`` but setting the
+# module guards against ``GraphData`` being re-exported through helper modules.
+GraphData.__module__ = "data.mdataset"
 
 __all__ = [
     "GraphData",
