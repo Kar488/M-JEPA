@@ -119,10 +119,22 @@ except Exception as e:
         rotate: bool = False
         mask_angle: bool = False
         dihedral: bool = False
+        bond_deletion: bool = False
+        atom_masking: bool = False
+        subgraph_removal: bool = False
 
 
-        def __init__(self, rotate: bool = False, mask_angle: bool = False,
-                     dihedral: bool = False, **kw):
+        def __init__(
+            self,
+            rotate: bool = False,
+            mask_angle: bool = False,
+            dihedral: bool = False,
+            *,
+            bond_deletion: bool = False,
+            atom_masking: bool = False,
+            subgraph_removal: bool = False,
+            **kw,
+        ):
             # map common aliases if sweeps pass them; ignore the rest
             if "random_rotate" in kw:
                 rv = kw["random_rotate"]
@@ -133,6 +145,11 @@ except Exception as e:
             object.__setattr__(self, "rotate", bool(rotate))
             object.__setattr__(self, "mask_angle", bool(mask_angle))
             object.__setattr__(self, "dihedral", bool(dihedral))
+            object.__setattr__(self, "random_rotate", bool(rotate))
+            object.__setattr__(self, "perturb_dihedral", bool(dihedral))
+            object.__setattr__(self, "bond_deletion", bool(bond_deletion))
+            object.__setattr__(self, "atom_masking", bool(atom_masking))
+            object.__setattr__(self, "subgraph_removal", bool(subgraph_removal))
 
         @classmethod
         def from_dict(cls, cfg: Optional[dict] = None) -> "AugmentationConfig":
@@ -141,6 +158,9 @@ except Exception as e:
                 rotate=bool(cfg.get("rotate", False)),
                 mask_angle=bool(cfg.get("mask_angle", False)),
                 dihedral=bool(cfg.get("dihedral", False)),
+                bond_deletion=bool(cfg.get("bond_deletion", False)),
+                atom_masking=bool(cfg.get("atom_masking", False)),
+                subgraph_removal=bool(cfg.get("subgraph_removal", False)),
             )
 
 
@@ -362,6 +382,9 @@ _aug_raw = {
     "rotate": bool(_aug_raw.get("rotate", _aug_raw.get("random_rotate", False))),
     "mask_angle": bool(_aug_raw.get("mask_angle", False)),
     "dihedral": bool(_aug_raw.get("dihedral", _aug_raw.get("perturb_dihedral", False))),
+    "bond_deletion": bool(_aug_raw.get("bond_deletion", False)),
+    "atom_masking": bool(_aug_raw.get("atom_masking", False)),
+    "subgraph_removal": bool(_aug_raw.get("subgraph_removal", False)),
 }
 
 # Build DEFAULT_AUG robustly against differing constructor names
@@ -386,6 +409,13 @@ if "perturb_dihedral" in params:
 elif "dihedral" in params:
     _mapped["dihedral"] = _aug_raw["dihedral"]
 
+if "bond_deletion" in params:
+    _mapped["bond_deletion"] = _aug_raw["bond_deletion"]
+if "atom_masking" in params:
+    _mapped["atom_masking"] = _aug_raw["atom_masking"]
+if "subgraph_removal" in params:
+    _mapped["subgraph_removal"] = _aug_raw["subgraph_removal"]
+
 try:
     # Prefer keyword construction with mapped names
     DEFAULT_AUG = AugmentationConfig(**_mapped)  # type: ignore[arg-type]
@@ -399,6 +429,9 @@ except Exception:
         dihedral=_aug_raw["dihedral"],
         random_rotate=_aug_raw["rotate"],
         perturb_dihedral=_aug_raw["dihedral"],
+        bond_deletion=_aug_raw["bond_deletion"],
+        atom_masking=_aug_raw["atom_masking"],
+        subgraph_removal=_aug_raw["subgraph_removal"],
     )
 
 
@@ -863,11 +896,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Serialize GraphDataset objects for reuse across sweep trials",
     )
-
-    # aug flags not covered by common (structural ones)
-    sweep.add_argument("--aug-bond-deletion", "--aug_bond_deletion", dest="aug_bond_deletion", type=int, choices=[0,1], default=0)
-    sweep.add_argument("--aug-atom-masking",  "--aug_atom_masking",  dest="aug_atom_masking",  type=int, choices=[0,1], default=0)
-    sweep.add_argument("--aug-subgraph-removal", "--aug_subgraph_removal", dest="aug_subgraph_removal", type=int, choices=[0,1], default=0)
 
     # pull in perf/common knobs once (devices, workers, pin/prefetch/bf16/use-wandb, etc.)
     _add_common_args(sweep, "sweep")
