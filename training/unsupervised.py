@@ -54,7 +54,14 @@ logger = logging.getLogger(__name__)
 from utils.schedule import cosine_with_warmup
 
 
-_COMPILE_WARMUP_BATCHES = 128
+# ``torch.compile`` incurs a noticeable warm-up cost per model variant.  Phase-2
+# sweeps cap each trial to a few hundred mini-batches (see
+# ``max_pretrain_batches`` in the sweep specs), which meant the warm-up often
+# consumed a significant fraction of the allocated budget.  Raising the
+# amortisation threshold ensures compilation only activates when the trial has
+# enough batches to hide the warm-up latency.  The new value still allows the
+# long-form pretraining stage to use compilation.
+_COMPILE_WARMUP_BATCHES = 512
 
 
 def _should_compile_models(
