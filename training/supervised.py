@@ -163,12 +163,19 @@ def _simple_pack_batch(dataset, batch_indices, task_type: str):
         else:
             batch_edge_attr = torch.zeros((0,) + attr_suffix, dtype=attr_dtype)
 
+    extras = {
+        "edge_index": batch_edge_index,
+        "pos": batch_pos,
+        "edge_attr": batch_edge_attr,
+        "batch_indices": torch.as_tensor(batch_indices, dtype=torch.long),
+    }
+
     return (
         torch.from_numpy(X),               # (N,F) float32
         torch.from_numpy(adj),             # (N,N) float32
         torch.from_numpy(ptr_arr),         # (B+1,) int64
         batch_labels_t,                    # (B,) float32 or None
-        {"edge_index": batch_edge_index, "pos": batch_pos, "edge_attr": batch_edge_attr},
+        extras,
     )
 
 
@@ -199,7 +206,12 @@ class _GraphBatchCollator:
             raise ValueError(
                 "get_batch must return (x, adj, ptr, labels) optionally followed by extras"
             )
-        return batch_x, batch_adj, batch_ptr, batch_labels, extras
+
+        extras_dict = dict(extras) if isinstance(extras, dict) else {}
+        if "batch_indices" not in extras_dict:
+            extras_dict["batch_indices"] = torch.as_tensor(indices, dtype=torch.long)
+
+        return batch_x, batch_adj, batch_ptr, batch_labels, extras_dict
 
     def _build_extras(self, indices):
         edge_blocks: List[torch.Tensor] = []  # type: ignore[var-annotated]
@@ -304,7 +316,28 @@ class _GraphBatchCollator:
             else:
                 batch_edge_attr = torch.zeros((0,) + attr_suffix, dtype=attr_dtype)
 
-        return {"edge_index": batch_edge_index, "pos": batch_pos, "edge_attr": batch_edge_attr}
+        extras = {
+            "edge_index": batch_edge_index,
+            "pos": batch_pos,
+            "edge_attr": batch_edge_attr,
+            "batch_indices": torch.as_tensor(indices, dtype=torch.long),
+        }
+        return extras
+
+
+def _extract_batch_indices(batch_meta) -> Optional[List[int]]:
+    """Return dataset indices stored in ``batch_meta`` if present."""
+
+    if not isinstance(batch_meta, dict):
+        return None
+    raw = batch_meta.get("batch_indices")
+    if raw is None:
+        return None
+    if torch.is_tensor(raw):
+        return [int(x) for x in raw.detach().cpu().view(-1).tolist()]
+    if isinstance(raw, np.ndarray):
+        return [int(x) for x in raw.reshape(-1).tolist()]
+    return [int(x) for x in raw]
 
 
 def _move_batch_to_device(batch, device: torch.device, non_blocking: bool):
@@ -345,7 +378,14 @@ def _move_batch_to_device(batch, device: torch.device, non_blocking: bool):
         else:
             edge_attr = torch.as_tensor(edge_attr, device=device)
 
-    moved_extras = {"edge_index": edge_index, "pos": pos, "edge_attr": edge_attr}
+    batch_indices = extras.get("batch_indices") if isinstance(extras, dict) else None
+
+    moved_extras = {
+        "edge_index": edge_index,
+        "pos": pos,
+        "edge_attr": edge_attr,
+        "batch_indices": batch_indices,
+    }
     return batch_x, batch_adj, batch_ptr, batch_labels, moved_extras
 
 def _build_graph_view(
@@ -512,6 +552,7 @@ def train_linear_head(
     head: Optional[nn.Module] = None,
     optimizer: Optional[Optimizer] = None,
     scheduler: Optional[_LRScheduler] = None,
+    cache_graph_embeddings: bool = True,
     **unused,
 ) -> Dict[str, float]:
     """Train a linear head on a frozen encoder for classification or regression.
@@ -547,6 +588,9 @@ def train_linear_head(
             one is not supplied.
         scheduler: Optional learning-rate scheduler that steps after
             each epoch, provided at least one optimisation step ran.
+        cache_graph_embeddings: When ``True`` (default) encoder outputs
+            are cached per-graph so subsequent epochs reuse precomputed
+            embeddings instead of re-encoding the frozen backbone.
     Returns:
         A dictionary of metrics on the test set (only populated on rank 0).
     """
@@ -669,6 +713,48 @@ def train_linear_head(
             else contextlib.nullcontext()
         )
 
+    embedding_cache: Dict[int, torch.Tensor] = {}
+
+    def _get_graph_embeddings(
+        batch_x: torch.Tensor,
+        batch_adj: torch.Tensor,
+        batch_ptr: Optional[torch.Tensor],
+        batch_meta: object,
+    ) -> torch.Tensor:
+        idx_list = _extract_batch_indices(batch_meta)
+        use_cache = cache_graph_embeddings and idx_list is not None
+        if use_cache and all(idx in embedding_cache for idx in idx_list):
+            stacked = torch.stack([embedding_cache[idx] for idx in idx_list], dim=0)
+            return stacked.to(device_t)
+
+        graph_obj = _build_graph_view(batch_x, batch_adj, batch_ptr, batch_meta)
+        with torch.no_grad():
+            with _amp_context():
+                node_embeddings = _encode_graph(encoder, graph_obj)
+
+        graph_emb = _pool_batch_embeddings(node_embeddings, batch_ptr)
+
+        if use_cache:
+            for graph_idx, emb in zip(idx_list, graph_emb):
+                embedding_cache[graph_idx] = emb.detach().cpu()
+
+        return graph_emb
+
+    def _precompute_embeddings(loader: Optional[DataLoader]) -> None:
+        if not cache_graph_embeddings or loader is None:
+            return
+        for batch in loader:
+            batch_x, batch_adj, batch_ptr, _, batch_meta = _move_batch_to_device(
+                batch, device_t, pin_memory_enabled
+            )
+            _get_graph_embeddings(batch_x, batch_adj, batch_ptr, batch_meta)
+
+    if cache_graph_embeddings:
+        encoder.eval()
+        _precompute_embeddings(train_loader)
+        _precompute_embeddings(val_loader)
+        _precompute_embeddings(test_loader)
+
     if train_loader is None:
         logger.warning("No training samples available; skipping linear-head optimisation.")
     else:
@@ -707,12 +793,7 @@ def train_linear_head(
                 if batch_labels is None:
                     raise ValueError("Dataset must have labels for supervised training.")
 
-                graph_obj = _build_graph_view(batch_x, batch_adj, batch_ptr, batch_meta)
-                with torch.no_grad():
-                    with _amp_context():
-                        node_embeddings = _encode_graph(encoder, graph_obj)
-
-                graph_emb = _pool_batch_embeddings(node_embeddings, batch_ptr)
+                graph_emb = _get_graph_embeddings(batch_x, batch_adj, batch_ptr, batch_meta)
                 param = next(head_param_source.parameters(), None)
                 if param is not None and graph_emb.dtype != param.dtype:
                     graph_emb = graph_emb.to(param.dtype)
@@ -751,12 +832,7 @@ def train_linear_head(
                     if batch_labels is None:
                         raise ValueError("Validation loader returned samples without labels.")
 
-                    graph_obj = _build_graph_view(batch_x, batch_adj, batch_ptr, batch_meta)
-                    with torch.no_grad():
-                        with _amp_context():
-                            node_embeddings = _encode_graph(encoder, graph_obj)
-
-                    graph_emb = _pool_batch_embeddings(node_embeddings, batch_ptr)
+                    graph_emb = _get_graph_embeddings(batch_x, batch_adj, batch_ptr, batch_meta)
                     param = next(head_param_source.parameters(), None)
                     if param is not None and graph_emb.dtype != param.dtype:
                         graph_emb = graph_emb.to(param.dtype)
@@ -787,9 +863,6 @@ def train_linear_head(
                 )
                 break
 
-            if scheduler is not None and batches_done > 0:
-                scheduler.step()
-
     metrics: Dict[str, float] = {}
     if is_main_process() or not distributed:
         encoder.eval()
@@ -805,12 +878,7 @@ def train_linear_head(
                 if batch_labels is None:
                     raise ValueError("Test loader returned samples without labels.")
 
-                graph_obj = _build_graph_view(batch_x, batch_adj, batch_ptr, batch_meta)
-                with torch.no_grad():
-                    with _amp_context():
-                        node_embeddings = _encode_graph(encoder, graph_obj)
-
-                graph_emb = _pool_batch_embeddings(node_embeddings, batch_ptr)
+                graph_emb = _get_graph_embeddings(batch_x, batch_adj, batch_ptr, batch_meta)
                 param = next(head_param_source.parameters(), None)
                 if param is not None and graph_emb.dtype != param.dtype:
                     graph_emb = graph_emb.to(param.dtype)
