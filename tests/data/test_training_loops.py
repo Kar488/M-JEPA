@@ -1,4 +1,7 @@
+import multiprocessing as mp
+
 import numpy as np
+import pytest
 
 from data.mdataset import GraphData
 from training.unsupervised import GraphBatch, _build_graph_dataloader
@@ -39,3 +42,20 @@ def test_batch_iter_and_mask_subgraph():
         assert ctx.edge_index.max() < ctx.x.shape[0]
     if tgt.edge_index.size > 0:
         assert tgt.edge_index.max() < tgt.x.shape[0]
+
+
+@pytest.mark.skipif("spawn" not in mp.get_all_start_methods(), reason="spawn not available")
+def test_spawn_dataloader_handles_graphdata():
+    graphs = [_make_graph(2), _make_graph(3), _make_graph(4)]
+    loader = _build_graph_dataloader(
+        graphs,
+        batch_size=2,
+        num_workers=2,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        multiprocessing_context="spawn",
+    )
+
+    batches = list(loader)
+    assert sum(len(b) for b in batches) == len(graphs)
