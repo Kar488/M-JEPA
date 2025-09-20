@@ -23,8 +23,9 @@ class FakeRun:
 
 
 class FakeSweep:
-    def __init__(self, runs):
+    def __init__(self, runs, config=None):
         self.runs = runs
+        self.config = config or {}
 
 def test_paired_effect_winner_and_no_pairs(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("WANDB_ENTITY", "ent")
@@ -130,6 +131,97 @@ def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     ])
     with pytest.raises(RuntimeError):
         eb.main()
+
+
+def test_export_best_extends_fixed_params(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DIR", str(tmp_path))
+    monkeypatch.setenv("GRID_DIR", str(tmp_path))
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setenv("WANDB_PROJECT", "proj")
+
+    runs = [
+        FakeRun(
+            "r1",
+            {"hidden_dim": 256, "num_layers": 3, "mask_ratio": 0.25, "contiguity": 1},
+            {"val_rmse": 0.4},
+            "r1",
+        ),
+        FakeRun(
+            "r2",
+            {"hidden_dim": 256, "num_layers": 3, "mask_ratio": 0.25, "contiguity": 1},
+            {"val_rmse": 0.5},
+            "r2",
+        ),
+    ]
+
+    sweep_cfg = {
+        "parameters": {
+            "hidden_dim": {"values": [128, 256, 512]},
+            "num_layers": {"values": [2, 3, 4]},
+            "mask_ratio": {"min": 0.1, "max": 0.4},
+            "contiguity": {"values": [0, 1]},
+        }
+    }
+
+    class FakeApi:
+        def sweep(self, sweep_id):
+            return FakeSweep(runs, config=sweep_cfg)
+
+    monkeypatch.setattr(eb, "wandb", types.SimpleNamespace(Api=lambda: FakeApi()))
+    monkeypatch.setattr(eb, "maybe_init_wandb", lambda *a, **k: None)
+
+    out_json = tmp_path / "best_ext.json"
+    out_yaml = tmp_path / "phase2_ext.yaml"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eb",
+            "--sweep-id",
+            "ent/proj/sw1",
+            "--task",
+            "regression",
+            "--out",
+            str(out_json),
+            "--phase2-yaml",
+            str(out_yaml),
+            "--emit-bounds",
+        ],
+    )
+    eb.main()
+    data = yaml.safe_load(out_yaml.read_text())
+    params = data["parameters"]
+    assert params["mask_ratio"]["min"] == pytest.approx(0.2, rel=1e-6)
+    assert params["mask_ratio"]["max"] == pytest.approx(0.3, rel=1e-6)
+    assert params["hidden_dim"]["values"] == [256, 512]
+    assert params["num_layers"]["values"] == [3, 4]
+    assert params["contiguity"]["values"] == [1, 0]
+
+    # Disable extension to recover legacy behaviour.
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eb",
+            "--sweep-id",
+            "ent/proj/sw1",
+            "--task",
+            "regression",
+            "--out",
+            str(out_json),
+            "--phase2-yaml",
+            str(out_yaml),
+            "--emit-bounds",
+            "--no-extend-fixed",
+        ],
+    )
+    eb.main()
+    data = yaml.safe_load(out_yaml.read_text())
+    params = data["parameters"]
+    assert params["hidden_dim"]["value"] == 256
+    assert params["num_layers"]["value"] == 3
+    assert params["contiguity"]["value"] == 1
 
 
 def test_export_best_rejects_tracked_template(monkeypatch, tmp_path):
