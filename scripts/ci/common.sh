@@ -37,6 +37,94 @@ python_bin() {
   fi
 }
 
+# --- accelerator discovery helpers ---
+# Return the list of CUDA device ids visible to this process.  We honour an
+# existing CUDA_VISIBLE_DEVICES mask so production runs can pin agents to
+# subsets of GPUs.  When the variable is absent, fall back to querying PyTorch
+# for the number of visible devices.  Any failure to import torch (e.g. CPU-only
+# CI) gracefully reports zero GPUs.
+visible_gpu_ids() {
+  local visible="${CUDA_VISIBLE_DEVICES:-}"
+  # Normalise separators and strip whitespace
+  visible="${visible//[[:space:]]/}"
+  if [[ -n "$visible" && "$visible" != "-1" ]]; then
+    IFS=',' read -r -a __grid_cuda_ids <<< "$visible"
+    for id in "${__grid_cuda_ids[@]}"; do
+      [[ -n "$id" ]] && printf '%s\n' "$id"
+    done
+    unset __grid_cuda_ids
+    return 0
+  fi
+
+  local py out
+  if py=$(python_bin 2>/dev/null); then
+    out="$("$py" - 2>/dev/null <<'PY'
+try:
+    import torch
+    count = torch.cuda.device_count()
+except Exception:
+    count = 0
+print(' '.join(str(i) for i in range(count)))
+PY
+    )"
+  fi
+
+  for id in $out; do
+    [[ -n "$id" ]] && printf '%s\n' "$id"
+  done
+}
+
+gpu_count() {
+  local -a ids
+  mapfile -t ids < <(visible_gpu_ids)
+  echo "${#ids[@]}"
+}
+
+# Split a list of GPU ids into roughly even, non-overlapping chunks so each
+# parallel agent can be pinned to its own CUDA_VISIBLE_DEVICES mask.  The result
+# is written to the named output array as comma-separated strings.
+split_gpu_ids() {
+  local out_name="$1"; shift
+  local agent_count="${1:-0}"; shift || true
+  local -a ids=("$@")
+  local total="${#ids[@]}"
+  local -a result=()
+
+  if (( agent_count <= 0 )); then
+    local -n ref="$out_name"
+    ref=()
+    return 0
+  fi
+
+  local base=$(( total / agent_count ))
+  local remainder=$(( total % agent_count ))
+  local idx=0
+  local i
+  for (( i=0; i<agent_count; i++ )); do
+    local take=$base
+    if (( remainder > 0 )); then
+      take=$((take + 1))
+      ((remainder--))
+    fi
+
+    if (( take <= 0 )); then
+      result+=("")
+      continue
+    fi
+
+    local -a chunk=()
+    local limit=$((idx + take))
+    while (( idx < limit && idx < total )); do
+      chunk+=("${ids[idx]}")
+      ((idx++))
+    done
+    result+=("$(IFS=,; echo "${chunk[*]}")")
+  done
+
+  local -n ref="$out_name"
+  ref=("${result[@]}")
+}
+
 # Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
 : "${GRID_DIR:=${GRID_CACHE_DIR:-$EXP_ROOT/grid}}"
 : "${PRETRAIN_DIR:=${PRETRAIN_CACHE_DIR:-$EXP_ROOT/pretrain}}"
