@@ -109,6 +109,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Remove old micromamba
+        run: rm -rf "$HOME/micromamba-bin"
       - name: Set up micromamba
         uses: mamba-org/setup-micromamba@v1
         with:
