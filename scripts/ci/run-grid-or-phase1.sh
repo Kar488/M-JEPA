@@ -74,13 +74,60 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   echo "[phase1] JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
 
   cd "$APP_DIR"
-  export SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
-  echo "[phase1] launching JEPA agent for sweep $SWEEP_ID"
-  run_with_timeout wandb_agent || exit 1
+  BASE_LOG_DIR="${LOG_DIR:-$APP_DIR/logs}"
+  mapfile -t GRID_VISIBLE_GPUS < <(visible_gpu_ids)
+  PHASE1_GPU_COUNT="${#GRID_VISIBLE_GPUS[@]}"
+  if (( PHASE1_GPU_COUNT >= 2 )); then
+    echo "[phase1] detected $PHASE1_GPU_COUNT GPUs; launching agents in parallel"
+    declare -a PHASE1_GPU_SPLITS
+    split_gpu_ids PHASE1_GPU_SPLITS 2 "${GRID_VISIBLE_GPUS[@]}"
 
-  export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
-  echo "[phase1] launching contrastive agent for sweep $SWEEP_ID"
-  run_with_timeout wandb_agent || exit 1
+    (
+      export LOG_DIR="${BASE_LOG_DIR}/phase1_jepa"
+      mkdir -p "$LOG_DIR"
+      if [[ -n "${PHASE1_GPU_SPLITS[0]:-}" ]]; then
+        export CUDA_VISIBLE_DEVICES="${PHASE1_GPU_SPLITS[0]}"
+        echo "[phase1] JEPA agent using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+      fi
+      export SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
+      echo "[phase1] launching JEPA agent for sweep $SWEEP_ID"
+      run_with_timeout wandb_agent
+    ) &
+    PHASE1_JEPA_PID=$!
+
+    (
+      export LOG_DIR="${BASE_LOG_DIR}/phase1_contrastive"
+      mkdir -p "$LOG_DIR"
+      if [[ -n "${PHASE1_GPU_SPLITS[1]:-}" ]]; then
+        export CUDA_VISIBLE_DEVICES="${PHASE1_GPU_SPLITS[1]}"
+        echo "[phase1] contrastive agent using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+      fi
+      export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
+      echo "[phase1] launching contrastive agent for sweep $SWEEP_ID"
+      run_with_timeout wandb_agent
+    ) &
+    PHASE1_CONTRAST_PID=$!
+
+    set +e
+    wait "$PHASE1_JEPA_PID"
+    PHASE1_JEPA_RC=$?
+    wait "$PHASE1_CONTRAST_PID"
+    PHASE1_CONTRAST_RC=$?
+    set -e
+
+    if (( PHASE1_JEPA_RC != 0 || PHASE1_CONTRAST_RC != 0 )); then
+      echo "[phase1][fatal] sweep agents failed: JEPA rc=$PHASE1_JEPA_RC contrastive rc=$PHASE1_CONTRAST_RC" >&2
+      exit 1
+    fi
+  else
+    export SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
+    echo "[phase1] launching JEPA agent for sweep $SWEEP_ID"
+    run_with_timeout wandb_agent || exit 1
+
+    export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
+    echo "[phase1] launching contrastive agent for sweep $SWEEP_ID"
+    run_with_timeout wandb_agent || exit 1
+  fi
 
   PE_METRIC="val_rmse"
   [[ "${TASK_FROM_PE:-regression}" == "classification" ]] && PE_METRIC="val_auc"

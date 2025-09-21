@@ -18,6 +18,7 @@ fi
 export WANDB_SWEEP_ID2="$(cat "$SWEEP_ID_FILE")"
 export SWEEP_ID="${WANDB_ENTITY}/${WANDB_PROJECT}/${WANDB_SWEEP_ID2}"  # stage.sh reads SWEEP_ID
 : "${WANDB_COUNT:=100}"                                                # default trials
+PHASE2_TOTAL_COUNT="$WANDB_COUNT"
 
 : "${PHASE2_LABELED_DIR:?[phase2] PHASE2_LABELED_DIR not set}"
 : "${PHASE2_UNLABELED_DIR:?[phase2] PHASE2_UNLABELED_DIR not set}"
@@ -27,8 +28,101 @@ echo "[phase2] labeled=$PHASE2_LABELED_DIR  unlabeled=$PHASE2_UNLABELED_DIR"
 
 
 echo "[phase2] using sweep: $SWEEP_ID"
-# Use the same wrapper we use in phase 1 for agents (timeout, tee, graceful stop)
-run_with_timeout wandb_agent || exit 1    # uses SWEEP_ID & WANDB_COUNT internally:contentReference[oaicite:1]{index=1}
+
+BASE_LOG_DIR="${LOG_DIR:-$APP_DIR/logs}"
+mapfile -t GRID_VISIBLE_GPUS < <(visible_gpu_ids)
+PHASE2_GPU_COUNT="${#GRID_VISIBLE_GPUS[@]}"
+
+PHASE2_AGENT_WORKERS=1
+if [[ -n "${PHASE2_AGENT_COUNT:-}" ]]; then
+  if [[ "${PHASE2_AGENT_COUNT}" =~ ^[0-9]+$ ]]; then
+    PHASE2_AGENT_WORKERS="${PHASE2_AGENT_COUNT}"
+  else
+    echo "[phase2][warn] ignoring non-numeric PHASE2_AGENT_COUNT='${PHASE2_AGENT_COUNT}'"
+    PHASE2_AGENT_WORKERS=1
+  fi
+elif (( PHASE2_GPU_COUNT > 1 )); then
+  PHASE2_AGENT_WORKERS="$PHASE2_GPU_COUNT"
+fi
+
+if (( PHASE2_GPU_COUNT > 0 && PHASE2_AGENT_WORKERS > PHASE2_GPU_COUNT )); then
+  PHASE2_AGENT_WORKERS="$PHASE2_GPU_COUNT"
+fi
+
+if (( PHASE2_AGENT_WORKERS < 1 )); then
+  PHASE2_AGENT_WORKERS=1
+fi
+
+if (( PHASE2_AGENT_WORKERS == 1 || PHASE2_GPU_COUNT <= 1 )); then
+  export WANDB_COUNT="$PHASE2_TOTAL_COUNT"
+  run_with_timeout wandb_agent || exit 1    # uses SWEEP_ID & WANDB_COUNT internally
+else
+  declare -a PHASE2_GPU_SPLITS
+  split_gpu_ids PHASE2_GPU_SPLITS "$PHASE2_AGENT_WORKERS" "${GRID_VISIBLE_GPUS[@]}"
+
+  declare -a PHASE2_AGENT_COUNTS=()
+  base=$(( PHASE2_TOTAL_COUNT / PHASE2_AGENT_WORKERS ))
+  remainder=$(( PHASE2_TOTAL_COUNT % PHASE2_AGENT_WORKERS ))
+  for ((i=0; i<PHASE2_AGENT_WORKERS; ++i)); do
+    count=$base
+    if (( i < remainder )); then
+      count=$((count + 1))
+    fi
+    PHASE2_AGENT_COUNTS+=("$count")
+  done
+
+  declare -a PHASE2_PIDS=()
+  declare -a PHASE2_AGENT_LABELS=()
+  launched=0
+
+  echo "[phase2] launching $PHASE2_AGENT_WORKERS parallel agents (target total count=$PHASE2_TOTAL_COUNT)"
+  for ((i=0; i<PHASE2_AGENT_WORKERS; ++i)); do
+    count="${PHASE2_AGENT_COUNTS[$i]}"
+    if (( count <= 0 )); then
+      continue
+    fi
+    (
+      export LOG_DIR="${BASE_LOG_DIR}/phase2_agent_${i}"
+      mkdir -p "$LOG_DIR"
+      if [[ -n "${PHASE2_GPU_SPLITS[$i]:-}" ]]; then
+        export CUDA_VISIBLE_DEVICES="${PHASE2_GPU_SPLITS[$i]}"
+        echo "[phase2] agent#$i using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+      else
+        unset CUDA_VISIBLE_DEVICES
+      fi
+      export WANDB_COUNT="$count"
+      echo "[phase2] launching agent#$i with count=$count"
+      run_with_timeout wandb_agent
+    ) &
+    PHASE2_PIDS+=($!)
+    PHASE2_AGENT_LABELS+=("agent#$i")
+    ((launched++))
+  done
+
+  if (( launched == 0 )); then
+    echo "[phase2][warn] parallel scheduling resulted in zero active agents; falling back to sequential"
+    export WANDB_COUNT="$PHASE2_TOTAL_COUNT"
+    run_with_timeout wandb_agent || exit 1
+  else
+    set +e
+    PHASE2_FAIL_RC=0
+    for idx in "${!PHASE2_PIDS[@]}"; do
+      pid="${PHASE2_PIDS[$idx]}"
+      if wait "$pid"; then
+        :
+      else
+        rc=$?
+        echo "[phase2][error] ${PHASE2_AGENT_LABELS[$idx]} failed (rc=$rc)" >&2
+        PHASE2_FAIL_RC=$rc
+      fi
+    done
+    set -e
+    if (( PHASE2_FAIL_RC != 0 )); then
+      echo "[phase2][fatal] one or more sweep agents failed" >&2
+      exit "$PHASE2_FAIL_RC"
+    fi
+  fi
+fi
 
 # 2) Recheck top-k on extra seeds (with the same timeout pattern)
 : "${TOPK_RECHECK:=5}"
