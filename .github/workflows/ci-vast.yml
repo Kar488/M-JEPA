@@ -153,7 +153,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           script: |
             set -e
@@ -183,7 +183,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           envs: APP_DIR,MAMBA_ROOT_PREFIX
           script: |
@@ -207,7 +207,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           envs: APP_DIR,REPO_TOKEN,REPO,BRANCH,DEFAULT_TOKEN
           script: |
@@ -233,7 +233,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           envs: APP_DIR,MAMBA_ROOT_PREFIX,PIP_CACHE_DIR,WANDB_DIR,CACHE_DIR,EXP_ROOT,RUN_ID
           script: |
@@ -255,7 +255,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           command_timeout: 940m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
@@ -293,7 +293,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           command_timeout: 940m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
@@ -337,7 +337,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           command_timeout: 199m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,CKPT_DIR,
@@ -370,7 +370,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           command_timeout: 190m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,CKPT_DIR,
@@ -402,7 +402,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           command_timeout: 100m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR, BENCH_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
@@ -434,7 +434,7 @@ jobs:
           username: ${{ secrets.VAST_USER }}
           port: ${{ secrets.VAST_PORT }}
           key: ${{ secrets.VAST_SSH_KEY }}
-          passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           command_timeout: 70m
           envs: APP_DIR,GRID_DIR,TOX21_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
