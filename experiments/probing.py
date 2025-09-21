@@ -23,6 +23,32 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+
+def _safe_column_means(X: np.ndarray) -> np.ndarray:
+    """Compute column means while ignoring non-finite values.
+
+    Columns that contain no finite entries fall back to zero without emitting
+    ``RuntimeWarning: Mean of empty slice``.
+    """
+
+    X = np.asarray(X, dtype=np.float64)
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+
+    if X.size == 0:
+        return np.zeros(X.shape[1], dtype=np.float64)
+
+    finite_mask = np.isfinite(X)
+    counts = finite_mask.sum(axis=0)
+    sums = np.where(finite_mask, X, 0.0).sum(axis=0)
+    means = np.divide(
+        sums,
+        counts,
+        out=np.zeros_like(sums, dtype=np.float64),
+        where=counts != 0,
+    )
+    return means
+
 def _adj_to_edge_index(adj):
     import torch
     t = torch.as_tensor(adj)
@@ -157,16 +183,31 @@ def linear_probe_regression(
         val_end = int(0.9 * n)
         tr, te = idx[:train_end], idx[val_end:]
 
+    if len(tr) == 0 or len(te) == 0:
+        return {
+            "probe_rmse": float("nan"),
+            "probe_mae": float("nan"),
+            "probe_r2": float("nan"),
+        }
+
     X_train = np.asarray(X[tr], dtype=np.float64)
     X_test = np.asarray(X[te], dtype=np.float64)
 
-    # Ridge does not handle NaNs, so impute with training-set means.
-    with np.errstate(invalid="ignore"):
-        col_means = np.nanmean(X_train, axis=0)
-    # Replace columns that are entirely NaN with zeros to avoid NaN means.
-    col_means = np.where(np.isnan(col_means), 0.0, col_means)
-    X_train = np.where(np.isnan(X_train), col_means, X_train)
-    X_test = np.where(np.isnan(X_test), col_means, X_test)
+    col_means = _safe_column_means(X_train)
+
+    if X_train.size:
+        invalid_train = ~np.isfinite(X_train)
+        if invalid_train.any():
+            X_train = X_train.copy()
+            rows, cols = np.where(invalid_train)
+            X_train[rows, cols] = col_means[cols]
+
+    if X_test.size:
+        invalid_test = ~np.isfinite(X_test)
+        if invalid_test.any():
+            X_test = X_test.copy()
+            rows, cols = np.where(invalid_test)
+            X_test[rows, cols] = col_means[cols]
 
     reg = Ridge(alpha=1.0, random_state=42)
     reg.fit(X_train, y[tr])
@@ -186,21 +227,16 @@ def clustering_quality(X: np.ndarray, n_clusters: int = 10) -> Dict[str, float]:
     if n < 3:
         return {"cluster_silhouette": 0.0}
 
-    # Impute any NaNs/Infs with column means (falling back to zero if a column
-    # is entirely missing) so downstream sklearn estimators receive finite
-    # values.
+    # Impute any non-finite values with column means (falling back to zero if a
+    # column is entirely missing) so downstream sklearn estimators receive
+    # finite values.
     if not np.isfinite(X).all():
-        X = X.copy()
         invalid_mask = ~np.isfinite(X)
         if invalid_mask.any():
-            X[invalid_mask] = np.nan
-        if np.isnan(X).any():
-            with np.errstate(invalid="ignore"):
-                col_means = np.nanmean(X, axis=0)
-            col_means = np.where(np.isnan(col_means), 0.0, col_means)
-            inds = np.where(np.isnan(X))
-            if inds[0].size:
-                X[inds] = np.take(col_means, inds[1])
+            col_means = _safe_column_means(X)
+            X = X.copy()
+            rows, cols = np.where(invalid_mask)
+            X[rows, cols] = col_means[cols]
 
     # cap clusters to at most n-1 to satisfy silhouette constraints
     k = min(n_clusters, n - 1)
