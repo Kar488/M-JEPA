@@ -103,7 +103,7 @@ jobs:
   tests_quick:
     if: ${{ github.event.inputs.run_unit_tests != 'false' }}
     name: Quick tests (no gpu, no slow)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     env:
       MAMBA_ROOT_PREFIX: ~/micromamba
     steps:
@@ -144,7 +144,7 @@ jobs:
   vast_smoke:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
     name: Smoke on Vast (GPU present?)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: GPU sanity
         uses: appleboy/ssh-action@v1
@@ -168,7 +168,7 @@ jobs:
   vast_deploy_and_prepare_environment:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
     name: Deploy + Prepare environment
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: vast_smoke
     steps:
       - name: Checkout repository
@@ -244,7 +244,7 @@ jobs:
   vast_learn_hyperparameters:
     if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
     name: Learn hyperparameters (Custom or WandB)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     #timeout-minutes: 740
     needs: [tests_quick,vast_deploy_and_prepare_environment]
     steps:
@@ -268,7 +268,7 @@ jobs:
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 28
+          WANDB_COUNT: 30
           GRID_MODE: "wandb"   # or "custom"
           EXPORT_OUT_PATH: ${{ env.GRID_DIR }}/best_grid_config.json
           EXPORT_PHASE2_PATH: ${{ env.GRID_DIR }}/grid_sweep_phase2.yaml
@@ -282,7 +282,7 @@ jobs:
   vast_sweep_phase2:
     if: ${{ (inputs.hyperparam_mode || 'wandb') == 'wandb' }}
     name: Sweep Phase 2 (Bayes refinement)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     #timeout-minutes: 1860
     needs: vast_learn_hyperparameters
     steps:
@@ -317,7 +317,7 @@ jobs:
 
   vast_pretrain:
     name: Pretain Model
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [vast_learn_hyperparameters, vast_sweep_phase2]
     if: >
       ${{
@@ -356,7 +356,7 @@ jobs:
 
   vast_finetune:
     name: Fine tune model
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: vast_pretrain
     if:
       ${{
@@ -388,7 +388,7 @@ jobs:
 
   vast_benchmark:
     name: Benchmark
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: vast_finetune
     if:
       ${{
@@ -420,7 +420,7 @@ jobs:
 
   vast_tox21:
     name: Tox21 Evaluation
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: vast_sweep_phase2
     if:
       ${{

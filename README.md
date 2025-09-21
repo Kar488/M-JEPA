@@ -124,6 +124,13 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
       a) On local windows powershell do this - 
       
       use -N for no pass phrase
+      Create the .ssh directory if it doesn't already exist
+      
+      ```bash
+      New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh"
+      ```
+      Now generate the keypair in that folder
+
       ```bash
       ssh-keygen -t ed25519 -C "vast-deploy" -f $env:USERPROFILE\.ssh\vast_deploy
       ```
@@ -152,7 +159,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
         ```bash
         sudo mkdir -p /root/.ssh
-        sudo bash -c 'echo "ssh-ed25519 AAAA... your_comment" >> /root/.ssh/authorized_keys'
+        sudo bash -c 'echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIwg66siIs/pTWsS29Gu/R5bf7sSzEgSX5pmRnXF4hhH vast-deploy" >> /root/.ssh/authorized_keys'
         sudo chmod 600 /root/.ssh/authorized_keys 
         sudo cat /root/.ssh/authorized_keys #verify the key added is there
         ```
@@ -160,10 +167,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
       f) once done you SSH from local machine to login to Vast instance
 
       ```bash
-      ssh -o IdentitiesOnly=yes `
-        -i $env:USERPROFILE\.ssh\vast_deploy `
-        -p 17259 `
-        root@144.6.107.170 -vv
+      ssh -o IdentitiesOnly=yes -i $env:USERPROFILE\.ssh\vast_deploy -p 20324 root@47.243.198.39 -vv
       ```
 
       g) set up private key on GIT server repository secrets so it can connect to Vast
@@ -191,12 +195,16 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
         adduser --disabled-password --gecos "" github # overcome MUST not run on sudo for step XX
         su - github # Switch to that user
         mkdir ~/actions-runner && cd ~/actions-runner # # Create a folder
-        curl -o actions-runner-linux-x64-2.327.1.tar.gz -L https://github.com/actions/runner/releases/download/v2.327.1/actions-runner-linux-x64-2.327.1.tar.gz # Download the latest runner package
-        echo "d68ac1f500b747d1271d9e52661c408d56cffd226974f68b7dc813e30b9e0575  actions-runner-linux-x64-2.327.1.tar.gz" | shasum -a 256 -c # Optional: Validate the hash
-        tar xzf ./actions-runner-linux-x64-2.327.1.tar.gz # Extract the installer
-        ./config.sh --url https://github.com/Kar488/M-JEPA --token BJEZIAQHZ4ZBGFLV6RE5TG3IT4H3W --name vast-runner --labels vast
+        curl -o actions-runner-linux-x64-2.328.0.tar.gz -L https://github.com/actions/runner/releases/download/v2.328.0/actions-runner-linux-x64-2.328.0.tar.gz # Download the latest runner package
+        echo "01066fad3a2893e63e6ca880ae3a1fad5bf9329d60e77ee15f2b97c148c3cd4e  actions-runner-linux-x64-2.328.0.tar.gz" | shasum -a 256 -c # Optional: Validate the hash
+        tar xzf ./actions-runner-linux-x64-2.328.0.tar.gz # Extract the installer
+        ./config.sh --url https://github.com/Kar488/M-JEPA --token BJEZIARE7I3CQRCLKRWMIETI2CEDQ --name vast-runner --labels vast
         ./run.sh # Start the runner
         ```
+
+        # Use this YAML in your workflow file for each job
+        runs-on: self-hosted
+
         # Optional
 
         ```bash
