@@ -257,7 +257,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 640m
+          command_timeout: 940m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,
             GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,
@@ -266,9 +266,9 @@ jobs:
           script: |
             bash "$APP_DIR/scripts/ci/run-grid-or-phase1.sh"
         env:
-          HARD_WALL_MINS: 600
+          HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 30
+          WANDB_COUNT: 28
           GRID_MODE: "wandb"   # or "custom"
           EXPORT_OUT_PATH: ${{ env.GRID_DIR }}/best_grid_config.json
           EXPORT_PHASE2_PATH: ${{ env.GRID_DIR }}/grid_sweep_phase2.yaml
