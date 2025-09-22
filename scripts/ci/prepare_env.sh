@@ -23,7 +23,7 @@ mkdir -p "$MM_PREFIX/bin"
 if ! command -v bsdtar >/dev/null 2>&1; then
   echo "Installing bsdtar…"
   sudo apt-get update -qq
-  sudo apt-get install -y bsdtar
+  sudo apt-get install -y libarchive-tools
 fi
 if ! [ -x "$MM_BIN" ]; then
   case "$(uname -m)" in
