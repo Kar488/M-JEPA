@@ -214,7 +214,10 @@ jobs:
           envs: APP_DIR,REPO_TOKEN,REPO,BRANCH,DEFAULT_TOKEN
           script: |
             set -euo pipefail
-            AUTH_URL="https://x-access-token:${DEFAULT_TOKEN}@github.com/${REPO}.git"
+            AUTH_URL="git@github.com:${REPO}.git"
+            # or explicitly include a key if needed:
+            # GIT_SSH_COMMAND="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" git clone "${AUTH_URL}" "$APP_DIR"
+            # AUTH_URL="https://x-access-token:${DEFAULT_TOKEN}@github.com/${REPO}.git"
             mkdir -p "$APP_DIR"
             git config --global --add safe.directory "$APP_DIR"
             if [ -d "$APP_DIR/.git" ]; then
