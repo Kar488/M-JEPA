@@ -237,15 +237,11 @@ jobs:
               git -C "$APP_DIR" checkout "$BRANCH"
             fi
 
-            # Authenticate to GitHub for LFS fetch using your personal access token
-            # This sets up an authorized remote for LFS temporarily
-            git -C "$APP_DIR" lfs fetch --include="data/BASF_AIPubChem_v4" \
-              --origin="https://x-access-token:${GH_PAT_RO}@github.com/${REPO}.git/info/lfs"
-
-            # Replace pointer files in working tree with the fetched data
-            git -C "$APP_DIR" lfs checkout
-
-            # Finally pull the LFS objects via SSH
+            # Define a proper LFS endpoint with your PAT
+            LFS_URL="https://x-access-token:${DEFAULT_TOKEN}@github.com/${REPO}.git/info/lfs"
+            git -C "$APP_DIR" config lfs.url "$LFS_URL"
+          
+            # Fetch and checkout all LFS objects for this branch
             git -C "$APP_DIR" lfs pull origin "$BRANCH"
       - name: Setup micromamba environment
         uses: appleboy/ssh-action@v1
