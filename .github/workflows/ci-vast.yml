@@ -200,6 +200,7 @@ jobs:
         env:
           #REPO_TOKEN: ${{ secrets.GH_PAT_RO }}
           DEFAULT_TOKEN: ${{ secrets.GH_PAT_RO }}  # PAT with at least 'repo' scope
+          GIT_LFS_SKIP_SMUDGE: 1
           REPO: Kar488/M-JEPA
           BRANCH: master
         with:
@@ -236,8 +237,13 @@ jobs:
               git -C "$APP_DIR" checkout "$BRANCH"
             fi
 
-            # Point LFS at an authenticated HTTPS endpoint
-            git -C "$APP_DIR" config lfs.url "https://x-access-token:${DEFAULT_TOKEN}@github.com/${REPO}.git/info/lfs"
+            # Authenticate to GitHub for LFS fetch using your personal access token
+            # This sets up an authorized remote for LFS temporarily
+            git -C "$APP_DIR" lfs fetch --include="data/BASF_AIPubChem_v4" \
+              --origin="https://x-access-token:${GH_PAT_RO}@github.com/${REPO}.git/info/lfs"
+
+            # Replace pointer files in working tree with the fetched data
+            git -C "$APP_DIR" lfs checkout
 
             # Finally pull the LFS objects via SSH
             git -C "$APP_DIR" lfs pull origin "$BRANCH"
