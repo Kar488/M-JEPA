@@ -129,7 +129,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
       ```bash
       New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh"
       ```
-      Now generate the keypair in that folder
+      Now generate the keypair in that folder - change "vast-deploy" to location specific as needed (e.g., office / home)
 
       ```bash
       ssh-keygen -t ed25519 -C "vast-deploy" -f $env:USERPROFILE\.ssh\vast_deploy
@@ -159,24 +159,30 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
         ```bash
         sudo mkdir -p /root/.ssh
-        sudo bash -c 'echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIwg66siIs/pTWsS29Gu/R5bf7sSzEgSX5pmRnXF4hhH vast-deploy" >> /root/.ssh/authorized_keys'
+        sudo bash -c 'echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC5ITBFL64GL5641TNGToOus7HaX5p04tRDZNoQQOLVi vast-deploy_office" >> /root/.ssh/authorized_keys'
         sudo chmod 600 /root/.ssh/authorized_keys 
         sudo cat /root/.ssh/authorized_keys #verify the key added is there
         ```
 
-      f) once done you SSH from local machine to login to Vast instance
+        OR overwrite keys in vast console - do this 
+        ```bash
+        nano /root/.ssh/authorized_keys # edit as needed / CTROL+O to save (enter) / CTRL+Q (quit)
+        sudo cat /root/.ssh/authorized_keys # see the list of keys
+        ```
+
+      f) once done you SSH from local machine to login to Vast instance - change vast_deploy with location (office/home) as needed
 
       ```bash
-      ssh -o IdentitiesOnly=yes -i $env:USERPROFILE\.ssh\vast_deploy -p 20324 root@47.243.198.39 -vv
+      ssh -o IdentitiesOnly=yes -i $env:USERPROFILE\.ssh\vast_deploy -p 50669 root@70.69.213.236 -vv
       ```
 
-      g) set up private key on GIT server repository secrets so it can connect to Vast
+      g) set up private key on GIT server repository secrets so it can connect to Vast - change vast_deploy with location (office/home) as needed
 
       VAST_SSH_KEY = contents of id_vast_ci (the private key - use pw cmd Get-Content $env:USERPROFILE\.ssh\vast_deploy)
 
       h) Setup git to be able to deploy code - GH_PAT_RO
 
-      GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens - Gen new token & content/metata read for repo M-JEPA/90 day expiry -Nov11)
+      GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens - Gen new token & content/metata read for repo M-JEPA/90 day expiry)
 
       Copy that GH_PAT_RO key value into Git GIT server repository secrets
 
@@ -198,7 +204,7 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
         curl -o actions-runner-linux-x64-2.328.0.tar.gz -L https://github.com/actions/runner/releases/download/v2.328.0/actions-runner-linux-x64-2.328.0.tar.gz # Download the latest runner package
         echo "01066fad3a2893e63e6ca880ae3a1fad5bf9329d60e77ee15f2b97c148c3cd4e  actions-runner-linux-x64-2.328.0.tar.gz" | shasum -a 256 -c # Optional: Validate the hash
         tar xzf ./actions-runner-linux-x64-2.328.0.tar.gz # Extract the installer
-        ./config.sh --url https://github.com/Kar488/M-JEPA --token BJEZIARE7I3CQRCLKRWMIETI2CEDQ --name vast-runner --labels vast
+        ./config.sh --url https://github.com/Kar488/M-JEPA --token BJEZIARE7I3CQRCLKRWMIETI2CEDQ
         ./run.sh # Start the runner
         ```
 
@@ -232,14 +238,14 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
         cat ~/.ssh/mjepa_deploy_key.pub
         ```
         
-        #Go to your repository on GitHub and click Settings.
+        # Go to your repository on GitHub and click Settings.
 
         # In the sidebar, click Deploy keys 
         # Click Add deploy key
         # Provide a descriptive Title (e.g., “Vast deployment server”).
         # Paste the contents of ~/.ssh/mjepa_deploy_key.pub into the Key field
         # If the server needs to push changes (not just clone/pull), check Allow write access
-        # Click Add key
+        # Click Add key - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMSsRfYnsN29PnL3zXF/MM1StM407i1dTT8X1ETWQh2o deploy key for M-JEPA
 
         # To avoid interactive prompts when connecting via SSH, add GitHub’s host key to known_hosts:
         ```bash

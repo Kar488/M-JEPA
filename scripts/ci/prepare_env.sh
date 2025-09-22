@@ -19,6 +19,12 @@ ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
 MM_PREFIX="$HOME/micromamba"
 MM_BIN="$MM_PREFIX/bin/micromamba"
 mkdir -p "$MM_PREFIX/bin"
+# Ensure bsdtar is installed on the system
+if ! command -v bsdtar >/dev/null 2>&1; then
+  echo "Installing bsdtar…"
+  sudo apt-get update -qq
+  sudo apt-get install -y bsdtar
+fi
 if ! [ -x "$MM_BIN" ]; then
   case "$(uname -m)" in
     x86_64|amd64) CHAN=linux-64 ;;
@@ -26,7 +32,7 @@ if ! [ -x "$MM_BIN" ]; then
     *) echo "Unsupported arch $(uname -m)"; exit 1 ;;
   esac
   curl -fsSL "https://micro.mamba.pm/api/micromamba/${CHAN}/latest" \
-  | bsdtar -xjf- -C "$HOME" bin/micromamba
+  | bsdtar -xjf- -C "$MM_PREFIX" bin/micromamba
 fi
 export MAMBA_ROOT_PREFIX
 eval "$("$MM_BIN" shell hook -s bash)"
