@@ -209,7 +209,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          envs: APP_DIR,REPO_TOKEN,REPO,BRANCH,DEFAULT_TOKEN
+          envs: APP_DIR,REPO,BRANCH
           script: |
             set -euo pipefail
             # Tell git to use the deploy key when connecting to GitHub.
@@ -232,10 +232,10 @@ jobs:
 
             # At this point $APP_DIR contains a working tree with origin set to "$AUTH_URL".
             # Now override the LFS endpoint to use SSH instead of HTTPS.
-            git -C "$APP_DIR" config lfs.url "ssh://git@github.com/${REPO}.git/info/lfs"
+            git -C "$APP_DIR" config --unset-all lfs.url || true
 
             # Finally pull the LFS objects via SSH
-            git -C "$APP_DIR" lfs pull
+            git -C "$APP_DIR" lfs pull origin "$BRANCH"
       - name: Setup micromamba environment
         uses: appleboy/ssh-action@v1
         with:
