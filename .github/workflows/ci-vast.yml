@@ -201,7 +201,7 @@ jobs:
         uses: appleboy/ssh-action@v1
         env:
           REPO_TOKEN: ${{ secrets.GH_PAT_RO }}
-          DEFAULT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_TOKEN: ${{ secrets.GH_PAT_RO }}
           REPO: Kar488/M-JEPA
           BRANCH: master
         with:
