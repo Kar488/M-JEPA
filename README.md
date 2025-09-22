@@ -217,7 +217,34 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
         git config --global --add safe.directory /srv/mjepa # listed reposistory as allowed in vast
         ```
     g) setup git pro account for increased action minutes and set budget limit to some $ and disallow block on expiry
+    h) give the public key of vast to git hub
+
+        # Create ~/.ssh if it doesn’t exist
+        ```bash
+        mkdir -p ~/.ssh && chmod 700 ~/.ssh
+        ```
+        # Generate a key pair without a passphrase
+        ```bash
+        ssh-keygen -t ed25519 -f ~/.ssh/mjepa_deploy_key -N "" -C "deploy key for M-JEPA"
+        ```
+        #diplay its content
+        ```bash
+        cat ~/.ssh/mjepa_deploy_key.pub
+        ```
         
+        #Go to your repository on GitHub and click Settings.
+
+        # In the sidebar, click Deploy keys 
+        # Click Add deploy key
+        # Provide a descriptive Title (e.g., “Vast deployment server”).
+        # Paste the contents of ~/.ssh/mjepa_deploy_key.pub into the Key field
+        # If the server needs to push changes (not just clone/pull), check Allow write access
+        # Click Add key
+
+        # To avoid interactive prompts when connecting via SSH, add GitHub’s host key to known_hosts:
+        ```bash
+        ssh-keyscan github.com >> ~/.ssh/known_hosts
+        ```
 
   5) After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
 

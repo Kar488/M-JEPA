@@ -212,7 +212,11 @@ jobs:
           envs: APP_DIR,REPO_TOKEN,REPO,BRANCH,DEFAULT_TOKEN
           script: |
             set -euo pipefail
-            AUTH_URL="https:///x-access-token:${DEFAULT_TOKEN}@github.com/${REPO}.git"
+            # Tell git to use the deploy key when connecting to GitHub.
+            export GIT_SSH_COMMAND="ssh -i ~/.ssh/mjepa_deploy_key -o StrictHostKeyChecking=no"
+            # Clone or update via SSH instead of HTTPS
+            AUTH_URL="git@github.com:${REPO}.git"
+            #AUTH_URL="https:///x-access-token:${DEFAULT_TOKEN}@github.com/${REPO}.git"
             mkdir -p "$APP_DIR"
             git config --global --add safe.directory "$APP_DIR"
             if [ -d "$APP_DIR/.git" ]; then
