@@ -51,8 +51,10 @@ if ! micromamba run -n "$ENV_NAME" python - <<'PY' >/dev/null 2>&1
 import torch, sys; sys.exit(0 if torch.cuda.is_available() or torch.__version__ else 1)
 PY
 then
+  #micromamba run -n "$ENV_NAME" python -m pip install --no-cache-dir \
+  #  --index-url https://download.pytorch.org/whl/cu121 torch==2.2.1
   micromamba run -n "$ENV_NAME" python -m pip install --no-cache-dir \
-    --index-url https://download.pytorch.org/whl/cu121 torch==2.2.1
+  --pre torch --index-url https://download.pytorch.org/whl/nightly/cu121
 fi
 
 # ----------- Optional PyG if required -----------
