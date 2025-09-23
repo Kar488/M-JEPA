@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import time as _t
@@ -52,6 +53,48 @@ from utils.graph_ops import _encode_graph, _pool_graph_emb
 from utils.logging import maybe_init_wandb
 logger = logging.getLogger(__name__)
 from utils.schedule import cosine_with_warmup
+
+
+def _make_wandb_handlers(wb: Any) -> Tuple[Callable[..., None], Callable[[], None]]:
+    """Return safe ``(log_fn, finish_fn)`` closures for W&B runs."""
+
+    wandb_active = bool(wb)
+
+    def _resolve_log_callable() -> Optional[Callable[..., Any]]:
+        target = getattr(wb, "log", None)
+        if callable(target):
+            return target
+        run = getattr(wb, "run", None)
+        target = getattr(run, "log", None)
+        return target if callable(target) else None
+
+    def _log(payload: Mapping[str, Any], **kwargs: Any) -> None:
+        nonlocal wandb_active
+        if not wandb_active or not is_main_process():
+            return
+        log_fn = _resolve_log_callable()
+        if log_fn is None:
+            wandb_active = False
+            return
+        try:
+            log_fn(payload, **kwargs)
+        except Exception as exc:  # pragma: no cover - backend dependent
+            wandb_active = False
+            logger.warning(
+                "Disabling Weights & Biases logging after failure: %s", exc
+            )
+
+    def _finish() -> None:
+        nonlocal wandb_active
+        if not wandb_active or not is_main_process():
+            return
+        finish_fn = getattr(wb, "finish", None)
+        if callable(finish_fn):
+            with contextlib.suppress(Exception):  # pragma: no cover - backend dependent
+                finish_fn()
+        wandb_active = False
+
+    return _log, _finish
 
 
 # ``torch.compile`` incurs a noticeable warm-up cost per model variant.  Phase-2
@@ -1028,6 +1071,7 @@ def train_jepa(
         config=dict(method="jepa", lr=lr, mask_ratio=mask_ratio, contiguous=contiguous),
         tags=wandb_tags,
     )
+    wb_log, wb_finish = _make_wandb_handlers(wb)
 
     start_epoch = 1
     ckpt: Optional[Dict[str, Any]] = None
@@ -1152,7 +1196,7 @@ def train_jepa(
             break
         if not _time_left():
             if is_main_process():
-                wb and wb.log({"early/stop_reason": "time_budget"})
+                wb_log({"early/stop_reason": "time_budget"})
                 tqdm.tqdm.write(
                     "Time budget exhausted before next JEPA epoch; stopping."
                 )
@@ -1257,15 +1301,14 @@ def train_jepa(
                     )
                     ema.update(_enc)
                     _sync_ema_encoder()
-                    if wb and is_main_process():
-                        wb.log(
-                            {
-                                "train/jepa_loss": lv,
-                                "lr": float(opt.param_groups[0]["lr"]),
-                                "step": step,
-                                "epoch": ep,
-                            }
-                        )
+                    wb_log(
+                        {
+                            "train/jepa_loss": lv,
+                            "lr": float(opt.param_groups[0]["lr"]),
+                            "step": step,
+                            "epoch": ep,
+                        }
+                    )
                     epoch_batches += 1
                     total_batches_done += 1
                     if pbar is not None:
@@ -1295,8 +1338,7 @@ def train_jepa(
         ep_loss /= max(1, epoch_batches)
         if is_main_process():
             losses.append(ep_loss)
-            if wb:
-                wb.log({"epoch/jepa_loss": ep_loss, "epoch": ep})
+            wb_log({"epoch/jepa_loss": ep_loss, "epoch": ep})
             if pbar is None:
                 logger.info(
                     "Epoch %d/%d finished: JEPA loss %.6f",
@@ -1332,16 +1374,12 @@ def train_jepa(
     _sync_ema_encoder()
 
 
-    try:
-        if wb and is_main_process():
-            wb.finish()
-    except Exception:
-        pass
+    if pbar is not None:
+        # Close the progress bar after training
+        pbar.close()
+    wb_finish()
     if distributed:
         cleanup()
-    # Close the progress bar after training
-    if pbar is not None:
-        pbar.close()
     return losses
 
 
@@ -1446,6 +1484,7 @@ def train_contrastive(
         config=dict(method="contrastive", lr=lr, mask_ratio=mask_ratio),
         tags=wandb_tags,
     )
+    wb_log, wb_finish = _make_wandb_handlers(wb)
 
     if resume_from and os.path.exists(resume_from):
         ckpt = load_checkpoint(resume_from)
@@ -1591,7 +1630,7 @@ def train_contrastive(
                                 (logits_12.sum() - logits_12.diag().sum())
                                 / (N * (N - 1))
                             ).item()
-                            wb and wb.log(
+                            wb_log(
                                 {"diag/pos_minus_neg": pos - neg, "diag/lnN": math.log(N)},
                                 commit=False,
                             )
@@ -1610,15 +1649,14 @@ def train_contrastive(
                     lv = float(loss.detach().cpu().item())
                     ep_loss += lv
                     step += 1
-                    if wb and is_main_process():
-                        wb.log(
-                            {
-                                "train/contrastive_loss": lv,
-                                "lr": float(opt.param_groups[0]["lr"]),
-                                "step": step,
-                                "epoch": ep,
-                            }
-                        )
+                    wb_log(
+                        {
+                            "train/contrastive_loss": lv,
+                            "lr": float(opt.param_groups[0]["lr"]),
+                            "step": step,
+                            "epoch": ep,
+                        }
+                    )
                     epoch_batches += 1
                     total_batches_done += 1
                     if pbar is not None:
@@ -1647,8 +1685,7 @@ def train_contrastive(
         ep_loss /= max(1, epoch_batches)
         if is_main_process():
             losses.append(ep_loss)
-            if wb:
-                wb.log({"epoch/contrastive_loss": ep_loss, "epoch": ep})
+            wb_log({"epoch/contrastive_loss": ep_loss, "epoch": ep})
             if pbar is None:
                 logger.info(
                     "Epoch %d/%d finished: contrastive loss %.6f",
@@ -1677,13 +1714,9 @@ def train_contrastive(
                 )
             break
     if pbar is not None:
+        # Close the progress bar after training
         pbar.close()
-    # Close the progress bar after training
-    try:
-        if wb and is_main_process():
-            wb.finish()
-    except Exception:
-        pass
+    wb_finish()
     if distributed:
         cleanup()
 
