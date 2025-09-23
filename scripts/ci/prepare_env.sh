@@ -9,6 +9,9 @@ set -euxo pipefail
 : "${RUN_ID:=$(date +%s)}"
 : "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
 ENV_NAME="mjepa"
+: "${PYTORCH_INDEX_URL:=https://download.pytorch.org/whl/nightly/cu128}"
+: "${PYTORCH_PACKAGE_SPEC:=--pre torch}"
+: "${TORCH_SCATTER_SOURCE:=git+https://github.com/pyg-team/pytorch_scatter.git@2.1.2}"
 
 # ----------- persistent dirs -----------
 mkdir -p /data/mjepa/experiments "$WANDB_DIR" "$CACHE_DIR"
@@ -44,7 +47,7 @@ if ! micromamba env list | grep -q "^${ENV_NAME}\b"; then
 fi
 
 # ----------- base pip deps -----------
-micromamba run -n "$ENV_NAME" python -m pip install -U pip setuptools wheel "numpy<2"
+micromamba run -n "$ENV_NAME" python -m pip install -U pip setuptools wheel "numpy<2" ninja cmake
 micromamba run -n "$ENV_NAME" python -m pip install deepchem==2.8.0
 
 # ----------- Install CUDA Toolkit 12.8 (for compiling extensions like PyG) -----------
@@ -71,10 +74,10 @@ if ! micromamba run -n "$ENV_NAME" python - <<'PY' >/dev/null 2>&1
 import torch, sys; sys.exit(0 if torch.cuda.is_available() or torch.__version__ else 1)
 PY
 then
-  #micromamba run -n "$ENV_NAME" python -m pip install --no-cache-dir \
-  #  --index-url https://download.pytorch.org/whl/cu121 torch==2.2.1
+  IFS=' ' read -r -a _torch_spec <<<"$PYTORCH_PACKAGE_SPEC"
   micromamba run -n "$ENV_NAME" python -m pip install --no-cache-dir \
-  --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128
+    --index-url "$PYTORCH_INDEX_URL" \
+    "${_torch_spec[@]}"
 fi
 
 # ----------- Optional PyG if required -----------
@@ -83,9 +86,42 @@ import importlib.util, sys
 sys.exit(0 if importlib.util.find_spec("torch_scatter") and importlib.util.find_spec("torch_geometric") else 1)
 PY
 then
-  TORCH_VER=$(micromamba run -n "$ENV_NAME" python -c "import torch; print(torch.__version__.split('+')[0])")
+  RAW_TORCH_VER=$(micromamba run -n "$ENV_NAME" python -c "import torch; print(torch.__version__)")
+  BASE_TORCH_VER=$(micromamba run -n "$ENV_NAME" python - <<'PY'
+import re, torch
+match = re.match(r"^(\d+\.\d+\.\d+)", torch.__version__)
+print(match.group(1) if match else "")
+PY
+  )
   CUDA_SUFFIX=$(micromamba run -n "$ENV_NAME" python -c "import torch; print('cu'+torch.version.cuda.replace('.','') if torch.version.cuda else 'cpu')")
-  micromamba run -n "$ENV_NAME" python -m pip install -f "https://data.pyg.org/whl/torch-${TORCH_VER}+${CUDA_SUFFIX}.html" torch-scatter==2.1.2 || true
+
+  if [[ -n "$BASE_TORCH_VER" ]]; then
+    micromamba run -n "$ENV_NAME" python -m pip install -f "https://data.pyg.org/whl/torch-${BASE_TORCH_VER}+${CUDA_SUFFIX}.html" torch-scatter==2.1.2 || true
+  else
+    echo "[prepare-env][info] building torch-scatter from source for Torch ${RAW_TORCH_VER}"
+    GPU_ARCH="${TORCH_CUDA_ARCH_LIST:-}"
+    if [ -z "$GPU_ARCH" ]; then
+      GPU_ARCH=$(micromamba run -n "$ENV_NAME" python - <<'PY' 2>/dev/null || true
+import torch
+if torch.cuda.is_available():
+    major, minor = torch.cuda.get_device_capability(0)
+    print(f"{major}.{minor}")
+PY
+)
+    fi
+    SCATTER_CMD=(python -m pip install --no-cache-dir --no-build-isolation "$TORCH_SCATTER_SOURCE")
+    if [ -n "$GPU_ARCH" ]; then
+      echo "[prepare-env][info] using TORCH_CUDA_ARCH_LIST=$GPU_ARCH for torch-scatter build"
+      if [[ "$GPU_ARCH" != "0.0" ]]; then
+        TORCH_CUDA_ARCH_LIST="$GPU_ARCH" FORCE_CUDA=1 micromamba run -n "$ENV_NAME" "${SCATTER_CMD[@]}" || true
+      else
+        TORCH_CUDA_ARCH_LIST="$GPU_ARCH" micromamba run -n "$ENV_NAME" "${SCATTER_CMD[@]}" || true
+      fi
+    else
+      micromamba run -n "$ENV_NAME" "${SCATTER_CMD[@]}" || true
+    fi
+  fi
+
   micromamba run -n "$ENV_NAME" python -m pip install torch-geometric==2.5.3 || true
 fi
 
