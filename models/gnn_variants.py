@@ -159,15 +159,15 @@ class MultiHeadGATLayer(nn.Module):
         )  # [E, H]
         alpha = self.leaky(alpha)
         # softmax by i (target)
-        import torch_scatter  # if not installed, we fallback below
-
         alpha_exp = torch.exp(alpha)
-        try:
-            # scatter softmax
-            from torch_scatter import segment_softmax
+        try:  # pragma: no cover - optional dependency tested via integration tests
+            from torch_scatter import segment_softmax  # type: ignore[import]
+        except Exception:  # pragma: no cover - gracefully handle missing torch_scatter
+            segment_softmax = None
 
+        if segment_softmax is not None:
             denom = segment_softmax(alpha_exp, i) * 0 + alpha_exp
-        except Exception:
+        else:
             # Manual softmax per target node
             denom = scatter_sum(i, alpha_exp, dim_size=N)
             denom = gather_nodes(denom, i)
