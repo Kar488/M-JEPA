@@ -245,6 +245,7 @@ jobs:
             git -C "$APP_DIR" lfs pull origin "$BRANCH"
       - name: Setup micromamba environment
         uses: appleboy/ssh-action@v1
+        timeout-minutes: 30        # connection timeout
         with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
@@ -252,7 +253,6 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          timeout: 1800        # connection timeout
           command_timeout: 1800 # allow remote script to run for 30 minutes
           envs: APP_DIR,MAMBA_ROOT_PREFIX,PIP_CACHE_DIR,WANDB_DIR,CACHE_DIR,EXP_ROOT,RUN_ID
           script: |
