@@ -37,6 +37,7 @@ fi
 export MAMBA_ROOT_PREFIX
 eval "$("$MM_BIN" shell hook -s bash)"
 
+
 # ----------- env create if needed -----------
 if ! micromamba env list | grep -q "^${ENV_NAME}\b"; then
   micromamba create -y -n "$ENV_NAME" -c conda-forge python=3.10 rdkit=2023.09.5 scipy pip
@@ -46,6 +47,25 @@ fi
 micromamba run -n "$ENV_NAME" python -m pip install -U pip setuptools wheel "numpy<2"
 micromamba run -n "$ENV_NAME" python -m pip install deepchem==2.8.0
 
+# ----------- Install CUDA Toolkit 12.8 (for compiling extensions like PyG) -----------
+# Add this block before the Torch section. Assumes Ubuntu 22.04/Debian-based (from your apt-get usage).
+# If on 24.04, swap 'ubuntu2204' for 'ubuntu2404' in the wget URL.
+if ! nvcc --version | grep -q "release 12.8"; then
+  echo "[prepare-env] Installing CUDA Toolkit 12.8..."
+  wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+  sudo dpkg -i cuda-keyring_1.1-1_all.deb
+  sudo rm cuda-keyring_1.1-1_all.deb  # Cleanup
+  sudo apt-get update
+  sudo apt-get install -y cuda-toolkit-12-8
+  # Add to PATH (persist via ~/.bashrc or eval in script)
+  export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}}
+  export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+  echo 'export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}}' >> ~/.bashrc
+  echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}' >> ~/.bashrc
+  # Verify
+  nvcc --version
+fi
+
 # ----------- Torch (CUDA if available) -----------
 if ! micromamba run -n "$ENV_NAME" python - <<'PY' >/dev/null 2>&1
 import torch, sys; sys.exit(0 if torch.cuda.is_available() or torch.__version__ else 1)
@@ -54,7 +74,7 @@ then
   #micromamba run -n "$ENV_NAME" python -m pip install --no-cache-dir \
   #  --index-url https://download.pytorch.org/whl/cu121 torch==2.2.1
   micromamba run -n "$ENV_NAME" python -m pip install --no-cache-dir \
-  --pre torch --index-url https://download.pytorch.org/whl/nightly/cu124
+  --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128
 fi
 
 # ----------- Optional PyG if required -----------
