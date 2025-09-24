@@ -1,5 +1,7 @@
-import numpy as np
-import torch
+import pytest
+
+np = pytest.importorskip("numpy")
+torch = pytest.importorskip("torch")
 
 from data.mdataset import GraphData, GraphDataset
 from training.unsupervised import (
