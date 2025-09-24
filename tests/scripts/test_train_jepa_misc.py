@@ -248,7 +248,18 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         **kwargs,
     ):
         captures.update(
-            {k: kwargs[k] for k in ("num_workers", "pin_memory", "persistent_workers", "prefetch_factor", "bf16")}
+            {
+                k: kwargs[k]
+                for k in (
+                    "num_workers",
+                    "pin_memory",
+                    "persistent_workers",
+                    "prefetch_factor",
+                    "bf16",
+                    "pretrain_time_budget_mins",
+                    "finetune_time_budget_mins",
+                )
+            }
         )
         return 0.3, 0.1, 0.5, {"baseline": 0.2}
 
@@ -288,6 +299,8 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         persistent_workers=False,
         prefetch_factor=5,
         bf16=True,
+        pretrain_time_budget_mins=7,
+        finetune_time_budget_mins=3,
     )
 
     tj.cmd_tox21(args)
@@ -306,6 +319,8 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         "persistent_workers": False,
         "prefetch_factor": 5,
         "bf16": True,
+        "pretrain_time_budget_mins": 7,
+        "finetune_time_budget_mins": 3,
     }
 
 

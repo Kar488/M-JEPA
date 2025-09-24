@@ -120,6 +120,8 @@ def test_tox21_parser_defaults_and_handler(tmp_path):
     assert args.finetune_epochs == case_cfg["finetune_epochs"]
     #assert args.gnn_type == CONFIG["model"]["gnn_type"]
     assert args.hidden_dim == CONFIG["model"]["hidden_dim"]
+    assert args.pretrain_time_budget_mins == 0
+    assert args.finetune_time_budget_mins == 0
 
 
 def test_grid_search_parser_defaults_and_handler(tmp_path):

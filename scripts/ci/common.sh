@@ -435,6 +435,8 @@ tox21_only = {
     "task": "--task",
     "pretrain_epochs": "--pretrain-epochs",
     "finetune_epochs": "--finetune-epochs",
+    "pretrain_time_budget_mins": "--pretrain-time-budget-mins",
+    "finetune_time_budget_mins": "--finetune-time-budget-mins",
 }
 
 # 6) Final per-stage maps (compose without duplication)
