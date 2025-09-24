@@ -868,6 +868,18 @@ def build_parser() -> argparse.ArgumentParser:
     tox.add_argument("--no-calibrate", action="store_true", help="Disable Platt scaling on VAL")
     tox.add_argument("--contrastive", action="store_true",
                      help="Use contrastive pretraining instead of JEPA during the case study")
+    tox.add_argument(
+        "--pretrain-time-budget-mins",
+        type=int,
+        default=0,
+        help="Optional wall-clock budget (minutes) for the pretraining phase; 0 disables.",
+    )
+    tox.add_argument(
+        "--finetune-time-budget-mins",
+        type=int,
+        default=0,
+        help="Optional wall-clock budget (minutes) for the finetuning phase; 0 disables.",
+    )
     _add_common_args(tox, "case_study")
     _add_model_args(tox)
     tox.set_defaults(func=cmd_tox21)

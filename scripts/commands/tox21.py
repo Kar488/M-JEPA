@@ -35,6 +35,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "finetune_epochs": getattr(args, "finetune_epochs", 20),
             "triage_pct": triage_pct,
             "calibrate": calibrate,
+            "pretrain_time_budget_mins": getattr(args, "pretrain_time_budget_mins", 0),
+            "finetune_time_budget_mins": getattr(args, "finetune_time_budget_mins", 0),
         },
     )
 
@@ -61,6 +63,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             persistent_workers=getattr(args, "persistent_workers", True),
             prefetch_factor=getattr(args, "prefetch_factor", 4),
             bf16=getattr(args, "bf16", False),
+            pretrain_time_budget_mins=getattr(args, "pretrain_time_budget_mins", 0),
+            finetune_time_budget_mins=getattr(args, "finetune_time_budget_mins", 0),
         )
         
         # Assemble a single metrics dictionary so all values appear on the same

@@ -111,6 +111,8 @@ def run_tox21_case_study(
     persistent_workers: bool = True,
     prefetch_factor: int = 4,
     bf16: bool = False,
+    pretrain_time_budget_mins: int = 0,
+    finetune_time_budget_mins: int = 0,
 ) -> Tuple[float, float, float, dict[str, float]]:
     """Run a Tox21 ranking experiment using real labels.
 
@@ -133,6 +135,10 @@ def run_tox21_case_study(
         persistent_workers: Keep data-loader workers alive across epochs.
         prefetch_factor: Batches prefetched per worker when ``num_workers > 0``.
         bf16: Enable bfloat16 mixed precision during training when supported.
+        pretrain_time_budget_mins: Optional wall-clock budget for pretraining.
+            A value of ``0`` disables the budget.
+        finetune_time_budget_mins: Optional wall-clock budget for the linear
+            head training phase.  A value of ``0`` disables the budget.
         baseline_embeddings: Optional mapping of baseline name to a file
             containing precomputed embeddings (``.npy`` or ``.csv``) in the
             same order as ``csv_path``.
@@ -309,6 +315,7 @@ def run_tox21_case_study(
         persistent_workers=persistent_workers,
         prefetch_factor=prefetch_factor,
         bf16=bf16,
+        time_budget_mins=pretrain_time_budget_mins,
     )
 
 
@@ -353,6 +360,7 @@ def run_tox21_case_study(
         persistent_workers=persistent_workers,
         prefetch_factor=prefetch_factor,
         bf16=bf16,
+        time_budget_mins=finetune_time_budget_mins,
         **extra_args,
         # selection_metric="val_auc",  # uncomment when supported
     )

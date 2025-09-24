@@ -88,4 +88,6 @@ tox21:
   tox21_dir: ${TOX21_DIR}
   pretrain_epochs: ${PRETRAIN_EPOCHS:-40}   # maps to --pretrain-epochs for "tox21"
   finetune_epochs: ${FINETUNE_EPOCHS:-8}    # maps to --finetune-epochs for "tox21"
+  pretrain_time_budget_mins: 45
+  finetune_time_budget_mins: 12
   use_wandb: true
