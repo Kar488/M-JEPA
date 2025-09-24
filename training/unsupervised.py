@@ -1125,7 +1125,7 @@ def train_jepa(
     # AMP setup (bf16 on 4090). GradScaler is only for fp16, not bf16.
     amp_enabled = (device_t.type == "cuda") and (use_amp or bf16)
     _amp_dtype = torch.bfloat16 if bf16 else torch.float16
-    scaler = torch.cuda.amp.GradScaler(enabled=(use_amp and (not bf16) and device_t.type == "cuda"))
+    scaler = torch.amp.GradScaler(enabled=(use_amp and (not bf16) and device_t.type == "cuda"))
 
 
     sch = cosine_with_warmup(opt, warmup_steps, total_steps) if use_scheduler else None
@@ -1572,7 +1572,7 @@ def train_contrastive(
         opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
 
     # GradScaler is for fp16; disable when using bf16
-    scaler = torch.cuda.amp.GradScaler(enabled=(use_amp and (not bf16) and device_t.type == "cuda"))
+    scaler = torch.amp.GradScaler(enabled=(use_amp and (not bf16) and device_t.type == "cuda"))
     # AMP setup (bf16 on 4090)
     amp_enabled = (device_t.type == "cuda") and (use_amp or bf16)
     _amp_dtype = torch.bfloat16 if bf16 else torch.float16
