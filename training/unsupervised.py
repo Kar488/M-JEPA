@@ -50,6 +50,7 @@ except ImportError:  # pragma: no cover - used in minimal test stubs
 from data.mdataset import GraphData, GraphDataset
 from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.ddp import DistributedSamplerList, cleanup, init_distributed, is_main_process
+from utils.dataloader import normalize_prefetch_factor
 from utils.graph_ops import _encode_graph, _pool_graph_emb
 from utils.logging import maybe_init_wandb
 logger = logging.getLogger(__name__)
@@ -1035,6 +1036,15 @@ def train_jepa(
             RuntimeWarning,
             stacklevel=2,
         )
+    if num_workers > 0:
+        normalized_prefetch, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
+        if bad_prefetch is not None and is_main_process():
+            logger.warning(
+                "prefetch_factor=%s is not positive; clamping to %s so DataLoader workers can start.",
+                bad_prefetch,
+                normalized_prefetch,
+            )
+        prefetch_factor = normalized_prefetch
     active_persistent_workers = bool(num_workers) and persistent_workers
     steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
     total_steps = epochs * steps_per_epoch
@@ -1521,6 +1531,15 @@ def train_contrastive(
             RuntimeWarning,
             stacklevel=2,
         )
+    if num_workers > 0:
+        normalized_prefetch, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
+        if bad_prefetch is not None and is_main_process():
+            logger.warning(
+                "prefetch_factor=%s is not positive; clamping to %s so DataLoader workers can start.",
+                bad_prefetch,
+                normalized_prefetch,
+            )
+        prefetch_factor = normalized_prefetch
     active_persistent_workers = bool(num_workers) and persistent_workers
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
