@@ -1037,6 +1037,7 @@ def train_jepa(
             stacklevel=2,
         )
     if num_workers > 0:
+        _ensure_file_system_sharing_strategy()
         normalized_prefetch, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
         if bad_prefetch is not None and is_main_process():
             logger.warning(
@@ -1532,6 +1533,7 @@ def train_contrastive(
             stacklevel=2,
         )
     if num_workers > 0:
+        _ensure_file_system_sharing_strategy()
         normalized_prefetch, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
         if bad_prefetch is not None and is_main_process():
             logger.warning(
