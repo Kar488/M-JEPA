@@ -487,8 +487,9 @@ def run_tox21_case_study(
                 ece += (np.sum(mask) / N) * abs(freq - conf)
             return float(ece)
         
-        from utils import _expected_calibration_error 
-        ece = _expected_calibration_error(yy, pp, n_bins=10)
+        from utils.metrics import expected_calibration_error
+
+        ece = expected_calibration_error(yy, pp, n_bins=10)
         logger.info(
             "Tox21 %s TEST metrics — AUC=%.4f, PR-AUC=%.4f, Brier=%.4f, ECE=%.4f",
             task_name, auc, ap, brier, ece
