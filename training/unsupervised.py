@@ -19,6 +19,59 @@ from torch.optim.lr_scheduler import _LRScheduler
 import tqdm
 from torch.utils.data import DataLoader
 
+_AMP_GRAD_SCALER_CANDIDATES: List[type] = []
+_torch_amp = getattr(torch, "amp", None)
+_amp_grad_scaler = getattr(_torch_amp, "GradScaler", None) if _torch_amp else None
+if isinstance(_amp_grad_scaler, type):
+    _AMP_GRAD_SCALER_CANDIDATES.append(_amp_grad_scaler)
+
+_torch_cuda = getattr(torch, "cuda", None)
+_torch_cuda_amp = getattr(_torch_cuda, "amp", None) if _torch_cuda else None
+_cuda_grad_scaler = (
+    getattr(_torch_cuda_amp, "GradScaler", None) if _torch_cuda_amp else None
+)
+if isinstance(_cuda_grad_scaler, type):
+    _AMP_GRAD_SCALER_CANDIDATES.append(_cuda_grad_scaler)
+
+
+class _NoOpGradScaler:
+    """Fallback GradScaler for CPU-only or minimal Torch builds."""
+
+    def __init__(self, enabled: bool = False):
+        self._enabled = False
+
+    def is_enabled(self) -> bool:  # pragma: no cover - trivial shim
+        return False
+
+    def get_scale(self) -> float:  # pragma: no cover - trivial shim
+        return 1.0
+
+    def scale(self, tensor: torch.Tensor) -> torch.Tensor:  # pragma: no cover - trivial shim
+        return tensor
+
+    def step(self, optimizer: optim.Optimizer) -> None:  # pragma: no cover - trivial shim
+        optimizer.step()
+
+    def update(self) -> None:  # pragma: no cover - trivial shim
+        return None
+
+    def state_dict(self) -> Dict[str, Any]:  # pragma: no cover - trivial shim
+        return {}
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:  # pragma: no cover - trivial shim
+        return None
+
+
+if not _AMP_GRAD_SCALER_CANDIDATES:
+    _AMP_GRAD_SCALER_CANDIDATES.append(_NoOpGradScaler)
+
+GradScaler = _AMP_GRAD_SCALER_CANDIDATES[0]
+_GRAD_SCALER_TYPES: Tuple[type, ...] = tuple({cls for cls in _AMP_GRAD_SCALER_CANDIDATES})
+
+
+def _is_grad_scaler(obj: Any) -> bool:
+    return isinstance(obj, _GRAD_SCALER_TYPES)
+
 try:
     from data.augment import (
         apply_graph_augmentations,
@@ -277,7 +330,7 @@ def _step_optimizer(
     loss: torch.Tensor,
     optimizer: optim.Optimizer,
     *,
-    scaler: Optional["torch.cuda.amp.GradScaler"] = None,
+    scaler: Optional[Any] = None,
     scheduler: Optional[_LRScheduler] = None,
 ) -> None:
     """Backpropagate ``loss`` and update ``optimizer``/``scheduler`` safely.
@@ -291,9 +344,7 @@ def _step_optimizer(
     """
 
     step_executed = True
-    grad_scaler_cls = getattr(torch.cuda, "amp", None)
-    grad_scaler_cls = getattr(grad_scaler_cls, "GradScaler", None)
-    if grad_scaler_cls is not None and isinstance(scaler, grad_scaler_cls):
+    if _is_grad_scaler(scaler):
         scaler_enabled = bool(getattr(scaler, "is_enabled", lambda: True)())
         prev_scale = scaler.get_scale() if scaler_enabled else None
         scaler.scale(loss).backward()
@@ -1125,7 +1176,7 @@ def train_jepa(
     # AMP setup (bf16 on 4090). GradScaler is only for fp16, not bf16.
     amp_enabled = (device_t.type == "cuda") and (use_amp or bf16)
     _amp_dtype = torch.bfloat16 if bf16 else torch.float16
-    scaler = torch.amp.GradScaler(enabled=(use_amp and (not bf16) and device_t.type == "cuda"))
+    scaler = GradScaler(enabled=(use_amp and (not bf16) and device_t.type == "cuda"))
 
 
     sch = cosine_with_warmup(opt, warmup_steps, total_steps) if use_scheduler else None
@@ -1152,7 +1203,7 @@ def train_jepa(
             predictor.load_state_dict(ckpt["predictor"])
         if "optimizer" in ckpt:
             opt.load_state_dict(ckpt["optimizer"])
-        if "scaler" in ckpt and isinstance(scaler, torch.cuda.amp.GradScaler):
+        if "scaler" in ckpt and _is_grad_scaler(scaler):
             scaler.load_state_dict(ckpt["scaler"])
         if "epoch" in ckpt:
             start_epoch = int(ckpt["epoch"]) + 1
@@ -1451,11 +1502,7 @@ def train_jepa(
                     ema_encoder=ema_encoder.state_dict(),
                     predictor=predictor.state_dict(),
                     optimizer=opt.state_dict(),
-                    scaler=(
-                        scaler.state_dict()
-                        if isinstance(scaler, torch.cuda.amp.GradScaler)
-                        else None
-                    ),
+                    scaler=(scaler.state_dict() if _is_grad_scaler(scaler) else None),
                     epoch=ep,
                 )
 
@@ -1572,7 +1619,7 @@ def train_contrastive(
         opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
 
     # GradScaler is for fp16; disable when using bf16
-    scaler = torch.amp.GradScaler(enabled=(use_amp and (not bf16) and device_t.type == "cuda"))
+    scaler = GradScaler(enabled=(use_amp and (not bf16) and device_t.type == "cuda"))
     # AMP setup (bf16 on 4090)
     amp_enabled = (device_t.type == "cuda") and (use_amp or bf16)
     _amp_dtype = torch.bfloat16 if bf16 else torch.float16
@@ -1602,7 +1649,7 @@ def train_contrastive(
             proj.load_state_dict(ckpt["projector"])
         if "optimizer" in ckpt:
             opt.load_state_dict(ckpt["optimizer"])
-        if "scaler" in ckpt and isinstance(scaler, torch.cuda.amp.GradScaler):
+        if "scaler" in ckpt and _is_grad_scaler(scaler):
             scaler.load_state_dict(ckpt["scaler"])
 
     losses: List[float] = []
@@ -1840,11 +1887,7 @@ def train_contrastive(
                     encoder=(encoder.module.state_dict() if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder.state_dict()),
                     projector=proj.state_dict(),
                     optimizer=opt.state_dict(),
-                    scaler=(
-                        scaler.state_dict()
-                        if isinstance(scaler, torch.cuda.amp.GradScaler)
-                        else None
-                    ),
+                    scaler=(scaler.state_dict() if _is_grad_scaler(scaler) else None),
                     epoch=ep,
                 )
         if hit_batch_cap and max_batches > 0 and total_batches_done >= max_batches:
