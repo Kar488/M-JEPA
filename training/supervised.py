@@ -31,6 +31,7 @@ from models.encoder import GNNEncoder
 from utils.early_stopping import EarlyStopping
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.graph_ops import _encode_graph
+from utils.dataloader import normalize_prefetch_factor
 
 logger = logging.getLogger(__name__)
 
@@ -677,6 +678,15 @@ def train_linear_head(
 
     collate_fn = _GraphBatchCollator(dataset, task_type)
     pin_memory_enabled = bool(pin_memory and device_t.type == "cuda")
+    if num_workers > 0:
+        normalized_prefetch, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
+        if bad_prefetch is not None:
+            logger.warning(
+                "prefetch_factor=%s is not positive; clamping to %s so DataLoader workers can start.",
+                bad_prefetch,
+                normalized_prefetch,
+            )
+        prefetch_factor = normalized_prefetch
 
     def _build_loader(indices: List[int], shuffle: bool) -> Optional[DataLoader]:
         if not indices:

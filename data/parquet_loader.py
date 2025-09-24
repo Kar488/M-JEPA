@@ -32,6 +32,7 @@ the tiny test cases used in the exercises.  For large datasets one may
 wish to implement streaming reads instead.
 """
 
+import logging
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
@@ -39,6 +40,11 @@ import pandas as pd
 import torch
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
+
+from utils.dataloader import normalize_prefetch_factor
+
+
+logger = logging.getLogger(__name__)
 
 
 def _row_to_data(row: dict) -> Data:
@@ -131,8 +137,16 @@ def load_dataloaders(
         persistent_workers=bool(num_workers) and persistent_workers,
         **loader_kwargs,
     )
-    if num_workers > 0 and prefetch_factor is not None:
-        common["prefetch_factor"] = prefetch_factor
+    if num_workers > 0:
+        normalized_prefetch, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
+        if bad_prefetch is not None:
+            logger.warning(
+                "prefetch_factor=%s is not positive; clamping to %s so DataLoader workers can start.",
+                bad_prefetch,
+                normalized_prefetch,
+            )
+        if normalized_prefetch is not None:
+            common["prefetch_factor"] = normalized_prefetch
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  **common)
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, **common)
