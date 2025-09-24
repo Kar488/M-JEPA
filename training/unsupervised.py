@@ -1315,7 +1315,8 @@ def train_jepa(
                     ctx_batch = ctx_batch.to(device_t)
                     tgt_batch = tgt_batch.to(device_t)
 
-                    with torch.cuda.amp.autocast(
+                    with torch.amp.autocast(
+                        device_type="cuda",
                         enabled=amp_enabled,
                         dtype=_amp_dtype,
                     ):
@@ -1326,7 +1327,8 @@ def train_jepa(
                     h_c_g = _ensure_2d(_pool_graph_emb(h_c_nodes, ctx_batch))
                     h_t_g = _ensure_2d(_pool_graph_emb(h_t_nodes, tgt_batch))
 
-                    with torch.cuda.amp.autocast(
+                    with torch.amp.autocast(
+                        device_type="cuda",
                         enabled=amp_enabled,
                         dtype=_amp_dtype,
                     ):
@@ -1682,7 +1684,9 @@ def train_contrastive(
                     view1_batch = view1_batch.to(device_t)
                     view2_batch = view2_batch.to(device_t)
 
-                    with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
+                    with torch.amp.autocast(
+                        device_type="cuda", enabled=amp_enabled, dtype=_amp_dtype
+                    ):
                         h1_nodes = _ensure_2d(_encode_graph(encoder, view1_batch))
                         h2_nodes = _ensure_2d(_encode_graph(encoder, view2_batch))
 
@@ -1708,7 +1712,9 @@ def train_contrastive(
                             "Contrastive loss requires at least two graphs per batch"
                         )
 
-                    with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=_amp_dtype):
+                    with torch.amp.autocast(
+                        device_type="cuda", enabled=amp_enabled, dtype=_amp_dtype
+                    ):
                         logits_12 = (z1 @ z2.t()) / float(temperature)
                         with torch.no_grad():
                             pos = logits_12.diag().mean().item()
