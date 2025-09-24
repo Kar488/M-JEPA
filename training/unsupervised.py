@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import contextlib
+import errno
+import logging
 import math
 import os
 import time as _t
@@ -16,7 +18,6 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import _LRScheduler
 import tqdm
 from torch.utils.data import DataLoader
-import logging
 
 try:
     from data.augment import (
@@ -886,6 +887,61 @@ def _is_pin_memory_failure(exc: BaseException) -> bool:
     return False
 
 
+def _is_too_many_open_files(exc: BaseException) -> bool:
+    """Detect ``OSError(EMFILE)`` buried in a ``RuntimeError`` chain."""
+
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, OSError) and getattr(cur, "errno", None) == errno.EMFILE:
+            return True
+        message = " ".join(str(arg) for arg in getattr(cur, "args", ()))
+        if "Too many open files" in message:
+            return True
+        cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+    return False
+
+
+def _ensure_file_system_sharing_strategy() -> None:
+    """Switch PyTorch multiprocessing to ``file_system`` sharing when possible."""
+
+    mp = getattr(torch, "multiprocessing", None)
+    if mp is None:  # pragma: no cover - depends on torch build
+        return
+    get_strategy = getattr(mp, "get_sharing_strategy", None)
+    set_strategy = getattr(mp, "set_sharing_strategy", None)
+    if not callable(get_strategy) or not callable(set_strategy):  # pragma: no cover - backend dependent
+        return
+    try:
+        if get_strategy() != "file_system":
+            set_strategy("file_system")
+    except RuntimeError:  # pragma: no cover - backend dependent
+        pass
+
+
+def _backoff_data_loader_workers(
+    persistent_workers: bool, prefetch_factor: int
+) -> Tuple[bool, bool, int]:
+    """Reduce worker resource usage when recovering from ``EMFILE`` failures."""
+
+    next_persistent_workers = persistent_workers
+    next_prefetch_factor = prefetch_factor
+    changed = False
+
+    if persistent_workers:
+        next_persistent_workers = False
+        changed = True
+
+    if prefetch_factor > 1:
+        reduced_prefetch = max(1, prefetch_factor // 2)
+        if reduced_prefetch != prefetch_factor:
+            next_prefetch_factor = reduced_prefetch
+            changed = True
+
+    return changed, next_persistent_workers, next_prefetch_factor
+
+
 def _graph_to_tensors(
     g: GraphData, device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -1225,6 +1281,7 @@ def train_jepa(
         pair_dataset = _AugmentedPairDataset(data_source, augmenter)
         loader_pin_memory = pin_memory_enabled
         loader_persistent_workers = active_persistent_workers
+        loader_prefetch_factor = prefetch_factor
         while True:
             ep_loss = 0.0
             epoch_batches = 0
@@ -1235,7 +1292,7 @@ def train_jepa(
                 num_workers=num_workers,
                 pin_memory=loader_pin_memory,
                 persistent_workers=loader_persistent_workers,
-                prefetch_factor=prefetch_factor,
+                prefetch_factor=loader_prefetch_factor,
                 collate_fn=_collate_graph_pair,
             )
 
@@ -1329,11 +1386,39 @@ def train_jepa(
                     pin_memory_enabled = False
                     active_persistent_workers = False
                     continue
+                if (
+                    epoch_batches == 0
+                    and num_workers > 0
+                    and _is_too_many_open_files(exc)
+                ):
+                    (
+                        strategy_changed,
+                        next_persistent_workers,
+                        next_prefetch_factor,
+                    ) = _backoff_data_loader_workers(
+                        loader_persistent_workers, loader_prefetch_factor
+                    )
+                    if next_persistent_workers != loader_persistent_workers:
+                        loader_persistent_workers = next_persistent_workers
+                        if not next_persistent_workers:
+                            active_persistent_workers = False
+                    if next_prefetch_factor != loader_prefetch_factor:
+                        loader_prefetch_factor = next_prefetch_factor
+                    _ensure_file_system_sharing_strategy()
+                    if strategy_changed:
+                        if is_main_process():
+                            logger.warning(
+                                "DataLoader workers exhausted file descriptors; retrying with persistent_workers=%s, prefetch_factor=%d",  # noqa: E501
+                                loader_persistent_workers,
+                                loader_prefetch_factor,
+                            )
+                        continue
                 raise
             break
 
         pin_memory_enabled = loader_pin_memory
         active_persistent_workers = loader_persistent_workers
+        prefetch_factor = loader_prefetch_factor
 
         ep_loss /= max(1, epoch_batches)
         if is_main_process():
@@ -1563,6 +1648,7 @@ def train_contrastive(
         pair_dataset = _AugmentedPairDataset(data_source, augmenter)
         loader_pin_memory = pin_memory_enabled
         loader_persistent_workers = active_persistent_workers
+        loader_prefetch_factor = prefetch_factor
         while True:
             ep_loss = 0.0
             epoch_batches = 0
@@ -1573,7 +1659,7 @@ def train_contrastive(
                 num_workers=num_workers,
                 pin_memory=loader_pin_memory,
                 persistent_workers=loader_persistent_workers,
-                prefetch_factor=prefetch_factor,
+                prefetch_factor=loader_prefetch_factor,
                 collate_fn=_collate_graph_pair,
             )
 
@@ -1677,11 +1763,39 @@ def train_contrastive(
                     pin_memory_enabled = False
                     active_persistent_workers = False
                     continue
+                if (
+                    epoch_batches == 0
+                    and num_workers > 0
+                    and _is_too_many_open_files(exc)
+                ):
+                    (
+                        strategy_changed,
+                        next_persistent_workers,
+                        next_prefetch_factor,
+                    ) = _backoff_data_loader_workers(
+                        loader_persistent_workers, loader_prefetch_factor
+                    )
+                    if next_persistent_workers != loader_persistent_workers:
+                        loader_persistent_workers = next_persistent_workers
+                        if not next_persistent_workers:
+                            active_persistent_workers = False
+                    if next_prefetch_factor != loader_prefetch_factor:
+                        loader_prefetch_factor = next_prefetch_factor
+                    _ensure_file_system_sharing_strategy()
+                    if strategy_changed:
+                        if is_main_process():
+                            logger.warning(
+                                "Contrastive DataLoader workers exhausted file descriptors; retrying with persistent_workers=%s, prefetch_factor=%d",  # noqa: E501
+                                loader_persistent_workers,
+                                loader_prefetch_factor,
+                            )
+                        continue
                 raise
             break
 
         pin_memory_enabled = loader_pin_memory
         active_persistent_workers = loader_persistent_workers
+        prefetch_factor = loader_prefetch_factor
         ep_loss /= max(1, epoch_batches)
         if is_main_process():
             losses.append(ep_loss)
