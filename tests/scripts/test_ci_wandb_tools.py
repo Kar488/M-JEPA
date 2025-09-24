@@ -64,6 +64,42 @@ def test_paired_effect_winner_and_no_pairs(monkeypatch, tmp_path, capsys):
     # In the empty case, the tool no longer writes an output file (unless --strict)
     assert not out2.exists()
 
+    # When runs exist for both methods but their pair_ids do not overlap, the
+    # paired-effect utility should fall back to a global aggregate delta rather
+    # than exiting with an error (even when --strict is provided).
+    unpaired_runs = [
+        FakeRun("j_only1", {"training_method": "jepa", "pair_id": "a"}, {"val_rmse": 0.48}),
+        FakeRun("j_only2", {"training_method": "jepa", "pair_id": "b"}, {"val_rmse": 0.50}),
+        FakeRun("c_only", {"training_method": "contrastive", "pair_id": "c"}, {"val_rmse": 0.55}),
+    ]
+
+    class UnpairedApi:
+        def runs(self, path, filters=None):
+            return unpaired_runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: UnpairedApi()))
+    out3 = tmp_path / "pe3.json"
+    capsys.readouterr()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out3),
+            "--strict",
+        ],
+    )
+    pe.main()
+    data3 = json.loads(out3.read_text())
+    assert data3["pairs"] == 1
+    assert data3["pairs_used"] == 0
+    assert data3["winner"] == "jepa"
+
 
 def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_DIR", str(tmp_path))

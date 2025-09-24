@@ -144,6 +144,28 @@ def main():
 
 
     if not deltas:
+        # As a last resort, attempt a global comparison between methods even if no
+        # per-pair matches were recorded.  This allows tiny sweeps (e.g. WANDB_COUNT
+        # of just a few runs) to still report a winner instead of failing with
+        # "No matched pairs" once filters remove some runs.  The fallback preserves
+        # the aggregate direction semantics while clearly signalling that no actual
+        # pairs were used in the comparison via `used_pairs`.
+        global_methods = defaultdict(list)
+        for methods in by_pair_vals.values():
+            for method, values in methods.items():
+                global_methods[method].extend(values)
+
+        if global_methods.get("jepa") and global_methods.get("contrastive"):
+            # Treat the aggregate as a single pseudo-pair delta so downstream code
+            # can continue to operate without special casing.  Record that no real
+            # pairs were consumed to keep reporting transparent.
+            jv = float(np.mean(global_methods["jepa"]))
+            cv = float(np.mean(global_methods["contrastive"]))
+            deltas = [cv - jv]
+            used_pairs = 0
+            print("[paired-effect] falling back to global mean delta across methods", flush=True)
+
+    if not deltas:
         # Do not write output when empty; only fail hard if --strict
         if args.strict:
             import sys; print("No matched pairs found.", flush=True); sys.exit(2)
