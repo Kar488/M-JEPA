@@ -19,6 +19,11 @@ from torch.optim.lr_scheduler import _LRScheduler
 import tqdm
 from torch.utils.data import DataLoader
 
+try:
+    import resource
+except ImportError:  # pragma: no cover - platform dependent
+    resource = None  # type: ignore[assignment]
+
 _AMP_GRAD_SCALER_CANDIDATES: List[type] = []
 _torch_amp = getattr(torch, "amp", None)
 _amp_grad_scaler = getattr(_torch_amp, "GradScaler", None) if _torch_amp else None
@@ -108,6 +113,51 @@ from utils.graph_ops import _encode_graph, _pool_graph_emb
 from utils.logging import maybe_init_wandb
 logger = logging.getLogger(__name__)
 from utils.schedule import cosine_with_warmup
+
+
+def _ensure_open_file_limit(min_soft_limit: int = 4096) -> None:
+    """Best-effort bump of ``RLIMIT_NOFILE`` so dataloaders stay healthy."""
+
+    if resource is None:  # pragma: no cover - platform dependent
+        return
+
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (OSError, ValueError):  # pragma: no cover - depends on runtime
+        return
+
+    desired = max(int(min_soft_limit), soft)
+    if desired <= soft:
+        return
+
+    target_hard = hard if hard >= desired else desired
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (desired, target_hard))
+        logger.debug(
+            "Raised RLIMIT_NOFILE soft limit from %d to %d (hard %d -> %d)",
+            soft,
+            desired,
+            hard,
+            target_hard,
+        )
+        return
+    except (OSError, ValueError):
+        pass
+
+    fallback_soft = min(max(desired, soft), hard)
+    if fallback_soft <= soft:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (fallback_soft, hard))
+        logger.debug(
+            "Raised RLIMIT_NOFILE soft limit to hard limit %d after initial attempt failed", fallback_soft
+        )
+    except (OSError, ValueError):  # pragma: no cover - depends on runtime
+        logger.debug(
+            "Unable to raise RLIMIT_NOFILE beyond current soft limit %d despite request for %d",
+            soft,
+            desired,
+        )
 
 
 def _make_wandb_handlers(wb: Any) -> Tuple[Callable[..., None], Callable[[], None]]:
@@ -1106,6 +1156,12 @@ def train_jepa(
                 normalized_prefetch,
             )
         prefetch_factor = normalized_prefetch
+    worker_count = int(num_workers) if num_workers else 0
+    prefetch_budget = int(prefetch_factor) if isinstance(prefetch_factor, (int, float)) else 0
+    if worker_count > 0:
+        prefetch_budget = max(prefetch_budget, 2)
+    min_fd_budget = max(4096, 1024 + 128 * max(worker_count, 1) * max(prefetch_budget, 1))
+    _ensure_open_file_limit(min_fd_budget)
     active_persistent_workers = bool(num_workers) and persistent_workers
     steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
     total_steps = epochs * steps_per_epoch
