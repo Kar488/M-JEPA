@@ -678,6 +678,7 @@ def train_linear_head(
 
     collate_fn = _GraphBatchCollator(dataset, task_type)
     pin_memory_enabled = bool(pin_memory and device_t.type == "cuda")
+    cache_state = {"enabled": bool(cache_graph_embeddings)}
     if num_workers > 0:
         normalized_prefetch, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
         if bad_prefetch is not None:
@@ -705,9 +706,14 @@ def train_linear_head(
                 loader_kwargs["prefetch_factor"] = prefetch_factor
         return DataLoader(list(indices), **loader_kwargs)
 
-    train_loader = _build_loader(train_idx_rank, shuffle=True)
-    val_loader = _build_loader(val_idx, shuffle=False)
-    test_loader = _build_loader(test_idx, shuffle=False)
+    def _refresh_loaders() -> Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]:
+        return (
+            _build_loader(train_idx_rank, shuffle=True),
+            _build_loader(val_idx, shuffle=False),
+            _build_loader(test_idx, shuffle=False),
+        )
+
+    train_loader, val_loader, test_loader = _refresh_loaders()
 
     _start_wall = _time.perf_counter()
 
@@ -726,6 +732,23 @@ def train_linear_head(
 
     embedding_cache: Dict[int, torch.Tensor] = {}
 
+    def _handle_pin_memory_failure(err: RuntimeError) -> None:
+        nonlocal pin_memory_enabled, train_loader, val_loader, test_loader
+
+        if not pin_memory_enabled:
+            raise err
+
+        logger.warning(
+            "Pin-memory DataLoader pipeline failed during embedding caching (%s). "
+            "Rebuilding loaders without pinned memory and disabling the cache.",
+            err,
+        )
+
+        pin_memory_enabled = False
+        cache_state["enabled"] = False
+        embedding_cache.clear()
+        train_loader, val_loader, test_loader = _refresh_loaders()
+
     def _get_graph_embeddings(
         batch_x: torch.Tensor,
         batch_adj: torch.Tensor,
@@ -733,7 +756,7 @@ def train_linear_head(
         batch_meta: object,
     ) -> torch.Tensor:
         idx_list = _extract_batch_indices(batch_meta)
-        use_cache = cache_graph_embeddings and idx_list is not None
+        use_cache = cache_state["enabled"] and idx_list is not None
         if use_cache and all(idx in embedding_cache for idx in idx_list):
             stacked = torch.stack([embedding_cache[idx] for idx in idx_list], dim=0)
             return stacked.to(device_t)
@@ -752,7 +775,7 @@ def train_linear_head(
         return graph_emb
 
     def _precompute_embeddings(loader: Optional[DataLoader]) -> None:
-        if not cache_graph_embeddings or loader is None:
+        if not cache_state["enabled"] or loader is None:
             return
         for batch in loader:
             batch_x, batch_adj, batch_ptr, _, batch_meta = _move_batch_to_device(
@@ -760,11 +783,18 @@ def train_linear_head(
             )
             _get_graph_embeddings(batch_x, batch_adj, batch_ptr, batch_meta)
 
-    if cache_graph_embeddings:
+    if cache_state["enabled"]:
         encoder.eval()
-        _precompute_embeddings(train_loader)
-        _precompute_embeddings(val_loader)
-        _precompute_embeddings(test_loader)
+        try:
+            _precompute_embeddings(train_loader)
+            _precompute_embeddings(val_loader)
+            _precompute_embeddings(test_loader)
+        except RuntimeError as err:
+            msg = str(err).lower()
+            if "pin memory" in msg or "ancdata" in msg:
+                _handle_pin_memory_failure(err)
+            else:
+                raise
 
     if train_loader is None:
         logger.warning("No training samples available; skipping linear-head optimisation.")
