@@ -79,7 +79,12 @@ def _load_real_graphdataset():
 
 from utils.graph_ops import _ensure_edge_attr_np_or_torch as ensure_edge_attr
 from utils.graph_ops import _encode_graph_flex
-from utils.bond_feats import attach_bond_features_from_smiles
+try:
+    from utils.bond_feats import attach_bond_features_from_smiles
+except Exception:  # pragma: no cover - optional dependency
+    def attach_bond_features_from_smiles(graph, smiles):
+        """Fallback when RDKit bond featurisation is unavailable."""
+        return graph
 
 def _import_graphdataset():
     from data.mdataset import GraphDataset
@@ -171,6 +176,8 @@ def run_tox21_case_study(
     set_seed(seed)
 
     GraphDatasetCls  = _load_real_graphdataset()
+    gnn_type_lower = (gnn_type or "").lower()
+    requires_3d = gnn_type_lower in {"schnet3d", "schnet"}
 
     def subset_dataset(ds: 'GraphDatasetT', idxs: Iterable[int]) -> 'GraphDatasetT':
         sub_graphs = [ds.graphs[i] for i in idxs]
@@ -178,7 +185,11 @@ def run_tox21_case_study(
         return GraphDatasetCls(sub_graphs, sub_labels)
 
 
-    dataset = GraphDatasetCls.from_smiles_list(smiles_list, labels=labels_list)
+    dataset = GraphDatasetCls.from_smiles_list(
+        smiles_list,
+        labels=labels_list,
+        add_3d=requires_3d,
+    )
     if len(dataset) == 0:
         raise ValueError("No valid molecules could be parsed from the dataset.")
 
@@ -198,7 +209,11 @@ def run_tox21_case_study(
         if ea is None or getattr(ea, "shape", (0, 0))[1] == 0:
             attach_bond_features_from_smiles(g, smi) # sets edge_attr to shape (E, 13)
 
-    print(dataset.graphs[0].edge_attr.shape) # (E, 13)
+    if requires_3d and all(getattr(g, "pos", None) is None for g in dataset.graphs):
+        raise ValueError(
+            "SchNet-style encoders require 3D coordinates, but none were generated. "
+            "Ensure RDKit is installed with 3D conformer support."
+        )
 
     # -------------------------------
     # Scaffold split (fallback to random)
@@ -434,9 +449,11 @@ def run_tox21_case_study(
     k = max(1, int(triage_pct * test_idx_arr.size))
     k = min(k, test_idx_arr.size)
 
-    top_k = np.argsort(-test_prob_rank)[:k]
+    top_k = np.asarray(np.argsort(-test_prob_rank)[:k], dtype=int).reshape(-1)
     exclude_pred = test_idx_arr[top_k]
-    remaining_pred = [i for i in test_idx_arr if i not in exclude_pred]
+    mask = np.ones(test_idx_arr.shape[0], dtype=bool)
+    mask[top_k] = False
+    remaining_pred = test_idx_arr[mask].tolist()
     mean_pred = float(np.mean(all_labels[remaining_pred])) if remaining_pred else 0.0
 
     # Random baseline triage (within TEST)
