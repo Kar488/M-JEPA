@@ -19,6 +19,11 @@ def test_is_too_many_open_files_detects_nested_oseerror():
     assert _is_too_many_open_files(exc)
 
 
+def test_is_too_many_open_files_detects_plain_oserror():
+    err = OSError(errno.EMFILE, "Too many open files")
+    assert _is_too_many_open_files(err)
+
+
 @pytest.mark.parametrize(
     "persistent, prefetch, expected",
     [
