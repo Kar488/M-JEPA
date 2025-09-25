@@ -701,7 +701,8 @@ def train_linear_head(
         }
         if num_workers > 0:
             loader_kwargs["persistent_workers"] = persistent_workers
-            loader_kwargs["prefetch_factor"] = prefetch_factor
+            if prefetch_factor is not None:
+                loader_kwargs["prefetch_factor"] = prefetch_factor
         return DataLoader(list(indices), **loader_kwargs)
 
     train_loader = _build_loader(train_idx_rank, shuffle=True)

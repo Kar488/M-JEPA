@@ -898,7 +898,7 @@ def _build_graph_dataloader(
     num_workers: int,
     pin_memory: bool,
     persistent_workers: bool,
-    prefetch_factor: int,
+    prefetch_factor: Optional[int],
     collate_fn: Optional[Callable[[Sequence[Any]], Any]] = None,
     multiprocessing_context: Optional[Any] = None,
 ) -> DataLoader:
@@ -913,7 +913,8 @@ def _build_graph_dataloader(
     )
     if num_workers > 0:
         loader_kwargs["persistent_workers"] = persistent_workers
-        loader_kwargs["prefetch_factor"] = prefetch_factor
+        if prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = prefetch_factor
         if multiprocessing_context is not None:
             loader_kwargs["multiprocessing_context"] = multiprocessing_context
     return DataLoader(data_source, **loader_kwargs)
@@ -973,8 +974,8 @@ def _ensure_file_system_sharing_strategy() -> None:
 
 
 def _backoff_data_loader_workers(
-    persistent_workers: bool, prefetch_factor: int
-) -> Tuple[bool, bool, int]:
+    persistent_workers: bool, prefetch_factor: Optional[int]
+) -> Tuple[bool, bool, Optional[int]]:
     """Reduce worker resource usage when recovering from ``EMFILE`` failures."""
 
     next_persistent_workers = persistent_workers
@@ -985,7 +986,7 @@ def _backoff_data_loader_workers(
         next_persistent_workers = False
         changed = True
 
-    if prefetch_factor > 1:
+    if prefetch_factor and prefetch_factor > 1:
         reduced_prefetch = max(1, prefetch_factor // 2)
         if reduced_prefetch != prefetch_factor:
             next_prefetch_factor = reduced_prefetch
@@ -1472,7 +1473,7 @@ def train_jepa(
                     if strategy_changed:
                         if is_main_process():
                             logger.warning(
-                                "DataLoader workers exhausted file descriptors; retrying with persistent_workers=%s, prefetch_factor=%d",  # noqa: E501
+                                "DataLoader workers exhausted file descriptors; retrying with persistent_workers=%s, prefetch_factor=%s",  # noqa: E501
                                 loader_persistent_workers,
                                 loader_prefetch_factor,
                             )
@@ -1859,7 +1860,7 @@ def train_contrastive(
                     if strategy_changed:
                         if is_main_process():
                             logger.warning(
-                                "Contrastive DataLoader workers exhausted file descriptors; retrying with persistent_workers=%s, prefetch_factor=%d",  # noqa: E501
+                                "Contrastive DataLoader workers exhausted file descriptors; retrying with persistent_workers=%s, prefetch_factor=%s",  # noqa: E501
                                 loader_persistent_workers,
                                 loader_prefetch_factor,
                             )
