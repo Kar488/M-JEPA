@@ -26,6 +26,7 @@ def test_is_too_many_open_files_detects_nested_oseerror():
         (True, 1, (True, False, 1)),
         (False, 8, (True, False, 4)),
         (False, 1, (False, False, 1)),
+        (True, None, (True, False, None)),
     ],
 )
 def test_backoff_data_loader_workers(persistent, prefetch, expected):
