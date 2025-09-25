@@ -504,7 +504,14 @@ def _clone_graph_data(graph: GraphData) -> GraphData:
         if arr is None:
             return None
         if has_torch and isinstance(arr, _t.Tensor):
-            return arr.detach().clone()
+            # Avoid initialising CUDA in worker processes when tensors happen
+            # to live on a GPU-backed device. Copy to CPU first so cloning does
+            # not touch the CUDA runtime in environments without a GPU.
+            if arr.is_cuda:
+                arr = arr.detach().cpu()
+            else:
+                arr = arr.detach()
+            return arr.clone()
         if hasattr(arr, "copy"):
             return arr.copy()
         return np.array(arr, copy=True)

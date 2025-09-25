@@ -597,7 +597,15 @@ def _clone_graph(graph):
         if a is None:
             return None
         if HAS_TORCH and isinstance(a, _t.Tensor):
-            return a.detach().clone()
+            # Some environments expose CUDA builds of PyTorch without an
+            # accessible GPU. Cloning a CUDA tensor in a DataLoader worker
+            # would try to initialise the CUDA runtime and fail. Force a CPU
+            # copy before cloning so the worker stays device agnostic.
+            if a.is_cuda:
+                a = a.detach().cpu()
+            else:
+                a = a.detach()
+            return a.clone()
         if hasattr(a, "copy"):             # numpy or array-like with .copy()
             return a.copy()
         return np.array(a, copy=True)
