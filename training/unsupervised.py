@@ -556,9 +556,16 @@ def _clone_graph_data(graph: GraphData) -> GraphData:
         if has_torch and isinstance(arr, _t.Tensor):
             # Avoid initialising CUDA in worker processes when tensors happen
             # to live on a GPU-backed device. Copy to CPU first so cloning does
-            # not touch the CUDA runtime in environments without a GPU.
+            # not touch the CUDA runtime in environments without a GPU. If the
+            # CUDA runtime is unavailable, clone on the original device.
             if arr.is_cuda:
-                arr = arr.detach().cpu()
+                try:
+                    if _t.cuda.is_available():
+                        arr = arr.detach().cpu()
+                    else:
+                        return arr.detach().clone()
+                except Exception:
+                    return arr.detach().clone()
             else:
                 arr = arr.detach()
             return arr.clone()
