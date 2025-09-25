@@ -113,3 +113,49 @@ def test_evaluate_finetuned_head_classification(monkeypatch):
     )
     result = finetune.evaluate_finetuned_head("ckpt.pt", ds, args, device="cpu")
     assert "acc" in result
+
+
+def test_maybe_enable_add_3d_sets_flag():
+    args = Namespace(gnn_type="SchNet3D", add_3d=False)
+    requires = finetune._maybe_enable_add_3d(args)
+    assert requires is True
+    assert args.add_3d is True
+
+
+def test_ensure_dataset_has_pos_raises_for_missing_coords():
+    graphs = [
+        GraphData(
+            x=np.ones((1, 1), dtype=np.float32),
+            edge_index=np.zeros((2, 0), dtype=np.int64),
+            pos=None,
+        )
+    ]
+
+    class DummyDataset:
+        def __init__(self, graphs):
+            self.graphs = graphs
+
+    with pytest.raises(ValueError):
+        finetune._ensure_dataset_has_pos(DummyDataset(graphs))
+
+
+def test_ensure_dataset_has_pos_skips_empty_graphs():
+    graphs = [
+        GraphData(
+            x=np.zeros((0, 1), dtype=np.float32),
+            edge_index=np.zeros((2, 0), dtype=np.int64),
+            pos=None,
+        ),
+        GraphData(
+            x=np.ones((1, 1), dtype=np.float32),
+            edge_index=np.zeros((2, 0), dtype=np.int64),
+            pos=np.zeros((1, 3), dtype=np.float32),
+        ),
+    ]
+
+    class DummyDataset:
+        def __init__(self, graphs):
+            self.graphs = graphs
+
+    # Should not raise because the first non-empty graph has coordinates.
+    finetune._ensure_dataset_has_pos(DummyDataset(graphs))
