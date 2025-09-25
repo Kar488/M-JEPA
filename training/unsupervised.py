@@ -1444,7 +1444,7 @@ def train_jepa(
                     total_batches_done += 1
                     if pbar is not None:
                         pbar.update(1)
-            except RuntimeError as exc:
+            except (RuntimeError, OSError) as exc:
                 if (
                     epoch_batches == 0
                     and loader_pin_memory
@@ -1845,7 +1845,7 @@ def train_contrastive(
                     total_batches_done += 1
                     if pbar is not None:
                         pbar.update(1)
-            except RuntimeError as exc:
+            except (RuntimeError, OSError) as exc:
                 if (
                     epoch_batches == 0
                     and loader_pin_memory
