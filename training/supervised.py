@@ -732,8 +732,27 @@ def train_linear_head(
 
     embedding_cache: Dict[int, torch.Tensor] = {}
 
+    def _shutdown_loader(loader: Optional[DataLoader]) -> None:
+        """Close worker pools associated with a DataLoader, if any."""
+        if loader is None:
+            return
+
+        iterator = getattr(loader, "_iterator", None)
+        if iterator is not None:
+            shutdown_workers = getattr(iterator, "_shutdown_workers", None)
+            if callable(shutdown_workers):
+                try:
+                    shutdown_workers()
+                except Exception:
+                    logger.debug("Failed to shutdown DataLoader workers cleanly", exc_info=True)
+
+        try:
+            setattr(loader, "_iterator", None)
+        except Exception:
+            logger.debug("Unable to reset DataLoader iterator state", exc_info=True)
+
     def _handle_pin_memory_failure(err: RuntimeError) -> None:
-        nonlocal pin_memory_enabled, train_loader, val_loader, test_loader
+        nonlocal pin_memory_enabled, train_loader, val_loader, test_loader, num_workers, persistent_workers
 
         if not pin_memory_enabled:
             raise err
@@ -744,8 +763,18 @@ def train_linear_head(
             err,
         )
 
+        _shutdown_loader(train_loader)
+        _shutdown_loader(val_loader)
+        _shutdown_loader(test_loader)
+
+        train_loader = None
+        val_loader = None
+        test_loader = None
+
         pin_memory_enabled = False
         cache_state["enabled"] = False
+        num_workers = 0
+        persistent_workers = False
         embedding_cache.clear()
         train_loader, val_loader, test_loader = _refresh_loaders()
 
