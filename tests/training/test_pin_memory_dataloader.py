@@ -7,6 +7,7 @@ from data.mdataset import GraphData, GraphDataset
 from training.unsupervised import (
     GraphBatch,
     _AugmentedPairDataset,
+    _backoff_num_workers,
     _build_graph_dataloader,
     _collate_graph_pair,
 )
@@ -46,3 +47,10 @@ def test_pinned_memory_dataloader_iterates():
             break
 
     assert batches > 0
+
+
+def test_backoff_num_workers_progressively_reduces_workers():
+    assert _backoff_num_workers(8) == 4
+    assert _backoff_num_workers(3) == 1
+    assert _backoff_num_workers(1) == 0
+    assert _backoff_num_workers(0) == 0

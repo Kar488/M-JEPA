@@ -995,6 +995,14 @@ def _backoff_data_loader_workers(
     return changed, next_persistent_workers, next_prefetch_factor
 
 
+def _backoff_num_workers(num_workers: int) -> int:
+    """Gradually reduce the number of DataLoader workers when needed."""
+
+    if num_workers <= 1:
+        return 0
+    return max(0, num_workers // 2)
+
+
 def _graph_to_tensors(
     g: GraphData, device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -1345,6 +1353,7 @@ def train_jepa(
         loader_pin_memory = pin_memory_enabled
         loader_persistent_workers = active_persistent_workers
         loader_prefetch_factor = prefetch_factor
+        loader_num_workers = num_workers
         while True:
             ep_loss = 0.0
             epoch_batches = 0
@@ -1352,7 +1361,7 @@ def train_jepa(
             dataloader = _build_graph_dataloader(
                 pair_dataset,
                 batch_size=batch_size,
-                num_workers=num_workers,
+                num_workers=loader_num_workers,
                 pin_memory=loader_pin_memory,
                 persistent_workers=loader_persistent_workers,
                 prefetch_factor=loader_prefetch_factor,
@@ -1453,7 +1462,7 @@ def train_jepa(
                     continue
                 if (
                     epoch_batches == 0
-                    and num_workers > 0
+                    and loader_num_workers > 0
                     and _is_too_many_open_files(exc)
                 ):
                     (
@@ -1463,17 +1472,27 @@ def train_jepa(
                     ) = _backoff_data_loader_workers(
                         loader_persistent_workers, loader_prefetch_factor
                     )
+                    next_num_workers = _backoff_num_workers(loader_num_workers)
+                    retry = strategy_changed or next_num_workers != loader_num_workers
                     if next_persistent_workers != loader_persistent_workers:
                         loader_persistent_workers = next_persistent_workers
+                        retry = True
                         if not next_persistent_workers:
                             active_persistent_workers = False
                     if next_prefetch_factor != loader_prefetch_factor:
                         loader_prefetch_factor = next_prefetch_factor
+                        retry = True
+                    if next_num_workers != loader_num_workers:
+                        loader_num_workers = next_num_workers
+                        if loader_num_workers == 0:
+                            loader_persistent_workers = False
+                            active_persistent_workers = False
                     _ensure_file_system_sharing_strategy()
-                    if strategy_changed:
+                    if retry:
                         if is_main_process():
                             logger.warning(
-                                "DataLoader workers exhausted file descriptors; retrying with persistent_workers=%s, prefetch_factor=%s",  # noqa: E501
+                                "DataLoader workers exhausted file descriptors; retrying with num_workers=%s, persistent_workers=%s, prefetch_factor=%s",  # noqa: E501
+                                loader_num_workers,
                                 loader_persistent_workers,
                                 loader_prefetch_factor,
                             )
@@ -1482,8 +1501,11 @@ def train_jepa(
             break
 
         pin_memory_enabled = loader_pin_memory
-        active_persistent_workers = loader_persistent_workers
+        active_persistent_workers = (
+            loader_persistent_workers and loader_num_workers > 0
+        )
         prefetch_factor = loader_prefetch_factor
+        num_workers = loader_num_workers
 
         ep_loss /= max(1, epoch_batches)
         if is_main_process():
@@ -1720,6 +1742,7 @@ def train_contrastive(
         loader_pin_memory = pin_memory_enabled
         loader_persistent_workers = active_persistent_workers
         loader_prefetch_factor = prefetch_factor
+        loader_num_workers = num_workers
         while True:
             ep_loss = 0.0
             epoch_batches = 0
@@ -1727,7 +1750,7 @@ def train_contrastive(
             dataloader = _build_graph_dataloader(
                 pair_dataset,
                 batch_size=batch_size,
-                num_workers=num_workers,
+                num_workers=loader_num_workers,
                 pin_memory=loader_pin_memory,
                 persistent_workers=loader_persistent_workers,
                 prefetch_factor=loader_prefetch_factor,
@@ -1840,7 +1863,7 @@ def train_contrastive(
                     continue
                 if (
                     epoch_batches == 0
-                    and num_workers > 0
+                    and loader_num_workers > 0
                     and _is_too_many_open_files(exc)
                 ):
                     (
@@ -1850,17 +1873,27 @@ def train_contrastive(
                     ) = _backoff_data_loader_workers(
                         loader_persistent_workers, loader_prefetch_factor
                     )
+                    next_num_workers = _backoff_num_workers(loader_num_workers)
+                    retry = strategy_changed or next_num_workers != loader_num_workers
                     if next_persistent_workers != loader_persistent_workers:
                         loader_persistent_workers = next_persistent_workers
+                        retry = True
                         if not next_persistent_workers:
                             active_persistent_workers = False
                     if next_prefetch_factor != loader_prefetch_factor:
                         loader_prefetch_factor = next_prefetch_factor
+                        retry = True
+                    if next_num_workers != loader_num_workers:
+                        loader_num_workers = next_num_workers
+                        if loader_num_workers == 0:
+                            loader_persistent_workers = False
+                            active_persistent_workers = False
                     _ensure_file_system_sharing_strategy()
-                    if strategy_changed:
+                    if retry:
                         if is_main_process():
                             logger.warning(
-                                "Contrastive DataLoader workers exhausted file descriptors; retrying with persistent_workers=%s, prefetch_factor=%s",  # noqa: E501
+                                "Contrastive DataLoader workers exhausted file descriptors; retrying with num_workers=%s, persistent_workers=%s, prefetch_factor=%s",  # noqa: E501
+                                loader_num_workers,
                                 loader_persistent_workers,
                                 loader_prefetch_factor,
                             )
@@ -1869,8 +1902,11 @@ def train_contrastive(
             break
 
         pin_memory_enabled = loader_pin_memory
-        active_persistent_workers = loader_persistent_workers
+        active_persistent_workers = (
+            loader_persistent_workers and loader_num_workers > 0
+        )
         prefetch_factor = loader_prefetch_factor
+        num_workers = loader_num_workers
         ep_loss /= max(1, epoch_batches)
         if is_main_process():
             losses.append(ep_loss)
