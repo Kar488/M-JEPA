@@ -4,6 +4,47 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
+import torch.utils.data.dataloader as _torch_dataloader
+
+
+def _patch_iterator_finalizer() -> None:
+    """Avoid ``AttributeError`` when worker start-up fails mid-construction."""
+
+    iterator_cls = getattr(_torch_dataloader, "_MultiProcessingDataLoaderIter", None)
+    if iterator_cls is None:  # pragma: no cover - backend dependent
+        return
+
+    if getattr(iterator_cls, "__mjepa_patched__", False):
+        return
+
+    original_del = getattr(iterator_cls, "__del__", None)
+    if not callable(original_del):  # pragma: no cover - backend dependent
+        return
+
+    def _safe_del(self) -> None:
+        # ``_workers_status`` is initialised near the end of the constructor.
+        # When spawning worker processes fails (e.g. after running out of file
+        # descriptors) PyTorch may invoke ``__del__`` on a partially constructed
+        # iterator that never defined ``_workers_status``.  The upstream
+        # finaliser assumes the attribute exists and crashes with ``AttributeError``
+        # which is emitted as ``Exception ignored in ...`` noise.  Skipping the
+        # original finaliser in this situation is safe because worker processes
+        # were never launched successfully.
+        if not hasattr(self, "_workers_status"):
+            return
+        try:
+            original_del(self)
+        except AttributeError as exc:  # pragma: no cover - defensive guard
+            if "_workers_status" in str(exc):
+                return
+            raise
+
+    iterator_cls.__del__ = _safe_del  # type: ignore[assignment]
+    setattr(iterator_cls, "__mjepa_patched__", True)
+
+
+_patch_iterator_finalizer()
+
 
 def normalize_prefetch_factor(prefetch_factor: Optional[int]) -> Tuple[Optional[int], Optional[int]]:
     """Return a DataLoader-compatible ``prefetch_factor`` and the original value.
