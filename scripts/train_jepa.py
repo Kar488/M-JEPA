@@ -468,17 +468,53 @@ def aggregate_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, float]:
 
 def resolve_device(preferred: str) -> str:
     """Return a valid PyTorch device string."""
+
     try:
-        if (
-            preferred
-            and preferred != "cpu"
-            and getattr(torch, "cuda", None) is not None
-            and torch.cuda.is_available()  # type: ignore[union-attr]
-        ):
-            return preferred
+        if not preferred:
+            return "cpu"
+
+        # ``torch.device`` performs basic validation (e.g. catches typos such as
+        # ``cudda``).  When the real torch package is unavailable our stub raises
+        # ``ModuleNotFoundError`` here, which we treat as a signal to fall back to
+        # CPU.
+        device = torch.device(preferred)
     except Exception:
-        pass
-    return "cpu"
+        return "cpu"
+
+    if device.type != "cuda":
+        return str(device)
+
+    try:
+        cuda = getattr(torch, "cuda")
+    except Exception:
+        return "cpu"
+
+    try:
+        if not cuda.is_available():  # type: ignore[attr-defined]
+            return "cpu"
+
+        index = getattr(device, "index", None)
+        if index is not None and index >= 0:
+            try:
+                if index >= cuda.device_count():  # type: ignore[attr-defined]
+                    return "cpu"
+            except Exception:
+                return "cpu"
+
+        # Some environments ship CUDA builds of PyTorch but do not provide a
+        # functioning GPU runtime (common on CI machines).  Attempting to touch
+        # CUDA later would surface an opaque ``AcceleratorError``.  Proactively
+        # allocate a tiny tensor so we can fall back to CPU with a clear error
+        # message instead.
+        try:
+            torch.empty(0, device=device)
+        except Exception:
+            return "cpu"
+
+        return str(device)
+    except Exception:
+        return "cpu"
+
 
 
 # ---------------------------------------------------------------------------
