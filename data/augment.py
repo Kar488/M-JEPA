@@ -600,9 +600,17 @@ def _clone_graph(graph):
             # Some environments expose CUDA builds of PyTorch without an
             # accessible GPU. Cloning a CUDA tensor in a DataLoader worker
             # would try to initialise the CUDA runtime and fail. Force a CPU
-            # copy before cloning so the worker stays device agnostic.
+            # copy before cloning so the worker stays device agnostic. If the
+            # CUDA runtime cannot be used, fall back to cloning on the
+            # original device instead of raising an ``AcceleratorError``.
             if a.is_cuda:
-                a = a.detach().cpu()
+                try:
+                    if _t.cuda.is_available():
+                        a = a.detach().cpu()
+                    else:
+                        return a.detach().clone()
+                except Exception:
+                    return a.detach().clone()
             else:
                 a = a.detach()
             return a.clone()
