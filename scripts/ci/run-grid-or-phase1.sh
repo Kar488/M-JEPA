@@ -191,14 +191,20 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
   PE_JSON="${GRID_DIR:-$APP_DIR/grid}/paired_effect.json"
   if [[ -f "$PE_JSON" ]]; then
-    if command -v jq >/dev/null 2>&1; then
-      METHOD_WINNER="$(jq -r '.winner // "jepa"' "$PE_JSON")"
-      TASK_FROM_PE="$(jq -r '.task   // "regression"' "$PE_JSON")"
+    if ! py=$(python_bin 2>/dev/null); then
+      echo "[phase1][fatal] python interpreter not found for tie resolution" >&2
+      exit 1
+    fi
+
+    if read -r METHOD_WINNER TASK_FROM_PE PE_DECISION_STATUS < <(
+      "$py" -m scripts.ci.phase1_decision "$PE_JSON"
+    ); then
+      if [[ "$PE_DECISION_STATUS" == "tie" ]]; then
+        echo "[phase1] paired-effect reported ~zero delta; defaulting to JEPA"
+      fi
     else
-      METHOD_WINNER="$(grep -o '"winner"\s*:\s*"[^"]*"' "$PE_JSON" | head -1 | sed 's/.*"winner"\s*:\s*"\([^"]*\)".*/\1/')"
-      TASK_FROM_PE="$(grep -o '"task"\s*:\s*"[^"]*"' "$PE_JSON" | head -1 | sed 's/.*"task"\s*:\s*"\([^"]*\)".*/\1/')"
-      : "${METHOD_WINNER:=jepa}"
-      : "${TASK_FROM_PE:=regression}"
+      echo "[phase1][fatal] failed to interpret paired-effect output" >&2
+      exit 1
     fi
   else
     echo "[phase1][warn] ${PE_JSON} not found; falling back to defaults (winner=jepa, task=regression)"

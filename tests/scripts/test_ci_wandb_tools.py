@@ -11,6 +11,7 @@ sys.modules.setdefault("wandb", types.SimpleNamespace(Api=lambda: None))
 
 from scripts.ci import export_best_from_wandb as eb
 from scripts.ci import paired_effect_from_wandb as pe
+from scripts.ci import phase1_decision as pd
 from scripts.ci import recheck_topk_from_wandb as rc
 
 
@@ -190,6 +191,31 @@ def test_paired_effect_ties_default_to_jepa(monkeypatch, tmp_path):
     assert payload["winner"] == "jepa"
     assert payload["mean_delta_contrastive_minus_jepa"] == 0.0
 
+
+def test_phase1_decision_handles_ties_and_missing_keys():
+    payload = {
+        "direction": "min",
+        "winner": "contrastive",
+        "mean_delta_contrastive_minus_jepa": 0.0,
+        "pairs": 1,
+    }
+
+    winner, task, tie = pd.resolve_phase1_decision(payload)
+    assert winner == "jepa"
+    assert task == "regression"
+    assert tie is True
+
+    # Missing winner but non-zero delta → derive from direction.
+    payload2 = {
+        "direction": "max",
+        "mean_delta_contrastive_minus_jepa": 0.5,
+        "task": None,
+    }
+
+    winner2, task2, tie2 = pd.resolve_phase1_decision(payload2)
+    assert winner2 == "contrastive"
+    assert task2 == "classification"
+    assert tie2 is False
 
 def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_DIR", str(tmp_path))
