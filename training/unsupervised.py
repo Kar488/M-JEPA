@@ -376,6 +376,29 @@ class GraphBatch:
             pos=state.get("pos"),
         )
 
+
+_DEVICE_MOVE_LOGGED = False
+
+
+def _move_graph_batch_to_device(batch: GraphBatch, device: torch.device | str) -> GraphBatch:
+    """Move ``batch`` to ``device`` from the main process."""
+
+    global _DEVICE_MOVE_LOGGED
+    try:
+        worker_info = torch.utils.data.get_worker_info()
+    except Exception:  # pragma: no cover - torch may not expose worker info
+        worker_info = None
+    if worker_info is not None:
+        raise RuntimeError(
+            "_move_graph_batch_to_device was called inside a DataLoader worker; "
+            "batches must remain on CPU until the main process performs the device transfer."
+        )
+    device_obj = torch.device(device)
+    if not _DEVICE_MOVE_LOGGED:
+        logger.info("Moving graph batches to %s in the main process", device_obj)
+        _DEVICE_MOVE_LOGGED = True
+    return batch.to(device_obj)
+
 def _step_optimizer(
     loss: torch.Tensor,
     optimizer: optim.Optimizer,
@@ -539,6 +562,30 @@ def _collate_graph_batch(batch: Sequence[GraphData] | GraphBatch) -> Dict[str, A
     return batch_obj.pack()
 
 
+def _ensure_worker_cpu_tensor(tensor: Any, *, context: str) -> None:
+    """Raise when CUDA tensors leak into DataLoader workers."""
+
+    try:  # pragma: no cover - torch optional in lightweight stubs
+        import torch as _t
+    except Exception:
+        return
+    if not isinstance(tensor, _t.Tensor) or tensor.device.type == "cpu":
+        return
+    try:
+        worker_info_fn = getattr(_t.utils.data, "get_worker_info", None)
+        worker = worker_info_fn() if callable(worker_info_fn) else None
+    except Exception:
+        worker = None
+    if worker is None:
+        return
+    location = f"DataLoader worker {worker.id}" if hasattr(worker, "id") else "a DataLoader worker"
+    raise RuntimeError(
+        f"{context} received a tensor on device '{tensor.device}' inside {location}. "
+        "Graph featurisation and augmentation must stay on CPU; move tensors to the target "
+        "device in the main process."
+    )
+
+
 def _clone_graph_data(graph: GraphData) -> GraphData:
     """Deep copy a :class:`GraphData` instance (numpy or torch backed)."""
 
@@ -554,21 +601,7 @@ def _clone_graph_data(graph: GraphData) -> GraphData:
         if arr is None:
             return None
         if has_torch and isinstance(arr, _t.Tensor):
-            # Avoid initialising CUDA in worker processes when tensors happen
-            # to live on a GPU-backed device. Copy to CPU first so cloning does
-            # not touch the CUDA runtime in environments without a GPU. If the
-            # CUDA runtime cannot be touched, degrade gracefully by returning a
-            # detached tensor instead of bubbling up an ``AcceleratorError``.
-            if arr.is_cuda:
-                try:
-                    if _t.cuda.is_available():
-                        return arr.detach().cpu().clone()
-                    return arr.detach().clone()
-                except Exception:
-                    try:
-                        return arr.detach().to(device=_t.device("cpu"), copy=True)
-                    except Exception:
-                        return arr.detach()
+            _ensure_worker_cpu_tensor(arr, context="_clone_graph_data")
             return arr.detach().clone()
         if hasattr(arr, "copy"):
             return arr.copy()
@@ -1455,8 +1488,8 @@ def train_jepa(
                     if ctx_batch.num_graphs == 0 or tgt_batch.num_graphs == 0:
                         continue
 
-                    ctx_batch = ctx_batch.to(device_t)
-                    tgt_batch = tgt_batch.to(device_t)
+                    ctx_batch = _move_graph_batch_to_device(ctx_batch, device_t)
+                    tgt_batch = _move_graph_batch_to_device(tgt_batch, device_t)
 
                     with torch.amp.autocast(
                         device_type="cuda",
@@ -1844,8 +1877,8 @@ def train_contrastive(
                     if view1_batch.num_graphs == 0 or view2_batch.num_graphs == 0:
                         continue
 
-                    view1_batch = view1_batch.to(device_t)
-                    view2_batch = view2_batch.to(device_t)
+                    view1_batch = _move_graph_batch_to_device(view1_batch, device_t)
+                    view2_batch = _move_graph_batch_to_device(view2_batch, device_t)
 
                     with torch.amp.autocast(
                         device_type="cuda", enabled=amp_enabled, dtype=_amp_dtype

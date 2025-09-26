@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from dataclasses import dataclass
 from itertools import product
@@ -21,6 +22,8 @@ try:  # GraphData is optional for lightweight imports
     from data.mdataset import GraphData  # type: ignore
 except Exception:  # pragma: no cover
     GraphData = Any  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "AugmentationConfig",
@@ -400,7 +403,8 @@ def mask_subgraph(
                     import torch as _t  # type: ignore
 
                     if isinstance(edge_index, _t.Tensor):
-                        edges = edge_index.detach().cpu().numpy().astype(np.int64, copy=False)
+                        _ensure_worker_cpu_tensor(edge_index, context="mask_subgraph")
+                        edges = edge_index.detach().numpy().astype(np.int64, copy=False)
                 except Exception:  # pragma: no cover - torch missing
                     edges = None
             if edges is None:
@@ -583,7 +587,32 @@ def apply_graph_augmentations(
         g = remove_random_subgraph(g)
 
     return g
-        
+
+
+def _ensure_worker_cpu_tensor(tensor: Any, *, context: str) -> None:
+    """Raise when CUDA tensors reach DataLoader workers."""
+
+    try:  # pragma: no cover - torch optional during lightweight imports
+        import torch as _t
+    except Exception:
+        return
+    if not isinstance(tensor, _t.Tensor) or tensor.device.type == "cpu":
+        return
+    try:
+        worker_info_fn = getattr(_t.utils.data, "get_worker_info", None)
+        worker = worker_info_fn() if callable(worker_info_fn) else None
+    except Exception:
+        worker = None
+    if worker is None:  # main process
+        return
+    location = f"DataLoader worker {worker.id}" if hasattr(worker, "id") else "a DataLoader worker"
+    raise RuntimeError(
+        f"{context} received a tensor on device '{tensor.device}' inside {location}. "
+        "Graph featurisation and augmentation must remain on CPU so workers "
+        "do not initialse CUDA. Move tensors to the accelerator in the main process."
+    )
+
+
 def _clone_graph(graph):
     """Clone GraphData that may store numpy arrays or torch tensors."""
     import numpy as np
@@ -597,27 +626,9 @@ def _clone_graph(graph):
         if a is None:
             return None
         if HAS_TORCH and isinstance(a, _t.Tensor):
-            # Some environments expose CUDA builds of PyTorch without an
-            # accessible GPU. Cloning a CUDA tensor in a DataLoader worker
-            # would try to initialise the CUDA runtime and fail. Force a CPU
-            # copy before cloning so the worker stays device agnostic. If the
-            # CUDA runtime cannot be used, fall back to a shallow detach so we
-            # at least return a tensor instead of raising an
-            # ``AcceleratorError``.
-            if a.is_cuda:
-                try:
-                    if _t.cuda.is_available():
-                        return a.detach().cpu().clone()
-                    return a.detach().clone()
-                except Exception:
-                    try:
-                        # As a best effort, attempt to materialise a CPU copy
-                        # without touching the CUDA runtime again.
-                        return a.detach().to(device=_t.device("cpu"), copy=True)
-                    except Exception:
-                        return a.detach()
+            _ensure_worker_cpu_tensor(a, context="_clone_graph")
             return a.detach().clone()
-        if hasattr(a, "copy"):             # numpy or array-like with .copy()
+        if hasattr(a, "copy"):  # numpy or array-like with .copy()
             return a.copy()
         return np.array(a, copy=True)
 

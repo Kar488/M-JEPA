@@ -21,11 +21,17 @@ _RUNNING_IN_CI = os.getenv("CI") == "true"  # run local vs remote
 # RDKit imports
 try:
     from rdkit import Chem
+    from rdkit import RDLogger
     from rdkit.Chem import AllChem
     from rdkit.Chem import rdMolTransforms as MT
 except Exception as e:
     if _RUNNING_IN_CI:
         raise ImportError("RDKit is required in CI for SMILES parsing.")
+else:  # pragma: no cover - depends on rdkit availability
+    try:
+        RDLogger.logger().setLevel(RDLogger.ERROR)
+    except Exception:
+        pass
 
 import pandas as pd
 
