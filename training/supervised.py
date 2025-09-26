@@ -11,6 +11,7 @@ possible. Performance metrics are computed using utilities from
 from __future__ import annotations
 
 import logging
+import math
 import random
 import time as _time
 from types import SimpleNamespace
@@ -679,6 +680,22 @@ def train_linear_head(
     collate_fn = _GraphBatchCollator(dataset, task_type)
     pin_memory_enabled = bool(pin_memory and device_t.type == "cuda")
     cache_state = {"enabled": bool(cache_graph_embeddings)}
+
+    def _effective_worker_count(split_size: int) -> int:
+        if num_workers <= 0:
+            return 0
+        if split_size <= 0:
+            return 0
+        approx_batches = max(1, math.ceil(split_size / max(1, batch_size)))
+        effective = min(num_workers, approx_batches)
+        if effective < num_workers:
+            logger.debug(
+                "Reducing DataLoader workers from %d to %d for split of %d samples",
+                num_workers,
+                effective,
+                split_size,
+            )
+        return effective
     if num_workers > 0:
         normalized_prefetch, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
         if bad_prefetch is not None:
@@ -692,16 +709,17 @@ def train_linear_head(
     def _build_loader(indices: List[int], shuffle: bool) -> Optional[DataLoader]:
         if not indices:
             return None
+        worker_count = _effective_worker_count(len(indices))
         loader_kwargs = {
             "batch_size": batch_size,
             "shuffle": shuffle,
-            "num_workers": num_workers,
+            "num_workers": worker_count,
             "pin_memory": pin_memory_enabled,
             "collate_fn": collate_fn,
             "drop_last": False,
         }
-        if num_workers > 0:
-            loader_kwargs["persistent_workers"] = persistent_workers
+        if worker_count > 0:
+            loader_kwargs["persistent_workers"] = bool(persistent_workers)
             if prefetch_factor is not None:
                 loader_kwargs["prefetch_factor"] = prefetch_factor
         return DataLoader(list(indices), **loader_kwargs)
@@ -714,6 +732,15 @@ def train_linear_head(
         )
 
     train_loader, val_loader, test_loader = _refresh_loaders()
+
+    def _get_loader(name: str) -> Optional[DataLoader]:
+        if name == "train":
+            return train_loader
+        if name == "val":
+            return val_loader
+        if name == "test":
+            return test_loader
+        raise ValueError(f"Unknown loader name: {name}")
 
     _start_wall = _time.perf_counter()
 
@@ -751,15 +778,15 @@ def train_linear_head(
         except Exception:
             logger.debug("Unable to reset DataLoader iterator state", exc_info=True)
 
-    def _handle_pin_memory_failure(err: RuntimeError) -> None:
+    def _handle_pin_memory_failure(err: BaseException) -> bool:
         nonlocal pin_memory_enabled, train_loader, val_loader, test_loader, num_workers, persistent_workers
 
-        if not pin_memory_enabled:
-            raise err
+        if not pin_memory_enabled and num_workers == 0:
+            return False
 
         logger.warning(
-            "Pin-memory DataLoader pipeline failed during embedding caching (%s). "
-            "Rebuilding loaders without pinned memory and disabling the cache.",
+            "Pin-memory DataLoader pipeline failed (%s). "
+            "Rebuilding loaders without pinned memory, disabling the cache, and reducing workers.",
             err,
         )
 
@@ -777,6 +804,22 @@ def train_linear_head(
         persistent_workers = False
         embedding_cache.clear()
         train_loader, val_loader, test_loader = _refresh_loaders()
+        return True
+
+    def _should_retry_loader_error(err: BaseException) -> bool:
+        msg = str(err).lower()
+        triggers = (
+            "pin memory",
+            "pin_memory",
+            "pin memory thread",
+            "pin_memory thread",
+            "too many open files",
+            "errno 24",
+            "ancdata",
+        )
+        if any(trigger in msg for trigger in triggers):
+            return _handle_pin_memory_failure(err)
+        return False
 
     def _get_graph_embeddings(
         batch_x: torch.Tensor,
@@ -803,27 +846,46 @@ def train_linear_head(
 
         return graph_emb
 
-    def _precompute_embeddings(loader: Optional[DataLoader]) -> None:
-        if not cache_state["enabled"] or loader is None:
+    def _precompute_embeddings(loader_name: str) -> None:
+        if not cache_state["enabled"]:
             return
-        for batch in loader:
-            batch_x, batch_adj, batch_ptr, _, batch_meta = _move_batch_to_device(
-                batch, device_t, pin_memory_enabled
-            )
-            _get_graph_embeddings(batch_x, batch_adj, batch_ptr, batch_meta)
+        while True:
+            loader = _get_loader(loader_name)
+            if loader is None:
+                return
+            try:
+                for batch in loader:
+                    batch_x, batch_adj, batch_ptr, _, batch_meta = _move_batch_to_device(
+                        batch, device_t, pin_memory_enabled
+                    )
+                    _get_graph_embeddings(batch_x, batch_adj, batch_ptr, batch_meta)
+                return
+            except (RuntimeError, OSError) as err:
+                if not _should_retry_loader_error(err):
+                    raise
 
     if cache_state["enabled"]:
         encoder.eval()
         try:
-            _precompute_embeddings(train_loader)
-            _precompute_embeddings(val_loader)
-            _precompute_embeddings(test_loader)
+            _precompute_embeddings("train")
+            _precompute_embeddings("val")
+            _precompute_embeddings("test")
         except (RuntimeError, OSError) as err:
-            msg = str(err).lower()
-            if "pin memory" in msg or "ancdata" in msg or "too many open files" in msg:
-                _handle_pin_memory_failure(err)
-            else:
+            if not _should_retry_loader_error(err):
                 raise
+
+    def _yield_batches(name: str):
+        while True:
+            loader = _get_loader(name)
+            if loader is None:
+                return
+            try:
+                for batch in loader:
+                    yield batch
+                return
+            except (RuntimeError, OSError) as err:
+                if not _should_retry_loader_error(err):
+                    raise
 
     if train_loader is None:
         logger.warning("No training samples available; skipping linear-head optimisation.")
@@ -846,7 +908,7 @@ def train_linear_head(
             epoch_batches = 0
             hit_batch_cap = False
 
-            for batch in train_loader:
+            for batch in _yield_batches("train"):
                 if max_batches > 0 and total_batches_done >= max_batches:
                     hit_batch_cap = True
                     break
@@ -895,7 +957,7 @@ def train_linear_head(
                 head_module.eval()
                 val_losses = []
 
-                for batch in val_loader:
+                for batch in _yield_batches("val"):
                     batch_x, batch_adj, batch_ptr, batch_labels, batch_meta = _move_batch_to_device(
                         batch, device_t, pin_memory_enabled
                     )
@@ -941,7 +1003,7 @@ def train_linear_head(
         all_preds = []
 
         if test_loader is not None:
-            for batch in test_loader:
+            for batch in _yield_batches("test"):
                 batch_x, batch_adj, batch_ptr, batch_labels, batch_meta = _move_batch_to_device(
                     batch, device_t, pin_memory_enabled
                 )
@@ -952,7 +1014,6 @@ def train_linear_head(
                 param = next(head_param_source.parameters(), None)
                 if param is not None and graph_emb.dtype != param.dtype:
                     graph_emb = graph_emb.to(param.dtype)
-
 
                 with _amp_context():
                     preds = head_module(graph_emb).squeeze(1)

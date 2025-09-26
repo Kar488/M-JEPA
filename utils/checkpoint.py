@@ -31,6 +31,29 @@ import os, shutil, logging, torch
 logger = logging.getLogger(__name__)
 from collections.abc import Mapping
 
+
+def _copy_within_shape(target, source):
+    """Create a tensor shaped like ``target`` populated with overlapping data from ``source``."""
+
+    if torch is None:
+        return None
+    if not torch.is_tensor(target) or not torch.is_tensor(source):
+        return None
+    if target.ndim != source.ndim:
+        return None
+
+    try:
+        new_tensor = target.clone().zero_()
+    except Exception:
+        return None
+
+    slices = tuple(slice(0, min(ts, ss)) for ts, ss in zip(target.shape, source.shape))
+    try:
+        new_tensor[slices] = source[slices]
+    except Exception:
+        return None
+    return new_tensor
+
 def load_state_dict_forgiving(module, state_dict):
     """
     Best-effort weight loader:
@@ -69,13 +92,39 @@ def load_state_dict_forgiving(module, state_dict):
         if not isinstance(current, Mapping):
             logger.warning("Module %s state_dict() did not return a Mapping; skipping load.", type(module).__name__)
             return None
-        filtered = {k: v for k, v in state_dict.items()
-                    if k in current and getattr(current[k], "shape", None) == getattr(v, "shape", None)}
-        res = module.load_state_dict(filtered, strict=False)
+
+        adapted = {}
+        resized: list[str] = []
+        for key, value in state_dict.items():
+            if key not in current:
+                continue
+            curr_val = current[key]
+            curr_shape = getattr(curr_val, "shape", None)
+            value_shape = getattr(value, "shape", None)
+            if curr_shape is None or value_shape is None:
+                if curr_shape == value_shape:
+                    adapted[key] = value
+                continue
+
+            if curr_shape == value_shape:
+                adapted[key] = value
+                continue
+
+            replacement = _copy_within_shape(curr_val, value)
+            if replacement is not None:
+                adapted[key] = replacement
+                resized.append(f"{key}: {tuple(value_shape)} -> {tuple(curr_shape)}")
+
+        res = module.load_state_dict(adapted, strict=False)
         miss = getattr(res, "missing_keys", [])
         unexp = getattr(res, "unexpected_keys", [])
         if miss or unexp:
             logger.warning("Filtered load: missing=%s unexpected=%s", miss, unexp)
+        if resized:
+            logger.warning(
+                "Resized checkpoint tensors to match module: %s",
+                "; ".join(resized),
+            )
         return res
     except Exception:
         logger.exception("Forgiving load: shape-filtered load also failed; skipping.")
