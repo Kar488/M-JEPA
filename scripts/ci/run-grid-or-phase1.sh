@@ -63,6 +63,27 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   TMP_JEPA="$(mktemp)";      yq ".method = \"random\"" "$JEPA_SPEC" > "$TMP_JEPA"
   TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\"" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
 
+  if [[ -n "${PHASE1_BACKBONES:-}" ]]; then
+    export PHASE1_BACKBONES
+    for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
+      yq -i '.parameters.gnn_type.values = (strenv(PHASE1_BACKBONES)
+        | split(",")
+        | map(gsub("^\\s+|\\s+$"; ""))
+        | map(select(length > 0)))' "$spec"
+    done
+  fi
+
+  if [[ -n "${PHASE1_SEEDS:-}" ]]; then
+    export PHASE1_SEEDS
+    for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
+      yq -i '.parameters.seed.values = (strenv(PHASE1_SEEDS)
+        | split(",")
+        | map(gsub("^\\s+|\\s+$"; ""))
+        | map(select(length > 0))
+        | map(tonumber))' "$spec"
+    done
+  fi
+
   check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
 
   JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"

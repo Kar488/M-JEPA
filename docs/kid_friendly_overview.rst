@@ -236,3 +236,73 @@ better of the two methods for each backbone.  A second phase of sweeps
 explores a wider range of hyper‑parameters for the winning method.  See
 ``agents.md`` in the repository root for a detailed description of how
 these agents and sweeps work.
+
+FAQ
+---
+
+Why did a 30-run phase-1 sweep report only nine pairs?
+  The phase-1 driver launches one sweep for JEPA and one for the
+  contrastive baseline, and each sweep reuses the same grid of shared
+  hyper-parameters: the backbone ``gnn_type`` values ``gine``, ``dmpnn``
+  and ``schnet3d`` and the random seeds ``{1, 2, 3}``.  The paired-effect
+  script only forms a pair when it finds matching runs from *both*
+  methods that share the same backbone and seed, so there can be at most
+  ``3 backbones × 3 seeds = 9`` such combinations.  Extra trials that a
+  sweep might launch beyond that grid explore method-specific knobs
+  (such as JEPA's ``mask_ratio`` or ``ema_decay``) and still feed phase-2
+  selection, but they do not increase the matched-pair count because they
+  lack a partner run from the other method with identical shared
+  settings.  Seeing nine pairs therefore means *both* methods populated
+  every backbone/seed slot the key expects; if JEPA were missing entirely
+  the report would exit with "No runs found" (under ``--strict``) instead
+  of printing a winner.
+
+What happens when there is no clear winner on the primary metric?
+  ``paired_effect_from_wandb.py`` compares JEPA and contrastive runs only
+  on the requested metric (``val_rmse`` by default) and never consults a
+  secondary score.  It first tries to compute per-seed deltas using the
+  shared backbone/seed grid; if no overlapping seeds exist it falls back
+  to mean-per-method deltas for that ``pair_id`` and, as a last resort,
+  to a single global mean delta when *no* pairs survived the filters.
+  After those reductions, the mean delta decides the winner—lower is
+  better for metrics ending in ``rmse``/``loss`` and higher is better for
+  metrics like ``auc``.  A tie (exactly zero mean delta) implicitly goes
+  to JEPA because the code chooses contrastive only when the contrastive
+  mean beats JEPA by the chosen direction.  There is no hidden
+  tie-breaker or secondary metric to consult; instead, the script writes
+  out ``pairs_used`` and ``aggregate`` fields in ``paired_effect.json`` so
+  you can audit whether the decision came from seed-wise pairs, per-pair
+  means, or the global fallback.
+
+What configuration keys form a "pair" today?
+  The ``pair_id`` that links JEPA and contrastive runs is the hash of four
+  architecture knobs written by ``scripts/commands/sweep_run.py``:
+  ``gnn_type`` (which backbone was chosen), ``hidden_dim`` (model width),
+  ``num_layers`` (depth), and ``contiguity`` (whether the masking window
+  must stay contiguous).  Because both sweeps share those knobs, they act
+  as the common key when the paired-effect report groups runs.  There is
+  no need to adjust the key as long as new sweeps stick to the same
+  shared backbone grid—method-specific settings (like JEPA's ``mask_ratio``
+  or contrastive temperature) live outside the key on purpose so each
+  method can search them independently.  Only if we introduced another
+  architecture hyper-parameter that *both* methods tuned (for example, a
+  new notion of encoder width) would we extend the key to include it.
+
+How do we increase the number of matched pairs beyond ``3 × 3 = 9``?
+  If the variance of the paired comparison feels too high, you can grow the
+  shared backbone grid instead of editing the pairing key.  The phase-1
+  launcher ``scripts/ci/run-grid-or-phase1.sh`` now understands two
+  environment variables:
+
+  - ``PHASE1_BACKBONES`` – a comma-separated list of backbones to plug into
+    both sweep specs (for example ``gine,dmpnn,schnet3d,gin``).
+  - ``PHASE1_SEEDS`` – a comma-separated list of integer seeds to apply to
+    both sweeps (for example ``1,2,3,4,5``).
+
+  Setting either variable rewrites the temporary YAML files that the script
+  hands to Weights & Biases, so you can run
+  ``PHASE1_SEEDS=1,2,3,4,5 GRID_MODE=wandb bash scripts/ci/run-grid-or-phase1.sh``
+  and obtain ``3 backbones × 5 seeds = 15`` potential pairs without touching
+  the tracked sweep templates.  This keeps the shared pairing knobs explicit
+  while making it easy to dial up the number of matched runs when additional
+  budget is available.
