@@ -152,6 +152,45 @@ def test_paired_effect_limits_pairs_to_shared_seeds(monkeypatch, tmp_path):
     assert pytest.approx(payload["mean_delta_contrastive_minus_jepa"], rel=1e-6) == expected_delta
 
 
+def test_paired_effect_ties_default_to_jepa(monkeypatch, tmp_path):
+    """When the aggregate delta is exactly zero the code should not invent a tiebreaker."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    runs = [
+        FakeRun("j_seed", {"training_method": "jepa", "pair_id": "pid", "seed": 1}, {"val_rmse": 0.5}),
+        FakeRun("c_seed", {"training_method": "contrastive", "pair_id": "pid", "seed": 1}, {"val_rmse": 0.5}),
+    ]
+
+    class FakeApi:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: FakeApi()))
+
+    out = tmp_path / "pe_tie.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+
+    assert payload["pairs"] == 1
+    assert payload["winner"] == "jepa"
+    assert payload["mean_delta_contrastive_minus_jepa"] == 0.0
+
+
 def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_DIR", str(tmp_path))
     monkeypatch.setenv("GRID_DIR", str(tmp_path))
