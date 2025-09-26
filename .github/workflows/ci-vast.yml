@@ -287,7 +287,7 @@ jobs:
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 4
+          WANDB_COUNT: 30
           GRID_MODE: "wandb"   # or "custom"
           EXPORT_OUT_PATH: ${{ env.GRID_DIR }}/best_grid_config.json
           EXPORT_PHASE2_PATH: ${{ env.GRID_DIR }}/grid_sweep_phase2.yaml
@@ -325,7 +325,7 @@ jobs:
            # agent knobs (already have these)
           HARD_WALL_MINS: 920
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 10
+          WANDB_COUNT: 24
           # recheck knobs (separate budget)
           TOPK_RECHECK: 5
           EXTRA_SEEDS: 3
@@ -465,6 +465,6 @@ jobs:
         env:
           HARD_WALL_MINS: 60
           KILL_AFTER_SECS: 120
-          PRETRAIN_EPOCHS: "40"
-          FINETUNE_EPOCHS: "8"
+          PRETRAIN_EPOCHS: "100"
+          FINETUNE_EPOCHS: "50"
           BESTCFG_NO_EPOCHS: "1"
