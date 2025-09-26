@@ -818,7 +818,7 @@ def train_linear_head(
             _precompute_embeddings(train_loader)
             _precompute_embeddings(val_loader)
             _precompute_embeddings(test_loader)
-        except RuntimeError as err:
+        except (RuntimeError, OSError) as err:
             msg = str(err).lower()
             if "pin memory" in msg or "ancdata" in msg or "too many open files" in msg:
                 _handle_pin_memory_failure(err)
