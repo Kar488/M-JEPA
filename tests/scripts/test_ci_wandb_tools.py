@@ -11,6 +11,7 @@ sys.modules.setdefault("wandb", types.SimpleNamespace(Api=lambda: None))
 
 from scripts.ci import export_best_from_wandb as eb
 from scripts.ci import paired_effect_from_wandb as pe
+from scripts.ci import phase1_decision as pd
 from scripts.ci import recheck_topk_from_wandb as rc
 
 
@@ -100,6 +101,121 @@ def test_paired_effect_winner_and_no_pairs(monkeypatch, tmp_path, capsys):
     assert data3["pairs_used"] == 0
     assert data3["winner"] == "jepa"
 
+
+def test_paired_effect_limits_pairs_to_shared_seeds(monkeypatch, tmp_path):
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    # Simulate a single backbone (pair_id="abc123") evaluated under three seeds for
+    # both methods.  Each method also reports duplicate runs per seed to mimic the
+    # behaviour of larger sweeps (e.g. WANDB_COUNT=30) exploring extra hyper-params
+    # that do not alter the pairing key.
+    runs = [
+        FakeRun("j_seed1_a", {"training_method": "jepa", "pair_id": "abc123", "seed": 1}, {"val_rmse": 0.50}),
+        FakeRun("j_seed1_b", {"training_method": "jepa", "pair_id": "abc123", "seed": 1}, {"val_rmse": 0.52}),
+        FakeRun("j_seed2",   {"training_method": "jepa", "pair_id": "abc123", "seed": 2}, {"val_rmse": 0.48}),
+        FakeRun("j_seed3",   {"training_method": "jepa", "pair_id": "abc123", "seed": 3}, {"val_rmse": 0.46}),
+        FakeRun("c_seed1",   {"training_method": "contrastive", "pair_id": "abc123", "seed": 1}, {"val_rmse": 0.55}),
+        FakeRun("c_seed1_b", {"training_method": "contrastive", "pair_id": "abc123", "seed": 1}, {"val_rmse": 0.53}),
+        FakeRun("c_seed2",   {"training_method": "contrastive", "pair_id": "abc123", "seed": 2}, {"val_rmse": 0.50}),
+        FakeRun("c_seed3",   {"training_method": "contrastive", "pair_id": "abc123", "seed": 3}, {"val_rmse": 0.47}),
+    ]
+
+    class FakeApi:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: FakeApi()))
+
+    out = tmp_path / "pe_seeds.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+
+    # Even with eight total runs, the tool should report three paired deltas – one
+    # per shared seed – and note that they came from a single pair_id.
+    assert payload["pairs"] == 3
+    assert payload["pairs_used"] == 1
+    # mean contrastive minus JEPA per seed → ((0.54-0.51) + (0.50-0.48) + (0.47-0.46)) / 3
+    expected_delta = ((0.54 - 0.51) + (0.50 - 0.48) + (0.47 - 0.46)) / 3
+    assert pytest.approx(payload["mean_delta_contrastive_minus_jepa"], rel=1e-6) == expected_delta
+
+
+def test_paired_effect_ties_default_to_jepa(monkeypatch, tmp_path):
+    """When the aggregate delta is exactly zero the code should not invent a tiebreaker."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    runs = [
+        FakeRun("j_seed", {"training_method": "jepa", "pair_id": "pid", "seed": 1}, {"val_rmse": 0.5}),
+        FakeRun("c_seed", {"training_method": "contrastive", "pair_id": "pid", "seed": 1}, {"val_rmse": 0.5}),
+    ]
+
+    class FakeApi:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: FakeApi()))
+
+    out = tmp_path / "pe_tie.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+
+    assert payload["pairs"] == 1
+    assert payload["winner"] == "jepa"
+    assert payload["mean_delta_contrastive_minus_jepa"] == 0.0
+
+
+def test_phase1_decision_handles_ties_and_missing_keys():
+    payload = {
+        "direction": "min",
+        "winner": "contrastive",
+        "mean_delta_contrastive_minus_jepa": 0.0,
+        "pairs": 1,
+    }
+
+    winner, task, tie = pd.resolve_phase1_decision(payload)
+    assert winner == "tie"
+    assert task == "regression"
+    assert tie is True
+
+    # Missing winner but non-zero delta → derive from direction.
+    payload2 = {
+        "direction": "max",
+        "mean_delta_contrastive_minus_jepa": 0.5,
+        "task": None,
+    }
+
+    winner2, task2, tie2 = pd.resolve_phase1_decision(payload2)
+    assert winner2 == "contrastive"
+    assert task2 == "classification"
+    assert tie2 is False
 
 def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_DIR", str(tmp_path))

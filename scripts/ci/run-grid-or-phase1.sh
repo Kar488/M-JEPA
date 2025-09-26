@@ -63,6 +63,27 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   TMP_JEPA="$(mktemp)";      yq ".method = \"random\"" "$JEPA_SPEC" > "$TMP_JEPA"
   TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\"" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
 
+  if [[ -n "${PHASE1_BACKBONES:-}" ]]; then
+    export PHASE1_BACKBONES
+    for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
+      yq -i '.parameters.gnn_type.values = (strenv(PHASE1_BACKBONES)
+        | split(",")
+        | map(gsub("^\\s+|\\s+$"; ""))
+        | map(select(length > 0)))' "$spec"
+    done
+  fi
+
+  if [[ -n "${PHASE1_SEEDS:-}" ]]; then
+    export PHASE1_SEEDS
+    for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
+      yq -i '.parameters.seed.values = (strenv(PHASE1_SEEDS)
+        | split(",")
+        | map(gsub("^\\s+|\\s+$"; ""))
+        | map(select(length > 0))
+        | map(tonumber))' "$spec"
+    done
+  fi
+
   check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
 
   JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
@@ -170,19 +191,53 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
   PE_JSON="${GRID_DIR:-$APP_DIR/grid}/paired_effect.json"
   if [[ -f "$PE_JSON" ]]; then
-    if command -v jq >/dev/null 2>&1; then
-      METHOD_WINNER="$(jq -r '.winner // "jepa"' "$PE_JSON")"
-      TASK_FROM_PE="$(jq -r '.task   // "regression"' "$PE_JSON")"
+    if ! py=$(python_bin 2>/dev/null); then
+      echo "[phase1][fatal] python interpreter not found for paired-effect resolution" >&2
+      exit 1
+    fi
+
+    if read -r METHOD_WINNER TASK_FROM_PE PE_DECISION_STATUS < <(
+      "$py" -m scripts.ci.phase1_decision "$PE_JSON"
+    ); then
+      if [[ "$PE_DECISION_STATUS" == "tie" ]]; then
+        echo "[phase1][warn] paired-effect reported a tie (winner field: ${METHOD_WINNER})"
+        if [[ -n "${PHASE1_TIE_BREAKER:-}" ]]; then
+          case "${PHASE1_TIE_BREAKER}" in
+            jepa|contrastive)
+              METHOD_WINNER="${PHASE1_TIE_BREAKER}"
+              echo "[phase1] resolved tie via PHASE1_TIE_BREAKER=${METHOD_WINNER}"
+              ;;
+            *)
+              echo "[phase1][fatal] invalid PHASE1_TIE_BREAKER='${PHASE1_TIE_BREAKER}' (expected 'jepa' or 'contrastive')" >&2
+              exit 1
+              ;;
+          esac
+        else
+          echo "[phase1][fatal] tie detected; set PHASE1_TIE_BREAKER to 'jepa' or 'contrastive' to continue" >&2
+          exit 1
+        fi
+      fi
     else
-      METHOD_WINNER="$(grep -o '"winner"\s*:\s*"[^"]*"' "$PE_JSON" | head -1 | sed 's/.*"winner"\s*:\s*"\([^"]*\)".*/\1/')"
-      TASK_FROM_PE="$(grep -o '"task"\s*:\s*"[^"]*"' "$PE_JSON" | head -1 | sed 's/.*"task"\s*:\s*"\([^"]*\)".*/\1/')"
-      : "${METHOD_WINNER:=jepa}"
-      : "${TASK_FROM_PE:=regression}"
+      echo "[phase1][fatal] failed to interpret paired-effect output" >&2
+      exit 1
     fi
   else
-    echo "[phase1][warn] ${PE_JSON} not found; falling back to defaults (winner=jepa, task=regression)"
-    METHOD_WINNER="jepa"
-    TASK_FROM_PE="regression"
+    if [[ -n "${PHASE1_FALLBACK_WINNER:-}" ]]; then
+      case "${PHASE1_FALLBACK_WINNER}" in
+        jepa|contrastive)
+          METHOD_WINNER="${PHASE1_FALLBACK_WINNER}"
+          TASK_FROM_PE="${PHASE1_FALLBACK_TASK:-regression}"
+          echo "[phase1][warn] ${PE_JSON} not found; using PHASE1_FALLBACK_WINNER=${METHOD_WINNER}"
+          ;;
+        *)
+          echo "[phase1][fatal] invalid PHASE1_FALLBACK_WINNER='${PHASE1_FALLBACK_WINNER}' (expected 'jepa' or 'contrastive')" >&2
+          exit 1
+          ;;
+      esac
+    else
+      echo "[phase1][fatal] ${PE_JSON} not found and no PHASE1_FALLBACK_WINNER provided" >&2
+      exit 1
+    fi
   fi
   export METHOD_WINNER TASK_FROM_PE
   echo "[phase1] paired-effect decided winner=${METHOD_WINNER} task=${TASK_FROM_PE}"
