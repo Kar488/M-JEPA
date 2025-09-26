@@ -5,10 +5,22 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
-DEFAULT_WINNER = "jepa"
+DEFAULT_WINNER: Optional[str] = None
 DEFAULT_TASK = "regression"
+
+VALID_METHODS = {"jepa", "contrastive"}
+VALID_TASKS = {"regression", "classification"}
+VALID_DIRECTIONS = {"min", "max"}
+
+
+def _normalize_choice(value: Any, choices: set[str]) -> Optional[str]:
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in choices:
+            return lowered
+    return None
 
 
 def _load_payload(payload: Any) -> Dict[str, Any]:
@@ -20,7 +32,7 @@ def _load_payload(payload: Any) -> Dict[str, Any]:
 def resolve_phase1_decision(
     payload: Any,
     *,
-    default_winner: str = DEFAULT_WINNER,
+    default_winner: Optional[str] = DEFAULT_WINNER,
     default_task: str = DEFAULT_TASK,
     tie_tol: float = 1e-9,
 ) -> Tuple[str, str, bool]:
@@ -28,18 +40,19 @@ def resolve_phase1_decision(
 
     The paired-effect tool already reports a ``winner`` string, but shell callers
     need a resilient interpretation that remains correct if the JSON artifact is
-    modified or missing expected keys.  This helper mirrors the logic from
-    ``paired_effect_from_wandb.py`` while guaranteeing that ties fall back to the
-    JEPA method.
+    modified or missing expected keys.  This helper mirrors the core comparison
+    logic while surfacing ties explicitly (``winner == "tie"``) so that callers
+    can choose an appropriate follow-up policy instead of assuming a default
+    method wins.
     """
 
     data = _load_payload(payload)
-    direction = data.get("direction")
-    winner = data.get("winner")
-    task = data.get("task")
+    direction = _normalize_choice(data.get("direction"), VALID_DIRECTIONS)
+    winner = _normalize_choice(data.get("winner"), VALID_METHODS | {"tie"})
+    task = _normalize_choice(data.get("task"), VALID_TASKS)
     mean_delta = data.get("mean_delta_contrastive_minus_jepa")
 
-    tie = False
+    tie = winner == "tie"
     delta = None
     if mean_delta is not None:
         try:
@@ -49,21 +62,27 @@ def resolve_phase1_decision(
 
     if delta is not None and abs(delta) <= tie_tol:
         tie = True
-        winner = default_winner
+        winner = "tie"
 
-    if winner not in {"jepa", "contrastive"}:
-        if delta is not None and direction in {"min", "max"}:
+    if winner not in VALID_METHODS:
+        if delta is not None and direction in VALID_DIRECTIONS:
             if abs(delta) <= tie_tol:
-                winner = default_winner
                 tie = True
+                winner = "tie"
             elif direction == "min":
                 winner = "contrastive" if delta < 0 else "jepa"
             else:
                 winner = "contrastive" if delta > 0 else "jepa"
-        else:
+        elif default_winner in VALID_METHODS:
             winner = default_winner
 
-    if task not in {"regression", "classification"}:
+    if winner is None:
+        if tie:
+            winner = "tie"
+        else:
+            raise ValueError("unable to determine phase-1 winner from payload")
+
+    if task is None:
         if direction == "max":
             task = "classification"
         else:

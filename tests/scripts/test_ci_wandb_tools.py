@@ -201,7 +201,7 @@ def test_phase1_decision_handles_ties_and_missing_keys():
     }
 
     winner, task, tie = pd.resolve_phase1_decision(payload)
-    assert winner == "jepa"
+    assert winner == "tie"
     assert task == "regression"
     assert tie is True
 
