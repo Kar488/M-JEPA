@@ -191,3 +191,54 @@ def test_train_linear_head_caches_embeddings(monkeypatch):
     calls_with_cache = _run(True)
 
     assert calls_with_cache < calls_without_cache
+
+
+def test_train_linear_head_recovers_from_emfile(monkeypatch):
+    import training.supervised as sup_mod
+
+    def _tensor_to(self, *args, **kwargs):  # noqa: ARG002
+        return self
+
+    def _module_to(self, *args, **kwargs):  # noqa: ARG002
+        return self
+
+    monkeypatch.setattr(torch.Tensor, "to", _tensor_to)
+    monkeypatch.setattr(torch.nn.Module, "to", _module_to)
+    monkeypatch.setattr(DummyEncoder, "parameters", lambda self, recurse=True: iter(()))
+
+    def fake_move(batch, device, non_blocking):  # noqa: ARG001
+        if len(batch) == 5:
+            return batch
+        batch_x, batch_adj, batch_ptr, batch_labels = batch
+        return batch_x, batch_adj, batch_ptr, batch_labels, {}
+
+    monkeypatch.setattr(sup_mod, "_move_batch_to_device", fake_move)
+
+    failure = {"raised": False}
+    original_encode = sup_mod._encode_graph
+
+    def flaky_encode(*args, **kwargs):
+        if not failure["raised"]:
+            failure["raised"] = True
+            raise RuntimeError("Too many open files encountered during pinning")
+        return original_encode(*args, **kwargs)
+
+    monkeypatch.setattr(sup_mod, "_encode_graph", flaky_encode)
+
+    labels = [0, 1] * 6
+    dataset = DummyDataset(labels)
+    encoder = DummyEncoder(4)
+
+    metrics = train_linear_head(
+        dataset,
+        encoder,
+        "classification",
+        epochs=1,
+        batch_size=4,
+        lr=0.01,
+        patience=0,
+        device="cuda",
+    )
+
+    assert failure["raised"]
+    assert "head" in metrics

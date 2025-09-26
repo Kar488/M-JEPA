@@ -1,6 +1,7 @@
 import pytest
-import torch
 import yaml
+
+torch = pytest.importorskip("torch")
 
 from scripts.train_jepa import aggregate_metrics, load_config, resolve_device
 
@@ -25,12 +26,25 @@ def test_aggregate_metrics_mean_std_ignore_head():
 
 def test_resolve_device_prefers_gpu(monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 4)
+    monkeypatch.setattr(torch, "empty", lambda *a, **k: torch.tensor([]))
     assert resolve_device("cuda:1") == "cuda:1"
 
 
 def test_resolve_device_falls_back_to_cpu(monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     assert resolve_device("cuda:1") == "cpu"
+
+
+def test_resolve_device_handles_initialisation_failures(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+
+    def _boom(*_args, **_kwargs):  # pragma: no cover - behaviour exercised in test
+        raise RuntimeError("cuda error: initialization error")
+
+    monkeypatch.setattr(torch, "empty", _boom)
+    assert resolve_device("cuda:0") == "cpu"
 
 
 def test_load_config_valid(tmp_path):

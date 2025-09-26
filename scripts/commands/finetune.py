@@ -18,6 +18,54 @@ from utils.pooling import global_mean_pool
 
 logger = logging.getLogger(__name__)
 
+_GNN_TYPES_REQUIRING_3D = {"schnet3d", "schnet"}
+
+
+def _maybe_enable_add_3d(args: argparse.Namespace) -> bool:
+    """Ensure SchNet-based encoders always receive 3-D coordinates."""
+
+    gnn_type = str(getattr(args, "gnn_type", "") or "").lower()
+    requires_3d = gnn_type in _GNN_TYPES_REQUIRING_3D
+    if requires_3d and not getattr(args, "add_3d", False):
+        logger.info(
+            "GNN '%s' requires 3D coordinates; enabling --add-3d automatically.",
+            getattr(args, "gnn_type", gnn_type),
+        )
+        setattr(args, "add_3d", True)
+    return requires_3d
+
+
+def _ensure_dataset_has_pos(dataset) -> None:
+    """Validate that a dataset provides ``pos`` coordinates when required."""
+
+    graphs = getattr(dataset, "graphs", None)
+    if not graphs:
+        return
+
+    for idx, graph in enumerate(graphs):
+        pos = getattr(graph, "pos", None)
+        if pos is None:
+            num_nodes = 0
+            if hasattr(graph, "num_nodes"):
+                try:
+                    num_nodes = int(graph.num_nodes())
+                except Exception:
+                    num_nodes = 0
+            if not num_nodes:
+                x_field = getattr(graph, "x", None)
+                try:
+                    num_nodes = int(len(x_field)) if x_field is not None else 0
+                except Exception:
+                    num_nodes = 0
+            if num_nodes == 0:
+                continue
+            raise ValueError(
+                "SchNet3D requires 3D coordinates `pos`; graph %d is missing them. "
+                "Clear cached datasets or rebuild with --add-3d."
+                % idx,
+            )
+        break
+
 
 def cmd_finetune(args: argparse.Namespace) -> None:
     """Fine‑tune a linear head on labelled data across multiple seeds resume & checkpoints."""
@@ -59,6 +107,8 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         logger.error("Fine-tuning modules are unavailable.")
         sys.exit(3)
 
+    requires_3d = _maybe_enable_add_3d(args)
+
     # Determine seeds: CLI overrides config
     seeds: List[int]
     if args.seeds is not None and len(args.seeds) > 0:
@@ -81,6 +131,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             "lr": args.lr,
             "ema_decay": args.ema_decay,
             "seeds": seeds,
+            "add_3d": bool(getattr(args, "add_3d", False)),
         },
     )
 
@@ -93,6 +144,9 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             num_workers=getattr(args, "num_workers", 0),
             cache_dir=getattr(args, "cache_dir", None),
         )  # type: ignore[arg-type]
+
+        if requires_3d:
+            _ensure_dataset_has_pos(labeled)
 
         # Sample a subset of labeled graphs if requested.  Use getattr to
         # handle cases where sample_labeled isn’t provided.
