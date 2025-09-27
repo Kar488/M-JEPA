@@ -60,9 +60,11 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
    -  The test suite uses small synthetic or bundled samples and does **not**
       require any of the large datasets.
    -  Pass `--cache-dir` to `scripts/train_jepa.py` to store featurised graphs on disk.
-      Grid search enables caching by default under `cache/graphs` unless `--no-cache`
+      Grid search enables caching by default under `cache/graphs_50k` unless `--no-cache`
       is given. Clear the cache when switching featurisation options such as
-      `--add-3d` to avoid stale representations.
+      `--add-3d` to avoid stale representations. The dedicated 50 K graph dataset keeps
+      its cached featurisations under `cache/graphs_50k` to avoid clashes with other
+      datasets.
 
    -  Pipeline usage
       Individual stages of the JEPA workflow can be invoked via subcommands in
@@ -275,12 +277,12 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 
       # create parent dirs first
       # make sure targets exist and are writable
-      sudo mkdir -p /data/mjepa/{cache/graphs,outputs,logs,wandb}
+      sudo mkdir -p /data/mjepa/{cache/graphs_50k,outputs,logs,wandb}
       sudo chown -R "$USER":"$USER" /data/mjepa
 
       # now re-point them into /data
-      rm -rf cache/graphs  # only if it exists already
-      ln -s /data/mjepa/cache/graphs cache/graphs
+      rm -rf cache/graphs_50k  # only if it exists already
+      ln -s /data/mjepa/cache/graphs_50k cache/graphs_50k
 
       rm -rf outputs
       ln -s /data/mjepa/outputs outputs

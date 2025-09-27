@@ -74,8 +74,8 @@ env:
   HARD_WALL_MINS: 120
   KILL_AFTER_SECS: 120
   GRID_MODE: wandb
-  CACHE_DIR: /data/mjepa/cache/graphs
-  SWEEP_CACHE_DIR: ${{ github.event.inputs.sweep_cache_dir || '/data/mjepa/cache/graphs' }}
+  CACHE_DIR: /data/mjepa/cache/graphs_50k
+  SWEEP_CACHE_DIR: ${{ github.event.inputs.sweep_cache_dir || '/data/mjepa/cache/graphs_50k' }}
   RUN_ID: ${{ github.run_id }}
   EXP_ROOT: /data/mjepa/experiments/${{ github.run_id }}
   GRID_DIR: /data/mjepa/experiments/${{ github.run_id }}/grid

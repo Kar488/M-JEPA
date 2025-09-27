@@ -5,7 +5,7 @@ set -euxo pipefail
 : "${APP_DIR:=/srv/mjepa}"
 : "${MAMBA_ROOT_PREFIX:=~/micromamba}"
 : "${WANDB_DIR:=/data/mjepa/wandb}"
-: "${CACHE_DIR:=/data/mjepa/cache/graphs}"
+: "${CACHE_DIR:=/data/mjepa/cache/graphs_50k}"
 : "${RUN_ID:=$(date +%s)}"
 : "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
 ENV_NAME="mjepa"
