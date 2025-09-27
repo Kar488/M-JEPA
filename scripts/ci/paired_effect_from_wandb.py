@@ -4,7 +4,7 @@ from collections import defaultdict
 import math
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import numpy as np, wandb, os, argparse, json, re, sys
+import numpy as np, wandb, os, argparse, json, sys
 
 
 MetricStore = Tuple[
@@ -294,12 +294,14 @@ def _aggregate_metric(
     return deltas, per_method, used_pairs, contributions
     
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description=(
+            "Compare JEPA and contrastive runs by automatically selecting the "
+            "appropriate validation metric from recorded W&B summaries."
+        )
+    )
     ap.add_argument("--project", default=os.getenv("WANDB_PROJECT","mjepa"))
     ap.add_argument("--group",   default=os.getenv("WANDB_RUN_GROUP"))
-    ap.add_argument("--metric",  default="val_rmse")
-    ap.add_argument("--direction", choices=["min","max"], default=None,
-                    help="Optimization direction for metric; if omitted, infer from metric name.")
     ap.add_argument("--out", default=os.path.join(os.getenv("GRID_DIR", "."), "paired_effect.json"))
     ap.add_argument("--seed", type=int, default=None, help="Seed for bootstrap reproducibility")
     ap.add_argument("--aggregate", choices=["pair-seed","mean","median","best"], default="pair-seed",
@@ -412,18 +414,22 @@ def main():
 
     # Determine task and select the primary metric.
     task = inferred_task
+    task_resolution_reason = "run config"
     if task is None:
-        metric_name = args.metric.lower()
-        direction_hint = "max" if re.search(r"(auc|acc|f1|pr[_-]?auc|roc)", metric_name) else "min"
-        task = "classification" if direction_hint == "max" else "regression"
+        task = "classification" if "roc_auc" in available_metrics else "regression"
+        task_resolution_reason = "available metrics"
 
     primary_key = TASK_PRIMARY.get(task, "rmse")
+    primary_resolution_reason = "task defaults"
     if primary_key not in available_metrics:
         fallback_primary = next((k for k in ("rmse", "roc_auc") if k in available_metrics), None)
         if fallback_primary:
             primary_key = fallback_primary
+            primary_resolution_reason = "available metrics"
         else:
             primary_key = next(iter(available_metrics), None)
+            if primary_key is not None:
+                primary_resolution_reason = "first available metric"
 
     if primary_key is None:
         if args.strict:
@@ -431,10 +437,23 @@ def main():
             sys.exit(2)
         return
 
+    print(
+        f"[paired-effect] using task={task} (source={task_resolution_reason})",
+        flush=True,
+    )
+
     if primary_key == "rmse":
         task = "regression"
     elif primary_key == "roc_auc":
         task = "classification"
+
+    print(
+        "[paired-effect] evaluating canonical metric={canonical} (source={source})".format(
+            canonical=primary_key,
+            source=primary_resolution_reason,
+        ),
+        flush=True,
+    )
 
     aggregate_result = _aggregate_metric(primary_key, metric_store, args.aggregate)
     if aggregate_result is None:
@@ -567,8 +586,10 @@ def main():
     )
 
     # machine-readable artifact
+    primary_metric_display_name = primary_metric_name
+
     payload = {
-        "metric": args.metric,
+        "metric": primary_metric_display_name,
         "direction": direction,
         "pairs": len(deltas), "mean_delta_contrastive_minus_jepa": mu,
         "ci95": [lo, hi], "win_pct_contrastive_over_jepa": win,
@@ -603,6 +624,8 @@ def main():
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     # grep-friendly marker line:
-    print(f"::winner::{winner} ::task::{task} ::metric::{args.metric} ::direction::{direction}")
+    print(
+        f"::winner::{winner} ::task::{task} ::metric::{primary_metric_display_name} ::direction::{direction}"
+    )
 if __name__ == "__main__":
     main()
