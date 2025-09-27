@@ -200,10 +200,11 @@ def test_phase1_decision_handles_ties_and_missing_keys():
         "pairs": 1,
     }
 
-    winner, task, tie = pd.resolve_phase1_decision(payload)
+    winner, task, tie, tie_breaker = pd.resolve_phase1_decision(payload)
     assert winner == "tie"
     assert task == "regression"
     assert tie is True
+    assert tie_breaker is False
 
     # Missing winner but non-zero delta → derive from direction.
     payload2 = {
@@ -212,10 +213,28 @@ def test_phase1_decision_handles_ties_and_missing_keys():
         "task": None,
     }
 
-    winner2, task2, tie2 = pd.resolve_phase1_decision(payload2)
+    winner2, task2, tie2, tie_breaker2 = pd.resolve_phase1_decision(payload2)
     assert winner2 == "contrastive"
     assert task2 == "classification"
     assert tie2 is False
+    assert tie_breaker2 is False
+
+
+def test_phase1_decision_detects_tie_breaker_resolution():
+    payload = {
+        "direction": "min",
+        "winner": "jepa",
+        "mean_delta_contrastive_minus_jepa": 5e-4,
+        "primary_metric": {"tied": True, "tolerance": 1e-2},
+        "tie_breaker_used": True,
+        "task": "regression",
+    }
+
+    winner, task, tie, tie_breaker = pd.resolve_phase1_decision(payload)
+    assert winner == "jepa"
+    assert task == "regression"
+    assert tie is False
+    assert tie_breaker is True
 
 def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_DIR", str(tmp_path))

@@ -50,7 +50,7 @@ parameters:
   bf16:                 {value: 1} #1 true
 
   # Temperature applies only to contrastive runs, so it remains absent here.
-  seed:                 {values: [1, 2, 3]}
+  seed:                 {values: [1, 2, 3, 4, 5]}
 
   task_type:            {value: regression}
   label_col:            {value: "measured log solubility in mols per litre"}

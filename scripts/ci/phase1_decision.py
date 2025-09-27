@@ -23,6 +23,20 @@ def _normalize_choice(value: Any, choices: set[str]) -> Optional[str]:
     return None
 
 
+def _coerce_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y"}:
+            return True
+        if lowered in {"false", "0", "no", "n"}:
+            return False
+    return None
+
+
 def _load_payload(payload: Any) -> Dict[str, Any]:
     if isinstance(payload, (str, Path)):
         return json.loads(Path(payload).read_text())
@@ -34,9 +48,9 @@ def resolve_phase1_decision(
     *,
     default_winner: Optional[str] = DEFAULT_WINNER,
     default_task: str = DEFAULT_TASK,
-    tie_tol: float = 1e-9,
-) -> Tuple[str, str, bool]:
-    """Return (winner, task, tie_flag) for the paired-effect payload.
+    tie_tol: float = 1e-2,
+) -> Tuple[str, str, bool, bool]:
+    """Return (winner, task, tie_flag, tie_breaker_used) for the payload.
 
     The paired-effect tool already reports a ``winner`` string, but shell callers
     need a resilient interpretation that remains correct if the JSON artifact is
@@ -52,7 +66,21 @@ def resolve_phase1_decision(
     task = _normalize_choice(data.get("task"), VALID_TASKS)
     mean_delta = data.get("mean_delta_contrastive_minus_jepa")
 
-    tie = winner == "tie"
+    primary_info = data.get("primary_metric")
+    primary_tied: Optional[bool] = None
+    payload_tol: Optional[float] = None
+    if isinstance(primary_info, dict):
+        tied_val = primary_info.get("tied")
+        if isinstance(tied_val, bool):
+            primary_tied = tied_val
+        tol_val = primary_info.get("tolerance")
+        try:
+            payload_tol = float(tol_val)
+        except (TypeError, ValueError):
+            payload_tol = None
+
+    tie_breaker_used = _coerce_bool(data.get("tie_breaker_used")) or False
+
     delta = None
     if mean_delta is not None:
         try:
@@ -60,13 +88,37 @@ def resolve_phase1_decision(
         except (TypeError, ValueError):
             delta = None
 
-    if delta is not None and abs(delta) <= tie_tol:
-        tie = True
-        winner = "tie"
+    effective_tol = payload_tol if payload_tol is not None else tie_tol
+    delta_is_tie = bool(
+        effective_tol is not None and delta is not None and abs(delta) <= effective_tol
+    )
 
-    if winner not in VALID_METHODS:
+    if winner not in VALID_METHODS | {"tie"}:
+        winner = None
+
+    if winner is None:
+        if delta_is_tie and not tie_breaker_used:
+            winner = "tie"
+        elif delta is not None and direction in VALID_DIRECTIONS:
+            if abs(delta) <= (effective_tol or 0.0) and not tie_breaker_used:
+                winner = "tie"
+            elif direction == "min":
+                winner = "contrastive" if delta < 0 else "jepa"
+            else:
+                winner = "contrastive" if delta > 0 else "jepa"
+        elif default_winner in VALID_METHODS:
+            winner = default_winner
+
+    tie = winner == "tie"
+
+    if not tie and not tie_breaker_used:
+        if primary_tied is True or (primary_tied is None and delta_is_tie):
+            tie = True
+            winner = "tie"
+
+    if winner not in VALID_METHODS and winner != "tie":
         if delta is not None and direction in VALID_DIRECTIONS:
-            if abs(delta) <= tie_tol:
+            if abs(delta) <= (effective_tol or 0.0) and not tie_breaker_used:
                 tie = True
                 winner = "tie"
             elif direction == "min":
@@ -88,7 +140,7 @@ def resolve_phase1_decision(
         else:
             task = default_task
 
-    return winner, task, tie
+    return winner, task, tie, tie_breaker_used
 
 
 def main(argv: Any = None) -> int:
@@ -97,13 +149,15 @@ def main(argv: Any = None) -> int:
     ap.add_argument(
         "--tie-tol",
         type=float,
-        default=1e-9,
+        default=1e-2,
         help="Absolute tolerance for considering the mean delta a tie",
     )
     args = ap.parse_args(argv)
 
-    winner, task, tie = resolve_phase1_decision(args.path, tie_tol=args.tie_tol)
-    status = "tie" if tie else "clear"
+    winner, task, tie, tie_breaker_used = resolve_phase1_decision(
+        args.path, tie_tol=args.tie_tol
+    )
+    status = "tie" if tie else ("tie-breaker" if tie_breaker_used else "clear")
     print(f"{winner} {task} {status}")
     return 0
 
