@@ -223,8 +223,9 @@ def _extend_numeric_constant(value: float, key: str, spec: Optional[Dict[str, An
     hi = base + delta
 
     if key == "mask_ratio":
-        lo = min(lo, base - 0.1)
-        hi = max(hi, base + 0.35, 0.6)
+        # Mask ratio searches benefit from a gentle band around the observed value.
+        lo = min(lo, base - 0.05)
+        hi = max(hi, base + 0.05)
     elif key == "learning_rate":
         lo = min(lo, base / 5.0, 5e-5)
         hi = max(hi, base * 3.0, 5e-4)
@@ -293,6 +294,7 @@ def _extend_categorical_constant(
 ) -> List[Any]:
     norm_value = _normalize_config_value(value)
     option_sources: List[Iterable[Any]] = []
+    spec_option_pool: List[Any] = []
     for spec in specs:
         if not spec:
             continue
@@ -302,10 +304,12 @@ def _extend_categorical_constant(
         elif "value" in spec:
             vals = _iterable_from_option(spec["value"])
         if vals is not None:
-            option_sources.append(vals)
+            vals_list = list(vals)
+            option_sources.append(vals_list)
+            spec_option_pool.extend(vals_list)
 
     fallback = CATEGORICAL_FALLBACK_OPTIONS.get(key)
-    if fallback:
+    if fallback and len(_dedupe_options(spec_option_pool)) <= 1:
         option_sources.append(fallback)
 
     options: List[Any] = _dedupe_options(opt for src in option_sources for opt in src)
@@ -331,14 +335,17 @@ def _extend_categorical_constant(
         idx = 0
 
     chosen: List[Any] = [options[idx]]
-    if idx + 1 < len(options):
-        chosen.append(options[idx + 1])
-    if idx - 1 >= 0:
-        chosen.append(options[idx - 1])
-    if idx == 0 and idx + 2 < len(options):
-        chosen.append(options[idx + 2])
-    if idx == len(options) - 1 and idx - 2 >= 0:
-        chosen.append(options[idx - 2])
+    higher = options[idx + 1] if idx + 1 < len(options) else None
+    lower = options[idx - 1] if idx - 1 >= 0 else None
+    if higher is not None:
+        chosen.append(higher)
+    elif lower is not None:
+        chosen.append(lower)
+    elif len(options) > 1:
+        chosen.append(options[1])
+    elif norm_value in (0, 1):
+        # Binary toggles benefit from offering both possibilities.
+        chosen.append(1 - norm_value)
         
     deduped = _dedupe_options(chosen)
     return deduped if deduped else [value]
