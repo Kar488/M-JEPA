@@ -12,6 +12,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+# Ensure PyTorch uses filesystem-backed shared memory objects instead of file
+# descriptors for inter-process tensor sharing.  The default "file_descriptor"
+# strategy opens a unique FD for every shared tensor created by DataLoader
+# workers, which eventually exhausts the per-process file descriptor quota
+# during long fine-tuning runs.  Switching to "file_system" prevents the
+# descriptor leak that triggers "Too many open files" crashes.
+torch.multiprocessing.set_sharing_strategy("file_system")
+
 from data.mdataset import GraphData
 from utils.graph_ops import _encode_graph
 from utils.pooling import global_mean_pool
