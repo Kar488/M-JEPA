@@ -166,8 +166,10 @@ NUMERIC_CLAMP_BOUNDS: Dict[str, Tuple[Optional[float], Optional[float]]] = {
 }
 
 CATEGORICAL_FALLBACK_OPTIONS: Dict[str, Sequence[Any]] = {
-    "hidden_dim": (128, 256, 512),
-    "num_layers": (2, 3, 4),
+    "hidden_dim": (256, 384, 512),
+    "num_layers": (3, 4, 5),
+    "pretrain_batch_size": (64, 128, 256),
+    "finetune_batch_size": (128, 256, 512),
 }
 
 
@@ -219,6 +221,14 @@ def _extend_numeric_constant(value: float, key: str, spec: Optional[Dict[str, An
         delta = max(abs(base) * 0.1, 1e-6)
     lo = base - delta
     hi = base + delta
+
+    if key == "mask_ratio":
+        lo = min(lo, base - 0.1)
+        hi = max(hi, base + 0.35, 0.6)
+    elif key == "learning_rate":
+        lo = min(lo, base / 5.0, 5e-5)
+        hi = max(hi, base * 3.0, 5e-4)
+
 
     if spec:
         try:
@@ -323,9 +333,13 @@ def _extend_categorical_constant(
     chosen: List[Any] = [options[idx]]
     if idx + 1 < len(options):
         chosen.append(options[idx + 1])
-    elif idx - 1 >= 0:
+    if idx - 1 >= 0:
         chosen.append(options[idx - 1])
-
+    if idx == 0 and idx + 2 < len(options):
+        chosen.append(options[idx + 2])
+    if idx == len(options) - 1 and idx - 2 >= 0:
+        chosen.append(options[idx - 2])
+        
     deduped = _dedupe_options(chosen)
     return deduped if deduped else [value]
 
