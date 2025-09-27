@@ -465,6 +465,6 @@ jobs:
         env:
           HARD_WALL_MINS: 90
           KILL_AFTER_SECS: 120
-          PRETRAIN_EPOCHS: "100"
+          PRETRAIN_EPOCHS: "40"
           FINETUNE_EPOCHS: "8"
-          BESTCFG_NO_EPOCHS: "0" # use best config without reloading any epochs
+          BESTCFG_NO_EPOCHS: "1" # use best config without reloading any epochs
