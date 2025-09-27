@@ -48,7 +48,7 @@ parameters:
   pin-memory:           {value: 0} # 0 false
   bf16:                 {value: 1} #1 true
 
-  seed:                 {values: [1, 2, 3]}
+  seed:                 {values: [1, 2, 3, 4, 5]}
 
   task_type:            {value: regression}
   label_col:            {value: "measured log solubility in mols per litre"}
