@@ -369,7 +369,7 @@ jobs:
         env:
           HARD_WALL_MINS: 190
           KILL_AFTER_SECS: 120
-          PRETRAIN_EPOCHS: "40"
+          PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "8"
           BESTCFG_NO_EPOCHS: "1"
 
@@ -402,7 +402,7 @@ jobs:
           HARD_WALL_MINS: 180
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "40"
-          FINETUNE_EPOCHS: "8"
+          FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1"
 
   vast_benchmark:
@@ -465,6 +465,6 @@ jobs:
         env:
           HARD_WALL_MINS: 90
           KILL_AFTER_SECS: 120
-          PRETRAIN_EPOCHS: "40"
-          FINETUNE_EPOCHS: "8"
+          PRETRAIN_EPOCHS: "70"
+          FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1" # use best config without reloading any epochs
