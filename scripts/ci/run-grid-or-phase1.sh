@@ -150,9 +150,6 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     run_with_timeout wandb_agent || exit 1
   fi
 
-  PE_METRIC="val_rmse"
-  [[ "${TASK_FROM_PE:-regression}" == "classification" ]] && PE_METRIC="val_auc"
-
   # Require that paired-effect analysis only considers runs that have reached
   # the minimum training budgets that Phase-1 sweeps schedule.  Allow
   # overrides via environment variables so CI callers can tighten or loosen the
@@ -182,7 +179,6 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     python -u "$APP_DIR/scripts/ci/paired_effect_from_wandb.py" \
       --project "${WANDB_PROJECT}" \
       --group   "${WANDB_RUN_GROUP}" \
-      --metric  "${PE_METRIC}" \
       --aggregate pair-seed \
       --seed "${CI_SEED:-42}" \
       --strict \
