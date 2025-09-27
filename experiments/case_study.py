@@ -369,7 +369,7 @@ def run_tox21_case_study(
         lr=lr,
         batch_size=32,
         device=device,
-        patience=5,
+        patience=10,
         num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=persistent_workers,
