@@ -378,6 +378,72 @@ class GraphBatch:
 
 
 _DEVICE_MOVE_LOGGED = False
+_DEVICE_FALLBACK_WARNED = False
+
+
+def _resolve_device(device: torch.device | str) -> torch.device:
+    """Return a safe ``torch.device`` falling back to CPU when CUDA is unusable."""
+
+    global _DEVICE_FALLBACK_WARNED
+
+    if isinstance(device, torch.device):
+        requested = device
+    else:
+        try:
+            requested = torch.device(device)
+        except Exception:
+            if not _DEVICE_FALLBACK_WARNED:
+                warnings.warn(
+                    "Requested device is unavailable; defaulting to CPU.",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                logger.warning(
+                    "Requested device %r is unavailable; falling back to CPU.", device
+                )
+                _DEVICE_FALLBACK_WARNED = True
+            return torch.device("cpu")
+
+    if requested.type != "cuda":
+        return requested
+
+    cuda = getattr(torch, "cuda", None)
+    is_available = False
+    if cuda is not None:
+        try:
+            is_available = bool(getattr(cuda, "is_available", lambda: False)())
+        except Exception:
+            is_available = False
+    if not is_available:
+        if not _DEVICE_FALLBACK_WARNED:
+            warnings.warn(
+                "CUDA device requested but not available; defaulting to CPU.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            logger.warning(
+                "CUDA device requested but not available; falling back to CPU."
+            )
+            _DEVICE_FALLBACK_WARNED = True
+        return torch.device("cpu")
+
+    try:
+        torch.empty(0, device=requested)
+    except Exception:
+        if not _DEVICE_FALLBACK_WARNED:
+            warnings.warn(
+                "CUDA device could not be initialised; defaulting to CPU.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            logger.warning(
+                "CUDA device %s could not be initialised; falling back to CPU.",
+                requested,
+            )
+            _DEVICE_FALLBACK_WARNED = True
+        return torch.device("cpu")
+
+    return requested
 
 
 def _move_graph_batch_to_device(batch: GraphBatch, device: torch.device | str) -> GraphBatch:
@@ -1184,7 +1250,7 @@ def train_jepa(
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     distributed = (devices > 1) and init_distributed(ddp_backend)
-    device_t = torch.device(device)
+    device_t = _resolve_device(device)
     pin_memory_enabled = bool(
         pin_memory and device_t.type == "cuda" and torch.cuda.is_available()
     )
@@ -1696,7 +1762,7 @@ def train_contrastive(
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     distributed = (devices > 1) and init_distributed(ddp_backend)
-    device_t = torch.device(device)
+    device_t = _resolve_device(device)
     pin_memory_enabled = bool(
         pin_memory and device_t.type == "cuda" and torch.cuda.is_available()
     )

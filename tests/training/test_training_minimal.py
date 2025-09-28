@@ -1,6 +1,7 @@
 import importlib
 import sys
 import types
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -263,6 +264,85 @@ def test_train_jepa_respects_max_batches(stub_data_modules):
 
     assert predictor.calls == 2
     assert len(losses) == 1
+
+
+def test_train_jepa_falls_back_to_cpu(stub_data_modules, monkeypatch, caplog):
+    torch = pytest.importorskip("torch")
+
+    from training import unsupervised as unsup
+
+    monkeypatch.setattr(unsup, "_DEVICE_FALLBACK_WARNED", False, raising=False)
+
+    cuda = getattr(torch, "cuda", None)
+    if cuda is not None:
+        monkeypatch.setattr(cuda, "is_available", lambda: False, raising=False)
+
+    g = make_graph()
+    dataset = GraphDataset([g])
+
+    class DummyEncoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.eye(2))
+            self.bias = torch.nn.Parameter(torch.zeros(2))
+
+        def forward(self, x, adj, edge_attr=None):
+            return x @ self.weight + self.bias
+
+    encoder = DummyEncoder()
+    ema_encoder = DummyEncoder()
+
+    class DummyPredictor(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.eye(2))
+            self.bias = torch.nn.Parameter(torch.zeros(2))
+
+        def forward(self, h):
+            return h @ self.weight + self.bias
+
+    predictor = DummyPredictor()
+
+    class DummyEMA:
+        def update(self, model):
+            pass
+
+    ema = DummyEMA()
+
+    moved_devices: list[str] = []
+    original_to = unsup.GraphBatch.to
+
+    def tracking_to(self, device):
+        moved_devices.append(str(torch.device(device)))
+        return original_to(self, device)
+
+    monkeypatch.setattr(unsup.GraphBatch, "to", tracking_to, raising=False)
+
+    caplog.set_level(logging.WARNING, logger="training.unsupervised")
+
+    losses = unsup.train_jepa(
+        dataset=dataset,
+        encoder=encoder,
+        ema_encoder=ema_encoder,
+        predictor=predictor,
+        ema=ema,
+        epochs=1,
+        batch_size=1,
+        lr=0.0,
+        reg_lambda=0.0,
+        mask_ratio=0.5,
+        device="cuda",
+        use_scheduler=False,
+        use_amp=False,
+        pin_memory=False,
+        persistent_workers=False,
+        num_workers=0,
+    )
+
+    assert losses == [pytest.approx(1.0)]
+    assert moved_devices, "No graph batches were moved to a device"
+    assert all(dev.startswith("cpu") for dev in moved_devices)
+    assert "falling back to cpu" in caplog.text.lower()
 
 
 def test_should_compile_models_requires_budget():
