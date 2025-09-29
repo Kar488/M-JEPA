@@ -124,7 +124,31 @@ def run_once(mm, program, subcmd, cfg: Dict[str, Any], seed: int,
         if forwarded:
             f.write("[recheck] forwarded flags: " + repr(forwarded) + "\n")
         p = subprocess.Popen(args, stdout=f, stderr=subprocess.STDOUT, env=env)
-    return p.wait()
+
+    print(
+        f"[recheck][seed {seed}] started PID {p.pid}; streaming logs to {log}",
+        flush=True,
+    )
+
+    start = time.time()
+    next_ping = start + 60.0
+    while True:
+        rc = p.poll()
+        if rc is not None:
+            return rc
+
+        now = time.time()
+        if now >= next_ping:
+            mins = int((now - start) // 60)
+            if mins == 0:
+                mins = 1  # ensure we report at least 1 minute
+            print(
+                f"[recheck][seed {seed}] still running after {mins} min; tail -f {log} for live output",
+                flush=True,
+            )
+            next_ping = now + 60.0
+
+        time.sleep(5.0)
 
 def ci95(xs: List[float]) -> Tuple[float, float]:
     bs = [np.mean(np.random.choice(xs, size=len(xs), replace=True)) for _ in range(4000)]
@@ -248,6 +272,10 @@ def main():
             rc = run_once(args.mm, args.program, args.subcmd, cfg, s,
               args.unlabeled_dir, args.labeled_dir, args.log_dir,
               args.project, args.group)
+            print(
+                f"[recheck][seed {s}] finished with exit code {rc}",
+                flush=True,
+            )
             if rc != 0:
                 # show last ~120 lines of the log for quick diagnosis
                 log_path = os.path.join(args.log_dir, f"recheck_{cfg.get('training_method','jepa')}_seed{s}.log")
