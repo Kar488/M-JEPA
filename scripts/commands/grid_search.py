@@ -254,7 +254,7 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
             disable_tqdm=(not getattr(args, "force_tqdm", False))
             and (not sys.stdout.isatty()),
             # dataloader & AMP knobs
-            num_workers=getattr(args, "num_workers", 0),
+            num_workers=getattr(args, "num_workers", -1),
             pin_memory=getattr(args, "pin_memory", True),
             persistent_workers=getattr(args, "persistent_workers", True),
             prefetch_factor=getattr(args, "prefetch_factor", 4),

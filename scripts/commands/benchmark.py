@@ -98,7 +98,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             data_dir,
             label_col=args.label_col,
             add_3d=args.add_3d,
-            num_workers=getattr(args, "num_workers", 0),
+            num_workers=getattr(args, "num_workers", -1),
             cache_dir=getattr(args, "cache_dir", None),
         )  # type: ignore[arg-type]
         _wb_log({"phase": "data_load", "labeled_graphs": len(labeled)})
@@ -206,7 +206,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
                 device=device,
                 patience=args.patience,
                 devices=args.devices,
-                num_workers=getattr(args, "num_workers", 0),
+                num_workers=getattr(args, "num_workers", -1),
                 pin_memory=getattr(args, "pin_memory", True),
                 persistent_workers=getattr(args, "persistent_workers", True),
                 prefetch_factor=getattr(args, "prefetch_factor", 4),

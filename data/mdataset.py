@@ -40,6 +40,17 @@ from ._graph_pickle import register_graph_class, rebuild_graph_data
 logger = logging.getLogger(__name__)
 
 
+def _resolve_worker_count(num_workers: int) -> int:
+    """Map negative worker counts to an automatic CPU-friendly budget."""
+
+    if num_workers is None:
+        return 0
+    if num_workers < 0:
+        cpu_budget = max(1, (os.cpu_count() or 2) - 1)
+        return max(1, min(cpu_budget, 8))
+    return int(num_workers)
+
+
 @lru_cache(maxsize=None)
 def _resolve_graphdataset_cls(module_name: str, qualname: str) -> type["GraphDataset"]:
     """Return a GraphDataset subclass given its module and qualified name."""
@@ -496,8 +507,9 @@ class GraphDataset:
         cls_module = cls.__module__
         cls_qualname = cls.__qualname__
 
-        if num_workers > 0:
-            with ProcessPoolExecutor(max_workers=int(num_workers)) as ex:
+        worker_budget = _resolve_worker_count(num_workers)
+        if worker_budget > 0:
+            with ProcessPoolExecutor(max_workers=worker_budget) as ex:
                 iterator = ex.map(
                     _safe_smiles_to_graph,
                     smiles,

@@ -32,7 +32,7 @@ from models.encoder import GNNEncoder
 from utils.early_stopping import EarlyStopping
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.graph_ops import _encode_graph
-from utils.dataloader import normalize_prefetch_factor
+from utils.dataloader import autotune_worker_pool, ensure_file_system_sharing_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -541,7 +541,7 @@ def train_linear_head(
     batch_size: int = 32,
     device: str = "cuda",
     patience: int = 10,
-    num_workers=0,
+    num_workers: int = -1,
     pin_memory=True,
     persistent_workers=True,
     prefetch_factor=4,
@@ -572,7 +572,8 @@ def train_linear_head(
         lr: Learning rate for the optimiser.
         batch_size: Batch size for training.
         device: Computation device.
-        num_workers: Number of subprocesses to use for data loading.
+        num_workers: Number of subprocesses to use for data loading.  Pass ``-1``
+            to auto-tune based on dataset size and available CPU cores.
         pin_memory: if true data transfer from CPU → GPU faster.
         persistent_workers: if true avoids the overhead of respawning worker processes every epoch.
         prefetch_factor: number of batches loaded in advance by each worker.
@@ -619,6 +620,21 @@ def train_linear_head(
     for p in encoder.parameters():
         p.requires_grad = False
     num_graphs = len(dataset)
+
+    requested_workers = num_workers
+    num_workers, persistent_workers, prefetch_factor = autotune_worker_pool(
+        requested_workers=requested_workers,
+        dataset_size=num_graphs,
+        batch_size=batch_size,
+        device_type=device_t.type,
+        persistent_workers=bool(persistent_workers),
+        prefetch_factor=prefetch_factor,
+        logger=logger,
+        stage="finetune",
+    )
+    if num_workers > 0:
+        ensure_file_system_sharing_strategy()
+
     indices = list(range(num_graphs))
 
     # Use provided batch_indices for single-batch training, else split dataset
@@ -696,20 +712,17 @@ def train_linear_head(
                 split_size,
             )
         return effective
-    if num_workers > 0:
-        normalized_prefetch, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
-        if bad_prefetch is not None:
-            logger.warning(
-                "prefetch_factor=%s is not positive; clamping to %s so DataLoader workers can start.",
-                bad_prefetch,
-                normalized_prefetch,
-            )
-        prefetch_factor = normalized_prefetch
 
     def _build_loader(indices: List[int], shuffle: bool) -> Optional[DataLoader]:
         if not indices:
             return None
         worker_count = _effective_worker_count(len(indices))
+        loader_prefetch = prefetch_factor
+        if worker_count <= 0:
+            loader_prefetch = None
+        elif loader_prefetch is not None:
+            batches_for_split = max(1, math.ceil(len(indices) / max(1, batch_size)))
+            loader_prefetch = max(1, min(loader_prefetch, max(2, batches_for_split)))
         loader_kwargs = {
             "batch_size": batch_size,
             "shuffle": shuffle,
@@ -720,8 +733,8 @@ def train_linear_head(
         }
         if worker_count > 0:
             loader_kwargs["persistent_workers"] = bool(persistent_workers)
-            if prefetch_factor is not None:
-                loader_kwargs["prefetch_factor"] = prefetch_factor
+            if loader_prefetch is not None:
+                loader_kwargs["prefetch_factor"] = loader_prefetch
         return DataLoader(list(indices), **loader_kwargs)
 
     def _refresh_loaders() -> Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]:

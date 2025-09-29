@@ -108,7 +108,7 @@ except ImportError:  # pragma: no cover - used in minimal test stubs
 from data.mdataset import GraphData, GraphDataset
 from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.ddp import DistributedSamplerList, cleanup, init_distributed, is_main_process
-from utils.dataloader import normalize_prefetch_factor
+from utils.dataloader import autotune_worker_pool, ensure_file_system_sharing_strategy
 from utils.graph_ops import _encode_graph, _pool_graph_emb
 from utils.logging import maybe_init_wandb
 logger = logging.getLogger(__name__)
@@ -1125,23 +1125,6 @@ def _is_too_many_open_files(exc: BaseException) -> bool:
     return False
 
 
-def _ensure_file_system_sharing_strategy() -> None:
-    """Switch PyTorch multiprocessing to ``file_system`` sharing when possible."""
-
-    mp = getattr(torch, "multiprocessing", None)
-    if mp is None:  # pragma: no cover - depends on torch build
-        return
-    get_strategy = getattr(mp, "get_sharing_strategy", None)
-    set_strategy = getattr(mp, "set_sharing_strategy", None)
-    if not callable(get_strategy) or not callable(set_strategy):  # pragma: no cover - backend dependent
-        return
-    try:
-        if get_strategy() != "file_system":
-            set_strategy("file_system")
-    except RuntimeError:  # pragma: no cover - backend dependent
-        pass
-
-
 def _backoff_data_loader_workers(
     persistent_workers: bool, prefetch_factor: Optional[int]
 ) -> Tuple[bool, bool, Optional[int]]:
@@ -1245,7 +1228,7 @@ def train_jepa(
     max_batches: int = 0,
     time_budget_mins: int = 0,
     disable_tqdm: bool = False,
-    num_workers=0, 
+    num_workers: int = -1,
     pin_memory=True, 
     persistent_workers=True, 
     prefetch_factor=4, 
@@ -1265,16 +1248,22 @@ def train_jepa(
             RuntimeWarning,
             stacklevel=2,
         )
+
+    dataset_size = len(getattr(dataset, "graphs", dataset))
+    requested_workers = num_workers
+    num_workers, persistent_workers, prefetch_factor = autotune_worker_pool(
+        requested_workers=requested_workers,
+        dataset_size=dataset_size,
+        batch_size=batch_size,
+        device_type=device_t.type,
+        persistent_workers=bool(persistent_workers),
+        prefetch_factor=prefetch_factor,
+        logger=logger if is_main_process() else None,
+        stage="pretrain",
+    )
     if num_workers > 0:
-        _ensure_file_system_sharing_strategy()
-        normalized_prefetch, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
-        if bad_prefetch is not None and is_main_process():
-            logger.warning(
-                "prefetch_factor=%s is not positive; clamping to %s so DataLoader workers can start.",
-                bad_prefetch,
-                normalized_prefetch,
-            )
-        prefetch_factor = normalized_prefetch
+        ensure_file_system_sharing_strategy()
+
     worker_count = int(num_workers) if num_workers else 0
     prefetch_budget = int(prefetch_factor) if isinstance(prefetch_factor, (int, float)) else 0
     if worker_count > 0:
@@ -1533,13 +1522,26 @@ def train_jepa(
             ep_loss = 0.0
             epoch_batches = 0
             hit_batch_cap = False
+            batches_per_epoch = max(1, math.ceil(len(pair_dataset) / max(1, batch_size)))
+            actual_num_workers = (
+                min(loader_num_workers, batches_per_epoch)
+                if loader_num_workers
+                else 0
+            )
+            if actual_num_workers != loader_num_workers:
+                loader_num_workers = actual_num_workers
+            local_prefetch = loader_prefetch_factor
+            if actual_num_workers <= 0:
+                local_prefetch = None
+            elif local_prefetch is not None:
+                local_prefetch = max(1, min(local_prefetch, max(2, batches_per_epoch)))
             dataloader = _build_graph_dataloader(
                 pair_dataset,
                 batch_size=batch_size,
-                num_workers=loader_num_workers,
+                num_workers=actual_num_workers,
                 pin_memory=loader_pin_memory,
                 persistent_workers=loader_persistent_workers,
-                prefetch_factor=loader_prefetch_factor,
+                prefetch_factor=local_prefetch,
                 collate_fn=_collate_graph_pair,
             )
 
@@ -1662,7 +1664,7 @@ def train_jepa(
                         if loader_num_workers == 0:
                             loader_persistent_workers = False
                             active_persistent_workers = False
-                    _ensure_file_system_sharing_strategy()
+                    ensure_file_system_sharing_strategy()
                     if retry:
                         if is_main_process():
                             logger.warning(
@@ -1758,7 +1760,7 @@ def train_contrastive(
     max_batches: int = 0,
     time_budget_mins: int = 0,
     disable_tqdm: bool = False,
-    num_workers=0, 
+    num_workers: int = -1,
     pin_memory=True, 
     persistent_workers=True, 
     prefetch_factor=4, 
@@ -1777,16 +1779,21 @@ def train_contrastive(
             RuntimeWarning,
             stacklevel=2,
         )
+
+    dataset_size = len(getattr(dataset, "graphs", dataset))
+    requested_workers = num_workers
+    num_workers, persistent_workers, prefetch_factor = autotune_worker_pool(
+        requested_workers=requested_workers,
+        dataset_size=dataset_size,
+        batch_size=batch_size,
+        device_type=device_t.type,
+        persistent_workers=bool(persistent_workers),
+        prefetch_factor=prefetch_factor,
+        logger=logger if is_main_process() else None,
+        stage="contrastive",
+    )
     if num_workers > 0:
-        _ensure_file_system_sharing_strategy()
-        normalized_prefetch, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
-        if bad_prefetch is not None and is_main_process():
-            logger.warning(
-                "prefetch_factor=%s is not positive; clamping to %s so DataLoader workers can start.",
-                bad_prefetch,
-                normalized_prefetch,
-            )
-        prefetch_factor = normalized_prefetch
+        ensure_file_system_sharing_strategy()
     active_persistent_workers = bool(num_workers) and persistent_workers
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
@@ -1922,13 +1929,26 @@ def train_contrastive(
             ep_loss = 0.0
             epoch_batches = 0
             hit_batch_cap = False
+            batches_per_epoch = max(1, math.ceil(len(pair_dataset) / max(1, batch_size)))
+            actual_num_workers = (
+                min(loader_num_workers, batches_per_epoch)
+                if loader_num_workers
+                else 0
+            )
+            if actual_num_workers != loader_num_workers:
+                loader_num_workers = actual_num_workers
+            local_prefetch = loader_prefetch_factor
+            if actual_num_workers <= 0:
+                local_prefetch = None
+            elif local_prefetch is not None:
+                local_prefetch = max(1, min(local_prefetch, max(2, batches_per_epoch)))
             dataloader = _build_graph_dataloader(
                 pair_dataset,
                 batch_size=batch_size,
-                num_workers=loader_num_workers,
+                num_workers=actual_num_workers,
                 pin_memory=loader_pin_memory,
                 persistent_workers=loader_persistent_workers,
-                prefetch_factor=loader_prefetch_factor,
+                prefetch_factor=local_prefetch,
                 collate_fn=_collate_graph_pair,
             )
 
@@ -2063,7 +2083,7 @@ def train_contrastive(
                         if loader_num_workers == 0:
                             loader_persistent_workers = False
                             active_persistent_workers = False
-                    _ensure_file_system_sharing_strategy()
+                    ensure_file_system_sharing_strategy()
                     if retry:
                         if is_main_process():
                             logger.warning(
