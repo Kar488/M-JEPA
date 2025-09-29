@@ -325,7 +325,7 @@ jobs:
            # agent knobs (already have these)
           HARD_WALL_MINS: 920
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 40
+          WANDB_COUNT: 30
           # recheck knobs (separate budget)
           TOPK_RECHECK: 5
           EXTRA_SEEDS: 3
