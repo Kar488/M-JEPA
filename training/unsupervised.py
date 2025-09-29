@@ -379,6 +379,7 @@ class GraphBatch:
 
 _DEVICE_MOVE_LOGGED = False
 _DEVICE_FALLBACK_WARNED = False
+_LAST_DEVICE_LOGGED: Optional[str] = None
 
 
 def _resolve_device(device: torch.device | str) -> torch.device:
@@ -405,6 +406,7 @@ def _resolve_device(device: torch.device | str) -> torch.device:
             return torch.device("cpu")
 
     if requested.type != "cuda":
+        _DEVICE_FALLBACK_WARNED = False
         return requested
 
     cuda = getattr(torch, "cuda", None)
@@ -443,13 +445,14 @@ def _resolve_device(device: torch.device | str) -> torch.device:
             _DEVICE_FALLBACK_WARNED = True
         return torch.device("cpu")
 
+    _DEVICE_FALLBACK_WARNED = False
     return requested
 
 
 def _move_graph_batch_to_device(batch: GraphBatch, device: torch.device | str) -> GraphBatch:
     """Move ``batch`` to ``device`` from the main process."""
 
-    global _DEVICE_MOVE_LOGGED
+    global _DEVICE_MOVE_LOGGED, _LAST_DEVICE_LOGGED
     try:
         worker_info = torch.utils.data.get_worker_info()
     except Exception:  # pragma: no cover - torch may not expose worker info
@@ -460,9 +463,11 @@ def _move_graph_batch_to_device(batch: GraphBatch, device: torch.device | str) -
             "batches must remain on CPU until the main process performs the device transfer."
         )
     device_obj = torch.device(device)
-    if not _DEVICE_MOVE_LOGGED:
+    device_repr = str(device_obj)
+    if (not _DEVICE_MOVE_LOGGED) or (_LAST_DEVICE_LOGGED != device_repr):
         logger.info("Moving graph batches to %s in the main process", device_obj)
         _DEVICE_MOVE_LOGGED = True
+        _LAST_DEVICE_LOGGED = device_repr
     return batch.to(device_obj)
 
 def _step_optimizer(
