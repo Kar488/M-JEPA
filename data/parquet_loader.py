@@ -33,15 +33,16 @@ wish to implement streaming reads instead.
 """
 
 import logging
+import math
 from pathlib import Path
-from typing import Iterable, List, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import torch
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 
-from utils.dataloader import normalize_prefetch_factor
+from utils.dataloader import autotune_worker_pool
 
 
 logger = logging.getLogger(__name__)
@@ -131,24 +132,39 @@ def load_dataloaders(
     val_ds = ParquetGraphDataset(_split_files(root, "val"))
     test_ds = ParquetGraphDataset(_split_files(root, "test"))
 
+    device_type = "cuda" if torch.cuda.is_available() else "cpu"
+    tuned_workers, tuned_persistent, tuned_prefetch = autotune_worker_pool(
+        requested_workers=num_workers,
+        dataset_size=len(train_ds),
+        batch_size=batch_size,
+        device_type=device_type,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
+        logger=logger,
+        stage="parquet_loader",
+    )
+
     common = dict(
-        num_workers=num_workers,
+        num_workers=tuned_workers,
         pin_memory=pin_memory,
-        persistent_workers=bool(num_workers) and persistent_workers,
+        persistent_workers=bool(tuned_workers) and tuned_persistent,
         **loader_kwargs,
     )
-    if num_workers > 0:
-        normalized_prefetch, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
-        if bad_prefetch is not None:
-            logger.warning(
-                "prefetch_factor=%s is not positive; clamping to %s so DataLoader workers can start.",
-                bad_prefetch,
-                normalized_prefetch,
-            )
-        if normalized_prefetch is not None:
-            common["prefetch_factor"] = normalized_prefetch
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  **common)
-    val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, **common)
-    test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False, **common)
+    def _prefetch_for(ds: Sequence) -> Optional[int]:
+        if tuned_workers <= 0 or tuned_prefetch is None:
+            return None
+        batches = max(1, math.ceil(len(ds) / max(1, batch_size)))
+        return max(1, min(tuned_prefetch, max(2, batches)))
+
+    def _build_loader(ds, *, shuffle: bool) -> DataLoader:
+        kwargs = dict(common)
+        prefetch = _prefetch_for(ds)
+        if prefetch is not None:
+            kwargs["prefetch_factor"] = prefetch
+        return DataLoader(ds, batch_size=batch_size, shuffle=shuffle, **kwargs)
+
+    train_loader = _build_loader(train_ds, shuffle=True)
+    val_loader = _build_loader(val_ds, shuffle=False)
+    test_loader = _build_loader(test_ds, shuffle=False)
     return train_loader, val_loader, test_loader

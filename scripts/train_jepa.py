@@ -723,7 +723,7 @@ class CommonArgDefaults:
             num_layers=model_cfg.get("num_layers", 2),
             ema_decay=model_cfg.get("ema_decay", 0.99),
             add_3d=False,
-            num_workers=0,
+            num_workers=-1,
             cache_dir=None,
             contiguous=False,
             aug_rotate=DEFAULT_AUG.rotate,
@@ -794,7 +794,12 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     p.add_argument("--bf16", action=BoolFlag, default=d.bf16, help="Enable bfloat16 autocast on GPU.")
     p.add_argument("--device", type=str, default=d.device, help="Device")
     p.add_argument("--devices", type=int, default=d.devices, help="Number of GPUs for DDP")
-    p.add_argument("--num-workers", type=int, default=d.num_workers, help="Process pool workers for SMILES conversion (0=serial)")
+    p.add_argument(
+        "--num-workers",
+        type=int,
+        default=d.num_workers,
+        help="Process pool workers for SMILES conversion (-1=auto, 0=serial)",
+    )
     
     p.add_argument("--use-wandb", "--use_wandb", dest="use_wandb", action=BoolFlag, default=d.use_wandb, help="Enable Weights & Biases logging")
     p.add_argument("--wandb-project", type=str, default=d.wandb_project, help="W&B project name")

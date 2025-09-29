@@ -149,7 +149,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             args.labeled_dir,
             label_col=args.label_col,
             add_3d=args.add_3d,
-            num_workers=getattr(args, "num_workers", 0),
+            num_workers=getattr(args, "num_workers", -1),
             cache_dir=getattr(args, "cache_dir", None),
         )  # type: ignore[arg-type]
 
@@ -369,7 +369,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     optimizer=optimizer,
                     scheduler=scheduler,
                     # dataloader & AMP knobs
-                    num_workers=getattr(args, "num_workers", 0),
+                    num_workers=getattr(args, "num_workers", -1),
                     pin_memory=getattr(args, "pin_memory", True),
                     persistent_workers=getattr(args, "persistent_workers", True),
                     prefetch_factor=getattr(args, "prefetch_factor", 4),

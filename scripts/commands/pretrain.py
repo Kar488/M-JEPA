@@ -100,14 +100,14 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 "Loading unlabeled (cap=%s, rows_per_file=%s, workers=%s)…",
                 sample_ul,
                 rows_per_file,
-                getattr(args, "num_workers", 0),
+                getattr(args, "num_workers", -1),
             )
             t0 = time.time()
 
             unlabeled = load_directory_dataset(
                 args.unlabeled_dir,
                 add_3d=args.add_3d,
-                num_workers=getattr(args, "num_workers", 0),
+                num_workers=getattr(args, "num_workers", -1),
                 cache_dir=getattr(args, "cache_dir", None),
                 n_rows_per_file=rows_per_file,
                 max_graphs=sample_ul,
@@ -207,7 +207,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     disable_tqdm=(not getattr(args, "force_tqdm", False))
                     and (not sys.stdout.isatty()),
                     # dataloader & AMP knobs
-                    num_workers=getattr(args, "num_workers", 0),
+                    num_workers=getattr(args, "num_workers", -1),
                     pin_memory=getattr(args, "pin_memory", True),
                     persistent_workers=getattr(args, "persistent_workers", True),
                     prefetch_factor=getattr(args, "prefetch_factor", 4),
@@ -281,7 +281,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     disable_tqdm=(not getattr(args, "force_tqdm", False))
                     and (not sys.stdout.isatty()),
                     # dataloader & AMP knobs
-                    num_workers=getattr(args, "num_workers", 0),
+                    num_workers=getattr(args, "num_workers", -1),
                     pin_memory=getattr(args, "pin_memory", True),
                     persistent_workers=getattr(args, "persistent_workers", True),
                     prefetch_factor=getattr(args, "prefetch_factor", 4),
