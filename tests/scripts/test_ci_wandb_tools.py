@@ -28,6 +28,63 @@ class FakeSweep:
         self.runs = runs
         self.config = config or {}
 
+
+def test_paired_effect_accepts_serialized_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    serialized_runs = [
+        FakeRun(
+            "jepa_serialized",
+            json.dumps(
+                {
+                    "training_method": "jepa",
+                    "pair_id": "pair-json",
+                    "prediction_target_type": "regression",
+                }
+            ),
+            json.dumps({"val_rmse": 0.4}),
+            run_id="run-jepa",
+        ),
+        FakeRun(
+            "contrastive_serialized",
+            json.dumps(
+                {
+                    "training_method": "contrastive",
+                    "pair_id": "pair-json",
+                    "prediction_target_type": "regression",
+                }
+            ),
+            json.dumps({"val_rmse": 0.6}),
+            run_id="run-contrastive",
+        ),
+    ]
+
+    class FakeApi:
+        def runs(self, path, filters=None):
+            return serialized_runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: FakeApi()))
+
+    out = tmp_path / "pe_serialized.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+        ],
+    )
+
+    pe.main()
+    result = json.loads(out.read_text())
+    assert result["winner"] == "jepa"
+    assert result["pairs"] == 1
+
 def test_paired_effect_winner_and_no_pairs(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("WANDB_ENTITY", "ent")
 
