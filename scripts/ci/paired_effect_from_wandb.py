@@ -352,7 +352,8 @@ def main():
     if not runs:
         # Do not write output when empty; only fail hard if --strict
         if args.strict:
-            import sys; print("No runs found.", flush=True); sys.exit(2)
+            print("No runs found.", flush=True)
+            sys.exit(2)
         return
 
     # Collect values per metric.
@@ -506,7 +507,8 @@ def main():
 
     if aggregate_result is None:
         if args.strict:
-            import sys; print("No matched pairs found.", flush=True); sys.exit(2)
+            print("No matched pairs found.", flush=True)
+            sys.exit(2)
         return
 
     deltas, per_method_values, used_pairs, contributions = aggregate_result
