@@ -1,10 +1,36 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 import math
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np, wandb, os, argparse, json, sys
+
+
+def _coerce_config(config: Any) -> Dict[str, Any]:
+    """Normalize a run config into a plain dictionary."""
+
+    if isinstance(config, Mapping):
+        return dict(config)
+
+    if hasattr(config, "to_dict"):
+        try:
+            converted = config.to_dict()
+        except Exception:
+            converted = None
+        if isinstance(converted, dict):
+            return converted
+
+    if isinstance(config, str):
+        try:
+            parsed = json.loads(config)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+
+    return {}
 
 
 MetricStore = Tuple[
@@ -341,13 +367,14 @@ def main():
     inferred_task: Optional[str] = None
 
     for r in runs:
-        mid = r.config.get("training_method")
-        pid = r.config.get("pair_id")
+        run_config = _coerce_config(getattr(r, "config", {}))
+        mid = run_config.get("training_method")
+        pid = run_config.get("pair_id")
         if not pid or mid not in ("jepa","contrastive"):
             continue
 
         if inferred_task is None:
-            inferred_task = _infer_task_from_config(getattr(r, "config", {}))
+            inferred_task = _infer_task_from_config(run_config)
 
         thresholds = (
             ("pretrain_epochs", args.min_pretrain_epochs),
@@ -358,7 +385,7 @@ def main():
         for key, minimum in thresholds:
             if minimum is None:
                 continue
-            conf_val = _coerce_to_float(r.config.get(key))
+            conf_val = _coerce_to_float(run_config.get(key))
             # Phase-1 sweeps often terminate early while phase-2 sweeps rely on mature metrics;
             # filtering prevents these under-trained runs from biasing the phase-1/phase-2 workflow.
             if conf_val is None or conf_val < minimum:
@@ -370,7 +397,7 @@ def main():
         pid = str(pid)
 
         # Gather metrics for all known candidates.
-        summary = getattr(r, "summary", {}) or {}
+        summary = _coerce_config(getattr(r, "summary", {}))
         metrics_recorded: List[Tuple[str, float]] = []
         for metric_key, info in METRIC_INFO.items():
             metric_val = None
@@ -390,7 +417,7 @@ def main():
             metrics_recorded.append((metric_key, metric_val))
 
         # capture seed if available
-        seed = r.config.get("seed", None)
+        seed = run_config.get("seed", None)
         if seed is not None:
             try:
                 seed = int(seed)
@@ -629,3 +656,4 @@ def main():
     )
 if __name__ == "__main__":
     main()
+
