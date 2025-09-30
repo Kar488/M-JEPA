@@ -230,11 +230,30 @@ def _should_compile_models(
     return True
 
 
-def _maybe_pin(tensor: Optional[torch.Tensor], device: Optional[str | torch.device] = None) -> Optional[torch.Tensor]:
+def _maybe_pin(
+    tensor: Optional[torch.Tensor],
+    device: Optional[str | torch.device] = None,
+) -> Optional[torch.Tensor]:
     if not isinstance(tensor, torch.Tensor):
         return tensor
+
+    if device is None:
+        try:
+            return tensor.pin_memory()
+        except NotImplementedError:  # pragma: no cover - backend dependent
+            return tensor
+
     try:
-        return tensor.pin_memory(device)
+        return tensor.pin_memory(device=device)
+    except TypeError:
+        # ``pin_memory`` only accepted ``self`` prior to PyTorch 2.1.  When the
+        # legacy signature is patched in (e.g. older wheels or certain vendor
+        # builds), retry without the device hint so DataLoader workers do not
+        # crash while moving batches to pinned memory.
+        try:
+            return tensor.pin_memory()
+        except NotImplementedError:  # pragma: no cover - backend dependent
+            return tensor
     except NotImplementedError:  # pragma: no cover - backend dependent
         return tensor
 

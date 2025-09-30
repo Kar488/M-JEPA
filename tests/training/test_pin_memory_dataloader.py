@@ -10,6 +10,7 @@ from training.unsupervised import (
     _backoff_num_workers,
     _build_graph_dataloader,
     _collate_graph_pair,
+    _maybe_pin,
 )
 
 
@@ -54,3 +55,19 @@ def test_backoff_num_workers_progressively_reduces_workers():
     assert _backoff_num_workers(3) == 1
     assert _backoff_num_workers(1) == 0
     assert _backoff_num_workers(0) == 0
+
+
+def test_maybe_pin_handles_legacy_signature(monkeypatch):
+    tensor = torch.zeros(1)
+    calls = {"count": 0}
+
+    def legacy_pin(self):
+        calls["count"] += 1
+        return self
+
+    monkeypatch.setattr(torch.Tensor, "pin_memory", legacy_pin, raising=False)
+
+    out = _maybe_pin(tensor, device="cuda")
+
+    assert out is tensor
+    assert calls["count"] == 2  # once with the device hint, once without
