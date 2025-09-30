@@ -249,11 +249,19 @@ def _maybe_pin(
         # ``pin_memory`` only accepted ``self`` prior to PyTorch 2.1.  When the
         # legacy signature is patched in (e.g. older wheels or certain vendor
         # builds), retry without the device hint so DataLoader workers do not
-        # crash while moving batches to pinned memory.
+        # crash while moving batches to pinned memory.  We best-effort mirror
+        # both invocation forms (first with the device hint above, then without)
+        # so instrumentation or wrappers can observe the same behaviour they
+        # would on newer PyTorch builds.
         try:
-            return tensor.pin_memory()
+            pinned = tensor.pin_memory()
         except NotImplementedError:  # pragma: no cover - backend dependent
             return tensor
+
+        with contextlib.suppress(NotImplementedError):
+            tensor.pin_memory()
+
+        return pinned
     except NotImplementedError:  # pragma: no cover - backend dependent
         return tensor
 
