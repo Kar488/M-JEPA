@@ -14,9 +14,15 @@ def _coerce_config(config: Any) -> Dict[str, Any]:
     if isinstance(config, Mapping):
         return dict(config)
 
-    if hasattr(config, "to_dict"):
+    to_dict_attr = None
+    try:
+        to_dict_attr = config.to_dict  # type: ignore[attr-defined]
+    except (AttributeError, KeyError):
+        to_dict_attr = None
+
+    if callable(to_dict_attr):
         try:
-            converted = config.to_dict()
+            converted = to_dict_attr()
         except Exception:
             converted = None
         if isinstance(converted, dict):
