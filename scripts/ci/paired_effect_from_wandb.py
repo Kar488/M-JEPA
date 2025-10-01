@@ -4,7 +4,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from itertools import islice
 import math
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np, wandb, os, argparse, json, sys, time
 
@@ -300,6 +300,32 @@ def _safe_mean(values: Iterable[float]) -> Optional[float]:
     return float(np.mean(data))
 
 
+def _format_method_diagnostics(
+    raw_counts: Dict[str, int],
+    raw_pairs: Dict[str, Set[str]],
+    eligible_counts: Dict[str, int],
+    eligible_pairs: Dict[str, Set[str]],
+) -> str:
+    methods = sorted(set(raw_counts) | set(eligible_counts))
+    if not methods:
+        return ""
+
+    parts: List[str] = []
+    for method in methods:
+        total = raw_counts.get(method, 0)
+        eligible = eligible_counts.get(method, 0)
+        pair_total = len(eligible_pairs.get(method, set()))
+        raw_pair_total = len(raw_pairs.get(method, set()))
+        parts.append(
+            f"{method}: runs={total}, eligible={eligible}, pair_ids={pair_total}, "
+            f"raw_pair_ids={raw_pair_total}"
+        )
+
+    shared = len(eligible_pairs.get("jepa", set()) & eligible_pairs.get("contrastive", set()))
+    parts.append(f"shared_pair_ids={shared}")
+    return "; ".join(parts)
+
+
 def _format_metric(value: Optional[float]) -> str:
     if value is None or math.isnan(value):
         return "n/a"
@@ -504,6 +530,10 @@ def main():
     }
     available_metrics = set()
     attempt = 0
+    raw_method_counts: Dict[str, int] = defaultdict(int)
+    eligible_method_counts: Dict[str, int] = defaultdict(int)
+    raw_pair_ids: Dict[str, Set[str]] = defaultdict(set)
+    eligible_pair_ids: Dict[str, Set[str]] = defaultdict(set)
 
     while True:
         attempt += 1
@@ -523,6 +553,11 @@ def main():
         missing_threshold_counts_local: Dict[str, int] = defaultdict(int)
         failed_threshold_counts_local: Dict[str, int] = defaultdict(int)
         recorded_any_metrics = False
+        raw_method_counts_local: Dict[str, int] = defaultdict(int)
+        eligible_method_counts_local: Dict[str, int] = defaultdict(int)
+        raw_pair_ids_local: Dict[str, Set[str]] = defaultdict(set)
+        eligible_pair_ids_local: Dict[str, Set[str]] = defaultdict(set)
+
 
         for r in runs_list:
             run_config = _coerce_config(getattr(r, "config", {}))
@@ -543,6 +578,12 @@ def main():
 
             if not pid_raw or mid not in ("jepa", "contrastive"):
                 continue
+
+
+            method_key = str(mid)
+            pid = str(pid_raw)
+            raw_method_counts_local[method_key] += 1
+            raw_pair_ids_local[method_key].add(pid)
 
             total_comparable_runs_local += 1
             if inferred_task_local is None:
@@ -571,7 +612,8 @@ def main():
                 skipped_by_threshold_local += 1
                 continue
 
-            pid = str(pid_raw)
+            eligible_method_counts_local[method_key] += 1
+            eligible_pair_ids_local[method_key].add(pid)
 
             # Gather metrics for all known candidates.
             metrics_recorded: List[Tuple[str, float]] = []
@@ -619,6 +661,10 @@ def main():
         missing_threshold_counts = missing_threshold_counts_local
         failed_threshold_counts = failed_threshold_counts_local
         available_metrics = available_metrics_local
+        raw_method_counts = raw_method_counts_local
+        eligible_method_counts = eligible_method_counts_local
+        raw_pair_ids = raw_pair_ids_local
+        eligible_pair_ids = eligible_pair_ids_local
 
         all_blocked = (
             total_comparable_runs_local > 0
@@ -676,6 +722,12 @@ def main():
         attempt_note = f" after {attempt} attempt(s)"
 
     if primary_key is None:
+        diagnostic = _format_method_diagnostics(
+            raw_method_counts,
+            raw_pair_ids,
+            eligible_method_counts,
+            eligible_pair_ids,
+        )
         if args.strict:
             if total_comparable_runs and skipped_by_threshold == total_comparable_runs:
                 reasons = []
@@ -697,18 +749,23 @@ def main():
                     )
                 detail = "; ".join(filter(None, reasons))
                 if detail:
-                    print(
+                    message = (
                         "No metrics available for comparison after applying threshold filters"
-                        f"{attempt_note}: {detail}.",
-                        flush=True,
+                        f"{attempt_note}: {detail}."
                     )
                 else:
-                    print(
-                        f"No metrics available for comparison after applying threshold filters{attempt_note}.",
-                        flush=True,
+                    message = (
+                        f"No metrics available for comparison after applying threshold filters{attempt_note}."
                     )
             else:
-                print(f"No metrics available for comparison{attempt_note}.", flush=True)
+                message = f"No metrics available for comparison{attempt_note}."
+
+            if diagnostic:
+                if not message.endswith("."):
+                    message += "."
+                message += f" Eligible runs summary: {diagnostic}."
+
+            print(message, flush=True)
             sys.exit(2)
         return
 
@@ -754,7 +811,16 @@ def main():
 
     if aggregate_result is None:
         if args.strict:
-            print("No matched pairs found.", flush=True)
+            diagnostic = _format_method_diagnostics(
+                raw_method_counts,
+                raw_pair_ids,
+                eligible_method_counts,
+                eligible_pair_ids,
+            )
+            message = "No matched pairs found."
+            if diagnostic:
+                message = message.rstrip(".") + f" Eligible runs summary: {diagnostic}."
+            print(message, flush=True)
             sys.exit(2)
         return
 
