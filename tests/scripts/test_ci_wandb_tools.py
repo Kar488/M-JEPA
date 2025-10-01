@@ -159,6 +159,51 @@ def test_paired_effect_winner_and_no_pairs(monkeypatch, tmp_path, capsys):
     assert data3["winner"] == "jepa"
 
 
+def test_paired_effect_handles_wandb_summary_wrappers(monkeypatch, tmp_path):
+    """Some wandb summary scalars are wrapped in {'value': x} containers."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    wrapped_runs = [
+        FakeRun(
+            "jepa_wrapped",
+            {"training_method": "jepa", "pair_id": "wrap"},
+            {"val_rmse": {"value": 0.41}},
+        ),
+        FakeRun(
+            "contrastive_wrapped",
+            {"training_method": "contrastive", "pair_id": "wrap"},
+            {"val_rmse": {"value": 0.55}},
+        ),
+    ]
+
+    class WrappedApi:
+        def runs(self, path, filters=None):
+            return wrapped_runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: WrappedApi()))
+
+    out = tmp_path / "pe_wrapped.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+        ],
+    )
+
+    pe.main()
+    result = json.loads(out.read_text())
+    assert result["winner"] == "jepa"
+    assert result["pairs"] == 1
+
+
 def test_paired_effect_limits_pairs_to_shared_seeds(monkeypatch, tmp_path):
     monkeypatch.setenv("WANDB_ENTITY", "ent")
 

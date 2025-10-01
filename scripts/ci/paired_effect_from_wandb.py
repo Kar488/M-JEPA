@@ -96,8 +96,36 @@ TASK_TIEBREAKER = {"regression": "r2", "classification": "brier"}
 def _coerce_to_float(value):
     if value is None:
         return None
+
+    # Common numeric scalars from numpy / wandb already satisfy this branch.
     if isinstance(value, (int, float)):
         return float(value)
+
+    # W&B may wrap summary scalars in lightweight containers (e.g. {'value': x})
+    # or provide per-statistic aggregates.  Attempt to unwrap a representative
+    # value before giving up.
+    if isinstance(value, Mapping):
+        for key in ("value", "latest", "last", "mean", "median", "max", "min", "best"):
+            if key in value:
+                coerced = _coerce_to_float(value[key])
+                if coerced is not None:
+                    return coerced
+        # Fall back to inspecting the mapping values in iteration order.  This
+        # mirrors the behaviour of wandb's RunSummary where the numeric payload
+        # can live under an opaque key (e.g. {'_type': 'summary', 'numeric': x}).
+        for candidate in value.values():
+            coerced = _coerce_to_float(candidate)
+            if coerced is not None:
+                return coerced
+        return None
+
+    if isinstance(value, (list, tuple)):
+        for candidate in value:
+            coerced = _coerce_to_float(candidate)
+            if coerced is not None:
+                return coerced
+        return None
+
     try:
         return float(value)
     except (TypeError, ValueError):
