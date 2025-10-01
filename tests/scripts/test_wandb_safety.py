@@ -101,3 +101,21 @@ def test_wb_summary_update_aliases(monkeypatch, tmp_path):
     ws.wb_summary_update({"mae_mean": 0.1, "auc": 0.9})
     assert dummy_wandb.run.summary["val_mae"] == 0.1
     assert dummy_wandb.run.summary["val_auc"] == 0.9
+
+
+def test_wb_summary_update_fallback_on_update_error(monkeypatch):
+    class DummySummary(dict):
+        def update(self, *a, **kwargs):
+            raise RuntimeError("boom")
+
+    class DummyRun:
+        def __init__(self):
+            self.summary = DummySummary()
+
+    dummy_wandb = types.SimpleNamespace(run=DummyRun(), log=lambda data: None)
+    monkeypatch.setitem(sys.modules, "wandb", dummy_wandb)
+
+    ws = importlib.reload(importlib.import_module("scripts.wandb_safety"))
+    ws.wb_summary_update({"pair_id": "abc123"})
+
+    assert dummy_wandb.run.summary["pair_id"] == "abc123"
