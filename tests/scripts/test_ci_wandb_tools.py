@@ -147,6 +147,52 @@ def test_paired_effect_unwraps_sweep_config_wrappers(monkeypatch, tmp_path):
     assert payload["pairs"] == 1
 
 
+def test_paired_effect_uses_summary_pair_id(monkeypatch, tmp_path):
+    """Runs missing pair_id in config should fall back to the summary payload."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    runs = [
+        FakeRun(
+            "jepa_summary_pair",
+            {"training_method": "jepa"},
+            {"pair_id": "summary-pair", "val_rmse": 0.4},
+        ),
+        FakeRun(
+            "contrastive_summary_pair",
+            {"training_method": "contrastive"},
+            {"pair_id": "summary-pair", "val_rmse": 0.6},
+        ),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_summary_pair.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+
+    assert payload["pairs"] == 1
+    assert payload["winner"] == "jepa"
+
+
 def test_paired_effect_winner_and_no_pairs(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("WANDB_ENTITY", "ent")
 

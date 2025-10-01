@@ -515,8 +515,12 @@ def main():
 
     for r in runs:
         run_config = _coerce_config(getattr(r, "config", {}))
+        summary = _coerce_config(getattr(r, "summary", {}))
         mid_raw = _unwrap_config_value(run_config.get("training_method"))
         pid_raw = _unwrap_config_value(run_config.get("pair_id"))
+
+        if not pid_raw:
+            pid_raw = _unwrap_config_value(summary.get("pair_id"))
 
         mid = mid_raw.strip().lower() if isinstance(mid_raw, str) else mid_raw
         if isinstance(mid, Mapping):
@@ -559,7 +563,6 @@ def main():
         pid = str(pid_raw)
 
         # Gather metrics for all known candidates.
-        summary = _coerce_config(getattr(r, "summary", {}))
         metrics_recorded: List[Tuple[str, float]] = []
         for metric_key, info in METRIC_INFO.items():
             metric_val = None

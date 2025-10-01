@@ -235,6 +235,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             upd["add_3d"] = int(add_3d)  # ensure Phase-2 sees the gated value
         if upd:
             wb.config.update(upd, allow_val_change=True)
+        _wb_summary_update({"pair_id": pair_id})
     else:
         print("⚠️ W&B is disabled or failed to init, skipping config update")
 
