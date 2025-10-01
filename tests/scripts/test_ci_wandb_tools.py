@@ -213,6 +213,90 @@ def test_paired_effect_winner_and_no_pairs(monkeypatch, tmp_path, capsys):
     assert data3["winner"] == "jepa"
 
 
+def test_paired_effect_missing_threshold_keys(monkeypatch, tmp_path):
+    """Runs lacking the threshold config keys should not be discarded entirely."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    runs = [
+        FakeRun("jepa", {"training_method": "jepa", "pair_id": "pid"}, {"val_rmse": 0.5}),
+        FakeRun("contrastive", {"training_method": "contrastive", "pair_id": "pid"}, {"val_rmse": 0.7}),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_missing_thresholds.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+            "--strict",
+            "--min_pretrain_epochs",
+            "5",
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+
+    assert payload["pairs"] == 1
+    assert payload["winner"] == "jepa"
+
+
+def test_paired_effect_ignores_disabled_thresholds(monkeypatch, tmp_path):
+    """Optional thresholds (default None) must not trigger comparison failures."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    runs = [
+        FakeRun("jepa", {"training_method": "jepa", "pair_id": "pid"}, {"val_rmse": 0.4}),
+        FakeRun(
+            "contrastive",
+            {"training_method": "contrastive", "pair_id": "pid", "max_pretrain_batches": 3},
+            {"val_rmse": 0.6},
+        ),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):  # pragma: no cover - simple stub
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_optional_thresholds.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+            "--strict",
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+
+    assert payload["pairs"] == 1
+    assert payload["winner"] == "jepa"
+
+
 def test_paired_effect_handles_wandb_summary_wrappers(monkeypatch, tmp_path):
     """Some wandb summary scalars are wrapped in {'value': x} containers."""
 
