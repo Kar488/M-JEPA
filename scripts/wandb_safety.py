@@ -59,6 +59,9 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
             _dbg("wandb.init raised; using wandb.run if present")
             return getattr(wandb, "run", None)
 
+METRIC_CANDIDATES = ("val_rmse", "rmse_mean", "rmse", "probe_rmse_mean", "metric")
+
+
 def wb_summary_update(payload: Dict[str, Any]) -> None:
     """Safe summary update: only writes if a run exists; never throws."""
     import wandb
@@ -80,15 +83,27 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
         v_key = None
         v = payload.get("val_rmse")
         if v is None:
-            for k in ("rmse_mean", "rmse", "probe_rmse_mean","metric"):
+            for k in METRIC_CANDIDATES:
+                if k == "val_rmse":
+                    continue
                 if payload.get(k) is not None:
-                    v_key, v = k, float(payload[k])
+                    try:
+                        v = float(payload[k])
+                    except Exception:
+                        continue
+                    v_key = k
                     break
+        else:
+            try:
+                v = float(v)
+            except Exception:
+                v = None
+
         if v is not None:
             _dbg(f"logging val_rmse={v} (from key={v_key or 'val_rmse'})")
             wandb.log({"val_rmse": float(v)})
             run.summary["val_rmse"] = float(v)
-        else:
+        elif any(k in payload for k in METRIC_CANDIDATES):
             _dbg("no RMSE candidate in payload; keys=", list(payload.keys()))
 
         # val_mae aliasing
@@ -106,9 +121,17 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
                         pass
                     break
 
-        run.summary.update(payload)
+        try:
+            run.summary.update(payload)
+        except Exception as e:
+            _dbg("wb_summary_update update() exception:", e)
+            for key, value in payload.items():
+                try:
+                    run.summary[key] = value
+                except Exception as inner:
+                    _dbg(f"failed to set summary[{key!r}]:", inner)
     except Exception as e:
-       _dbg("wb_summary_update exception:", e)
+        _dbg("wb_summary_update exception:", e)
 
 def wb_finish_safely() -> None:
     with contextlib.suppress(Exception):
