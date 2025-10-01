@@ -93,6 +93,33 @@ TASK_PRIMARY = {"regression": "rmse", "classification": "roc_auc"}
 TASK_TIEBREAKER = {"regression": "r2", "classification": "brier"}
 
 
+def _unwrap_config_value(value: Any) -> Any:
+    """Best-effort extraction of a primitive value from sweep/config payloads."""
+
+    # W&B sweeps frequently wrap the actual parameter value in small dictionaries
+    # such as {'value': 'jepa'} or {'value': 5, '_type': 'int'}.  When the
+    # payload exposes an unambiguous candidate ("value", "default", etc.) keep
+    # peeling the onion until we reach the underlying primitive.  We fall back to
+    # the original input if no recognised wrapper is present so nested
+    # dictionaries (e.g. structured configs) remain intact.
+    if isinstance(value, Mapping):
+        for key in ("value", "default", "actual", "_value"):
+            if key in value:
+                inner = _unwrap_config_value(value[key])
+                if inner is not None:
+                    return inner
+        if len(value) == 1:
+            # Occasionally sweep configs store the payload under an opaque single
+            # key (e.g. {'wandb': {'value': ...}}).  Peeking at the only value is
+            # safe here because we only reach this branch when the mapping does
+            # not expose the standard wrappers checked above.
+            inner = next(iter(value.values()))
+            return _unwrap_config_value(inner)
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        return _unwrap_config_value(value[0])
+    return value
+
+
 def _coerce_to_float(value):
     if value is None:
         return None
@@ -156,13 +183,15 @@ def _infer_task_from_config(config: Dict[str, Any]) -> Optional[str]:
         return None
 
     for key in ("prediction_target_type", "target_type", "label_type"):
-        task = _normalize_task(config.get(key))
+        task = _normalize_task(_unwrap_config_value(config.get(key)))
         if task:
             return task
 
-    target_cfg = config.get("prediction_target")
+    target_cfg = _unwrap_config_value(config.get("prediction_target"))
     if isinstance(target_cfg, dict):
-        task = _normalize_task(target_cfg.get("type") or target_cfg.get("dtype"))
+        task = _normalize_task(
+            _unwrap_config_value(target_cfg.get("type") or target_cfg.get("dtype"))
+        )
         if task:
             return task
     elif isinstance(target_cfg, str):
@@ -170,15 +199,17 @@ def _infer_task_from_config(config: Dict[str, Any]) -> Optional[str]:
         if task:
             return task
 
-    task = _normalize_task(config.get("task_type"))
+    task = _normalize_task(_unwrap_config_value(config.get("task_type")))
     if task:
         return task
 
-    label_values = config.get("label_values") or config.get("classes")
+    label_values = _unwrap_config_value(config.get("label_values")) or _unwrap_config_value(
+        config.get("classes")
+    )
     if isinstance(label_values, (list, tuple, set)) and label_values:
         return "classification"
 
-    num_classes = config.get("num_classes")
+    num_classes = _unwrap_config_value(config.get("num_classes"))
     if isinstance(num_classes, int) and num_classes > 1:
         return "classification"
 
@@ -397,9 +428,18 @@ def main():
 
     for r in runs:
         run_config = _coerce_config(getattr(r, "config", {}))
-        mid = run_config.get("training_method")
-        pid = run_config.get("pair_id")
-        if not pid or mid not in ("jepa","contrastive"):
+        mid_raw = _unwrap_config_value(run_config.get("training_method"))
+        pid_raw = _unwrap_config_value(run_config.get("pair_id"))
+
+        mid = mid_raw.strip().lower() if isinstance(mid_raw, str) else mid_raw
+        if isinstance(mid, Mapping):
+            mid = _unwrap_config_value(mid)
+            mid = mid.strip().lower() if isinstance(mid, str) else mid
+
+        if isinstance(pid_raw, Mapping):
+            pid_raw = _unwrap_config_value(pid_raw)
+
+        if not pid_raw or mid not in ("jepa", "contrastive"):
             continue
 
         if inferred_task is None:
@@ -423,7 +463,7 @@ def main():
         if skip:
             continue
         
-        pid = str(pid)
+        pid = str(pid_raw)
 
         # Gather metrics for all known candidates.
         summary = _coerce_config(getattr(r, "summary", {}))
@@ -446,7 +486,7 @@ def main():
             metrics_recorded.append((metric_key, metric_val))
 
         # capture seed if available
-        seed = run_config.get("seed", None)
+        seed = _unwrap_config_value(run_config.get("seed", None))
         if seed is not None:
             try:
                 seed = int(seed)

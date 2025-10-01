@@ -85,6 +85,60 @@ def test_paired_effect_accepts_serialized_config(monkeypatch, tmp_path):
     assert result["winner"] == "jepa"
     assert result["pairs"] == 1
 
+
+def test_paired_effect_unwraps_sweep_config_wrappers(monkeypatch, tmp_path):
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    wrapped_runs = [
+        FakeRun(
+            "jepa_wrapped_cfg",
+            {
+                "training_method": {"value": "jepa", "_type": "string"},
+                "pair_id": {"value": "cfg-wrap"},
+                "seed": {"value": 11},
+                "task_type": {"value": "regression"},
+            },
+            {"val_rmse": {"value": 0.42}},
+        ),
+        FakeRun(
+            "contrastive_wrapped_cfg",
+            {
+                "training_method": {"value": "contrastive"},
+                "pair_id": {"value": "cfg-wrap"},
+                "seed": {"value": 11},
+                "task_type": {"value": "regression"},
+            },
+            {"val_rmse": {"value": 0.58}},
+        ),
+    ]
+
+    class WrappedCfgApi:
+        def runs(self, path, filters=None):
+            return wrapped_runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: WrappedCfgApi()))
+
+    out = tmp_path / "pe_cfg_wrapped.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+    assert payload["winner"] == "jepa"
+    assert payload["pairs"] == 1
+
+
 def test_paired_effect_winner_and_no_pairs(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("WANDB_ENTITY", "ent")
 
