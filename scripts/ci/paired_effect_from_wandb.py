@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping
+from itertools import islice
 import math
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -37,6 +38,76 @@ def _coerce_config(config: Any) -> Dict[str, Any]:
             return parsed
 
     return {}
+
+
+def _lookup_nested(mapping: Mapping[str, Any], key: str) -> Any:
+    """Return ``mapping[key]`` while supporting ``foo/bar`` or ``foo.bar`` access."""
+
+    if key in mapping:
+        return mapping[key]
+
+    for sep in ("/", "."):
+        if sep not in key:
+            continue
+        parts = key.split(sep)
+        node: Any = mapping
+        for part in parts:
+            if isinstance(node, Mapping) and part in node:
+                node = node[part]
+            else:
+                node = None
+                break
+        if node is not None:
+            return node
+    return None
+
+
+def _extract_from_history(run: Any, candidates: Iterable[str], limit: int = 512) -> Tuple[Optional[float], Optional[str]]:
+    """Best-effort extraction of metric values from a W&B run history.
+
+    Some runs fail to promote validation metrics into the W&B summary – especially
+    when they abort prematurely.  Instead of bailing out, attempt to read the
+    recorded history events and use the most recent non-NaN scalar.  The helper is
+    defensive because ``run.history`` has a fairly loose contract and user stubs
+    in the unit tests provide simplified implementations.
+    """
+
+    history = getattr(run, "history", None)
+    if not callable(history):
+        return None, None
+
+    rows: List[Dict[str, Any]] = []
+    history_iters = (
+        {"keys": list(candidates), "pandas": False},
+        {"keys": list(candidates)},
+        {},
+    )
+    for kwargs in history_iters:
+        try:
+            iterator = history(**kwargs)
+        except TypeError:
+            continue
+        except Exception:
+            return None, None
+        if iterator is None:
+            continue
+        try:
+            for row in islice(iterator, limit):
+                rows.append(_coerce_config(row))
+        except TypeError:
+            # ``history`` may return a list already.
+            try:
+                rows = [_coerce_config(r) for r in iterator[:limit]]  # type: ignore[index]
+            except Exception:
+                rows = []
+        break
+
+    for row in reversed(rows):
+        for candidate in candidates:
+            value = _coerce_to_float(_lookup_nested(row, candidate))
+            if value is not None:
+                return value, candidate
+    return None, None
 
 
 MetricStore = Tuple[
@@ -496,9 +567,13 @@ def main():
             for candidate in info["candidates"]:
                 if candidate in summary:
                     metric_val = _coerce_to_float(summary.get(candidate))
+                else:
+                    metric_val = _coerce_to_float(_lookup_nested(summary, candidate))
+                if metric_val is not None:
                     metric_name = candidate
-                    if metric_val is not None:
-                        break
+                    break
+            if metric_val is None:
+                metric_val, metric_name = _extract_from_history(r, info["candidates"])
             if metric_val is None:
                 continue
 

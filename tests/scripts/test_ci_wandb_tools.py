@@ -16,11 +16,19 @@ from scripts.ci import recheck_topk_from_wandb as rc
 
 
 class FakeRun:
-    def __init__(self, name, config, summary, run_id="runid"):
+    def __init__(self, name, config, summary, run_id="runid", history=None):
         self.name = name
         self.config = config
         self.summary = summary
         self.id = run_id
+        self._history = history
+
+    def history(self, **kwargs):  # pragma: no cover - simple passthrough
+        if self._history is None:
+            return []
+        if callable(self._history):
+            return self._history(**kwargs)
+        return list(self._history)
 
 
 class FakeSweep:
@@ -340,6 +348,52 @@ def test_paired_effect_handles_wandb_summary_wrappers(monkeypatch, tmp_path):
     result = json.loads(out.read_text())
     assert result["winner"] == "jepa"
     assert result["pairs"] == 1
+
+
+def test_paired_effect_reads_history_when_summary_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    runs = [
+        FakeRun(
+            "jepa_hist",
+            {"training_method": "jepa", "pair_id": "hist"},
+            {},
+            history=[{"val_rmse": 0.45}],
+        ),
+        FakeRun(
+            "contrastive_hist",
+            {"training_method": "contrastive", "pair_id": "hist"},
+            {},
+            history=[{"val_rmse": 0.6}],
+        ),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_history.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+            "--strict",
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+    assert payload["winner"] == "jepa"
+    assert payload["pairs"] == 1
 
 
 def test_paired_effect_limits_pairs_to_shared_seeds(monkeypatch, tmp_path):
