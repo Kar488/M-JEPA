@@ -442,6 +442,57 @@ def test_paired_effect_reads_history_when_summary_empty(monkeypatch, tmp_path):
     assert payload["pairs"] == 1
 
 
+def test_paired_effect_reports_method_counts_when_metrics_missing(monkeypatch, tmp_path, capsys):
+    """Strict mode should include per-method diagnostics when no metrics exist."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    runs = [
+        FakeRun(
+            "jepa_missing_metrics",
+            {"training_method": "jepa", "pair_id": "pid"},
+            {},
+        ),
+        FakeRun(
+            "contrastive_missing_metrics",
+            {"training_method": "contrastive", "pair_id": "pid"},
+            {},
+        ),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_missing_metrics.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+            "--strict",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        pe.main()
+
+    assert excinfo.value.code == 2
+    output = capsys.readouterr().out
+    assert "Eligible runs summary" in output
+    assert "jepa: runs=1, eligible=1" in output
+    assert "contrastive: runs=1, eligible=1" in output
+    assert not out.exists()
+
+
 def test_paired_effect_limits_pairs_to_shared_seeds(monkeypatch, tmp_path):
     monkeypatch.setenv("WANDB_ENTITY", "ent")
 
