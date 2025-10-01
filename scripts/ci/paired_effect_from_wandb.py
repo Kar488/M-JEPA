@@ -558,6 +558,7 @@ def main():
         raw_pair_ids_local: Dict[str, Set[str]] = defaultdict(set)
         eligible_pair_ids_local: Dict[str, Set[str]] = defaultdict(set)
 
+
         for r in runs_list:
             run_config = _coerce_config(getattr(r, "config", {}))
             summary = _coerce_config(getattr(r, "summary", {}))
@@ -577,6 +578,7 @@ def main():
 
             if not pid_raw or mid not in ("jepa", "contrastive"):
                 continue
+
 
             method_key = str(mid)
             pid = str(pid_raw)
