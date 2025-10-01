@@ -80,7 +80,7 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
         v_key = None
         v = payload.get("val_rmse")
         if v is None:
-            for k in ("rmse_mean", "rmse", "probe_rmse_mean","metric"):
+            for k in ("rmse_mean", "rmse", "probe_rmse_mean", "metric"):
                 if payload.get(k) is not None:
                     v_key, v = k, float(payload[k])
                     break
@@ -89,12 +89,14 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
             wandb.log({"val_rmse": float(v)})
             run.summary["val_rmse"] = float(v)
         else:
-            _dbg("no RMSE candidate in payload; keys=", list(payload.keys()))
+            payload_keys = {k for k, v in payload.items() if v is not None}
+            metadata_only = {"pair_id", "training_method", "seed", "gnn_type", "add_3d"}
+            if payload_keys and not payload_keys.issubset(metadata_only):
+                _dbg("no RMSE candidate in payload; keys=", list(payload.keys()))
 
         # val_mae aliasing
         if "val_mae" not in payload and payload.get("mae_mean") is not None:
             run.summary["val_mae"] = float(payload["mae_mean"])
-
 
         # classification: alias AUC candidates
         if "val_auc" not in run.summary:
@@ -106,9 +108,13 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
                         pass
                     break
 
-        run.summary.update(payload)
+        for k, v in payload.items():
+            try:
+                run.summary[k] = v
+            except Exception as item_exc:
+                _dbg(f"failed to write summary[{k!r}]: {item_exc}")
     except Exception as e:
-       _dbg("wb_summary_update exception:", e)
+        _dbg("wb_summary_update exception:", e)
 
 def wb_finish_safely() -> None:
     with contextlib.suppress(Exception):
