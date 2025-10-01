@@ -432,6 +432,16 @@ def main():
 
     inferred_task: Optional[str] = None
 
+    total_comparable_runs = 0
+    skipped_by_threshold = 0
+    missing_threshold_counts: Dict[str, int] = defaultdict(int)
+    failed_threshold_counts: Dict[str, int] = defaultdict(int)
+    threshold_minimums = {
+        "pretrain_epochs": args.min_pretrain_epochs,
+        "finetune_epochs": args.min_finetune_epochs,
+        "max_pretrain_batches": args.min_pretrain_batches,
+    }
+
     for r in runs:
         run_config = _coerce_config(getattr(r, "config", {}))
         mid_raw = _unwrap_config_value(run_config.get("training_method"))
@@ -448,13 +458,14 @@ def main():
         if not pid_raw or mid not in ("jepa", "contrastive"):
             continue
 
+        total_comparable_runs += 1
         if inferred_task is None:
             inferred_task = _infer_task_from_config(run_config)
 
         thresholds = (
-            ("pretrain_epochs", args.min_pretrain_epochs),
-            ("finetune_epochs", args.min_finetune_epochs),
-            ("max_pretrain_batches", args.min_pretrain_batches),
+            ("pretrain_epochs", threshold_minimums["pretrain_epochs"]),
+            ("finetune_epochs", threshold_minimums["finetune_epochs"]),
+            ("max_pretrain_batches", threshold_minimums["max_pretrain_batches"]),
         )
         skip = False
         for key, minimum in thresholds:
@@ -463,10 +474,15 @@ def main():
             conf_val = _coerce_to_float(run_config.get(key))
             # Phase-1 sweeps often terminate early while phase-2 sweeps rely on mature metrics;
             # filtering prevents these under-trained runs from biasing the phase-1/phase-2 workflow.
-            if conf_val is None or conf_val < minimum:
+            if conf_val is None:
+                missing_threshold_counts[key] += 1
+                continue
+            if conf_val < minimum:
+                failed_threshold_counts[key] += 1
                 skip = True
                 break
         if skip:
+            skipped_by_threshold += 1
             continue
         
         pid = str(pid_raw)
@@ -535,7 +551,35 @@ def main():
 
     if primary_key is None:
         if args.strict:
-            print("No metrics available for comparison.", flush=True)
+            if total_comparable_runs and skipped_by_threshold == total_comparable_runs:
+                reasons = []
+                if failed_threshold_counts:
+                    reasons.append(
+                        "; ".join(
+                            f"{key}<{threshold_minimums.get(key)} ({count} run(s))"
+                            for key, count in failed_threshold_counts.items()
+                            if threshold_minimums.get(key) is not None and count
+                        )
+                    )
+                if missing_threshold_counts:
+                    reasons.append(
+                        ", ".join(
+                            f"missing {key} ({count} run(s))"
+                            for key, count in missing_threshold_counts.items()
+                            if count
+                        )
+                    )
+                detail = "; ".join(filter(None, reasons))
+                if detail:
+                    print(
+                        "No metrics available for comparison after applying threshold filters: "
+                        f"{detail}.",
+                        flush=True,
+                    )
+                else:
+                    print("No metrics available for comparison after applying threshold filters.", flush=True)
+            else:
+                print("No metrics available for comparison.", flush=True)
             sys.exit(2)
         return
 
