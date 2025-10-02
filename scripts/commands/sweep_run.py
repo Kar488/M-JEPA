@@ -11,7 +11,19 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     Run one hyperparameter config (JEPA or contrastive) for W&B sweeps.
     Mirrors one row of grid-search, but logs directly to W&B.
     """
-    from experiments.grid_search import Config, _run_one_config_method
+    try:
+        from experiments.grid_search import (
+            AugmentationConfig,
+            Config,
+            _run_one_config_method,
+        )
+    except ImportError:
+        from experiments.grid_search import Config, _run_one_config_method  # type: ignore
+
+        from types import SimpleNamespace
+
+        def AugmentationConfig(**kwargs):  # type: ignore
+            return SimpleNamespace(**kwargs)
 
     from wandb_safety import wb_get_or_init as _wb_get_or_init
     from wandb_safety import wb_summary_update as _wb_summary_update
@@ -235,6 +247,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             upd["add_3d"] = int(add_3d)  # ensure Phase-2 sees the gated value
         if upd:
             wb.config.update(upd, allow_val_change=True)
+        _wb_summary_update({"pair_id": pair_id})
     else:
         print("⚠️ W&B is disabled or failed to init, skipping config update")
 
@@ -400,7 +413,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     # --- normalize result into a payload dict for W&B summary update ---
     if isinstance(row, dict):
-        payload = row
+        payload = dict(row)
     elif isinstance(row, (float, int)):
         payload = {"val_rmse": float(row)}
     else:
@@ -442,6 +455,18 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                         pass
                     break
                
+    metadata = {
+        "pair_id": pair_id,
+        "training_method": getattr(args, "training_method", None),
+        "seed": getattr(args, "seed", None),
+        "gnn_type": gnn,
+        "add_3d": int(add_3d),
+        "contiguity": int(getattr(args, "contiguity", 0)),
+    }
+    for key, value in metadata.items():
+        if key not in payload and value is not None:
+            payload[key] = value
+
     _wb_get_or_init(args) # re-open if an inner path finished it
     _wb_summary_update(payload)
     _wb_finish_safely()

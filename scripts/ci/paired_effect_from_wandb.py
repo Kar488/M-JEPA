@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping
+from itertools import islice
 import math
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-import numpy as np, wandb, os, argparse, json, sys
+import numpy as np, wandb, os, argparse, json, sys, time
 
 
 def _coerce_config(config: Any) -> Dict[str, Any]:
@@ -14,9 +15,15 @@ def _coerce_config(config: Any) -> Dict[str, Any]:
     if isinstance(config, Mapping):
         return dict(config)
 
-    if hasattr(config, "to_dict"):
+    to_dict_attr = None
+    try:
+        to_dict_attr = config.to_dict  # type: ignore[attr-defined]
+    except (AttributeError, KeyError):
+        to_dict_attr = None
+
+    if callable(to_dict_attr):
         try:
-            converted = config.to_dict()
+            converted = to_dict_attr()
         except Exception:
             converted = None
         if isinstance(converted, dict):
@@ -31,6 +38,76 @@ def _coerce_config(config: Any) -> Dict[str, Any]:
             return parsed
 
     return {}
+
+
+def _lookup_nested(mapping: Mapping[str, Any], key: str) -> Any:
+    """Return ``mapping[key]`` while supporting ``foo/bar`` or ``foo.bar`` access."""
+
+    if key in mapping:
+        return mapping[key]
+
+    for sep in ("/", "."):
+        if sep not in key:
+            continue
+        parts = key.split(sep)
+        node: Any = mapping
+        for part in parts:
+            if isinstance(node, Mapping) and part in node:
+                node = node[part]
+            else:
+                node = None
+                break
+        if node is not None:
+            return node
+    return None
+
+
+def _extract_from_history(run: Any, candidates: Iterable[str], limit: int = 512) -> Tuple[Optional[float], Optional[str]]:
+    """Best-effort extraction of metric values from a W&B run history.
+
+    Some runs fail to promote validation metrics into the W&B summary – especially
+    when they abort prematurely.  Instead of bailing out, attempt to read the
+    recorded history events and use the most recent non-NaN scalar.  The helper is
+    defensive because ``run.history`` has a fairly loose contract and user stubs
+    in the unit tests provide simplified implementations.
+    """
+
+    history = getattr(run, "history", None)
+    if not callable(history):
+        return None, None
+
+    rows: List[Dict[str, Any]] = []
+    history_iters = (
+        {"keys": list(candidates), "pandas": False},
+        {"keys": list(candidates)},
+        {},
+    )
+    for kwargs in history_iters:
+        try:
+            iterator = history(**kwargs)
+        except TypeError:
+            continue
+        except Exception:
+            return None, None
+        if iterator is None:
+            continue
+        try:
+            for row in islice(iterator, limit):
+                rows.append(_coerce_config(row))
+        except TypeError:
+            # ``history`` may return a list already.
+            try:
+                rows = [_coerce_config(r) for r in iterator[:limit]]  # type: ignore[index]
+            except Exception:
+                rows = []
+        break
+
+    for row in reversed(rows):
+        for candidate in candidates:
+            value = _coerce_to_float(_lookup_nested(row, candidate))
+            if value is not None:
+                return value, candidate
+    return None, None
 
 
 MetricStore = Tuple[
@@ -91,6 +168,33 @@ METRIC_INFO = {
 
 TASK_PRIMARY = {"regression": "rmse", "classification": "roc_auc"}
 TASK_TIEBREAKER = {"regression": "r2", "classification": "brier"}
+
+
+def _unwrap_config_value(value: Any) -> Any:
+    """Best-effort extraction of a primitive value from sweep/config payloads."""
+
+    # W&B sweeps frequently wrap the actual parameter value in small dictionaries
+    # such as {'value': 'jepa'} or {'value': 5, '_type': 'int'}.  When the
+    # payload exposes an unambiguous candidate ("value", "default", etc.) keep
+    # peeling the onion until we reach the underlying primitive.  We fall back to
+    # the original input if no recognised wrapper is present so nested
+    # dictionaries (e.g. structured configs) remain intact.
+    if isinstance(value, Mapping):
+        for key in ("value", "default", "actual", "_value"):
+            if key in value:
+                inner = _unwrap_config_value(value[key])
+                if inner is not None:
+                    return inner
+        if len(value) == 1:
+            # Occasionally sweep configs store the payload under an opaque single
+            # key (e.g. {'wandb': {'value': ...}}).  Peeking at the only value is
+            # safe here because we only reach this branch when the mapping does
+            # not expose the standard wrappers checked above.
+            inner = next(iter(value.values()))
+            return _unwrap_config_value(inner)
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        return _unwrap_config_value(value[0])
+    return value
 
 
 def _coerce_to_float(value):
@@ -156,13 +260,15 @@ def _infer_task_from_config(config: Dict[str, Any]) -> Optional[str]:
         return None
 
     for key in ("prediction_target_type", "target_type", "label_type"):
-        task = _normalize_task(config.get(key))
+        task = _normalize_task(_unwrap_config_value(config.get(key)))
         if task:
             return task
 
-    target_cfg = config.get("prediction_target")
+    target_cfg = _unwrap_config_value(config.get("prediction_target"))
     if isinstance(target_cfg, dict):
-        task = _normalize_task(target_cfg.get("type") or target_cfg.get("dtype"))
+        task = _normalize_task(
+            _unwrap_config_value(target_cfg.get("type") or target_cfg.get("dtype"))
+        )
         if task:
             return task
     elif isinstance(target_cfg, str):
@@ -170,15 +276,17 @@ def _infer_task_from_config(config: Dict[str, Any]) -> Optional[str]:
         if task:
             return task
 
-    task = _normalize_task(config.get("task_type"))
+    task = _normalize_task(_unwrap_config_value(config.get("task_type")))
     if task:
         return task
 
-    label_values = config.get("label_values") or config.get("classes")
+    label_values = _unwrap_config_value(config.get("label_values")) or _unwrap_config_value(
+        config.get("classes")
+    )
     if isinstance(label_values, (list, tuple, set)) and label_values:
         return "classification"
 
-    num_classes = config.get("num_classes")
+    num_classes = _unwrap_config_value(config.get("num_classes"))
     if isinstance(num_classes, int) and num_classes > 1:
         return "classification"
 
@@ -190,6 +298,32 @@ def _safe_mean(values: Iterable[float]) -> Optional[float]:
     if not data:
         return None
     return float(np.mean(data))
+
+
+def _format_method_diagnostics(
+    raw_counts: Dict[str, int],
+    raw_pairs: Dict[str, Set[str]],
+    eligible_counts: Dict[str, int],
+    eligible_pairs: Dict[str, Set[str]],
+) -> str:
+    methods = sorted(set(raw_counts) | set(eligible_counts))
+    if not methods:
+        return ""
+
+    parts: List[str] = []
+    for method in methods:
+        total = raw_counts.get(method, 0)
+        eligible = eligible_counts.get(method, 0)
+        pair_total = len(eligible_pairs.get(method, set()))
+        raw_pair_total = len(raw_pairs.get(method, set()))
+        parts.append(
+            f"{method}: runs={total}, eligible={eligible}, pair_ids={pair_total}, "
+            f"raw_pair_ids={raw_pair_total}"
+        )
+
+    shared = len(eligible_pairs.get("jepa", set()) & eligible_pairs.get("contrastive", set()))
+    parts.append(f"shared_pair_ids={shared}")
+    return "; ".join(parts)
 
 
 def _format_metric(value: Optional[float]) -> str:
@@ -376,90 +510,186 @@ def main():
 
     api = wandb.Api()
     filters = {"group": args.group} if args.group else None
-    runs = api.runs(f"{os.getenv('WANDB_ENTITY')}/{args.project}", filters=filters)
-    if not runs:
-        # Do not write output when empty; only fail hard if --strict
+    entity = os.getenv("WANDB_ENTITY")
+    project_path = f"{entity}/{args.project}" if entity else args.project
+
+    max_attempts = max(1, int(os.getenv("PE_FETCH_MAX_ATTEMPTS", "5")))
+    retry_delay = float(os.getenv("PE_FETCH_RETRY_DELAY", "15"))
+
+    runs_list: List[Any] = []
+    metric_store: MetricStore = ({}, {}, {})
+    inferred_task: Optional[str] = None
+    total_comparable_runs = 0
+    skipped_by_threshold = 0
+    missing_threshold_counts: Dict[str, int] = defaultdict(int)
+    failed_threshold_counts: Dict[str, int] = defaultdict(int)
+    threshold_minimums = {
+        "pretrain_epochs": args.min_pretrain_epochs,
+        "finetune_epochs": args.min_finetune_epochs,
+        "max_pretrain_batches": args.min_pretrain_batches,
+    }
+    available_metrics = set()
+    attempt = 0
+    raw_method_counts: Dict[str, int] = defaultdict(int)
+    eligible_method_counts: Dict[str, int] = defaultdict(int)
+    raw_pair_ids: Dict[str, Set[str]] = defaultdict(set)
+    eligible_pair_ids: Dict[str, Set[str]] = defaultdict(set)
+
+    while True:
+        attempt += 1
+        runs_iter = api.runs(project_path, filters=filters)
+        runs_list = list(runs_iter)
+        if not runs_list:
+            break
+
+        by_metric_pair_vals: Dict[str, Dict[str, Dict[str, List[float]]]] = {}
+        by_metric_pair_seed: Dict[str, Dict[str, Dict[Any, Dict[str, List[float]]]]] = {}
+        metric_names: Dict[str, Optional[str]] = {}
+        metric_store = (by_metric_pair_vals, by_metric_pair_seed, metric_names)
+
+        inferred_task_local: Optional[str] = None
+        total_comparable_runs_local = 0
+        skipped_by_threshold_local = 0
+        missing_threshold_counts_local: Dict[str, int] = defaultdict(int)
+        failed_threshold_counts_local: Dict[str, int] = defaultdict(int)
+        recorded_any_metrics = False
+        raw_method_counts_local: Dict[str, int] = defaultdict(int)
+        eligible_method_counts_local: Dict[str, int] = defaultdict(int)
+        raw_pair_ids_local: Dict[str, Set[str]] = defaultdict(set)
+        eligible_pair_ids_local: Dict[str, Set[str]] = defaultdict(set)
+
+
+        for r in runs_list:
+            run_config = _coerce_config(getattr(r, "config", {}))
+            summary = _coerce_config(getattr(r, "summary", {}))
+            mid_raw = _unwrap_config_value(run_config.get("training_method"))
+            pid_raw = _unwrap_config_value(run_config.get("pair_id"))
+
+            if not pid_raw:
+                pid_raw = _unwrap_config_value(summary.get("pair_id"))
+
+            mid = mid_raw.strip().lower() if isinstance(mid_raw, str) else mid_raw
+            if isinstance(mid, Mapping):
+                mid = _unwrap_config_value(mid)
+                mid = mid.strip().lower() if isinstance(mid, str) else mid
+
+            if isinstance(pid_raw, Mapping):
+                pid_raw = _unwrap_config_value(pid_raw)
+
+            if not pid_raw or mid not in ("jepa", "contrastive"):
+                continue
+
+
+            method_key = str(mid)
+            pid = str(pid_raw)
+            raw_method_counts_local[method_key] += 1
+            raw_pair_ids_local[method_key].add(pid)
+
+            total_comparable_runs_local += 1
+            if inferred_task_local is None:
+                inferred_task_local = _infer_task_from_config(run_config)
+
+            thresholds = (
+                ("pretrain_epochs", threshold_minimums["pretrain_epochs"]),
+                ("finetune_epochs", threshold_minimums["finetune_epochs"]),
+                ("max_pretrain_batches", threshold_minimums["max_pretrain_batches"]),
+            )
+            skip = False
+            for key, minimum in thresholds:
+                if minimum is None:
+                    continue
+                conf_val = _coerce_to_float(run_config.get(key))
+                # Phase-1 sweeps often terminate early while phase-2 sweeps rely on mature metrics;
+                # filtering prevents these under-trained runs from biasing the phase-1/phase-2 workflow.
+                if conf_val is None:
+                    missing_threshold_counts_local[key] += 1
+                    continue
+                if conf_val < minimum:
+                    failed_threshold_counts_local[key] += 1
+                    skip = True
+                    break
+            if skip:
+                skipped_by_threshold_local += 1
+                continue
+
+            eligible_method_counts_local[method_key] += 1
+            eligible_pair_ids_local[method_key].add(pid)
+
+            # Gather metrics for all known candidates.
+            metrics_recorded: List[Tuple[str, float]] = []
+            for metric_key, info in METRIC_INFO.items():
+                metric_val = None
+                metric_name = None
+                for candidate in info["candidates"]:
+                    if candidate in summary:
+                        metric_val = _coerce_to_float(summary.get(candidate))
+                    else:
+                        metric_val = _coerce_to_float(_lookup_nested(summary, candidate))
+                    if metric_val is not None:
+                        metric_name = candidate
+                        break
+                if metric_val is None:
+                    metric_val, metric_name = _extract_from_history(r, info["candidates"])
+                if metric_val is None:
+                    continue
+
+                recorded_any_metrics = True
+                _ensure_metric_store(metric_key, metric_store)
+                metric_names[metric_key] = metric_names.get(metric_key) or metric_name
+                by_metric_pair_vals[metric_key].setdefault(pid, defaultdict(list))[mid].append(metric_val)
+                metrics_recorded.append((metric_key, metric_val))
+
+            # capture seed if available
+            seed = _unwrap_config_value(run_config.get("seed", None))
+            if seed is not None:
+                try:
+                    seed = int(seed)
+                except Exception:
+                    pass
+            for metric_key, metric_val in metrics_recorded:
+                if seed is None:
+                    continue
+                _ensure_metric_store(metric_key, metric_store)
+                by_metric_pair_seed[metric_key][pid][seed][mid].append(metric_val)
+
+        available_metrics_local = {key for key, vals in by_metric_pair_vals.items() if vals}
+
+        metric_store = (by_metric_pair_vals, by_metric_pair_seed, metric_names)
+        inferred_task = inferred_task_local
+        total_comparable_runs = total_comparable_runs_local
+        skipped_by_threshold = skipped_by_threshold_local
+        missing_threshold_counts = missing_threshold_counts_local
+        failed_threshold_counts = failed_threshold_counts_local
+        available_metrics = available_metrics_local
+        raw_method_counts = raw_method_counts_local
+        eligible_method_counts = eligible_method_counts_local
+        raw_pair_ids = raw_pair_ids_local
+        eligible_pair_ids = eligible_pair_ids_local
+
+        all_blocked = (
+            total_comparable_runs_local > 0
+            and skipped_by_threshold_local == total_comparable_runs_local
+        )
+
+        if available_metrics_local or all_blocked or attempt >= max_attempts:
+            break
+
+        wait_reason = "no comparable metrics yet"
+        if recorded_any_metrics:
+            wait_reason += " (partial metrics present)"
+        print(
+            f"[paired-effect] {wait_reason}; retrying in {retry_delay:.1f}s "
+            f"(attempt {attempt}/{max_attempts})",
+            flush=True,
+        )
+        time.sleep(retry_delay)
+
+    if not runs_list:
         if args.strict:
             print("No runs found.", flush=True)
             sys.exit(2)
         return
 
-    # Collect values per metric.
-    # by_metric_pair_vals[metric][pair_id][method] -> list[float]
-    # by_metric_pair_seed[metric][pair_id][seed][method] -> list[float]
-    by_metric_pair_vals: Dict[str, Dict[str, Dict[str, List[float]]]] = {}
-    by_metric_pair_seed: Dict[str, Dict[str, Dict[Any, Dict[str, List[float]]]]] = {}
-    metric_names: Dict[str, Optional[str]] = {}
-
-    metric_store: MetricStore = (by_metric_pair_vals, by_metric_pair_seed, metric_names)
-
-    inferred_task: Optional[str] = None
-
-    for r in runs:
-        run_config = _coerce_config(getattr(r, "config", {}))
-        mid = run_config.get("training_method")
-        pid = run_config.get("pair_id")
-        if not pid or mid not in ("jepa","contrastive"):
-            continue
-
-        if inferred_task is None:
-            inferred_task = _infer_task_from_config(run_config)
-
-        thresholds = (
-            ("pretrain_epochs", args.min_pretrain_epochs),
-            ("finetune_epochs", args.min_finetune_epochs),
-            ("max_pretrain_batches", args.min_pretrain_batches),
-        )
-        skip = False
-        for key, minimum in thresholds:
-            if minimum is None:
-                continue
-            conf_val = _coerce_to_float(run_config.get(key))
-            # Phase-1 sweeps often terminate early while phase-2 sweeps rely on mature metrics;
-            # filtering prevents these under-trained runs from biasing the phase-1/phase-2 workflow.
-            if conf_val is None or conf_val < minimum:
-                skip = True
-                break
-        if skip:
-            continue
-        
-        pid = str(pid)
-
-        # Gather metrics for all known candidates.
-        summary = _coerce_config(getattr(r, "summary", {}))
-        metrics_recorded: List[Tuple[str, float]] = []
-        for metric_key, info in METRIC_INFO.items():
-            metric_val = None
-            metric_name = None
-            for candidate in info["candidates"]:
-                if candidate in summary:
-                    metric_val = _coerce_to_float(summary.get(candidate))
-                    metric_name = candidate
-                    if metric_val is not None:
-                        break
-            if metric_val is None:
-                continue
-
-            _ensure_metric_store(metric_key, metric_store)
-            metric_names[metric_key] = metric_names.get(metric_key) or metric_name
-            by_metric_pair_vals[metric_key].setdefault(pid, defaultdict(list))[mid].append(metric_val)
-            metrics_recorded.append((metric_key, metric_val))
-
-        # capture seed if available
-        seed = run_config.get("seed", None)
-        if seed is not None:
-            try:
-                seed = int(seed)
-            except Exception:
-                pass
-        for metric_key, metric_val in metrics_recorded:
-            if seed is None:
-                continue
-            _ensure_metric_store(metric_key, metric_store)
-            by_metric_pair_seed[metric_key][pid][seed][mid].append(metric_val)
-
-    # infer task before reduction
-    available_metrics = {key for key, vals in by_metric_pair_vals.items() if vals}
     if inferred_task is None:
         if "roc_auc" in available_metrics and "rmse" not in available_metrics:
             inferred_task = "classification"
@@ -487,9 +717,55 @@ def main():
             if primary_key is not None:
                 primary_resolution_reason = "first available metric"
 
+    attempt_note = ""
+    if attempt > 1:
+        attempt_note = f" after {attempt} attempt(s)"
+
     if primary_key is None:
+        diagnostic = _format_method_diagnostics(
+            raw_method_counts,
+            raw_pair_ids,
+            eligible_method_counts,
+            eligible_pair_ids,
+        )
         if args.strict:
-            print("No metrics available for comparison.", flush=True)
+            if total_comparable_runs and skipped_by_threshold == total_comparable_runs:
+                reasons = []
+                if failed_threshold_counts:
+                    reasons.append(
+                        "; ".join(
+                            f"{key}<{threshold_minimums.get(key)} ({count} run(s))"
+                            for key, count in failed_threshold_counts.items()
+                            if threshold_minimums.get(key) is not None and count
+                        )
+                    )
+                if missing_threshold_counts:
+                    reasons.append(
+                        ", ".join(
+                            f"missing {key} ({count} run(s))"
+                            for key, count in missing_threshold_counts.items()
+                            if count
+                        )
+                    )
+                detail = "; ".join(filter(None, reasons))
+                if detail:
+                    message = (
+                        "No metrics available for comparison after applying threshold filters"
+                        f"{attempt_note}: {detail}."
+                    )
+                else:
+                    message = (
+                        f"No metrics available for comparison after applying threshold filters{attempt_note}."
+                    )
+            else:
+                message = f"No metrics available for comparison{attempt_note}."
+
+            if diagnostic:
+                if not message.endswith("."):
+                    message += "."
+                message += f" Eligible runs summary: {diagnostic}."
+
+            print(message, flush=True)
             sys.exit(2)
         return
 
@@ -535,7 +811,16 @@ def main():
 
     if aggregate_result is None:
         if args.strict:
-            print("No matched pairs found.", flush=True)
+            diagnostic = _format_method_diagnostics(
+                raw_method_counts,
+                raw_pair_ids,
+                eligible_method_counts,
+                eligible_pair_ids,
+            )
+            message = "No matched pairs found."
+            if diagnostic:
+                message = message.rstrip(".") + f" Eligible runs summary: {diagnostic}."
+            print(message, flush=True)
             sys.exit(2)
         return
 

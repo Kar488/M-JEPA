@@ -150,6 +150,8 @@ def test_cmd_sweep_run_handles_float_return(monkeypatch, tmp_path):
 
     tj.cmd_sweep_run(args)
     assert captures.get("val_rmse") == 0.5
+    assert "pair_id" in captures
+    assert captures.get("training_method") == "jepa"
 
 
 def test_cmd_sweep_run_dataset_cache(monkeypatch, tmp_path):

@@ -16,11 +16,19 @@ from scripts.ci import recheck_topk_from_wandb as rc
 
 
 class FakeRun:
-    def __init__(self, name, config, summary, run_id="runid"):
+    def __init__(self, name, config, summary, run_id="runid", history=None):
         self.name = name
         self.config = config
         self.summary = summary
         self.id = run_id
+        self._history = history
+
+    def history(self, **kwargs):  # pragma: no cover - simple passthrough
+        if self._history is None:
+            return []
+        if callable(self._history):
+            return self._history(**kwargs)
+        return list(self._history)
 
 
 class FakeSweep:
@@ -84,6 +92,106 @@ def test_paired_effect_accepts_serialized_config(monkeypatch, tmp_path):
     result = json.loads(out.read_text())
     assert result["winner"] == "jepa"
     assert result["pairs"] == 1
+
+
+def test_paired_effect_unwraps_sweep_config_wrappers(monkeypatch, tmp_path):
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    wrapped_runs = [
+        FakeRun(
+            "jepa_wrapped_cfg",
+            {
+                "training_method": {"value": "jepa", "_type": "string"},
+                "pair_id": {"value": "cfg-wrap"},
+                "seed": {"value": 11},
+                "task_type": {"value": "regression"},
+            },
+            {"val_rmse": {"value": 0.42}},
+        ),
+        FakeRun(
+            "contrastive_wrapped_cfg",
+            {
+                "training_method": {"value": "contrastive"},
+                "pair_id": {"value": "cfg-wrap"},
+                "seed": {"value": 11},
+                "task_type": {"value": "regression"},
+            },
+            {"val_rmse": {"value": 0.58}},
+        ),
+    ]
+
+    class WrappedCfgApi:
+        def runs(self, path, filters=None):
+            return wrapped_runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: WrappedCfgApi()))
+
+    out = tmp_path / "pe_cfg_wrapped.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+    assert payload["winner"] == "jepa"
+    assert payload["pairs"] == 1
+
+
+def test_paired_effect_uses_summary_pair_id(monkeypatch, tmp_path):
+    """Runs missing pair_id in config should fall back to the summary payload."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    runs = [
+        FakeRun(
+            "jepa_summary_pair",
+            {"training_method": "jepa"},
+            {"pair_id": "summary-pair", "val_rmse": 0.4},
+        ),
+        FakeRun(
+            "contrastive_summary_pair",
+            {"training_method": "contrastive"},
+            {"pair_id": "summary-pair", "val_rmse": 0.6},
+        ),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_summary_pair.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+
+    assert payload["pairs"] == 1
+    assert payload["winner"] == "jepa"
+
 
 def test_paired_effect_winner_and_no_pairs(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("WANDB_ENTITY", "ent")
@@ -159,6 +267,90 @@ def test_paired_effect_winner_and_no_pairs(monkeypatch, tmp_path, capsys):
     assert data3["winner"] == "jepa"
 
 
+def test_paired_effect_missing_threshold_keys(monkeypatch, tmp_path):
+    """Runs lacking the threshold config keys should not be discarded entirely."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    runs = [
+        FakeRun("jepa", {"training_method": "jepa", "pair_id": "pid"}, {"val_rmse": 0.5}),
+        FakeRun("contrastive", {"training_method": "contrastive", "pair_id": "pid"}, {"val_rmse": 0.7}),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_missing_thresholds.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+            "--strict",
+            "--min_pretrain_epochs",
+            "5",
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+
+    assert payload["pairs"] == 1
+    assert payload["winner"] == "jepa"
+
+
+def test_paired_effect_ignores_disabled_thresholds(monkeypatch, tmp_path):
+    """Optional thresholds (default None) must not trigger comparison failures."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    runs = [
+        FakeRun("jepa", {"training_method": "jepa", "pair_id": "pid"}, {"val_rmse": 0.4}),
+        FakeRun(
+            "contrastive",
+            {"training_method": "contrastive", "pair_id": "pid", "max_pretrain_batches": 3},
+            {"val_rmse": 0.6},
+        ),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):  # pragma: no cover - simple stub
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_optional_thresholds.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+            "--strict",
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+
+    assert payload["pairs"] == 1
+    assert payload["winner"] == "jepa"
+
+
 def test_paired_effect_handles_wandb_summary_wrappers(monkeypatch, tmp_path):
     """Some wandb summary scalars are wrapped in {'value': x} containers."""
 
@@ -202,6 +394,103 @@ def test_paired_effect_handles_wandb_summary_wrappers(monkeypatch, tmp_path):
     result = json.loads(out.read_text())
     assert result["winner"] == "jepa"
     assert result["pairs"] == 1
+
+
+def test_paired_effect_reads_history_when_summary_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    runs = [
+        FakeRun(
+            "jepa_hist",
+            {"training_method": "jepa", "pair_id": "hist"},
+            {},
+            history=[{"val_rmse": 0.45}],
+        ),
+        FakeRun(
+            "contrastive_hist",
+            {"training_method": "contrastive", "pair_id": "hist"},
+            {},
+            history=[{"val_rmse": 0.6}],
+        ),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_history.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+            "--strict",
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+    assert payload["winner"] == "jepa"
+    assert payload["pairs"] == 1
+
+
+def test_paired_effect_reports_method_counts_when_metrics_missing(monkeypatch, tmp_path, capsys):
+    """Strict mode should include per-method diagnostics when no metrics exist."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    runs = [
+        FakeRun(
+            "jepa_missing_metrics",
+            {"training_method": "jepa", "pair_id": "pid"},
+            {},
+        ),
+        FakeRun(
+            "contrastive_missing_metrics",
+            {"training_method": "contrastive", "pair_id": "pid"},
+            {},
+        ),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_missing_metrics.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+            "--strict",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        pe.main()
+
+    assert excinfo.value.code == 2
+    output = capsys.readouterr().out
+    assert "Eligible runs summary" in output
+    assert "jepa: runs=1, eligible=1" in output
+    assert "contrastive: runs=1, eligible=1" in output
+    assert not out.exists()
 
 
 def test_paired_effect_limits_pairs_to_shared_seeds(monkeypatch, tmp_path):

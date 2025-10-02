@@ -306,3 +306,38 @@ How do we increase the number of matched pairs beyond ``3 × 3 = 9``?
   the tracked sweep templates.  This keeps the shared pairing knobs explicit
   while making it easy to dial up the number of matched runs when additional
   budget is available.
+
+How many phase-1 runs do we need before ``pair_id``
+overlap becomes likely?
+  Phase-1 sweeps sample one of three backbones (``gine``, ``dmpnn``,
+  ``schnet3d``) at random for each run.  The ``pair_id`` only depends on the
+  chosen backbone because the other pairing knobs are fixed during the sweep.
+  With ``n`` runs per method, the probability that at least one backbone is
+  shared between the JEPA and contrastive sweeps is shown below alongside the
+  chance that **each** sweep covers all three backbones.
+
+  .. list-table:: Pair-id coverage when backbones are sampled uniformly
+     :header-rows: 1
+     :widths: 15 25 30
+
+     * - Runs per method (``n``)
+       - Probability of a shared ``pair_id``
+       - Probability both sweeps cover all three backbones
+     * - 3
+       - 94.2%
+       - 4.9%
+     * - 4
+       - 98.6%
+       - 19.8%
+     * - 5
+       - 99.7%
+       - 38.1%
+     * - 6
+       - 99.9%
+       - 54.9%
+
+  Even with four runs per method there is already a 98.6% chance that the two
+  sweeps share at least one ``pair_id``.  Increasing the run count mainly
+  improves the odds that both sweeps exercise *every* backbone, which is useful
+  when you want to make a decision per backbone rather than relying on the
+  global fallback in the paired-effect report.
