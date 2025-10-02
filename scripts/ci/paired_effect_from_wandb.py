@@ -37,6 +37,74 @@ def _coerce_config(config: Any) -> Dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
 
+    json_dict = getattr(config, "_json_dict", None)
+    if isinstance(json_dict, dict):
+        return dict(json_dict)
+
+    items_attr = getattr(config, "items", None)
+    if callable(items_attr):
+        try:
+            return dict(items_attr())
+        except TypeError:
+            try:
+                return dict(config)
+            except Exception:
+                pass
+
+    try:
+        return dict(config)
+    except Exception:
+        pass
+
+    return {}
+
+
+def _extract_summary_payload(run: Any) -> Dict[str, Any]:
+    """Best-effort extraction of a run summary payload.
+
+    The W&B public API exposes multiple representations of the summary: the
+    mutable ``run.summary`` object, the read-only ``run.summary_metrics`` view
+    returned by GraphQL queries, and the raw ``_attrs`` field populated during
+    pagination.  Some roll-outs have been returning an empty ``run.summary``
+    even though ``summaryMetrics`` is populated in the lightweight attrs.  The
+    paired-effect tool previously trusted ``run.summary`` exclusively which left
+    the metric inventory empty.  This helper inspects each representation in
+    priority order and returns the first non-empty mapping.
+    """
+
+    summary_sources = []
+
+    try:
+        summary_sources.append(getattr(run, "summary"))
+    except Exception:
+        summary_sources.append(None)
+
+    # Newer public API versions expose ``summary_metrics`` which is already a
+    # plain dictionary.  Prefer this when the mutable summary is empty.
+    try:
+        summary_sources.append(getattr(run, "summary_metrics"))
+    except Exception:
+        summary_sources.append(None)
+
+    # Some client versions materialise summary metrics under a camelCased
+    # attribute or only expose them via the private ``_attrs`` payload.  Check
+    # both to avoid depending on a particular W&B release cadence.
+    try:
+        summary_sources.append(getattr(run, "summaryMetrics"))
+    except Exception:
+        summary_sources.append(None)
+
+    attrs = getattr(run, "_attrs", None)
+    if isinstance(attrs, Mapping):
+        for key in ("summaryMetrics", "summary_metrics"):
+            if key in attrs:
+                summary_sources.append(attrs.get(key))
+
+    for source in summary_sources:
+        summary = _coerce_config(source or {})
+        if summary:
+            return summary
+
     return {}
 
 
@@ -561,7 +629,7 @@ def main():
 
         for r in runs_list:
             run_config = _coerce_config(getattr(r, "config", {}))
-            summary = _coerce_config(getattr(r, "summary", {}))
+            summary = _extract_summary_payload(r)
             mid_raw = _unwrap_config_value(run_config.get("training_method"))
             pid_raw = _unwrap_config_value(run_config.get("pair_id"))
 

@@ -2,6 +2,7 @@ import json
 import sys
 import types
 from pathlib import Path
+from typing import Any, Dict
 
 import pytest
 import yaml
@@ -16,12 +17,23 @@ from scripts.ci import recheck_topk_from_wandb as rc
 
 
 class FakeRun:
-    def __init__(self, name, config, summary, run_id="runid", history=None):
+    def __init__(
+        self,
+        name,
+        config,
+        summary,
+        run_id="runid",
+        history=None,
+        summary_metrics=None,
+        raw_attrs=None,
+    ):
         self.name = name
         self.config = config
         self.summary = summary
         self.id = run_id
         self._history = history
+        self.summary_metrics = summary_metrics if summary_metrics is not None else {}
+        self._attrs = raw_attrs if raw_attrs is not None else {}
 
     def history(self, **kwargs):  # pragma: no cover - simple passthrough
         if self._history is None:
@@ -172,6 +184,59 @@ def test_paired_effect_uses_summary_pair_id(monkeypatch, tmp_path):
     monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
 
     out = tmp_path / "pe_summary_pair.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+
+    assert payload["pairs"] == 1
+    assert payload["winner"] == "jepa"
+
+
+def test_paired_effect_uses_summary_metrics_fallback(monkeypatch, tmp_path):
+    """Ensure runs exposing summary metrics outside ``run.summary`` are parsed."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    class EmptySummary:
+        _json_dict: Dict[str, Any] = {}
+
+    runs = [
+        FakeRun(
+            "jepa_fallback",
+            {"training_method": "jepa", "pair_id": "metrics"},
+            EmptySummary(),
+            summary_metrics={"val_rmse": 0.41},
+            raw_attrs={"summaryMetrics": {"val_rmse": 0.41}},
+        ),
+        FakeRun(
+            "contrastive_fallback",
+            {"training_method": "contrastive", "pair_id": "metrics"},
+            EmptySummary(),
+            summary_metrics={"val_rmse": 0.55},
+            raw_attrs={"summaryMetrics": {"val_rmse": 0.55}},
+        ),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_summary_metrics.json"
     monkeypatch.setattr(
         sys,
         "argv",
@@ -421,6 +486,56 @@ def test_paired_effect_reads_history_when_summary_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
 
     out = tmp_path / "pe_history.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+            "--strict",
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+    assert payload["winner"] == "jepa"
+    assert payload["pairs"] == 1
+
+
+def test_paired_effect_reads_summary_json_dict(monkeypatch, tmp_path):
+    """Summary objects exposing _json_dict should be coerced into mappings."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    class SummaryWithJsonDict:
+        def __init__(self, payload):
+            self._json_dict = dict(payload)
+
+    runs = [
+        FakeRun(
+            "jepa_json_dict",
+            {"training_method": "jepa", "pair_id": "pid"},
+            SummaryWithJsonDict({"val_rmse": 0.41}),
+        ),
+        FakeRun(
+            "contrastive_json_dict",
+            {"training_method": "contrastive", "pair_id": "pid"},
+            SummaryWithJsonDict({"val_rmse": 0.56}),
+        ),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_json_dict.json"
     monkeypatch.setattr(
         sys,
         "argv",
