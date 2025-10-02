@@ -63,6 +63,13 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   TMP_JEPA="$(mktemp)";      yq ".method = \"random\"" "$JEPA_SPEC" > "$TMP_JEPA"
   TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\"" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
 
+  if [[ -n "${PHASE1_SWEEP_SEED:-}" ]]; then
+    export PHASE1_SWEEP_SEED
+    for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
+      yq -i '.seed = (strenv(PHASE1_SWEEP_SEED) | tonumber)' "$spec"
+    done
+  fi
+
   if [[ -n "${PHASE1_BACKBONES:-}" ]]; then
     export PHASE1_BACKBONES
     for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do

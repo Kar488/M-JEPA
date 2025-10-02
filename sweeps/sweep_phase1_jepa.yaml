@@ -1,6 +1,7 @@
 program: scripts/train_jepa.py
 command: ["${interpreter}", "${program}", "sweep-run", "${args}"]
 
+# Randomness is coordinated by CI; a top-level `seed` may be injected dynamically.
 method: random
 metric: {name: val_rmse, goal: minimize}
 early_terminate: {type: hyperband, min_iter: 3}
