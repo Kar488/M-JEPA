@@ -44,12 +44,17 @@ def _coerce_config(config: Any) -> Dict[str, Any]:
     items_attr = getattr(config, "items", None)
     if callable(items_attr):
         try:
-            return dict(items_attr())
-        except TypeError:
+            items_value = items_attr()
+        except Exception:
+            items_value = None
+        else:
             try:
-                return dict(config)
+                return dict(items_value)
             except Exception:
-                pass
+                try:
+                    return dict(config)
+                except Exception:
+                    pass
 
     try:
         return dict(config)

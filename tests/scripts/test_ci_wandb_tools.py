@@ -557,6 +557,65 @@ def test_paired_effect_reads_summary_json_dict(monkeypatch, tmp_path):
     assert payload["pairs"] == 1
 
 
+def test_paired_effect_handles_summary_items_attribute_error(monkeypatch, tmp_path):
+    """Summary.items implementations raising AttributeError should be ignored."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    class SummaryWithBrokenItems:
+        def __init__(self):
+            self._json_dict = "corrupted"
+
+        def keys(self):  # pragma: no cover - exercised indirectly during failure
+            return self._json_dict.keys()
+
+        def items(self):  # pragma: no cover - exercised indirectly during failure
+            # Mimic wandb.old.summary.Summary relying on ``keys()``.
+            return [(key, None) for key in self.keys()]
+
+    runs = [
+        FakeRun(
+            "jepa_items_error",
+            {"training_method": "jepa", "pair_id": "pid"},
+            SummaryWithBrokenItems(),
+            summary_metrics={"val_rmse": 0.41},
+        ),
+        FakeRun(
+            "contrastive_items_error",
+            {"training_method": "contrastive", "pair_id": "pid"},
+            SummaryWithBrokenItems(),
+            summary_metrics={"val_rmse": 0.6},
+        ),
+    ]
+
+    class Api:
+        def runs(self, path, filters=None):
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+
+    out = tmp_path / "pe_summary_items_error.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+            "--strict",
+        ],
+    )
+
+    pe.main()
+    payload = json.loads(out.read_text())
+    assert payload["winner"] == "jepa"
+    assert payload["pairs"] == 1
+
+
 def test_paired_effect_reports_method_counts_when_metrics_missing(monkeypatch, tmp_path, capsys):
     """Strict mode should include per-method diagnostics when no metrics exist."""
 
