@@ -22,9 +22,24 @@ import wandb
 import subprocess
 import shlex
 
+def _safe_get(container, name):
+    if container is None:
+        return None
+    if isinstance(container, dict):
+        return container.get(name, None)
+    getter = getattr(container, "get", None)
+    if callable(getter):
+        try:
+            return getter(name, None)
+        except (TypeError, AttributeError):
+            return None
+    return None
+
+
 def metric_of(run, name, default=None):
-    v = run.summary.get(name, None)
-    if v is None: v = run.config.get(name, None)
+    v = _safe_get(getattr(run, "summary", None), name)
+    if v is None:
+        v = _safe_get(getattr(run, "config", None), name)
     return v if v is not None else default
 
 def pick_topk(sweep, metric: str, maximize: bool, k: int):
