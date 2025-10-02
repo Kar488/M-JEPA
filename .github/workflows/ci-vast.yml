@@ -288,7 +288,7 @@ jobs:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
           # Set matching backbone/seed combinations so JEPA & contrastive sweeps stay paired.
-          WANDB_COUNT: 15
+          WANDB_COUNT: 4
           GRID_MODE: "wandb"   # or "custom"
           EXPORT_OUT_PATH: ${{ env.GRID_DIR }}/best_grid_config.json
           EXPORT_PHASE2_PATH: ${{ env.GRID_DIR }}/grid_sweep_phase2.yaml
