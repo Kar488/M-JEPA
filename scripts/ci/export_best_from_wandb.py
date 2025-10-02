@@ -33,9 +33,28 @@ def need_env(name: str) -> str:
 # ---------- metric helpers ----------
 
 def metric(run, name: str, default=None):
-    v = run.summary.get(name, None)
+    v = None
+    summary = getattr(run, "summary", None)
+    if summary is not None:
+        if isinstance(summary, dict):
+            v = summary.get(name, None)
+        else:
+            try:
+                v = summary.get(name, None)
+            except TypeError:
+                # Some wandb summary objects can temporarily resolve to raw
+                # JSON strings when hydration fails. Treat those as missing
+                # rather than crashing the export script.
+                v = None
     if v is None:
-        v = run.config.get(name, None)
+        config = getattr(run, "config", {}) or {}
+        if isinstance(config, dict):
+            v = config.get(name, None)
+        else:
+            try:
+                v = config.get(name, None)
+            except AttributeError:
+                v = None
     return v if v is not None else default
 
 def detect_task(runs) -> str:
