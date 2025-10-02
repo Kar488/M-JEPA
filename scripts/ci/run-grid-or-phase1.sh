@@ -67,7 +67,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     export PHASE1_SWEEP_SEED
     for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
       # Use -y to specify YAML output when editing in place
-      yq -y -i '.seed = (strenv(PHASE1_SWEEP_SEED) | tonumber)' "$spec"
+      yq -y -i --arg seed "$PHASE1_SWEEP_SEED" '.seed = ($seed | tonumber)' "$spec"
     done
   fi
 
@@ -75,7 +75,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     export PHASE1_BACKBONES
     for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
       # Use -y to specify YAML output when editing in place
-      yq -y -i '.parameters.gnn_type.values = (strenv(PHASE1_BACKBONES)
+      yq -y -i --arg backbones "$PHASE1_BACKBONES" '.parameters.gnn_type.values = ($backbones
         | split(",")
         | map(gsub("^\\s+|\\s+$"; ""))
         | map(select(length > 0)))' "$spec"
@@ -86,7 +86,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     export PHASE1_SEEDS
     for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
       # Use -y to specify YAML output when editing in place
-      yq -y -i '.parameters.seed.values = (strenv(PHASE1_SEEDS)
+      yq -y -i --arg seeds "$PHASE1_SEEDS" '.parameters.seed.values = ($seeds
         | split(",")
         | map(gsub("^\\s+|\\s+$"; ""))
         | map(select(length > 0))
