@@ -281,13 +281,14 @@ jobs:
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,
             GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,
             GRID_MODE,WANDB_COUNT,EXPORT_OUT_PATH,EXPORT_PHASE2_PATH,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR,
-            PE_MIN_PRETRAIN_EPOCHS,PE_MIN_FINETUNE_EPOCHS,PE_MIN_PRETRAIN_BATCHES,PHASE1_SWEEP_SEED, PHASE1_SEEDS
+            PE_MIN_PRETRAIN_EPOCHS,PE_MIN_FINETUNE_EPOCHS,PE_MIN_PRETRAIN_BATCHES,PHASE1_BACKBONES,PHASE1_SEEDS
           script: |
             bash "$APP_DIR/scripts/ci/run-grid-or-phase1.sh"
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 4
+          # Set matching backbone/seed combinations so JEPA & contrastive sweeps stay paired.
+          WANDB_COUNT: 15
           GRID_MODE: "wandb"   # or "custom"
           EXPORT_OUT_PATH: ${{ env.GRID_DIR }}/best_grid_config.json
           EXPORT_PHASE2_PATH: ${{ env.GRID_DIR }}/grid_sweep_phase2.yaml
@@ -296,7 +297,8 @@ jobs:
           PE_MIN_PRETRAIN_EPOCHS: 5
           PE_MIN_FINETUNE_EPOCHS: 1
           PE_MIN_PRETRAIN_BATCHES: 200
-          PHASE1_SWEEP_SEED: 42
+          # W&B sweeps pair runs via PHASE1_BACKBONES/PHASE1_SEEDS; PHASE1_SWEEP_SEED is deprecated.
+          PHASE1_BACKBONES: gine,dmpnn,schnet3d
           PHASE1_SEEDS: 1,2,3,4,5
 
 

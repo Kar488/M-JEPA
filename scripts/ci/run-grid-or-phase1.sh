@@ -62,14 +62,8 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
   TMP_JEPA="$(mktemp)";      yq ".method = \"random\"" "$JEPA_SPEC" > "$TMP_JEPA"
   TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\"" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
-
-  if [[ -n "${PHASE1_SWEEP_SEED:-}" ]]; then
-    export PHASE1_SWEEP_SEED
-    for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
-      # Use -y to specify YAML output when editing in place
-      yq -y -i --arg seed "$PHASE1_SWEEP_SEED" '.seed = ($seed | tonumber)' "$spec"
-    done
-  fi
+  # WandB sweeps ignore a top-level `seed`; pairing is instead controlled via
+  # PHASE1_BACKBONES / PHASE1_SEEDS so both specs enumerate identical combos.
 
   if [[ -n "${PHASE1_BACKBONES:-}" ]]; then
     export PHASE1_BACKBONES
