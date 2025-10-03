@@ -8,7 +8,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from training.supervised import stratified_split, train_linear_head
+from training.supervised import _pool_batch_embeddings, stratified_split, train_linear_head
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -55,6 +55,25 @@ class DummyDataset:
         ptr = torch.arange(0, len(indices) + 1, dtype=torch.long)
         batch_labels = torch.tensor(self.labels[indices], dtype=torch.float32)
         return batch_x, batch_adj, ptr, batch_labels
+
+
+def test_pool_batch_embeddings_accepts_float_ptr():
+    node_embeddings = torch.tensor(
+        [
+            [1.0, 1.0],
+            [3.0, 3.0],
+            [2.0, 4.0],
+            [6.0, 2.0],
+            [5.0, 1.0],
+        ],
+        dtype=torch.float32,
+    )
+    batch_ptr = torch.tensor([0.0, 2.0, 5.0], dtype=torch.float32)
+
+    pooled = _pool_batch_embeddings(node_embeddings, batch_ptr)
+
+    expected = torch.tensor([[2.0, 2.0], [13.0 / 3.0, 7.0 / 3.0]], dtype=torch.float32)
+    assert torch.allclose(pooled, expected)
 
 
 def test_stratified_split_balanced():
