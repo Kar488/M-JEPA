@@ -217,9 +217,10 @@ def collect_topk(runs, primary: str, maximize: bool, k: int):
 
 # ---------- bounds helpers ----------
 
-def _config_lookup(config: Dict[str, Any], key: str):
+def _config_lookup(config: Any, key: str):
     """Return a configuration value matching ``key`` with hyphen/underscore fallbacks."""
 
+    mapping = _coerce_mapping(config or {})
     candidates = [key]
     if "-" in key:
         candidates.append(key.replace("-", "_"))
@@ -231,8 +232,8 @@ def _config_lookup(config: Dict[str, Any], key: str):
         if cand in seen:
             continue
         seen.add(cand)
-        if cand in config:
-            val = config[cand]
+        if cand in mapping:
+            val = mapping[cand]
             if isinstance(val, dict) and "value" in val:
                 val = val["value"]
             return val
