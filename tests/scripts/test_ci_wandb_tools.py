@@ -801,6 +801,67 @@ def test_phase1_decision_detects_tie_breaker_resolution():
     assert tie is False
     assert tie_breaker is True
 
+
+def test_export_best_reads_summary_metrics(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DIR", str(tmp_path))
+    monkeypatch.setenv("GRID_DIR", str(tmp_path))
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setenv("WANDB_PROJECT", "proj")
+
+    class EmptySummary:
+        _json_dict: Dict[str, Any] = {}
+
+    runs = [
+        FakeRun(
+            "jepa_summary_metrics",
+            {"training_method": "jepa", "mask_ratio": 0.15},
+            EmptySummary(),
+            summary_metrics={"val_rmse": 0.42},
+        ),
+        FakeRun(
+            "contrastive_summary_metrics",
+            {"training_method": "contrastive", "mask_ratio": 0.2},
+            EmptySummary(),
+            summary_metrics={"val_rmse": 0.6},
+        ),
+    ]
+
+    class Api:
+        def sweep(self, sweep_id):
+            return FakeSweep(runs)
+
+    monkeypatch.setattr(eb, "wandb", types.SimpleNamespace(Api=lambda: Api()))
+    monkeypatch.setattr(eb, "maybe_init_wandb", lambda *a, **k: None)
+
+    out_json = tmp_path / "best_summary_metrics.json"
+    out_yaml = tmp_path / "phase2_summary_metrics.yaml"
+
+    monkeypatch.setenv("METHOD_WINNER", "jepa")
+    monkeypatch.setenv("SWEEP_CACHE_DIR", "/tmp/cache")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eb",
+            "--sweep-id",
+            "ent/proj/sw1",
+            "--task",
+            "regression",
+            "--out",
+            str(out_json),
+            "--phase2-yaml",
+            str(out_yaml),
+        ],
+    )
+
+    eb.main()
+
+    data = json.loads(out_json.read_text())
+    assert data["training_method"] == "jepa"
+    assert data["mask_ratio"] == 0.15
+
+
 def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_DIR", str(tmp_path))
     monkeypatch.setenv("GRID_DIR", str(tmp_path))
