@@ -538,6 +538,30 @@ def stratified_split(
     random.shuffle(test_idx)
     return train_idx, val_idx, test_idx
 
+def _dataset_size(dataset) -> int:
+    """Return the number of graphs in ``dataset`` with sensible fallbacks."""
+
+    try:
+        return len(dataset)  # type: ignore[arg-type]
+    except TypeError:
+        pass
+
+    for attr_name in ("graphs", "data", "items"):
+        sized_attr = getattr(dataset, attr_name, None)
+        if sized_attr is None:
+            continue
+        try:
+            return len(sized_attr)
+        except TypeError:
+            continue
+
+    raise TypeError(
+        "Dataset of type "
+        f"{type(dataset).__name__} does not provide a length and lacks a sized "
+        "attribute among: graphs, data, items"
+    )
+
+
 def train_linear_head(
     dataset: GraphDataset,
     encoder: GNNEncoder,
@@ -625,7 +649,7 @@ def train_linear_head(
     encoder = encoder.to(device_t)
     for p in encoder.parameters():
         p.requires_grad = False
-    num_graphs = len(dataset)
+    num_graphs = _dataset_size(dataset)
 
     requested_workers = num_workers
     num_workers, persistent_workers, prefetch_factor = autotune_worker_pool(
