@@ -33,13 +33,22 @@ def need_env(name: str) -> str:
 
 # ---------- metric helpers ----------
 
+def _safe_getattr(obj: Any, name: str, default: Any = None) -> Any:
+    """Like ``getattr`` but tolerates wrappers that raise ``KeyError``."""
+
+    try:
+        return getattr(obj, name)
+    except (AttributeError, KeyError):
+        return default
+
+
 def _coerce_mapping(payload: Any) -> Dict[str, Any]:
     """Best-effort conversion of W&B payloads into a plain dictionary."""
 
     if isinstance(payload, Mapping):
         return dict(payload)
 
-    to_dict = getattr(payload, "to_dict", None)
+    to_dict = _safe_getattr(payload, "to_dict")
     if callable(to_dict):
         try:
             converted = to_dict()
@@ -56,11 +65,11 @@ def _coerce_mapping(payload: Any) -> Dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
 
-    json_dict = getattr(payload, "_json_dict", None)
+    json_dict = _safe_getattr(payload, "_json_dict")
     if isinstance(json_dict, dict):
         return dict(json_dict)
 
-    items = getattr(payload, "items", None)
+    items = _safe_getattr(payload, "items")
     if callable(items):
         try:
             pairs = items()
