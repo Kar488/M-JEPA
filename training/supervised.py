@@ -462,17 +462,23 @@ def _pool_batch_embeddings(node_embeddings: torch.Tensor, batch_ptr: torch.Tenso
     lengths = batch_ptr[1:] - batch_ptr[:-1]
     device = node_embeddings.device
     lengths = lengths.to(device=device)
-    graph_ids = torch.arange(lengths.numel(), device=device).repeat_interleave(lengths)
+
+    total_nodes = node_embeddings.shape[0]
+    if int(lengths.sum().item()) != total_nodes:
+        raise ValueError(
+            "batch_ptr does not describe the provided node embeddings: "
+            f"expected {int(lengths.sum().item())} nodes but received {total_nodes}"
+        )
+
     graph_emb = torch.zeros(
         (lengths.numel(), node_embeddings.shape[-1]),
         dtype=node_embeddings.dtype,
         device=device,
     )
-    graph_emb.scatter_add_(
-        0,
-        graph_ids.unsqueeze(-1).expand_as(node_embeddings),
-        node_embeddings,
-    )
+    node_ids = torch.arange(total_nodes, device=device, dtype=batch_ptr.dtype)
+    boundaries = batch_ptr[1:].to(device=device)
+    graph_ids = torch.bucketize(node_ids, boundaries)
+    graph_emb.index_add_(0, graph_ids, node_embeddings)
     denom = lengths.unsqueeze(-1).clamp(min=1).to(node_embeddings.dtype)
     graph_emb = graph_emb / denom
     return graph_emb
