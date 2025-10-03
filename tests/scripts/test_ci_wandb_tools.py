@@ -49,6 +49,28 @@ class FakeSweep:
         self.config = config or {}
 
 
+def test_metric_considers_summary_metrics_when_missing_in_summary():
+    run = FakeRun(
+        "with_metadata",
+        config={},
+        summary={"_runtime": 10, "_timestamp": 1234},
+        summary_metrics={"val_auc": 0.78},
+    )
+
+    assert eb.metric(run, "val_auc") == 0.78
+
+
+def test_metric_supports_nested_keys_from_summary_metrics():
+    run = FakeRun(
+        "nested_metrics",
+        config={},
+        summary={},
+        summary_metrics={"validation": {"rmse": 0.43}},
+    )
+
+    assert eb.metric(run, "validation.rmse") == 0.43
+
+
 def test_paired_effect_accepts_serialized_config(monkeypatch, tmp_path):
     monkeypatch.setenv("WANDB_ENTITY", "ent")
 

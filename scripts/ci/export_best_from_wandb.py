@@ -81,6 +81,17 @@ def _coerce_mapping(payload: Any) -> Dict[str, Any]:
         return {}
 
 
+def _merge_missing(dst: Dict[str, Any], src: Mapping[str, Any]) -> None:
+    """Recursively merge ``src`` into ``dst`` without clobbering existing keys."""
+
+    for key, value in src.items():
+        if key in dst:
+            if isinstance(value, Mapping) and isinstance(dst[key], Mapping):
+                _merge_missing(dst[key], value)
+            continue
+        dst[key] = value
+
+
 def _extract_summary(run: Any) -> Dict[str, Any]:
     """Collect the most complete summary mapping exposed by the run."""
 
@@ -103,12 +114,15 @@ def _extract_summary(run: Any) -> Dict[str, Any]:
             if key in attrs:
                 sources.append(attrs.get(key))
 
+    merged: Dict[str, Any] = {}
+
     for source in sources:
         summary = _coerce_mapping(source or {})
-        if summary:
-            return summary
+        if not summary:
+            continue
+        _merge_missing(merged, summary)
 
-    return {}
+    return merged
 
 
 def _lookup_nested(mapping: Mapping[str, Any], key: str) -> Any:
