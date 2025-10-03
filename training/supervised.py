@@ -459,12 +459,15 @@ def _pool_batch_embeddings(node_embeddings: torch.Tensor, batch_ptr: torch.Tenso
     if batch_ptr.numel() <= 1:
         return node_embeddings.mean(dim=0, keepdim=True)
 
-    lengths = batch_ptr[1:] - batch_ptr[:-1]
+    raw_lengths = batch_ptr[1:] - batch_ptr[:-1]
     device = node_embeddings.device
-    lengths = lengths.to(device=device)
-    graph_ids = torch.arange(lengths.numel(), device=device).repeat_interleave(lengths)
+    raw_lengths = raw_lengths.to(device=device)
+    lengths_int = raw_lengths.to(dtype=torch.long)
+    graph_ids = torch.arange(lengths_int.numel(), device=device).repeat_interleave(
+        lengths_int, output_size=node_embeddings.size(0)
+    )
     graph_emb = torch.zeros(
-        (lengths.numel(), node_embeddings.shape[-1]),
+        (raw_lengths.numel(), node_embeddings.shape[-1]),
         dtype=node_embeddings.dtype,
         device=device,
     )
@@ -473,7 +476,7 @@ def _pool_batch_embeddings(node_embeddings: torch.Tensor, batch_ptr: torch.Tenso
         graph_ids.unsqueeze(-1).expand_as(node_embeddings),
         node_embeddings,
     )
-    denom = lengths.unsqueeze(-1).clamp(min=1).to(node_embeddings.dtype)
+    denom = raw_lengths.unsqueeze(-1).clamp(min=1).to(node_embeddings.dtype)
     graph_emb = graph_emb / denom
     return graph_emb
 
