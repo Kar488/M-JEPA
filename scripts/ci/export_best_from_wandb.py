@@ -13,6 +13,7 @@ Notes:
 """
 
 import argparse, json, math, os
+from collections.abc import Mapping
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from utils.logging import maybe_init_wandb
 
@@ -32,33 +33,110 @@ def need_env(name: str) -> str:
 
 # ---------- metric helpers ----------
 
+def _coerce_mapping(payload: Any) -> Dict[str, Any]:
+    """Best-effort conversion of W&B payloads into a plain dictionary."""
+
+    if isinstance(payload, Mapping):
+        return dict(payload)
+
+    to_dict = getattr(payload, "to_dict", None)
+    if callable(to_dict):
+        try:
+            converted = to_dict()
+        except Exception:
+            converted = None
+        if isinstance(converted, dict):
+            return converted
+
+    if isinstance(payload, str):
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+
+    json_dict = getattr(payload, "_json_dict", None)
+    if isinstance(json_dict, dict):
+        return dict(json_dict)
+
+    items = getattr(payload, "items", None)
+    if callable(items):
+        try:
+            pairs = items()
+        except Exception:
+            pairs = None
+        else:
+            try:
+                return dict(pairs)
+            except Exception:
+                try:
+                    return dict(payload)
+                except Exception:
+                    pass
+
+    try:
+        return dict(payload)
+    except Exception:
+        return {}
+
+
+def _extract_summary(run: Any) -> Dict[str, Any]:
+    """Collect the most complete summary mapping exposed by the run."""
+
+    sources: List[Any] = []
+
+    try:
+        sources.append(getattr(run, "summary"))
+    except Exception:
+        sources.append(None)
+
+    for attr in ("summary_metrics", "summaryMetrics"):
+        try:
+            sources.append(getattr(run, attr))
+        except Exception:
+            sources.append(None)
+
+    attrs = getattr(run, "_attrs", None)
+    if isinstance(attrs, Mapping):
+        for key in ("summaryMetrics", "summary_metrics"):
+            if key in attrs:
+                sources.append(attrs.get(key))
+
+    for source in sources:
+        summary = _coerce_mapping(source or {})
+        if summary:
+            return summary
+
+    return {}
+
+
+def _lookup_nested(mapping: Mapping[str, Any], key: str) -> Any:
+    if key in mapping:
+        return mapping[key]
+
+    for sep in ("/", "."):
+        if sep not in key:
+            continue
+        parts = key.split(sep)
+        node: Any = mapping
+        for part in parts:
+            if isinstance(node, Mapping) and part in node:
+                node = node[part]
+            else:
+                node = None
+                break
+        if node is not None:
+            return node
+    return None
+
+
 def metric(run, name: str, default=None):
-    v = None
-    summary = getattr(run, "summary", None)
-    if summary is not None:
-        if isinstance(summary, dict):
-            v = summary.get(name, None)
-        else:
-            getter = getattr(summary, "get", None)
-            if callable(getter):
-                try:
-                    v = getter(name, None)
-                except (TypeError, AttributeError):
-                    # Some wandb summary objects can temporarily resolve to raw
-                    # JSON strings when hydration fails. Treat those as missing
-                    # rather than crashing the export script.
-                    v = None
+    summary = _extract_summary(run)
+    v = _lookup_nested(summary, name)
     if v is None:
-        config = getattr(run, "config", {}) or {}
-        if isinstance(config, dict):
-            v = config.get(name, None)
-        else:
-            getter = getattr(config, "get", None)
-            if callable(getter):
-                try:
-                    v = getter(name, None)
-                except AttributeError:
-                    v = None
+        config = _coerce_mapping(getattr(run, "config", {}) or {})
+        v = _lookup_nested(config, name)
     return v if v is not None else default
 
 def detect_task(runs) -> str:
