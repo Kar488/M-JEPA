@@ -852,6 +852,30 @@ def train_linear_head(
             stacked = torch.stack([embedding_cache[idx] for idx in idx_list], dim=0)
             return stacked.to(device_t)
 
+        base_encoder = encoder.module if isinstance(
+            encoder, nn.parallel.DistributedDataParallel
+        ) else encoder
+
+        if idx_list is not None and hasattr(base_encoder, "encode_graph"):
+            graphs = [dataset.graphs[idx] for idx in idx_list]
+            with torch.no_grad():
+                with _amp_context():
+                    graph_emb = encoder(graphs)
+
+            if not torch.is_tensor(graph_emb):
+                graph_emb = torch.as_tensor(graph_emb, device=device_t)
+            else:
+                graph_emb = graph_emb.to(device_t)
+
+            if graph_emb.dim() == 1:
+                graph_emb = graph_emb.unsqueeze(0)
+
+            if use_cache:
+                for graph_idx, emb in zip(idx_list, graph_emb):
+                    embedding_cache[graph_idx] = emb.detach().cpu()
+
+            return graph_emb
+
         graph_obj = _build_graph_view(batch_x, batch_adj, batch_ptr, batch_meta)
         with torch.no_grad():
             with _amp_context():
