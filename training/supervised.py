@@ -459,8 +459,9 @@ def _pool_batch_embeddings(node_embeddings: torch.Tensor, batch_ptr: torch.Tenso
     if batch_ptr.numel() <= 1:
         return node_embeddings.mean(dim=0, keepdim=True)
 
-    lengths = batch_ptr[1:] - batch_ptr[:-1]
     device = node_embeddings.device
+    ptr = batch_ptr.to(device=device)
+    lengths = ptr[1:] - ptr[:-1]
 
     total_nodes = node_embeddings.shape[0]
     if int(lengths.sum().item()) != total_nodes:
@@ -468,30 +469,17 @@ def _pool_batch_embeddings(node_embeddings: torch.Tensor, batch_ptr: torch.Tenso
             "batch_ptr does not describe the provided node embeddings: "
             f"expected {int(lengths.sum().item())} nodes but received {total_nodes}"
         )
-    raw_lengths = lengths.to(device=device)
-    lengths_int = lengths.to(dtype=torch.long)
-    graph_ids = torch.arange(lengths_int.numel(), device=device).repeat_interleave(
-        lengths_int, output_size=node_embeddings.size(0)
-    )
-    graph_emb = torch.zeros(
-        (raw_lengths.numel(), node_embeddings.shape[-1]),
-        dtype=node_embeddings.dtype,
-        device=device,
-    )
 
-    node_ids = torch.arange(total_nodes, device=device, dtype=batch_ptr.dtype)
-    boundaries = batch_ptr[1:].to(device=device)
-    graph_ids = torch.bucketize(node_ids, boundaries)
+    num_graphs = lengths.numel()
+    graph_emb = node_embeddings.new_zeros((num_graphs, node_embeddings.shape[-1]))
+
+    # ``torch.bucketize`` works for both integer and floating point pointers.
+    node_positions = torch.arange(total_nodes, device=device, dtype=ptr.dtype)
+    boundaries = ptr[1:]
+    graph_ids = torch.bucketize(node_positions, boundaries, right=True).to(torch.long)
     graph_emb.index_add_(0, graph_ids, node_embeddings)
-    denom = lengths.unsqueeze(-1).clamp(min=1).to(node_embeddings.dtype)
 
-    graph_emb.scatter_add_(
-        0,
-        graph_ids.unsqueeze(-1).expand_as(node_embeddings),
-        node_embeddings,
-    )
-    denom = raw_lengths.unsqueeze(-1).clamp(min=1).to(node_embeddings.dtype)
-
+    denom = lengths.to(node_embeddings.dtype).unsqueeze(-1).clamp_min(1)
     graph_emb = graph_emb / denom
     return graph_emb
 
