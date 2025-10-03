@@ -459,10 +459,17 @@ def _pool_batch_embeddings(node_embeddings: torch.Tensor, batch_ptr: torch.Tenso
     if batch_ptr.numel() <= 1:
         return node_embeddings.mean(dim=0, keepdim=True)
 
-    raw_lengths = batch_ptr[1:] - batch_ptr[:-1]
+    lengths = batch_ptr[1:] - batch_ptr[:-1]
     device = node_embeddings.device
-    raw_lengths = raw_lengths.to(device=device)
-    lengths_int = raw_lengths.to(dtype=torch.long)
+
+    total_nodes = node_embeddings.shape[0]
+    if int(lengths.sum().item()) != total_nodes:
+        raise ValueError(
+            "batch_ptr does not describe the provided node embeddings: "
+            f"expected {int(lengths.sum().item())} nodes but received {total_nodes}"
+        )
+    raw_lengths = lengths.to(device=device)
+    lengths_int = lengths.to(dtype=torch.long)
     graph_ids = torch.arange(lengths_int.numel(), device=device).repeat_interleave(
         lengths_int, output_size=node_embeddings.size(0)
     )
@@ -471,12 +478,20 @@ def _pool_batch_embeddings(node_embeddings: torch.Tensor, batch_ptr: torch.Tenso
         dtype=node_embeddings.dtype,
         device=device,
     )
+
+    node_ids = torch.arange(total_nodes, device=device, dtype=batch_ptr.dtype)
+    boundaries = batch_ptr[1:].to(device=device)
+    graph_ids = torch.bucketize(node_ids, boundaries)
+    graph_emb.index_add_(0, graph_ids, node_embeddings)
+    denom = lengths.unsqueeze(-1).clamp(min=1).to(node_embeddings.dtype)
+
     graph_emb.scatter_add_(
         0,
         graph_ids.unsqueeze(-1).expand_as(node_embeddings),
         node_embeddings,
     )
     denom = raw_lengths.unsqueeze(-1).clamp(min=1).to(node_embeddings.dtype)
+
     graph_emb = graph_emb / denom
     return graph_emb
 
