@@ -22,8 +22,9 @@ class GraphData:
 
 
 class GraphDataset:
-    def __init__(self, graphs):
+    def __init__(self, graphs, labels=None):
         self.graphs = graphs
+        self.labels = np.asarray(labels) if labels is not None else None
 
     def __len__(self):
         return len(self.graphs)
