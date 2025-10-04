@@ -217,6 +217,20 @@ class MeanGraphEncoder(EncoderBase):
         return x.mean(dim=0)
 
 
+def test_encoder_base_handles_sequence_wrapped_graph():
+    graph = GraphData(
+        x=np.array([[1.0, 0.0], [3.0, 1.0]], dtype=np.float32),
+        edge_index=np.zeros((2, 0), dtype=np.int64),
+    )
+    wrapped = [graph, {"label": 1}]
+
+    encoder = MeanGraphEncoder()
+    out = encoder([wrapped])
+
+    assert out.shape == (1, graph.x.shape[1])
+    assert encoder.seen_graphs == [graph]
+
+
 def test_train_linear_head_uses_encode_graph_cache(monkeypatch):
     graphs = [
         GraphData(
