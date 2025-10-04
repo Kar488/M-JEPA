@@ -12,6 +12,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from . import log_effective_gnn
+
 # Ensure PyTorch uses filesystem-backed shared memory objects instead of file
 # descriptors for inter-process tensor sharing.  The default "file_descriptor"
 # strategy opens a unique FD for every shared tensor created by DataLoader
@@ -142,6 +144,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             "add_3d": bool(getattr(args, "add_3d", False)),
         },
     )
+    log_effective_gnn(args, logger, wb)
 
     # Load labelled dataset
     try:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import sys
 from typing import Any, Dict, List
+
+from . import log_effective_gnn
 def cmd_benchmark(args: argparse.Namespace) -> None:
     """Compare JEPA and contrastive encoders on the same labelled dataset  with flexible loading + report.
 
@@ -40,6 +42,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             "seeds": seeds,
         },
     )
+    log_effective_gnn(args, logger, wb)
 
     import json
     import os

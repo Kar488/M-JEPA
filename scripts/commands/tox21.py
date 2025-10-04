@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+
+from . import log_effective_gnn
 import sys
 def cmd_tox21(args: argparse.Namespace) -> None:
     """Run the Tox21 ranking case study."""
@@ -39,6 +41,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "finetune_time_budget_mins": getattr(args, "finetune_time_budget_mins", 0),
         },
     )
+    log_effective_gnn(args, logger, wb)
 
     try:
         wb.log({"phase": "tox21", "status": "start"})
