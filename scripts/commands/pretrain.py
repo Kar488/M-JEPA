@@ -10,6 +10,8 @@ from typing import Dict, List
 import numpy as np
 import torch
 
+from . import log_effective_gnn
+
 
 def cmd_pretrain(args: argparse.Namespace) -> None:
     """Self‑supervised pretraining of a JEPA encoder and optional contrastive baseline."""
@@ -37,6 +39,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             "contrastive": args.contrastive,
         },
     )
+    log_effective_gnn(args, logger, wb)
 
     def _wb_run_ok(wb):
         return (wb is not None) and (getattr(wb, "run", None) is not None)
