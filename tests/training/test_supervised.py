@@ -8,7 +8,18 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from training.supervised import stratified_split, train_linear_head
+import training.supervised as supervised_mod
+
+from data.mdataset import GraphData, GraphDataset
+from models.base import EncoderBase
+
+
+from training.supervised import (
+    stratified_split,
+    train_linear_head,
+    _pool_batch_embeddings,
+)
+
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -55,6 +66,46 @@ class DummyDataset:
         ptr = torch.arange(0, len(indices) + 1, dtype=torch.long)
         batch_labels = torch.tensor(self.labels[indices], dtype=torch.float32)
         return batch_x, batch_adj, ptr, batch_labels
+
+
+def test_pool_batch_embeddings_handles_variable_sizes():
+    node_emb = torch.arange(15, dtype=torch.float32).reshape(5, 3)
+    batch_ptr = torch.tensor([0, 2, 5], dtype=torch.long)
+
+    pooled = _pool_batch_embeddings(node_emb, batch_ptr)
+    expected = torch.stack(
+        (
+            node_emb[:2].mean(dim=0),
+            node_emb[2:].mean(dim=0),
+        )
+    )
+
+    assert torch.allclose(pooled, expected)
+
+
+def test_pool_batch_embeddings_validates_ptr_lengths():
+    node_emb = torch.zeros((4, 2))
+    batch_ptr = torch.tensor([0, 3, 6], dtype=torch.long)
+
+    with pytest.raises(ValueError, match="batch_ptr does not describe"):
+        _pool_batch_embeddings(node_emb, batch_ptr)
+def test_pool_batch_embeddings_accepts_float_ptr():
+    node_embeddings = torch.tensor(
+        [
+            [1.0, 1.0],
+            [3.0, 3.0],
+            [2.0, 4.0],
+            [6.0, 2.0],
+            [5.0, 1.0],
+        ],
+        dtype=torch.float32,
+    )
+    batch_ptr = torch.tensor([0.0, 2.0, 5.0], dtype=torch.float32)
+
+    pooled = _pool_batch_embeddings(node_embeddings, batch_ptr)
+
+    expected = torch.tensor([[2.0, 2.0], [13.0 / 3.0, 7.0 / 3.0]], dtype=torch.float32)
+    assert torch.allclose(pooled, expected)
 
 
 def test_stratified_split_balanced():
@@ -151,6 +202,74 @@ def test_train_linear_head_respects_max_batches(monkeypatch):
     )
 
     assert step_counter["count"] == 3
+
+
+class MeanGraphEncoder(EncoderBase):
+    def __init__(self):
+        super().__init__()
+        self.dummy = nn.Parameter(torch.zeros(1))
+        self.seen_graphs: list[GraphData] = []
+
+    def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:  # type: ignore[override]
+        assert isinstance(g, GraphData)
+        self.seen_graphs.append(g)
+        x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
+        return x.mean(dim=0)
+
+
+def test_encoder_base_handles_sequence_wrapped_graph():
+    graph = GraphData(
+        x=np.array([[1.0, 0.0], [3.0, 1.0]], dtype=np.float32),
+        edge_index=np.zeros((2, 0), dtype=np.int64),
+    )
+    wrapped = [graph, {"label": 1}]
+
+    encoder = MeanGraphEncoder()
+    out = encoder([wrapped])
+
+    assert out.shape == (1, graph.x.shape[1])
+    assert encoder.seen_graphs == [graph]
+
+
+def test_train_linear_head_uses_encode_graph_cache(monkeypatch):
+    graphs = [
+        GraphData(
+            x=np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+            edge_index=np.zeros((2, 0), dtype=np.int64),
+        ),
+        GraphData(
+            x=np.array([[0.5, -1.0], [1.5, 2.0]], dtype=np.float32),
+            edge_index=np.zeros((2, 0), dtype=np.int64),
+        ),
+        GraphData(
+            x=np.array([[2.0, 0.0], [0.0, 2.0]], dtype=np.float32),
+            edge_index=np.zeros((2, 0), dtype=np.int64),
+        ),
+    ]
+    labels = np.linspace(0.0, 1.0, len(graphs)).astype(np.float32)
+    dataset = GraphDataset(graphs, labels=labels)
+    encoder = MeanGraphEncoder()
+
+    def _forbid_pool(*args, **kwargs):  # noqa: ANN001, ANN002
+        raise AssertionError("pooling path should not be used when encode_graph is available")
+
+    monkeypatch.setattr(supervised_mod, "_pool_batch_embeddings", _forbid_pool)
+
+    metrics = train_linear_head(
+        dataset,
+        encoder,
+        "regression",
+        epochs=0,
+        batch_size=2,
+        lr=0.01,
+        patience=0,
+        device="cpu",
+        cache_graph_embeddings=True,
+    )
+
+    assert "head" in metrics
+    seen_ids = {id(g) for g in encoder.seen_graphs}
+    assert seen_ids == {id(g) for g in graphs}
 
 
 def test_train_linear_head_caches_embeddings(monkeypatch):

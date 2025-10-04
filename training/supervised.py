@@ -459,21 +459,27 @@ def _pool_batch_embeddings(node_embeddings: torch.Tensor, batch_ptr: torch.Tenso
     if batch_ptr.numel() <= 1:
         return node_embeddings.mean(dim=0, keepdim=True)
 
-    lengths = batch_ptr[1:] - batch_ptr[:-1]
     device = node_embeddings.device
-    lengths = lengths.to(device=device)
-    graph_ids = torch.arange(lengths.numel(), device=device).repeat_interleave(lengths)
-    graph_emb = torch.zeros(
-        (lengths.numel(), node_embeddings.shape[-1]),
-        dtype=node_embeddings.dtype,
-        device=device,
-    )
-    graph_emb.scatter_add_(
-        0,
-        graph_ids.unsqueeze(-1).expand_as(node_embeddings),
-        node_embeddings,
-    )
-    denom = lengths.unsqueeze(-1).clamp(min=1).to(node_embeddings.dtype)
+    ptr = batch_ptr.to(device=device)
+    lengths = ptr[1:] - ptr[:-1]
+
+    total_nodes = node_embeddings.shape[0]
+    if int(lengths.sum().item()) != total_nodes:
+        raise ValueError(
+            "batch_ptr does not describe the provided node embeddings: "
+            f"expected {int(lengths.sum().item())} nodes but received {total_nodes}"
+        )
+
+    num_graphs = lengths.numel()
+    graph_emb = node_embeddings.new_zeros((num_graphs, node_embeddings.shape[-1]))
+
+    # ``torch.bucketize`` works for both integer and floating point pointers.
+    node_positions = torch.arange(total_nodes, device=device, dtype=ptr.dtype)
+    boundaries = ptr[1:]
+    graph_ids = torch.bucketize(node_positions, boundaries, right=True).to(torch.long)
+    graph_emb.index_add_(0, graph_ids, node_embeddings)
+
+    denom = lengths.to(node_embeddings.dtype).unsqueeze(-1).clamp_min(1)
     graph_emb = graph_emb / denom
     return graph_emb
 
@@ -531,6 +537,30 @@ def stratified_split(
     random.shuffle(val_idx)
     random.shuffle(test_idx)
     return train_idx, val_idx, test_idx
+
+def _dataset_size(dataset) -> int:
+    """Return the number of graphs in ``dataset`` with sensible fallbacks."""
+
+    try:
+        return len(dataset)  # type: ignore[arg-type]
+    except TypeError:
+        pass
+
+    for attr_name in ("graphs", "data", "items"):
+        sized_attr = getattr(dataset, attr_name, None)
+        if sized_attr is None:
+            continue
+        try:
+            return len(sized_attr)
+        except TypeError:
+            continue
+
+    raise TypeError(
+        "Dataset of type "
+        f"{type(dataset).__name__} does not provide a length and lacks a sized "
+        "attribute among: graphs, data, items"
+    )
+
 
 def train_linear_head(
     dataset: GraphDataset,
@@ -619,7 +649,7 @@ def train_linear_head(
     encoder = encoder.to(device_t)
     for p in encoder.parameters():
         p.requires_grad = False
-    num_graphs = len(dataset)
+    num_graphs = _dataset_size(dataset)
 
     requested_workers = num_workers
     num_workers, persistent_workers, prefetch_factor = autotune_worker_pool(
@@ -845,6 +875,32 @@ def train_linear_head(
         if use_cache and all(idx in embedding_cache for idx in idx_list):
             stacked = torch.stack([embedding_cache[idx] for idx in idx_list], dim=0)
             return stacked.to(device_t)
+
+        base_encoder = encoder.module if isinstance(
+            encoder, nn.parallel.DistributedDataParallel
+        ) else encoder
+
+        if idx_list is not None and hasattr(base_encoder, "encode_graph"):
+            graphs = [dataset.graphs[idx] for idx in idx_list]
+            with torch.no_grad():
+                with _amp_context():
+                    emb_list = []
+                    for graph in graphs:
+                        emb = base_encoder.encode_graph(graph, device_t)
+                        if not torch.is_tensor(emb):
+                            emb = torch.as_tensor(emb, device=device_t)
+                        else:
+                            emb = emb.to(device_t)
+                        if emb.dim() == 2 and emb.size(0) == 1:
+                            emb = emb.squeeze(0)
+                        emb_list.append(emb)
+                    graph_emb = torch.stack(emb_list, dim=0)
+
+            if use_cache:
+                for graph_idx, emb in zip(idx_list, graph_emb):
+                    embedding_cache[graph_idx] = emb.detach().cpu()
+
+            return graph_emb
 
         graph_obj = _build_graph_view(batch_x, batch_adj, batch_ptr, batch_meta)
         with torch.no_grad():
