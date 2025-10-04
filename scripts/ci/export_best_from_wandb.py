@@ -15,6 +15,7 @@ Notes:
 import argparse, json, math, os
 from collections.abc import Mapping
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+
 from utils.logging import maybe_init_wandb
 
 import numpy as np
@@ -238,6 +239,88 @@ def _config_lookup(config: Any, key: str):
                 val = val["value"]
             return val
     return None
+
+
+def _unwrap_config_value(value: Any) -> Any:
+    """Convert W&B config payloads into JSON-serialisable primitives."""
+
+    if isinstance(value, Mapping):
+        mapping = _coerce_mapping(value)
+        if not mapping:
+            return {}
+        if set(mapping.keys()) == {"value"}:
+            return _unwrap_config_value(mapping["value"])
+        unwrapped: Dict[str, Any] = {}
+        for key, val in mapping.items():
+            if isinstance(key, str) and key.startswith("_wandb"):
+                continue
+            unwrapped[str(key)] = _unwrap_config_value(val)
+        return unwrapped
+
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_unwrap_config_value(v) for v in value]
+
+    if isinstance(value, np.generic):
+        try:
+            return value.item()
+        except Exception:
+            return _normalize_config_value(value)
+
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except Exception:
+            return value.decode("utf-8", "replace")
+
+    return _normalize_config_value(value)
+
+
+def _sanitize_run_config(config: Any) -> Dict[str, Any]:
+    mapping = _coerce_mapping(config or {})
+    sanitized: Dict[str, Any] = {}
+    for key, value in mapping.items():
+        if isinstance(key, str) and key.startswith("_wandb"):
+            continue
+        sanitized[str(key)] = _unwrap_config_value(value)
+    return sanitized
+
+
+REQUIRED_KEY_ALIASES: Dict[str, Sequence[str]] = {
+    "training_method": ("training_method", "method"),
+    "gnn_type": ("gnn_type", "gnn-type"),
+    "hidden_dim": ("hidden_dim", "hidden-dim"),
+    "num_layers": ("num_layers", "num-layers"),
+}
+
+
+def _enforce_required_keys(
+    raw_config: Mapping[str, Any],
+    sanitized: Dict[str, Any],
+) -> Dict[str, Any]:
+    best_cfg = dict(sanitized)
+    missing: List[str] = []
+    for canonical, aliases in REQUIRED_KEY_ALIASES.items():
+        value = None
+        for alias in aliases:
+            value = _config_lookup(raw_config, alias)
+            if value is None:
+                value = _config_lookup(sanitized, alias)
+            if value is not None:
+                break
+        if value is None:
+            missing.append(canonical)
+            continue
+        best_cfg[canonical] = _normalize_config_value(value)
+
+    if missing:
+        raise RuntimeError(
+            "Best run config missing required keys: " + ", ".join(sorted(missing))
+        )
+
+    if not best_cfg:
+        raise RuntimeError("Best run config resolved to an empty payload")
+
+    return best_cfg
 
 
 def _normalize_config_value(val: Any) -> Any:
@@ -597,10 +680,20 @@ def main():
             msg += f"  {n}={v}"
     print(msg)
 
+    raw_config = getattr(best, "config", {}) or {}
+    sanitized_config = _sanitize_run_config(raw_config)
+    best_cfg = _enforce_required_keys(raw_config, sanitized_config)
+
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(best.config, f, indent=2)
-    print(f"[export_best] Wrote best config to {args.out}")
+        json.dump(best_cfg, f, indent=2, sort_keys=True)
+
+    summary_keys = ["training_method", "gnn_type", "hidden_dim", "num_layers"]
+    summary = {k: best_cfg.get(k) for k in summary_keys if k in best_cfg}
+    print(
+        f"[export_best] Wrote best config to {args.out}: "
+        f"{json.dumps(summary, sort_keys=True)}"
+    )
 
     # Optionally derive narrowed Phase-2 ranges and write YAML for Step #3
     if args.emit_bounds:

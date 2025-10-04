@@ -49,6 +49,14 @@ class FakeSweep:
         self.config = config or {}
 
 
+def _build_fake_api(runs):
+    class _Api:
+        def sweep(self, sweep_id):  # pragma: no cover - trivial wrapper
+            return FakeSweep(runs)
+
+    return _Api()
+
+
 def test_metric_considers_summary_metrics_when_missing_in_summary():
     run = FakeRun(
         "with_metadata",
@@ -179,6 +187,162 @@ def test_paired_effect_unwraps_sweep_config_wrappers(monkeypatch, tmp_path):
     payload = json.loads(out.read_text())
     assert payload["winner"] == "jepa"
     assert payload["pairs"] == 1
+
+
+def test_export_best_nonempty_json(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DIR", str(tmp_path))
+    grid_dir = tmp_path / "grid"
+    grid_dir.mkdir()
+    monkeypatch.setenv("GRID_DIR", str(grid_dir))
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setenv("WANDB_PROJECT", "proj")
+    monkeypatch.setenv("METHOD_WINNER", "contrastive")
+
+    best_run = FakeRun(
+        "best",
+        config={
+            "training_method": {"value": "jepa"},
+            "gnn_type": {"value": "gine"},
+            "hidden_dim": {"value": "384"},
+            "num_layers": {"value": 4},
+            "cache-dir": {"value": "/tmp/cache"},
+            "misc": {"value": {"nested": 1}},
+        },
+        summary={"val_rmse": 0.42},
+    )
+    other_run = FakeRun(
+        "worse",
+        config={"training_method": "jepa"},
+        summary={"val_rmse": 0.9},
+    )
+
+    monkeypatch.setattr(eb, "wandb", types.SimpleNamespace(Api=lambda: _build_fake_api([best_run, other_run])))
+    monkeypatch.setattr(eb, "maybe_init_wandb", lambda *a, **k: None)
+
+    out_path = grid_dir / "best_grid_config.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export",
+            "--sweep-id",
+            "ent/proj/sw",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    eb.main()
+
+    payload = json.loads(out_path.read_text())
+    for key in ("training_method", "gnn_type", "hidden_dim", "num_layers"):
+        assert key in payload
+    assert payload["training_method"] == "jepa"
+    assert payload["gnn_type"] == "gine"
+    assert payload["hidden_dim"] == 384
+    assert payload["num_layers"] == 4
+
+
+def test_phase2_yaml_and_best_paths(monkeypatch, tmp_path):
+    app_dir = tmp_path
+    grid_dir = tmp_path / "grid"
+    sweeps_dir = tmp_path / "sweeps"
+    sweeps_dir.mkdir()
+    grid_dir.mkdir()
+    (sweeps_dir / "grid_sweep_phase2.yaml").write_text("parameters:\n  hidden_dim:\n    values: [256, 384]\n")
+
+    monkeypatch.setenv("APP_DIR", str(app_dir))
+    monkeypatch.setenv("GRID_DIR", str(grid_dir))
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setenv("WANDB_PROJECT", "proj")
+    monkeypatch.setenv("METHOD_WINNER", "contrastive")
+
+    runs = [
+        FakeRun(
+            "best",
+            config={
+                "training_method": {"value": "contrastive"},
+                "gnn_type": {"value": "gine"},
+                "hidden_dim": {"value": 512},
+                "num_layers": {"value": 5},
+                "learning_rate": {"value": 0.0003},
+                "mask_ratio": {"value": 0.2},
+            },
+            summary={"val_auc": 0.91},
+        ),
+        FakeRun(
+            "runner_up",
+            config={
+                "training_method": {"value": "contrastive"},
+                "gnn_type": {"value": "gine"},
+                "hidden_dim": {"value": 384},
+                "num_layers": {"value": 4},
+                "learning_rate": {"value": 0.0005},
+                "mask_ratio": {"value": 0.15},
+            },
+            summary={"val_auc": 0.9},
+        ),
+    ]
+
+    monkeypatch.setattr(eb, "wandb", types.SimpleNamespace(Api=lambda: _build_fake_api(runs)))
+    monkeypatch.setattr(eb, "maybe_init_wandb", lambda *a, **k: None)
+
+    out_path = grid_dir / "best_grid_config.json"
+    phase2_path = grid_dir / "grid_sweep_phase2.yaml"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export",
+            "--sweep-id",
+            "ent/proj/sw",
+            "--emit-bounds",
+            "--out",
+            str(out_path),
+            "--phase2-yaml",
+            str(phase2_path),
+        ],
+    )
+
+    eb.main()
+
+    payload = json.loads(out_path.read_text())
+    for key in ("training_method", "gnn_type", "hidden_dim", "num_layers"):
+        assert key in payload
+
+    phase2 = yaml.safe_load(phase2_path.read_text())
+    assert phase2["parameters"]["training_method"]["value"] == "contrastive"
+    assert phase2_path.is_file()
+
+
+def test_export_best_errors_on_empty_sweep(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DIR", str(tmp_path))
+    grid_dir = tmp_path / "grid"
+    grid_dir.mkdir()
+    monkeypatch.setenv("GRID_DIR", str(grid_dir))
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setenv("WANDB_PROJECT", "proj")
+
+    monkeypatch.setattr(eb, "wandb", types.SimpleNamespace(Api=lambda: _build_fake_api([])))
+    monkeypatch.setattr(eb, "maybe_init_wandb", lambda *a, **k: None)
+
+    out_path = grid_dir / "best_grid_config.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export",
+            "--sweep-id",
+            "ent/proj/sw",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="No runs found"):
+        eb.main()
+
+    assert not out_path.exists()
 
 
 def test_paired_effect_uses_summary_pair_id(monkeypatch, tmp_path):
@@ -836,13 +1000,25 @@ def test_export_best_reads_summary_metrics(monkeypatch, tmp_path):
     runs = [
         FakeRun(
             "jepa_summary_metrics",
-            {"training_method": "jepa", "mask_ratio": 0.15},
+            {
+                "training_method": "jepa",
+                "gnn_type": "gine",
+                "hidden_dim": 384,
+                "num_layers": 4,
+                "mask_ratio": 0.15,
+            },
             EmptySummary(),
             summary_metrics={"val_rmse": 0.42},
         ),
         FakeRun(
             "contrastive_summary_metrics",
-            {"training_method": "contrastive", "mask_ratio": 0.2},
+            {
+                "training_method": "contrastive",
+                "gnn_type": "gine",
+                "hidden_dim": 384,
+                "num_layers": 4,
+                "mask_ratio": 0.2,
+            },
             EmptySummary(),
             summary_metrics={"val_rmse": 0.6},
         ),
@@ -891,8 +1067,32 @@ def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("WANDB_PROJECT", "proj")
 
     runs = [
-        FakeRun("r1", {"mask_ratio": 0.1, "aug_rotate": 1}, {"val_rmse": 0.4, "val_mae": 0.3}, "1"),
-        FakeRun("r2", {"mask_ratio": 0.2, "aug_rotate": 0}, {"val_rmse": 0.6, "val_mae": 0.5}, "2"),
+        FakeRun(
+            "r1",
+            {
+                "training_method": "jepa",
+                "gnn_type": "gine",
+                "hidden_dim": 384,
+                "num_layers": 4,
+                "mask_ratio": 0.1,
+                "aug_rotate": 1,
+            },
+            {"val_rmse": 0.4, "val_mae": 0.3},
+            "1",
+        ),
+        FakeRun(
+            "r2",
+            {
+                "training_method": "jepa",
+                "gnn_type": "gine",
+                "hidden_dim": 384,
+                "num_layers": 4,
+                "mask_ratio": 0.2,
+                "aug_rotate": 0,
+            },
+            {"val_rmse": 0.6, "val_mae": 0.5},
+            "2",
+        ),
     ]
 
     class FakeApi:
@@ -961,13 +1161,27 @@ def test_export_best_extends_fixed_params(monkeypatch, tmp_path):
     runs = [
         FakeRun(
             "r1",
-            {"hidden_dim": 256, "num_layers": 3, "mask_ratio": 0.25, "contiguity": 1},
+            {
+                "training_method": "jepa",
+                "gnn_type": "gine",
+                "hidden_dim": 256,
+                "num_layers": 3,
+                "mask_ratio": 0.25,
+                "contiguity": 1,
+            },
             {"val_rmse": 0.4},
             "r1",
         ),
         FakeRun(
             "r2",
-            {"hidden_dim": 256, "num_layers": 3, "mask_ratio": 0.25, "contiguity": 1},
+            {
+                "training_method": "jepa",
+                "gnn_type": "gine",
+                "hidden_dim": 256,
+                "num_layers": 3,
+                "mask_ratio": 0.25,
+                "contiguity": 1,
+            },
             {"val_rmse": 0.5},
             "r2",
         ),
@@ -1052,7 +1266,18 @@ def test_export_best_rejects_tracked_template(monkeypatch, tmp_path):
     monkeypatch.setenv("WANDB_PROJECT", "proj")
 
     runs = [
-        FakeRun("r1", {"mask_ratio": 0.1}, {"val_rmse": 0.4, "val_mae": 0.3}, "1"),
+        FakeRun(
+            "r1",
+            {
+                "training_method": "jepa",
+                "gnn_type": "gine",
+                "hidden_dim": 384,
+                "num_layers": 4,
+                "mask_ratio": 0.1,
+            },
+            {"val_rmse": 0.4, "val_mae": 0.3},
+            "1",
+        ),
     ]
 
     class FakeApi:
