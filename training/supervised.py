@@ -884,15 +884,17 @@ def train_linear_head(
             graphs = [dataset.graphs[idx] for idx in idx_list]
             with torch.no_grad():
                 with _amp_context():
-                    graph_emb = encoder(graphs)
-
-            if not torch.is_tensor(graph_emb):
-                graph_emb = torch.as_tensor(graph_emb, device=device_t)
-            else:
-                graph_emb = graph_emb.to(device_t)
-
-            if graph_emb.dim() == 1:
-                graph_emb = graph_emb.unsqueeze(0)
+                    emb_list = []
+                    for graph in graphs:
+                        emb = base_encoder.encode_graph(graph, device_t)
+                        if not torch.is_tensor(emb):
+                            emb = torch.as_tensor(emb, device=device_t)
+                        else:
+                            emb = emb.to(device_t)
+                        if emb.dim() == 2 and emb.size(0) == 1:
+                            emb = emb.squeeze(0)
+                        emb_list.append(emb)
+                    graph_emb = torch.stack(emb_list, dim=0)
 
             if use_cache:
                 for graph_idx, emb in zip(idx_list, graph_emb):
