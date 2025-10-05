@@ -77,6 +77,27 @@ def _ensure_dataset_has_pos(dataset) -> None:
         break
 
 
+def _iter_trainable_params(model) -> List[nn.Parameter]:
+    params = getattr(model, "parameters", None)
+    if callable(params):
+        try:
+            return list(params())
+        except Exception:
+            return []
+
+    for attr in ("encoder", "module", "backbone"):
+        sub = getattr(model, attr, None)
+        if sub is None:
+            continue
+        sub_params = getattr(sub, "parameters", None)
+        if callable(sub_params):
+            try:
+                return list(sub_params())
+            except Exception:
+                return []
+    return []
+
+
 def _configure_encoder_trainability(
     encoder: nn.Module,
     *,
@@ -88,24 +109,32 @@ def _configure_encoder_trainability(
     if not isinstance(encoder, nn.Module):
         return []
 
-    if not freeze_encoder and unfreeze_top_layers <= 0:
-        for param in encoder.parameters():
-            param.requires_grad = True
-        return list(encoder.parameters())
+    params_fn = getattr(encoder, "parameters", None)
+    if not callable(params_fn):
+        return []
 
-    for param in encoder.parameters():
+    try:
+        all_params = list(params_fn())
+    except Exception:
+        return []
+
+    if not freeze_encoder and unfreeze_top_layers <= 0:
+        for param in all_params:
+            param.requires_grad = True
+        return all_params
+
+    for param in all_params:
         param.requires_grad = False
 
     if not freeze_encoder and unfreeze_top_layers > 0:
-        # Treat negative/positive unfreeze counts as full unfreeze when freeze disabled.
-        for param in encoder.parameters():
+        for param in all_params:
             param.requires_grad = True
-        return list(encoder.parameters())
+        return all_params
 
     if unfreeze_top_layers < 0:
-        for param in encoder.parameters():
+        for param in all_params:
             param.requires_grad = True
-        return list(encoder.parameters())
+        return all_params
 
     if unfreeze_top_layers == 0:
         return []
@@ -117,7 +146,14 @@ def _configure_encoder_trainability(
     seen: set[int] = set()
     trainable: List[nn.Parameter] = []
     for module in selected:
-        for param in module.parameters():
+        params_fn = getattr(module, "parameters", None)
+        if not callable(params_fn):
+            continue
+        try:
+            module_params = list(params_fn())
+        except Exception:
+            continue
+        for param in module_params:
             param.requires_grad = True
             pid = id(param)
             if pid not in seen:
@@ -433,7 +469,9 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         _maybe_to(head, device)
 
         # Optimizer & scheduler
-        encoder_params = [p for p in encoder.parameters() if p.requires_grad]
+        encoder_params = [
+            p for p in _iter_trainable_params(encoder) if getattr(p, "requires_grad", False)
+        ]
         head_params = [p for p in head.parameters() if p.requires_grad]
         optimizer_groups = []
         if encoder_params:

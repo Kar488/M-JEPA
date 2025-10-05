@@ -9,6 +9,11 @@ source "$(dirname "$0")/stage.sh"
 export WANDB_NAME="tox21"
 export WANDB_JOB_TYPE="tox21"
 
+: "${GITHUB_ENV:=${EXP_ROOT}/tox21_gate.env}"
+mkdir -p "$(dirname "$GITHUB_ENV")"
+: >"$GITHUB_ENV"
+export GITHUB_ENV
+
 SOURCE="${TOX21_ENCODER_SOURCE:-pretrain_frozen}"
 MANIFEST_DEFAULT="${PRETRAIN_MANIFEST:-${PRETRAIN_DIR}/artifacts/encoder_manifest.json}"
 MANIFEST_PATH="${TOX21_ENCODER_MANIFEST:-$MANIFEST_DEFAULT}"
