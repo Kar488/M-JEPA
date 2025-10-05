@@ -182,28 +182,62 @@ def _history_latest(run: Any, candidates: Sequence[str], limit: int = 512) -> Tu
 
 
 def metric_of(run: Any, name: str, default: Optional[float] = None) -> Optional[float]:
-    """Extract a numeric metric from a run summary/history."""
-
+    """
+    Robustly extract `name` from a W&B run:
+      1) run.summary and common alternates
+      2) run._attrs.{summaryMetrics, summary_metrics}
+      3) history fallback: latest non-NaN/finite among candidate keys
+    Returns a float or `default`.
+    """
     candidates = _metric_candidates(name)
-    summary_sources: List[Mapping[str, Any]] = []
 
+    def _as_mapping(obj: Any) -> Optional[Mapping[str, Any]]:
+        if obj is None:
+            return None
+        if isinstance(obj, Mapping):
+            return obj
+        # W&B Summary is a custom object; try to get a dict view
+        to_dict = getattr(obj, "to_dict", None)
+        if callable(to_dict):
+            try:
+                d = to_dict()
+                if isinstance(d, Mapping):
+                    return d
+            except Exception:
+                pass
+        # Some versions expose private dicts
+        for attr in ("_json_dict", "_root"):
+            inner = getattr(obj, attr, None)
+            if isinstance(inner, Mapping):
+                return inner
+        # Fall back to repo's coercer if available
+        try:
+            return _coerce_config(obj)  # type: ignore
+        except Exception:
+            return None
+
+    # 1) Collect all plausible summary sources
+    summary_sources: List[Mapping[str, Any]] = []
     for attr in ("summary", "summary_metrics", "summaryMetrics"):
-        payload = getattr(run, attr, None)
+        payload = _as_mapping(getattr(run, attr, None))
         if payload:
-            summary_sources.append(_coerce_config(payload))
+            summary_sources.append(payload)
 
     attrs = getattr(run, "_attrs", None)
     if isinstance(attrs, Mapping):
         for key in ("summaryMetrics", "summary_metrics"):
-            if key in attrs and isinstance(attrs[key], Mapping):
-                summary_sources.append(_coerce_config(attrs[key]))
+            payload = _as_mapping(attrs.get(key))
+            if payload:
+                summary_sources.append(payload)
 
+    # Try summaries first (fast path)
     for summary in summary_sources:
         for candidate in candidates:
             numeric = _coerce_numeric(_lookup_nested(summary, candidate))
             if numeric is not None:
                 return numeric
 
+    # 2) History fallback: latest non-NaN/finite across candidates
     history_value, _ = _history_latest(run, candidates)
     if history_value is not None:
         return history_value
