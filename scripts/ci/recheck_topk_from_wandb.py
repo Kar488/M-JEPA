@@ -15,39 +15,288 @@ Usage:
     --labeled-dir   "${env:APP_DIR}/data/katielinkmoleculenet_benchmark/train" \
     --out "${GRID_DIR}/recheck_summary.json"
 """
-import argparse, json, os, math, time, tempfile, pathlib
-from typing import List, Dict, Any, Tuple
+import argparse, json, os, math, time, tempfile, pathlib, sys
+from collections import Counter
+from collections.abc import Mapping
+from itertools import islice
+from typing import List, Dict, Any, Tuple, Iterable, Optional
 import numpy as np
 import wandb
 import subprocess
 import shlex
 
-def _safe_get(container, name):
-    if container is None:
-        return None
-    if isinstance(container, dict):
-        return container.get(name, None)
-    getter = getattr(container, "get", None)
-    if callable(getter):
+def _coerce_config(config: Any) -> Dict[str, Any]:
+    if isinstance(config, Mapping):
+        return dict(config)
+
+    to_dict_attr = getattr(config, "to_dict", None)
+    if callable(to_dict_attr):
         try:
-            return getter(name, None)
-        except (TypeError, AttributeError):
-            return None
+            converted = to_dict_attr()
+        except Exception:
+            converted = None
+        if isinstance(converted, dict):
+            return converted
+
+    if isinstance(config, str):
+        try:
+            parsed = json.loads(config)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+
+    json_dict = getattr(config, "_json_dict", None)
+    if isinstance(json_dict, dict):
+        return dict(json_dict)
+
+    items_attr = getattr(config, "items", None)
+    if callable(items_attr):
+        try:
+            items_value = items_attr()
+        except Exception:
+            items_value = None
+        else:
+            try:
+                return dict(items_value)
+            except Exception:
+                try:
+                    return dict(config)
+                except Exception:
+                    pass
+
+    try:
+        return dict(config)
+    except Exception:
+        pass
+
+    return {}
+
+
+def _unwrap_config_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        if "value" in value and len(value) <= 2:
+            # Common wandb wrapper for nested config values
+            return _unwrap_config_value(value.get("value"))
+        for key in ("value", "values", "_value"):
+            if key in value:
+                inner = value[key]
+                return _unwrap_config_value(inner)
+        if "_type" in value and value.get("_type") == "quantized_params":
+            params = value.get("params")
+            if isinstance(params, Mapping):
+                return {k: _unwrap_config_value(v) for k, v in params.items()}
+        if len(value) == 1:
+            inner = next(iter(value.values()))
+            return _unwrap_config_value(inner)
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        return _unwrap_config_value(value[0])
+    return value
+
+
+def _extract_summary_payload(run: Any) -> Dict[str, Any]:
+    summary_sources = []
+
+    try:
+        summary_sources.append(getattr(run, "summary"))
+    except Exception:
+        summary_sources.append(None)
+
+    try:
+        summary_sources.append(getattr(run, "summary_metrics"))
+    except Exception:
+        summary_sources.append(None)
+
+    try:
+        summary_sources.append(getattr(run, "summaryMetrics"))
+    except Exception:
+        summary_sources.append(None)
+
+    attrs = getattr(run, "_attrs", None)
+    if isinstance(attrs, Mapping):
+        for key in ("summaryMetrics", "summary_metrics"):
+            if key in attrs:
+                summary_sources.append(attrs.get(key))
+
+    for source in summary_sources:
+        summary = _coerce_config(source or {})
+        if summary:
+            return summary
+
+    return {}
+
+
+def _lookup_nested(mapping: Mapping[str, Any], key: str) -> Any:
+    if key in mapping:
+        return mapping[key]
+
+    for sep in ("/", "."):
+        if sep not in key:
+            continue
+        parts = key.split(sep)
+        node: Any = mapping
+        for part in parts:
+            if isinstance(node, Mapping) and part in node:
+                node = node[part]
+            else:
+                node = None
+                break
+        if node is not None:
+            return node
     return None
 
 
-def metric_of(run, name, default=None):
-    v = _safe_get(getattr(run, "summary", None), name)
-    if v is None:
-        v = _safe_get(getattr(run, "config", None), name)
-    return v if v is not None else default
+def _coerce_to_float(value):
+    if value is None:
+        return None
 
-def pick_topk(sweep, metric: str, maximize: bool, k: int):
-    runs = list(sweep.runs)
-    have = [r for r in runs if metric_of(r, metric) is not None]
-    have.sort(key=(lambda r: -float(metric_of(r, metric, -math.inf))) if maximize
-                    else (lambda r:  float(metric_of(r, metric,  math.inf))))
-    return have[:max(1, k)]
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    if isinstance(value, Mapping):
+        for key in ("value", "latest", "last", "mean", "median", "max", "min", "best"):
+            if key in value:
+                coerced = _coerce_to_float(value[key])
+                if coerced is not None:
+                    return coerced
+        for candidate in value.values():
+            coerced = _coerce_to_float(candidate)
+            if coerced is not None:
+                return coerced
+        return None
+
+    if isinstance(value, (list, tuple)):
+        for candidate in value:
+            coerced = _coerce_to_float(candidate)
+            if coerced is not None:
+                return coerced
+        return None
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_from_history(run: Any, candidates: Iterable[str], limit: int = 512) -> Tuple[Optional[float], Optional[str]]:
+    history = getattr(run, "history", None)
+    if not callable(history):
+        return None, None
+
+    rows: List[Dict[str, Any]] = []
+    history_iters = (
+        {"keys": list(candidates), "pandas": False},
+        {"keys": list(candidates)},
+        {},
+    )
+    for kwargs in history_iters:
+        try:
+            iterator = history(**kwargs)
+        except TypeError:
+            continue
+        except Exception:
+            return None, None
+        if iterator is None:
+            continue
+        try:
+            for row in islice(iterator, limit):
+                rows.append(_coerce_config(row))
+        except TypeError:
+            try:
+                rows = [_coerce_config(r) for r in iterator[:limit]]  # type: ignore[index]
+            except Exception:
+                rows = []
+        break
+
+    for row in reversed(rows):
+        for candidate in candidates:
+            value = _coerce_to_float(_lookup_nested(row, candidate))
+            if value is not None:
+                return value, candidate
+    return None, None
+
+
+def _metric_candidates(metric: str) -> List[str]:
+    candidates = [metric]
+    if "/" in metric:
+        candidates.append(metric.replace("/", "."))
+    if "." in metric:
+        candidates.append(metric.replace(".", "/"))
+    return list(dict.fromkeys(candidates))
+
+
+def _extract_metric_from_run(run: Any, metric: str) -> Tuple[Optional[float], Optional[str]]:
+    candidates = _metric_candidates(metric)
+
+    summary = _extract_summary_payload(run)
+    for candidate in candidates:
+        value = _coerce_to_float(_lookup_nested(summary, candidate))
+        if value is not None and math.isfinite(value):
+            return float(value), f"summary[{candidate}]"
+
+    config = _coerce_config(getattr(run, "config", {}))
+    for candidate in candidates:
+        value = _coerce_to_float(_lookup_nested(config, candidate))
+        if value is not None and math.isfinite(value):
+            return float(value), f"config[{candidate}]"
+
+    value, candidate = _extract_from_history(run, candidates)
+    if value is not None and math.isfinite(value):
+        return float(value), f"history[{candidate}]"
+
+    return None, None
+
+
+def _collect_top_runs(api: wandb.Api, sweep_path: str, metric: str, maximize: bool, k: int,
+                      max_attempts: int, retry_delay: float) -> Tuple[List[Tuple[Any, float, str]], Dict[str, Any]]:
+    diagnostics: Dict[str, Any] = {"attempts": 0, "total_runs": 0, "missing": [], "method_counts": Counter()}
+
+    for attempt in range(1, max_attempts + 1):
+        diagnostics["attempts"] = attempt
+        try:
+            sweep = api.sweep(sweep_path)
+        except Exception as exc:
+            diagnostics["error"] = str(exc)
+            print(f"[recheck] attempt {attempt}/{max_attempts}: failed to load sweep {sweep_path}: {exc}", flush=True)
+            if attempt < max_attempts:
+                time.sleep(retry_delay)
+                continue
+            break
+
+        runs = list(sweep.runs)
+        diagnostics["total_runs"] = len(runs)
+        diagnostics["missing"] = []
+        diagnostics["method_counts"] = Counter()
+
+        ranked: List[Tuple[Any, float, str]] = []
+        for run in runs:
+            config = _coerce_config(getattr(run, "config", {}))
+            method = str(config.get("training_method", "unknown")).lower()
+            diagnostics["method_counts"][method] += 1
+
+            value, source = _extract_metric_from_run(run, metric)
+            if value is None:
+                diagnostics["missing"].append(run.id)
+                continue
+            ranked.append((run, value, source or ""))
+
+        if ranked:
+            ranked.sort(key=lambda item: item[1], reverse=maximize)
+            limit = max(1, k)
+            return ranked[:limit], diagnostics
+
+        if len(runs) == 0:
+            print(f"[recheck] attempt {attempt}/{max_attempts}: sweep returned zero runs; retrying", flush=True)
+        else:
+            print(
+                f"[recheck] attempt {attempt}/{max_attempts}: no runs with metric '{metric}' yet; missing from {len(diagnostics['missing'])} runs",
+                flush=True,
+            )
+
+        if attempt < max_attempts:
+            time.sleep(retry_delay)
+
+    return [], diagnostics
 
 def run_once(mm, program, subcmd, cfg: Dict[str, Any], seed: int,
              unlabeled: str, labeled: str, log_dir: str,
@@ -104,7 +353,7 @@ def run_once(mm, program, subcmd, cfg: Dict[str, Any], seed: int,
     }
     DROP = {
         "augmentations", "pair_id", "pair_key", "_wandb", "wandb_version",
-        "seed", "name", "id", "group",
+        "seed", "name", "id", "group", "use_wandb",
     }
 
     forwarded = []  # for debug print below
@@ -127,6 +376,10 @@ def run_once(mm, program, subcmd, cfg: Dict[str, Any], seed: int,
         else:
             args += [flag, str(v)]
         forwarded.append((flag, v))
+
+    # Always enable wandb logging for rechecks so metrics propagate reliably.
+    args += ["--use-wandb", "1"]
+    forwarded.append(("--use-wandb", 1))
 
     # Seed per recheck
     args += ["--seed", str(seed)]
@@ -188,6 +441,8 @@ def main():
     ap.add_argument("--log_dir", default=os.environ.get("LOG_DIR","./logs"))
     # Pick a writable default at runtime (cwd or temp) if GRID_DIR is missing or not writable
     ap.add_argument("--out", default=None)
+    ap.add_argument("--strict", action="store_true",
+                    help="Fail if fewer than topk runs expose the metric after retries")
     args = ap.parse_args()
 
     print("[recheck] args parsed:", flush=True)
@@ -205,6 +460,7 @@ def main():
     print("  mm         =", args.mm, flush=True)
     print("  log_dir    =", args.log_dir, flush=True)
     print("  out        =", args.out, flush=True)
+    print("  strict     =", args.strict, flush=True)
 
     # --- resolve a safe, writable output path and ensure parent exists ---
     def _safe_out(user_out: str | None) -> str:
@@ -245,12 +501,89 @@ def main():
 
     args.log_dir = _safe_dir(args.log_dir)
 
-    api = wandb.Api()
-    sweep = api.sweep(args.sweep)
-    maximize = (args.direction == "max")
-    top = pick_topk(sweep, args.metric, maximize, args.topk)
+    def _env_int(name: str, default: int) -> int:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        try:
+            return int(raw)
+        except ValueError:
+            print(f"[recheck][warn] invalid int for {name}={raw!r}; using {default}", flush=True)
+            return default
 
-    print(f"[recheck] picked top {len(top)} from sweep: {[r.id for r in top]}", flush=True)
+    def _env_float(name: str, default: float) -> float:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            print(f"[recheck][warn] invalid float for {name}={raw!r}; using {default}", flush=True)
+            return default
+
+    max_attempts = max(1, _env_int("RECHECK_MAX_ATTEMPTS", 5))
+    retry_delay = max(0.0, _env_float("RECHECK_RETRY_DELAY", 15.0))
+
+    print("  max_attempts=", max_attempts, flush=True)
+    print("  retry_delay =", retry_delay, flush=True)
+
+    api = wandb.Api()
+    maximize = (args.direction == "max")
+    top_info, diagnostics = _collect_top_runs(api, args.sweep, args.metric, maximize, args.topk, max_attempts, retry_delay)
+
+    if not top_info:
+        method_counts = diagnostics.get("method_counts", Counter())
+        total_runs = diagnostics.get("total_runs", 0)
+        missing = diagnostics.get("missing", [])
+        print(
+            f"[recheck][fatal] unable to locate metric '{args.metric}' in sweep {args.sweep} "
+            f"after {diagnostics.get('attempts', max_attempts)} attempt(s); runs={total_runs} missing_metrics={len(missing)}",
+            flush=True,
+        )
+        if method_counts:
+            print(
+                "[recheck] sweep method counts: " + ", ".join(f"{m or 'unknown'}={c}" for m, c in sorted(method_counts.items())),
+                flush=True,
+            )
+        if missing:
+            sample = ", ".join(missing[:5])
+            more = "" if len(missing) <= 5 else f" … (+{len(missing)-5} more)"
+            print(f"[recheck] runs missing metric: {sample}{more}", flush=True)
+        if diagnostics.get("error"):
+            print(f"[recheck] last API error: {diagnostics['error']}", flush=True)
+        sys.exit(2)
+
+    if args.strict and len(top_info) < max(1, args.topk):
+        print(
+            f"[recheck][fatal] strict mode requires {args.topk} runs with metric '{args.metric}' "
+            f"but only found {len(top_info)}",
+            flush=True,
+        )
+        sys.exit(2)
+
+    top = [item[0] for item in top_info]
+
+    print(
+        f"[recheck] picked top {len(top)} from sweep: {[r.id for r in top]} (metric source(s): "
+        + ", ".join(f"{r.id}:{src}" for r, _, src in top_info)
+        + ")",
+        flush=True,
+    )
+
+    missing = diagnostics.get("missing", [])
+    if missing:
+        print(
+            f"[recheck] ignored {len(missing)} runs without metric '{args.metric}'",
+            flush=True,
+        )
+
+    method_counts = diagnostics.get("method_counts", Counter())
+    if method_counts:
+        print(
+            "[recheck] sweep method counts: "
+            + ", ".join(f"{method or 'unknown'}={count}" for method, count in sorted(method_counts.items())),
+            flush=True,
+        )
 
     def _kv(d, keys=("training_method","gnn_type","hidden_dim","num_layers","contiguity","mask_ratio","ema_decay","temperature","learning_rate")):
         out = {}
@@ -268,10 +601,11 @@ def main():
     tops: List[Dict[str, Any]] = []
     for r in top:
         cfg = {}
-        for k, v in r.config.items():
+        raw_cfg = _coerce_config(getattr(r, "config", {}))
+        for k, v in raw_cfg.items():
             if k.startswith("_"):   # skip internal
                 continue
-            cfg[k] = v
+            cfg[k] = _unwrap_config_value(v)
         # Drop seed so we can override
         cfg.pop("seed", None)
         tops.append(cfg)
@@ -313,12 +647,15 @@ def main():
         if proj_path:
             runs = list(api.runs(proj_path, filters={"group": args.group}))
         for r in runs:
+            run_cfg = _coerce_config(getattr(r, "config", {}))
             ok = True
-            for k,v in cfg.items():
-                if r.config.get(k) != v:
-                    ok=False; break
-            if ok and (r.config.get("seed") in seeds):
-                mv = metric_of(r, args.metric)
+            for k, v in cfg.items():
+                if _unwrap_config_value(run_cfg.get(k)) != v:
+                    ok = False
+                    break
+            run_seed = _unwrap_config_value(run_cfg.get("seed"))
+            if ok and run_seed in seeds:
+                mv, _source = _extract_metric_from_run(r, args.metric)
                 if mv is not None:
                     vals.append(float(mv))
 
@@ -328,43 +665,45 @@ def main():
         else:
             results.append({"index": i, "mean": None, "ci95": [None,None], "n": 0, "config": cfg})
 
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump({"metric": args.metric, "direction": args.direction,
-                   "topk": args.topk, "extra_seeds": args.extra_seeds,
-                   "results": results}, f, indent=2)
+    success_results = [r for r in results if r.get("mean") is not None]
 
+    summary_payload = {
+        "metric": args.metric,
+        "direction": args.direction,
+        "topk": args.topk,
+        "extra_seeds": args.extra_seeds,
+        "results": results,
+    }
+
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(summary_payload, f, indent=2)
+
+    if not success_results:
+        print(
+            f"[recheck][fatal] no metrics collected for metric '{args.metric}' in sweep {args.sweep}; "
+            f"see {args.out} for details",
+            flush=True,
+        )
+        sys.exit(3)
 
     # --- Normalize Phase-2 winner to Phase-1 schema and automically back up best_grid_config.json from phase1 ---
-    # --- Choose winner from recheck; fallback to sweep top if needed ---
     out_dir = os.path.dirname(args.out)
 
-    # 1) Try recheck results first
-    best = None
-    if results:
-        cand = [r for r in results if r.get("mean") is not None]
-        if cand:
-            if args.direction == "min":
-                best = sorted(cand, key=lambda r: r["mean"])[0]
-            else:
-                best = sorted(cand, key=lambda r: -r["mean"])[0]
+    if args.direction == "min":
+        best = min(success_results, key=lambda r: r["mean"])
+    else:
+        best = max(success_results, key=lambda r: r["mean"])
 
-    winner_cfg = None
-    if best is not None:
-        winner_cfg = (best or {}).get("config") or None
+    winner_cfg = (best or {}).get("config") or {}
+    if not isinstance(winner_cfg, dict) or not winner_cfg:
+        print(
+            f"[recheck][fatal] best configuration for sweep {args.sweep} produced an empty payload; "
+            f"inspect {args.out}",
+            flush=True,
+        )
+        sys.exit(3)
 
-    # 2) Fallback: use the top sweep run's config (already filtered earlier)
-    if winner_cfg is None:
-        if top:
-            # copy W&B run.config into a plain dict, drop internals and seed
-            cfg = {k: v for k, v in top[0].config.items() if not k.startswith("_")}
-            cfg.pop("seed", None)
-            winner_cfg = cfg
-            print("[recheck] fallback: using top sweep config (no recheck means)", flush=True)
-        else:
-            winner_cfg = {}
-            print("[recheck][warn] no top entries and no recheck means; writing empty config", flush=True)
-
-    # 3) Atomically write Phase-2 winner in Phase-1 schema: {"config": {...}}
+    # Atomically write Phase-2 winner in Phase-1 schema: {"config": {...}}
     p1_best   = os.path.join(out_dir, "best_grid_config.json")
     p1_backup = os.path.join(out_dir, "best_grid_config.phase1.json")
     tmp_write = os.path.join(out_dir, ".best_grid_config.tmp")
