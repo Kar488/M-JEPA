@@ -167,4 +167,33 @@ fi
 
 # === materialize Phase-2 winner as fixed CLI for downstream ===
 BEST_JSON="${GRID_DIR:-$APP_DIR/grid}/best_grid_config.json"
-[[ -s "$BEST_JSON" ]] || { echo "[phase2][fatal] missing $BEST_JSON"; exit 2; }
+if [[ ! -s "$BEST_JSON" ]]; then
+  echo "[phase2][fatal] missing $BEST_JSON" >&2
+  exit 2
+fi
+
+if ! BEST_JSON_PATH="$BEST_JSON" RECHECK_LOG="$LOG" python - <<'PY'
+import json, os, sys
+
+path = os.environ["BEST_JSON_PATH"]
+log_path = os.environ.get("RECHECK_LOG")
+
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except Exception as exc:  # noqa: BLE001 - surface the error to the shell
+    print(f"[phase2][fatal] unable to parse {path}: {exc}", file=sys.stderr)
+    sys.exit(2)
+
+config = payload.get("config") if isinstance(payload, dict) else None
+if not isinstance(config, dict) or not config:
+    hint = f"; inspect {log_path}" if log_path else ""
+    print(f"[phase2][fatal] {path} contains an empty config{hint}", file=sys.stderr)
+    sys.exit(3)
+
+sys.exit(0)
+PY
+then
+  rc=$?
+  exit "$rc"
+fi
