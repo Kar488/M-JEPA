@@ -115,11 +115,20 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         threshold_rule = None
 
     threshold_payload: Dict[str, Any] = {}
+    target_baseline = 0.65
     if threshold_rule is not None:
+        metric_name = str(getattr(threshold_rule, "metric", "")).lower()
+        if metric_name == "roc_auc":
+            try:
+                target_baseline = float(threshold_rule.threshold)
+            except Exception:
+                target_baseline = 0.65
         threshold_payload = {
             "benchmark_metric": threshold_rule.metric,
             "benchmark_threshold": threshold_rule.threshold,
         }
+
+    target_payload = {"target_baseline_roc_auc": float(target_baseline)}
 
     report_dir = (
         getattr(args, "tox21_dir", None)
@@ -144,10 +153,14 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             except Exception:
                 logger.debug("Failed to write TOX21_MET_GATE to %s", env_path, exc_info=True)
 
+    wandb_tags = list(getattr(args, "wandb_tags", []) or [])
+    if "target_baseline_roc_auc" not in {str(t) for t in wandb_tags}:
+        wandb_tags.append("target_baseline_roc_auc")
+
     wb = maybe_init_wandb(
         getattr(args, "use_wandb", False),
         project=getattr(args, "wandb_project", "m-jepa"),
-        tags=getattr(args, "wandb_tags", []),
+        tags=wandb_tags,
         config={
             "csv": args.csv,
             "task": args.task,
@@ -159,6 +172,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "pretrain_time_budget_mins": getattr(args, "pretrain_time_budget_mins", 0),
             "finetune_time_budget_mins": getattr(args, "finetune_time_budget_mins", 0),
             **threshold_payload,
+            **target_payload,
         },
     )
     log_effective_gnn(args, logger, wb)
@@ -166,6 +180,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     try:
         start_log = {"phase": "tox21", "status": "start"}
         start_log.update(threshold_payload)
+        start_log.update(target_payload)
         _wandb_log_safe(wb, start_log)
 
         result = run_tox21_case_study(
@@ -262,6 +277,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         }
         summary_payload["encoder_source"] = source_for_gate
         summary_payload["tox21_gate_passed"] = bool(gate_passed_flag)
+        summary_payload.update(target_payload)
         if gate_metric_name is not None and "benchmark_metric" not in summary_payload:
             summary_payload["benchmark_metric"] = gate_metric_name
         if gate_threshold is not None and "benchmark_threshold" not in summary_payload:
@@ -291,6 +307,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             prefix = f"{getattr(eval_res, 'name', 'evaluation')}/" if multi_eval else ""
             payload = {"phase": "tox21", "status": "success"}
             payload.update(threshold_payload)
+            payload.update(target_payload)
             payload[f"{prefix}mean_true"] = float(getattr(eval_res, "mean_true", 0.0))
             payload[f"{prefix}mean_rand"] = float(getattr(eval_res, "mean_random", 0.0))
             payload[f"{prefix}mean_pred"] = float(getattr(eval_res, "mean_pred", 0.0))
@@ -339,6 +356,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 "task": task_name,
                 **threshold_payload,
             },
+            **target_payload,
             "auc_summary": auc_summary,
             "selected_path": selected_source,
             "met_benchmark_selected": selected_benchmark,
@@ -414,6 +432,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 "selected_auc": auc_summary.get(selected_source) if selected_source else None,
                 "met_benchmark": selected_benchmark,
                 "tox21_gate_passed": bool(gate_passed_flag),
+                **target_payload,
                 "auc_summary": auc_summary,
                 "evaluations": [
                     {
