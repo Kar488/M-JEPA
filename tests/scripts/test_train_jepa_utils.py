@@ -1,9 +1,23 @@
+import argparse
+import types
+
+import numpy as np
 import pytest
 import yaml
 
 torch = pytest.importorskip("torch")
 
-from scripts.train_jepa import aggregate_metrics, load_config, resolve_device
+from scripts.train_jepa import (
+    aggregate_metrics,
+    load_config,
+    resolve_device,
+    _maybe_to,
+    _maybe_labels,
+    _infer_num_classes,
+    _iter_params,
+    _maybe_state_dict,
+    _to_bool,
+)
 
 
 def test_aggregate_metrics_empty():
@@ -59,3 +73,50 @@ def test_load_config_missing(tmp_path):
     missing = tmp_path / "missing.yaml"
     with pytest.raises(FileNotFoundError):
         load_config(str(missing))
+
+
+def test_maybe_to_and_labels():
+    captured = {}
+
+    class Dummy:
+        def to(self, device):
+            captured["device"] = device
+
+    module = Dummy()
+    assert _maybe_to(module, "cpu") is module
+    assert captured["device"] == "cpu"
+
+    ds = types.SimpleNamespace(y=[0, 1, 1])
+    labels = _maybe_labels(ds)
+    assert labels.tolist() == [0, 1, 1]
+
+
+def test_infer_num_classes():
+    ds = types.SimpleNamespace(num_classes=4)
+    assert _infer_num_classes(ds) == 4
+
+    ds2 = types.SimpleNamespace(labels=np.array([0, 1, 1, 0]))
+    assert _infer_num_classes(ds2) == 2
+
+
+def test_iter_params_and_state_dict():
+    module = torch.nn.Linear(2, 1)
+    params = _iter_params(module)
+    assert any(p is module.weight for p in params)
+
+    wrapper = types.SimpleNamespace(encoder=module)
+    assert _iter_params(wrapper)
+
+    class DummyState:
+        def state_dict(self):
+            return {"w": 1}
+
+    assert _maybe_state_dict(DummyState()) == {"w": 1}
+    assert _maybe_state_dict(object()) is None
+
+
+def test_to_bool_parsing():
+    assert _to_bool("true") is True
+    assert _to_bool("0") is False
+    with pytest.raises(argparse.ArgumentTypeError):
+        _to_bool("maybe")
