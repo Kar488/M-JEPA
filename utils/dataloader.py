@@ -11,6 +11,14 @@ import os
 import torch
 import torch.utils.data.dataloader as _torch_dataloader
 
+try:
+    import resource
+except ImportError:  # pragma: no cover - platform dependent
+    resource = None  # type: ignore[assignment]
+
+
+logger = logging.getLogger(__name__)
+
 
 def _patch_iterator_finalizer() -> None:
     """Avoid ``AttributeError`` when worker start-up fails mid-construction."""
@@ -101,6 +109,52 @@ def ensure_file_system_sharing_strategy() -> None:
             set_strategy("file_system")
     except RuntimeError:  # pragma: no cover - backend dependent
         pass
+
+
+def ensure_open_file_limit(min_soft_limit: int = 4096) -> None:
+    """Best-effort bump of ``RLIMIT_NOFILE`` so dataloaders stay healthy."""
+
+    if resource is None:  # pragma: no cover - platform dependent
+        return
+
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (OSError, ValueError):  # pragma: no cover - depends on runtime
+        return
+
+    desired = max(int(min_soft_limit), soft)
+    if desired <= soft:
+        return
+
+    target_hard = hard if hard >= desired else desired
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (desired, target_hard))
+        logger.debug(
+            "Raised RLIMIT_NOFILE soft limit from %d to %d (hard %d -> %d)",
+            soft,
+            desired,
+            hard,
+            target_hard,
+        )
+        return
+    except (OSError, ValueError):
+        pass
+
+    fallback_soft = min(max(desired, soft), hard)
+    if fallback_soft <= soft:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (fallback_soft, hard))
+        logger.debug(
+            "Raised RLIMIT_NOFILE soft limit to hard limit %d after initial attempt failed",
+            fallback_soft,
+        )
+    except (OSError, ValueError):  # pragma: no cover - depends on runtime
+        logger.debug(
+            "Unable to raise RLIMIT_NOFILE beyond current soft limit %d despite request for %d",
+            soft,
+            desired,
+        )
 
 
 def _auto_worker_budget(max_auto_workers: Optional[int] = None) -> int:

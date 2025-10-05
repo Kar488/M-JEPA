@@ -6,12 +6,12 @@ import pytest
 pytest.importorskip("numpy")
 pytest.importorskip("torch")
 
-from training import unsupervised
 from training.unsupervised import (
     _backoff_data_loader_workers,
-    _ensure_open_file_limit,
     _is_too_many_open_files,
 )
+from utils import dataloader as dataloader_utils
+from utils.dataloader import ensure_open_file_limit
 
 
 def _make_nested_emfile() -> RuntimeError:
@@ -72,9 +72,9 @@ def test_ensure_open_file_limit_raises_soft_cap(monkeypatch):
 
     stub.setrlimit = fake_set
 
-    monkeypatch.setattr(unsupervised, "resource", stub, raising=False)
+    monkeypatch.setattr(dataloader_utils, "resource", stub, raising=False)
 
-    _ensure_open_file_limit(4096)
+    ensure_open_file_limit(4096)
 
     assert calls[-1] == (4096, 8192)
 
@@ -95,8 +95,8 @@ def test_ensure_open_file_limit_falls_back_to_hard_limit(monkeypatch):
 
     stub.setrlimit = fake_set
 
-    monkeypatch.setattr(unsupervised, "resource", stub, raising=False)
+    monkeypatch.setattr(dataloader_utils, "resource", stub, raising=False)
 
-    _ensure_open_file_limit(4096)
+    ensure_open_file_limit(4096)
 
     assert calls[-1] == (2048, 2048)

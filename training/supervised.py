@@ -32,7 +32,11 @@ from models.encoder import GNNEncoder
 from utils.early_stopping import EarlyStopping
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.graph_ops import _encode_graph
-from utils.dataloader import autotune_worker_pool, ensure_file_system_sharing_strategy
+from utils.dataloader import (
+    autotune_worker_pool,
+    ensure_file_system_sharing_strategy,
+    ensure_open_file_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -664,6 +668,16 @@ def train_linear_head(
     )
     if num_workers > 0:
         ensure_file_system_sharing_strategy()
+        worker_count = int(num_workers)
+        prefetch_budget = (
+            int(prefetch_factor) if isinstance(prefetch_factor, (int, float)) else 0
+        )
+        if worker_count > 0:
+            prefetch_budget = max(prefetch_budget, 2)
+        min_fd_budget = max(
+            4096, 1024 + 128 * max(worker_count, 1) * max(prefetch_budget, 1)
+        )
+        ensure_open_file_limit(min_fd_budget)
 
     indices = list(range(num_graphs))
 
