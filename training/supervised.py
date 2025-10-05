@@ -15,7 +15,7 @@ import math
 import random
 import time as _time
 from types import SimpleNamespace
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -41,6 +41,26 @@ from utils.dataloader import (
 logger = logging.getLogger(__name__)
 
 __all__ = ["stratified_split", "train_linear_head"]
+
+# NOTE: keep in sync with experiments.case_study._to_list behaviour for tests.
+def _as_index_list(indices: Iterable[int]) -> List[int]:
+    """Convert an arbitrary index container into a plain ``list`` of ``int``."""
+
+    if isinstance(indices, list):
+        return [int(i) for i in indices]
+    if isinstance(indices, np.ndarray):
+        return indices.astype(int).reshape(-1).tolist()
+    tolist = getattr(indices, "tolist", None)
+    if callable(tolist):
+        try:
+            values = tolist()
+            if isinstance(values, list):
+                return [int(i) for i in values]
+            if isinstance(values, tuple):
+                return [int(i) for i in values]
+        except Exception:
+            pass
+    return [int(i) for i in list(indices)]
 
 # Test harness supprt
 def _simple_pack_batch(dataset, batch_indices, task_type: str):
@@ -696,11 +716,9 @@ def train_linear_head(
     # Use provided batch_indices for single-batch training, else split dataset
     if use_scaffold and getattr(dataset, "smiles", None) is not None:
         train_idx, val_idx, test_idx = scaffold_split_indices(dataset.smiles)
-        train_idx, val_idx, test_idx = (
-            train_idx.tolist(),
-            val_idx.tolist(),
-            test_idx.tolist(),
-        )
+        train_idx = _as_index_list(train_idx)
+        val_idx = _as_index_list(val_idx)
+        test_idx = _as_index_list(test_idx)
     elif task_type == "classification":
         train_idx, val_idx, test_idx = stratified_split(
             indices, dataset.labels, train_frac=0.8, val_frac=0.1
