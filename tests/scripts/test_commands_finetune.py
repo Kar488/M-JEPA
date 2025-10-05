@@ -159,3 +159,51 @@ def test_ensure_dataset_has_pos_skips_empty_graphs():
 
     # Should not raise because the first non-empty graph has coordinates.
     finetune._ensure_dataset_has_pos(DummyDataset(graphs))
+class TinyEncoder(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layer1 = torch.nn.Linear(2, 2)
+        self.layer2 = torch.nn.Linear(2, 1)
+
+
+def test_maybe_enable_add_3d_enables_flag(caplog):
+    args = types.SimpleNamespace(gnn_type="SchNet3D", add_3d=False)
+    requires = finetune._maybe_enable_add_3d(args)
+    assert requires is True
+    assert args.add_3d is True
+
+
+def test_ensure_dataset_has_pos_validates_missing():
+    graph = types.SimpleNamespace(x=torch.ones(2, 3), edge_index=torch.tensor([[0, 1], [1, 0]]), pos=None)
+    dataset = types.SimpleNamespace(graphs=[graph])
+    with pytest.raises(ValueError):
+        finetune._ensure_dataset_has_pos(dataset)
+
+    graph2 = types.SimpleNamespace(pos=torch.ones(2, 3))
+    dataset2 = types.SimpleNamespace(graphs=[graph2])
+    finetune._ensure_dataset_has_pos(dataset2)
+
+
+def test_iter_trainable_params_and_configure_encoder():
+    encoder = TinyEncoder()
+    params = finetune._iter_trainable_params(encoder)
+    assert len(params) == 4  # weights and biases
+
+    # Freeze everything and unfreeze last layer
+    trainable = finetune._configure_encoder_trainability(
+        encoder,
+        freeze_encoder=True,
+        unfreeze_top_layers=1,
+    )
+    assert all(not p.requires_grad for p in encoder.parameters()) is False
+    assert len(trainable) > 0
+
+    # No freeze requested -> all params trainable
+    encoder2 = TinyEncoder()
+    all_params = finetune._configure_encoder_trainability(
+        encoder2,
+        freeze_encoder=False,
+        unfreeze_top_layers=0,
+    )
+    assert all(p.requires_grad for p in all_params)
+

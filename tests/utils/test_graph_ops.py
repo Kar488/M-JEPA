@@ -7,6 +7,8 @@ from utils.graph_ops import (
     _edge_index_to_dense,
     _encode_graph,
     _pool_graph_emb,
+    _ref_device,
+    _ensure_edge_attr_np_or_torch,
 )
 from data.mdataset import GraphData
 
@@ -63,7 +65,6 @@ def test_pool_graph_emb_batch_and_single():
     assert torch.allclose(single, expected_single)
 
 def test_ensure_edge_attr_np_or_torch(monkeypatch):
-    from utils.graph_ops import _ensure_edge_attr_np_or_torch
     g = SimpleNamespace(x=torch.ones(2, 3), edge_index=torch.tensor([[0,1],[1,0]], dtype=torch.long))
     g2 = _ensure_edge_attr_np_or_torch(g, need_dim=4)
     assert g2.edge_attr.shape == (2, 4)
@@ -71,6 +72,9 @@ def test_ensure_edge_attr_np_or_torch(monkeypatch):
     g3 = SimpleNamespace(x=torch.ones(2,3), edge_index=torch.tensor([[0,1],[1,0]], dtype=torch.long), edge_attr=torch.ones(2,2))
     g3 = _ensure_edge_attr_np_or_torch(g3, need_dim=4)
     assert g3.edge_attr.shape == (2,4)
+    g4 = SimpleNamespace(x=torch.ones(2,3), edge_index=torch.tensor([[0,1],[1,0]], dtype=torch.long), edge_attr=torch.ones(2,6))
+    g4 = _ensure_edge_attr_np_or_torch(g4, need_dim=3)
+    assert g4.edge_attr.shape == (2,3)
 
 
 def test_encode_graph_flex_handles_factory_and_legacy():
@@ -90,3 +94,12 @@ def test_encode_graph_flex_handles_factory_and_legacy():
     out2 = _encode_graph_flex(enc, g, device=torch.device("cpu"))
     assert isinstance(out2, torch.Tensor)
     assert enc.x.shape[0] == 2 and enc.adj.shape[0] == 2
+
+
+def test_ref_device_no_parameters():
+    class NoParam(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+
+    module = NoParam()
+    assert _ref_device(module).type == "cpu"
