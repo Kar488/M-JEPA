@@ -6,7 +6,7 @@ import logging
 import os
 import shutil
 import sys
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import torch
@@ -241,8 +241,14 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     metrics_runs: List[Dict[str, float]] = []
 
     # --- choose metric & direction (maximize cls metrics, minimize losses/errors) ---
-    metric_name = (getattr(args, "metric", "val_loss") or "").lower()
-    higher_is_better = metric_name in {
+    metric_choice = getattr(args, "metric", None)
+    if not metric_choice:
+        metric_choice = "val_auc" if args.task_type == "classification" else "val_loss"
+        setattr(args, "metric", metric_choice)
+        logger.debug("Defaulting fine-tune metric to %s for task=%s", metric_choice, args.task_type)
+
+    metric_name = str(metric_choice or "").lower()
+    maximize_metrics = {
         "acc",
         "accuracy",
         "auc",
@@ -255,6 +261,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         "r2",
         "val_r2",
     }
+    preferred_mode = "max" if metric_name in maximize_metrics else "min"
 
     def _lookup_metric(m: dict, name: str):
         """Return float metric value; try common aliases if the exact key is missing."""
@@ -281,8 +288,10 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     return None
         return None
 
-    def _is_better(curr, best):
-        return (curr > best) if higher_is_better else (curr < best)
+    def _is_better(curr: float, best: Optional[float], mode: str) -> bool:
+        if best is None:
+            return True
+        return curr > best if mode == "max" else curr < best
 
     save_every = max(1, int(getattr(args, "save_every", 1)))
 
@@ -481,7 +490,8 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             seed_dir = os.path.join(args.ckpt_dir, f"seed_{seed}")
             os.makedirs(seed_dir, exist_ok=True)
             # initialize best depending on direction
-            best_metric = -float("inf") if higher_is_better else float("inf")
+            best_metric: Optional[float] = None
+            best_metric_mode = preferred_mode
 
             wrote_best = False
             last_epoch = start_epoch - 1
@@ -524,32 +534,48 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     head = trained_head
 
                 current = _lookup_metric(metrics, metric_name)
+                current_mode = preferred_mode
 
-                if current is not None and _is_better(current, best_metric):
-                    best_metric = current
-                    best_path = os.path.join(seed_dir, "ft_best.pt")
-                    save_checkpoint(
-                        best_path,
-                        epoch=epoch,
-                        encoder=encoder.state_dict(),
-                        head=head.state_dict(),
-                        optimizer=optimizer.state_dict(),
-                        scheduler=scheduler.state_dict(),
-                        best_metric=best_metric,
-                    )
-                    wrote_best = True
-                    # optional: stable link at the finetune root
-
-                    try:
-                        from utils.checkpoint import safe_link_or_copy
-
-                        link = os.path.join(args.ckpt_dir, "head.pt")
-                        mode = safe_link_or_copy(best_path, link)
-                        logger.info("Updated head.pt (%s) -> %s", mode, best_path)
-                    except Exception:
-                        logger.warning(
-                            "Could not create head.pt symlink", exc_info=True
+                if current is None and metric_name != "val_loss":
+                    fallback_val = _lookup_metric(metrics, "val_loss")
+                    if fallback_val is not None:
+                        logger.debug(
+                            "Metric '%s' missing in results; falling back to val_loss for checkpointing.",
+                            metric_name,
                         )
+                        current = fallback_val
+                        current_mode = "min"
+
+                if current is not None:
+                    if best_metric_mode != current_mode:
+                        best_metric = None
+                        best_metric_mode = current_mode
+
+                    if _is_better(current, best_metric, current_mode):
+                        best_metric = current
+                        best_path = os.path.join(seed_dir, "ft_best.pt")
+                        save_checkpoint(
+                            best_path,
+                            epoch=epoch,
+                            encoder=encoder.state_dict(),
+                            head=head.state_dict(),
+                            optimizer=optimizer.state_dict(),
+                            scheduler=scheduler.state_dict(),
+                            best_metric=best_metric,
+                        )
+                        wrote_best = True
+                        # optional: stable link at the finetune root
+
+                        try:
+                            from utils.checkpoint import safe_link_or_copy
+
+                            link = os.path.join(args.ckpt_dir, "head.pt")
+                            mode = safe_link_or_copy(best_path, link)
+                            logger.info("Updated head.pt (%s) -> %s", mode, best_path)
+                        except Exception:
+                            logger.warning(
+                                "Could not create head.pt symlink", exc_info=True
+                            )
 
                 # periodic (and last-epoch) snapshot
                 if ((epoch + 1) % save_every == 0) or ((epoch + 1) == args.epochs):

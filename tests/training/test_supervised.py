@@ -165,6 +165,64 @@ def test_train_linear_head_regression():
     assert isinstance(metrics["head"], nn.Module)
 
 
+def test_train_linear_head_switches_mode_when_metric_missing(monkeypatch):
+    np.random.seed(0)
+    torch.manual_seed(0)
+    labels = [0, 1] * 6
+    dataset = DummyDataset(labels)
+    enc = DummyEncoder(4)
+
+    def metrics_stub(y_true, y_pred):
+        return {"roc_auc": float("nan")}
+
+    monkeypatch.setattr(
+        supervised_mod,
+        "compute_classification_metrics",
+        metrics_stub,
+        raising=False,
+    )
+
+    record = {}
+
+    class RecordingEarlyStopping:
+        def __init__(self, patience, mode):
+            record["init_mode"] = mode
+            record["instance"] = self
+            self.mode = mode
+            self.best = None
+            self.counter = 0
+            self.patience = patience
+
+        def step(self, value):
+            record.setdefault("calls", []).append((self.mode, value))
+            self.best = value
+            self.counter = 0
+            return False
+
+    monkeypatch.setattr(
+        supervised_mod,
+        "EarlyStopping",
+        RecordingEarlyStopping,
+        raising=False,
+    )
+
+    train_linear_head(
+        dataset,
+        enc,
+        "classification",
+        epochs=1,
+        batch_size=4,
+        lr=0.01,
+        patience=2,
+        device="cpu",
+        early_stop_metric="val_auc",
+    )
+
+    assert record["init_mode"] == "max"
+    assert record["calls"] and record["calls"][0][0] == "min"
+    assert record["instance"].mode == "min"
+
+
 def test_train_linear_head_respects_max_batches(monkeypatch):
     np.random.seed(0)
     torch.manual_seed(0)

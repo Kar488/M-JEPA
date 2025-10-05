@@ -1136,6 +1136,7 @@ def train_linear_head(
                         val_metric_values = compute_regression_metrics(y_true_val, y_pred_val)
 
                 monitor_value = avg_val_loss
+                current_mode = monitor_mode
                 if metric_key != "val_loss":
                     metric_val = val_metric_values.get(metric_key)
                     if metric_val is not None and not np.isnan(metric_val):
@@ -1146,6 +1147,17 @@ def train_linear_head(
                             early_stop_metric,
                         )
                         monitor_value = avg_val_loss
+                        current_mode = "min"
+
+                if early_stopper.mode != current_mode:
+                    logger.debug(
+                        "Switching early stopping mode from %s to %s due to metric fallback.",
+                        early_stopper.mode,
+                        current_mode,
+                    )
+                    early_stopper.mode = current_mode
+                    early_stopper.best = None
+                    early_stopper.counter = 0
 
                 if early_stopper.step(monitor_value):
                     logger.info("Early stopping at epoch %d", epoch)
