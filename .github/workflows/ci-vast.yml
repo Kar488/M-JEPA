@@ -78,6 +78,7 @@ env:
   SWEEP_CACHE_DIR: ${{ github.event.inputs.sweep_cache_dir || '/data/mjepa/cache/graphs_50k' }}
   RUN_ID: ${{ github.run_id }}
   EXP_ROOT: /data/mjepa/experiments/${{ github.run_id }}
+  EXPERIMENT_DIR: /data/mjepa/experiments/${{ github.run_id }}
   GRID_DIR: /data/mjepa/experiments/${{ github.run_id }}/grid
   PRETRAIN_DIR: /data/mjepa/experiments/${{ github.run_id }}/pretrain
   FINETUNE_DIR: /data/mjepa/experiments/${{ github.run_id }}/finetune
@@ -86,6 +87,8 @@ env:
   TOX21_DIR: /data/mjepa/experiments/${{ github.run_id }}/tox21
   LOG_DIR: /data/mjepa/experiments/${{ github.run_id }}/logs
   REPORTS_DIR: /data/mjepa/experiments/${{ github.run_id }}/reports
+  ARTIFACTS_DIR: /data/mjepa/experiments/${{ github.run_id }}/artifacts
+  PRETRAIN_MANIFEST: /data/mjepa/experiments/${{ github.run_id }}/artifacts/encoder_manifest.json
   # as such this cache is used inside a single run only
   #Changing cache to be used across runs, change to fixed directory e.g. /data/mjepa/cache/grid
   # either delete stamp (rm /data/mjepa/cache/grid/.stamp) or point to empty directory ("") for forced reruns
@@ -378,6 +381,32 @@ jobs:
           PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "8"
           BESTCFG_NO_EPOCHS: "1"
+
+      - name: Collect pretrain artifacts
+        if: always()
+        env:
+          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/vast_key
+          chmod 600 ~/.ssh/vast_key
+          mkdir -p pretrain_artifacts
+          rsync -avz --chmod=ugo=rwX -e "ssh -i ~/.ssh/vast_key -p ${{ secrets.VAST_PORT }} -o StrictHostKeyChecking=no" \
+            "${{ secrets.VAST_USER }}@${{ secrets.VAST_HOST }}:${{ env.PRETRAIN_DIR }}/encoder.pt" pretrain_artifacts/ || true
+          rsync -avz --chmod=ugo=rwX -e "ssh -i ~/.ssh/vast_key -p ${{ secrets.VAST_PORT }} -o StrictHostKeyChecking=no" \
+            "${{ secrets.VAST_USER }}@${{ secrets.VAST_HOST }}:${{ env.PRETRAIN_MANIFEST }}" pretrain_artifacts/ || true
+          rsync -avz --chmod=ugo=rwX -e "ssh -i ~/.ssh/vast_key -p ${{ secrets.VAST_PORT }} -o StrictHostKeyChecking=no" \
+            "${{ secrets.VAST_USER }}@${{ secrets.VAST_HOST }}:${{ env.PRETRAIN_DIR }}/stage-outputs/pretrain.json" pretrain_artifacts/ || true
+          rm -f ~/.ssh/vast_key
+
+      - name: Upload pretrain artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-pretrain-artifacts
+          if-no-files-found: ignore
+          path: pretrain_artifacts
 
   vast_finetune:
     name: Fine tune model

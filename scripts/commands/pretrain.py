@@ -1,16 +1,212 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
 import random
-from typing import Dict, List
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
 
 from . import log_effective_gnn
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _infer_metric_direction(name: Optional[str], fallback: Optional[bool] = None) -> Optional[bool]:
+    if isinstance(fallback, bool):
+        return fallback
+    if not name:
+        return fallback
+    lowered = name.lower()
+    if any(token in lowered for token in ("loss", "rmse", "mae", "error", "mse", "duration")):
+        return False
+    if any(token in lowered for token in ("acc", "auc", "f1", "precision", "recall", "roc")):
+        return True
+    return fallback
+
+
+def _normalize_stage_outputs_dir() -> Optional[Path]:
+    stage_dir = os.getenv("STAGE_OUTPUTS_DIR")
+    if not stage_dir:
+        return None
+    try:
+        path = Path(stage_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except Exception:
+        return None
+
+
+def _record_stage_outputs(payload: Dict[str, Any]) -> None:
+    stage_dir = _normalize_stage_outputs_dir()
+    if stage_dir is None:
+        return
+    try:
+        out = stage_dir / "pretrain.json"
+        with out.open("w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+    except Exception:
+        # Stage outputs are best-effort; never crash the training command.
+        logger.warning("Failed to write pretrain stage outputs", exc_info=True)
+
+
+def _extract_metric_from_args(args: argparse.Namespace) -> Optional[Dict[str, Any]]:
+    # Support a variety of attribute spellings to ease integration with CI wrappers.
+    metric: Dict[str, Any] = {}
+
+    if hasattr(args, "best_metric") and isinstance(getattr(args, "best_metric"), dict):
+        metric.update(getattr(args, "best_metric"))
+
+    name_candidates = [
+        getattr(args, "validation_metric_name", None),
+        getattr(args, "val_metric_name", None),
+        getattr(args, "best_metric_name", None),
+        getattr(args, "metric_name", None),
+        getattr(args, "metric", None),
+    ]
+    value_candidates = [
+        getattr(args, "validation_metric", None),
+        getattr(args, "val_metric", None),
+        getattr(args, "best_metric_value", None),
+        getattr(args, "metric_value", None),
+    ]
+    hib_candidates = [
+        getattr(args, "validation_metric_higher_is_better", None),
+        getattr(args, "val_metric_higher_is_better", None),
+        getattr(args, "higher_is_better", None),
+        getattr(args, "metric_higher_is_better", None),
+    ]
+
+    env_value = os.getenv("PRETRAIN_VAL_METRIC_VALUE") or os.getenv("VAL_METRIC_VALUE")
+    env_name = os.getenv("PRETRAIN_VAL_METRIC_NAME") or os.getenv("VAL_METRIC_NAME")
+    env_dir = os.getenv("PRETRAIN_VAL_METRIC_DIRECTION") or os.getenv("VAL_METRIC_DIRECTION")
+
+    def _parse_direction(raw: Any) -> Optional[bool]:
+        if isinstance(raw, bool):
+            return raw
+        if raw is None:
+            return None
+        if isinstance(raw, (int, float)):
+            return bool(raw)
+        text = str(raw).strip().lower()
+        if text in {"true", "t", "1", "yes", "y", "on", "max", "maximize", "higher", "up"}:
+            return True
+        if text in {"false", "f", "0", "no", "n", "off", "min", "minimize", "lower", "down"}:
+            return False
+        return None
+
+    name = metric.get("name") or next((n for n in name_candidates if n), None) or env_name
+    value = metric.get("value")
+    if value is None:
+        for cand in value_candidates:
+            if cand is not None:
+                value = cand
+                break
+    if value is None and env_value is not None:
+        value = env_value
+
+    higher_is_better = metric.get("higher_is_better")
+    if higher_is_better is None:
+        for cand in hib_candidates:
+            parsed = _parse_direction(cand)
+            if parsed is not None:
+                higher_is_better = parsed
+                break
+    if higher_is_better is None:
+        higher_is_better = _parse_direction(env_dir)
+
+    val = _safe_float(value)
+    if val is None:
+        return None
+
+    higher_is_better = _infer_metric_direction(name, higher_is_better)
+    return {
+        "name": name,
+        "value": val,
+        "higher_is_better": higher_is_better if isinstance(higher_is_better, bool) else None,
+    }
+
+
+def _extract_metric_from_manifest(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(data, dict):
+        return None
+    metrics = data.get("metrics")
+    if not isinstance(metrics, dict):
+        return None
+    for key in ("validation", "val", "best", "metric"):
+        candidate = metrics.get(key)
+        if isinstance(candidate, dict):
+            if "value" in candidate:
+                result = {
+                    "name": candidate.get("name"),
+                    "value": _safe_float(candidate.get("value")),
+                    "higher_is_better": candidate.get("higher_is_better"),
+                }
+                if result["value"] is not None:
+                    if result["higher_is_better"] is None:
+                        result["higher_is_better"] = _infer_metric_direction(result.get("name"))
+                    return result
+    return None
+
+
+def _load_existing_manifest(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        logger.warning("Failed to parse existing encoder manifest at %s", path, exc_info=True)
+        return None
+
+
+def _metric_is_better(new: Dict[str, Any], old: Optional[Dict[str, Any]]) -> bool:
+    if new is None:
+        return old is None
+    if old is None:
+        return True
+    new_val = _safe_float(new.get("value"))
+    old_val = _safe_float(old.get("value"))
+    if new_val is None:
+        return False
+    if old_val is None:
+        return True
+    higher = new.get("higher_is_better")
+    if higher is None:
+        higher = _infer_metric_direction(new.get("name"))
+    if higher is None:
+        higher = True
+    if higher:
+        return new_val > old_val
+    return new_val < old_val
+
+
+def _collect_run_metadata(wb) -> Dict[str, Any]:
+    run = getattr(wb, "run", None)
+    if run is None:
+        run = wb
+    if run is None:
+        return {}
+    meta = {}
+    for attr in ("id", "name", "project", "entity", "group", "job_type"):
+        value = getattr(run, attr, None)
+        if value:
+            meta[attr] = value
+    url = getattr(run, "url", None)
+    if url:
+        meta["url"] = url
+    return meta
 
 
 def cmd_pretrain(args: argparse.Namespace) -> None:
@@ -253,6 +449,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
         # Optionally run contrastive baseline
         cont_losses: List[float] = []
+        cont_path: Optional[str] = None
         if args.contrastive:
             cont_encoder = build_encoder(
                 gnn_type=args.gnn_type,
@@ -318,6 +515,10 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             logger.warning("Could not create encoder.pt symlink", exc_info=True)
 
         # Plot training losses to W&B and filesystem
+        plot_dir = getattr(args, "plot_dir", None) or os.path.join(
+            args.ckpt_dir, "plots"
+        )
+        csv_path = os.path.join(args.ckpt_dir, "pretrain_losses.csv")
         try:
             curves = {"jepa": pretrain_losses}
             if cont_losses:
@@ -325,9 +526,6 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             fig = plot_training_curves(curves, wb=wb)
 
             # Respect --plot-dir if provided; otherwise default to <ckpt_dir>/plots
-            plot_dir = getattr(args, "plot_dir", None) or os.path.join(
-                args.ckpt_dir, "plots"
-            )
             os.makedirs(plot_dir, exist_ok=True)
             out_png = os.path.join(plot_dir, "pretrain_loss.png")
             fig.savefig(out_png, dpi=200)
@@ -342,7 +540,6 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 pass
 
             # Also write a CSV of epoch losses next to the checkpoint
-            csv_path = os.path.join(args.ckpt_dir, "pretrain_losses.csv")
             with open(csv_path, "w", encoding="utf-8") as f:
                 f.write("epoch,loss\n")
                 for i, v in enumerate(pretrain_losses, 1):
@@ -357,6 +554,119 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 pass
         except Exception:
             logger.exception("Failed to plot training curves")
+
+        # Assemble encoder manifest and stage outputs
+        try:
+            manifest_metric = _extract_metric_from_args(args)
+            experiment_root = Path(
+                os.getenv("EXPERIMENT_DIR")
+                or os.getenv("EXP_ROOT")
+                or args.ckpt_dir
+            )
+            artifacts_dir = Path(os.getenv("ARTIFACTS_DIR") or (experiment_root / "artifacts"))
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            manifest_path = artifacts_dir / "encoder_manifest.json"
+
+            existing_manifest = _load_existing_manifest(manifest_path)
+            existing_metric = _extract_metric_from_manifest(existing_manifest or {})
+
+            should_write = True
+            if existing_manifest is not None:
+                if manifest_metric is None:
+                    should_write = False
+                else:
+                    should_write = _metric_is_better(manifest_metric, existing_metric)
+
+            manifest_payload: Dict[str, Any]
+            if should_write:
+                timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                hyperparameters: Dict[str, Any] = {
+                    "gnn_type": args.gnn_type,
+                    "hidden_dim": args.hidden_dim,
+                    "num_layers": args.num_layers,
+                    "mask_ratio": args.mask_ratio,
+                    "epochs": args.epochs,
+                    "save_every": save_every,
+                    "batch_size": args.batch_size,
+                    "lr": args.lr,
+                    "temperature": args.temperature,
+                    "ema_decay": args.ema_decay,
+                    "contrastive": bool(getattr(args, "contrastive", False)),
+                    "contiguity": bool(getattr(args, "contiguity", False)),
+                    "add_3d": bool(getattr(args, "add_3d", False)),
+                    "aug_rotate": bool(getattr(args, "aug_rotate", False)),
+                    "aug_mask_angle": bool(getattr(args, "aug_mask_angle", False)),
+                    "aug_dihedral": bool(getattr(args, "aug_dihedral", False)),
+                    "aug_bond_deletion": bool(getattr(args, "aug_bond_deletion", False)),
+                    "aug_atom_masking": bool(getattr(args, "aug_atom_masking", False)),
+                    "aug_subgraph_removal": bool(getattr(args, "aug_subgraph_removal", False)),
+                    "devices": getattr(args, "devices", 1),
+                    "bf16": bool(getattr(args, "bf16", False)),
+                    "pin_memory": bool(getattr(args, "pin_memory", False)),
+                    "persistent_workers": bool(getattr(args, "persistent_workers", False)),
+                    "prefetch_factor": getattr(args, "prefetch_factor", None),
+                }
+                if seeds:
+                    try:
+                        hyperparameters["seeds"] = [int(s) for s in seeds]
+                    except Exception:
+                        hyperparameters["seeds"] = list(seeds)
+                if sample_ul is not None:
+                    hyperparameters["sample_unlabeled"] = sample_ul
+                if rows_per_file is not None:
+                    hyperparameters["n_rows_per_file"] = rows_per_file
+
+                manifest_paths: Dict[str, Any] = {
+                    "encoder": os.path.abspath(ckpt_base),
+                    "encoder_symlink": os.path.abspath(link),
+                    "checkpoint_dir": os.path.abspath(args.ckpt_dir),
+                }
+                if cont_path:
+                    manifest_paths["contrastive"] = os.path.abspath(cont_path)
+                if plot_dir:
+                    manifest_paths["plot_dir"] = os.path.abspath(plot_dir)
+                if 'csv_path' in locals():
+                    manifest_paths["loss_csv"] = os.path.abspath(csv_path)
+
+                manifest_payload = {
+                    "created_at": timestamp,
+                    "paths": manifest_paths,
+                    "hyperparameters": hyperparameters,
+                    "run": _collect_run_metadata(wb),
+                    "metrics": {},
+                }
+                if manifest_metric is not None:
+                    manifest_payload["metrics"]["validation"] = manifest_metric
+
+                with manifest_path.open("w", encoding="utf-8") as fh:
+                    json.dump(manifest_payload, fh, indent=2, sort_keys=True)
+                    fh.write("\n")
+                logger.info("Wrote encoder manifest to %s", manifest_path)
+            else:
+                manifest_payload = existing_manifest or {}
+                logger.info(
+                    "Skipping manifest update; validation metric did not improve (current=%s, previous=%s)",
+                    manifest_metric,
+                    existing_metric,
+                )
+
+            if manifest_path.exists():
+                manifest_str = str(manifest_path)
+                _wb_summary(wb, {"encoder_manifest": manifest_str})
+                _wb_log(wb, {"encoder_manifest": manifest_str})
+
+            stage_payload = {
+                "encoder_checkpoint": os.path.abspath(ckpt_base),
+                "manifest_path": str(manifest_path),
+                "manifest_updated": bool(should_write),
+            }
+            if cont_path:
+                stage_payload["contrastive_checkpoint"] = os.path.abspath(cont_path)
+            if manifest_metric is not None:
+                stage_payload["validation_metric"] = manifest_metric
+            _record_stage_outputs(stage_payload)
+        except Exception:
+            logger.exception("Failed to update encoder manifest")
 
     except Exception as e:
         _wb_log(wb, {"phase": "pretrain", "status": "error", "msg": str(e)})

@@ -101,3 +101,9 @@ report:
   schema_path: ${REPORTS_DIR}/schema.json
   max_runs: ${REPORT_MAX_RUNS:-500}
   refresh: true
+
+artifacts:
+  pretrain:
+    - ${PRETRAIN_DIR}/encoder.pt
+    - ${PRETRAIN_MANIFEST}
+    - ${PRETRAIN_DIR}/stage-outputs/pretrain.json
