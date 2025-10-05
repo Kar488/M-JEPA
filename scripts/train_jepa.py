@@ -866,7 +866,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--early-stop-metric",
         dest="metric",
         type=str,
-        default="val_auc",
+        default=None,
         choices=["val_loss", "val_auc", "auc", "auroc", "roc_auc", "val_rmse", "val_mae", "val_r2"],
         help="Validation metric used for early stopping and checkpoint selection",
     )

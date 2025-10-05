@@ -137,6 +137,131 @@ def test_cmd_finetune_aggregates_metrics(tmp_path, monkeypatch):
     assert np.isclose(agg["acc_std"], np.std(metric_values))
 
 
+def test_cmd_finetune_regression_defaults_metric(tmp_path, monkeypatch):
+    dataset = DummyDataset()
+
+    monkeypatch.setattr(tj, "load_directory_dataset", lambda *a, **k: dataset, raising=False)
+
+    class DummyEncoder:
+        hidden_dim = 16
+
+        def state_dict(self):
+            return {}
+
+        def parameters(self):
+            return []
+
+    monkeypatch.setattr(tj, "build_encoder", lambda **k: DummyEncoder(), raising=False)
+
+    captured = {}
+
+    def train_linear_head_stub(**kwargs):
+        captured.update(kwargs)
+        return {"val_loss": 0.42}
+
+    monkeypatch.setattr(tj, "train_linear_head", train_linear_head_stub, raising=False)
+
+    class DummyWB:
+        def log(self, *_a, **_k):
+            pass
+
+        def finish(self):
+            pass
+
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: DummyWB(), raising=False)
+
+    import scripts.commands.finetune as ft
+    monkeypatch.setattr(ft, "load_directory_dataset", lambda *a, **k: dataset, raising=False)
+
+    saved = []
+
+    def save_checkpoint_stub(path, **payload):
+        saved.append((path, payload))
+
+    monkeypatch.setattr(ft, "save_checkpoint", save_checkpoint_stub, raising=False)
+
+    import utils.checkpoint as ckpt_mod
+
+    monkeypatch.setattr(ckpt_mod, "save_checkpoint", save_checkpoint_stub, raising=False)
+    monkeypatch.setattr(ckpt_mod, "safe_link_or_copy", lambda *a, **k: "copy", raising=False)
+
+    monkeypatch.setattr(tj.torch, "load", lambda *a, **k: {"encoder": {}}, raising=True)
+
+    args = make_args(tmp_path, seeds=[0])
+    args.task_type = "regression"
+    args.ckpt_dir = str(tmp_path / "ft")
+    args.metric = None
+    if hasattr(args, "sample_labeled"):
+        args.sample_labeled = 4
+
+    tj.cmd_finetune(args)
+
+    assert captured.get("early_stop_metric") == "val_loss"
+    assert args.metric == "val_loss"
+    assert saved and saved[0][1]["best_metric"] == pytest.approx(0.42)
+
+
+def test_cmd_finetune_classification_fallback_to_val_loss(tmp_path, monkeypatch):
+    dataset = DummyDataset()
+
+    monkeypatch.setattr(tj, "load_directory_dataset", lambda *a, **k: dataset, raising=False)
+
+    class DummyEncoder:
+        hidden_dim = 16
+
+        def state_dict(self):
+            return {}
+
+        def parameters(self):
+            return []
+
+    monkeypatch.setattr(tj, "build_encoder", lambda **k: DummyEncoder(), raising=False)
+
+    captured = {}
+
+    def train_linear_head_stub(**kwargs):
+        captured.update(kwargs)
+        return {"val_loss": 0.81}
+
+    monkeypatch.setattr(tj, "train_linear_head", train_linear_head_stub, raising=False)
+
+    class DummyWB:
+        def log(self, *_a, **_k):
+            pass
+
+        def finish(self):
+            pass
+
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: DummyWB(), raising=False)
+
+    import scripts.commands.finetune as ft
+    monkeypatch.setattr(ft, "load_directory_dataset", lambda *a, **k: dataset, raising=False)
+
+    saved = []
+
+    def save_checkpoint_stub(path, **payload):
+        saved.append((path, payload))
+
+    monkeypatch.setattr(ft, "save_checkpoint", save_checkpoint_stub, raising=False)
+
+    import utils.checkpoint as ckpt_mod
+
+    monkeypatch.setattr(ckpt_mod, "save_checkpoint", save_checkpoint_stub, raising=False)
+    monkeypatch.setattr(ckpt_mod, "safe_link_or_copy", lambda *a, **k: "copy", raising=False)
+
+    monkeypatch.setattr(tj.torch, "load", lambda *a, **k: {"encoder": {}}, raising=True)
+
+    args = make_args(tmp_path, seeds=[0])
+    args.ckpt_dir = str(tmp_path / "ft_cls")
+    if hasattr(args, "sample_labeled"):
+        args.sample_labeled = 4
+
+    tj.cmd_finetune(args)
+
+    assert captured.get("early_stop_metric") == "val_auc"
+    assert saved and saved[0][1]["best_metric"] == pytest.approx(0.81)
+
+
 def test_cmd_evaluate_delegates_to_finetune(tmp_path, monkeypatch):
     called = {"finetune": 0}
 
