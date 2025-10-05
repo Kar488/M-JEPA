@@ -42,7 +42,7 @@ import torch
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 
-from utils.dataloader import autotune_worker_pool
+from utils.dataloader import autotune_worker_pool, ensure_open_file_limit
 
 
 logger = logging.getLogger(__name__)
@@ -143,6 +143,18 @@ def load_dataloaders(
         logger=logger,
         stage="parquet_loader",
     )
+
+    if tuned_workers > 0:
+        worker_count = int(tuned_workers)
+        prefetch_budget = (
+            int(tuned_prefetch) if isinstance(tuned_prefetch, (int, float)) else 0
+        )
+        if worker_count > 0:
+            prefetch_budget = max(prefetch_budget, 2)
+        min_fd_budget = max(
+            4096, 1024 + 128 * max(worker_count, 1) * max(prefetch_budget, 1)
+        )
+        ensure_open_file_limit(min_fd_budget)
 
     common = dict(
         num_workers=tuned_workers,
