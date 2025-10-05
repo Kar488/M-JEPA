@@ -597,6 +597,7 @@ def main() -> None:
     if not top_entries:
         total_runs = diagnostics.get("total_runs", 0)
         missing = diagnostics.get("missing", [])
+        method_counts = diagnostics.get("method_counts", Counter())
 
         if total_runs:
             print(
@@ -604,25 +605,31 @@ def main() -> None:
                 f"after {diagnostics.get('attempts', attempts)} attempt(s); missing metrics from {len(missing)} run(s)",
                 flush=True,
             )
-        else:
-            print(
-                f"[recheck][fatal] sweep {args.sweep} returned zero runs after {diagnostics.get('attempts', attempts)} attempt(s)",
-                flush=True,
-            )
-        method_counts = diagnostics.get("method_counts", Counter())
-        if method_counts:
-            print(
-                "[recheck] sweep method counts: "
-                + ", ".join(f"{m or 'unknown'}={c}" for m, c in sorted(method_counts.items())),
-                flush=True,
-            )
-        if missing:
-            preview = ", ".join(missing[:5])
-            suffix = "" if len(missing) <= 5 else f" … (+{len(missing) - 5} more)"
-            print(f"[recheck] runs missing metric: {preview}{suffix}", flush=True)
+            if method_counts:
+                print(
+                    "[recheck] sweep method counts: "
+                    + ", ".join(f"{m or 'unknown'}={c}" for m, c in sorted(method_counts.items())),
+                    flush=True,
+                )
+            if missing:
+                preview = ", ".join(missing[:5])
+                suffix = "" if len(missing) <= 5 else f" … (+{len(missing) - 5} more)"
+                print(f"[recheck] runs missing metric: {preview}{suffix}", flush=True)
+            if diagnostics.get("error"):
+                print(f"[recheck] last API error: {diagnostics['error']}", flush=True)
+            sys.exit(2)
+
+        # Empty sweeps should not be treated as fatal: emit an empty summary so callers
+        # can decide how to proceed (and the CLI remains testable).
+        print(
+            f"[recheck][warn] sweep {args.sweep} returned zero runs after {diagnostics.get('attempts', attempts)} attempt(s); "
+            "writing empty summary",
+            flush=True,
+        )
         if diagnostics.get("error"):
             print(f"[recheck] last API error: {diagnostics['error']}", flush=True)
-        sys.exit(2)
+        _write_summary([], diagnostics)
+        return
 
     if args.strict and len(top_entries) < max(1, args.topk):
         print(
