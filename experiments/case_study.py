@@ -254,11 +254,20 @@ def _evaluate_case_study(
 ):
     val_idx_arr = np.asarray(val_idx, dtype=int)
     test_idx_arr = np.asarray(test_idx, dtype=int)
+
+    if not isinstance(val_idx_arr, np.ndarray):
+        val_idx_arr = np.asarray(list(val_idx_arr), dtype=int)
+    if not isinstance(test_idx_arr, np.ndarray):
+        test_idx_arr = np.asarray(list(test_idx_arr), dtype=int)
+
+    val_indices = val_idx_arr.reshape(-1).tolist()
+    test_indices = test_idx_arr.reshape(-1).tolist()
+
     val_logits, val_probs = _predict_logits_probs_in_chunks(
-        dataset, val_idx_arr.tolist(), encoder, head, device, edge_dim
+        dataset, val_indices, encoder, head, device, edge_dim
     )
     test_logits, test_probs = _predict_logits_probs_in_chunks(
-        dataset, test_idx_arr.tolist(), encoder, head, device, edge_dim
+        dataset, test_indices, encoder, head, device, edge_dim
     )
 
     val_logits_np = val_logits.cpu().numpy().reshape(-1, 1) if val_logits.numel() else np.zeros((0, 1))

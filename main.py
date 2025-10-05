@@ -129,6 +129,44 @@ def _ensure_labels_inplace_local(ds, task_type: str) -> None:
         ds.labels = arr.astype(np.int64 if task_type == "classification" else np.float32, copy=False)
 
 
+def _summarise_case_study_result(result: Any) -> tuple[float, float, float, Optional[Any]]:
+    """Return ``(mean_true, mean_random, mean_pred, primary_eval)`` for logging.
+
+    The case study helper historically returned a raw tuple, but the modern
+    implementation exposes a dataclass with richer metadata. The demonstration
+    should succeed either way, so we coerce the payload to a consistent shape.
+    """
+
+    primary_eval = None
+
+    if hasattr(result, "evaluations"):
+        evaluations = getattr(result, "evaluations") or []
+        if evaluations:
+            primary_eval = evaluations[0]
+            mean_true = float(getattr(primary_eval, "mean_true", float("nan")))
+            mean_random = float(getattr(primary_eval, "mean_random", float("nan")))
+            mean_pred = float(getattr(primary_eval, "mean_pred", float("nan")))
+            return mean_true, mean_random, mean_pred, primary_eval
+
+    if isinstance(result, dict):
+        try:
+            mean_true = float(result.get("mean_true"))  # type: ignore[arg-type]
+            mean_random = float(result.get("mean_random"))  # type: ignore[arg-type]
+            mean_pred = float(result.get("mean_pred"))  # type: ignore[arg-type]
+            return mean_true, mean_random, mean_pred, primary_eval
+        except Exception:
+            pass
+
+    if isinstance(result, (list, tuple)) and len(result) >= 3:
+        try:
+            mean_true, mean_random, mean_pred = result[:3]
+            return float(mean_true), float(mean_random), float(mean_pred), primary_eval
+        except Exception:
+            pass
+
+    return float("nan"), float("nan"), float("nan"), primary_eval
+
+
 def demonstration(device: str = "cpu", devices: int = 1, use_scaffold: bool = False) -> None:
     """Tiny run: JEPA vs contrastive on a toy dataset, with a tiny linear head and a synthetic case study."""
     smiles = ["CCO","CCN","CCC","c1ccccc1","CC(=O)O","CCOCC","CNC","CCCl","COC","CCN(CC)CC"]
@@ -268,13 +306,18 @@ def demonstration(device: str = "cpu", devices: int = 1, use_scaffold: bool = Fa
         finetune_epochs=1,
         device=device,
     )
-    primary_eval = result.evaluations[0]
+    mean_true, mean_random, mean_pred, primary_eval = _summarise_case_study_result(result)
     logger.info(
         "Tox21 case study – mean true: %.3f, random: %.3f, predicted: %.3f",
-        primary_eval.mean_true,
-        primary_eval.mean_random,
-        primary_eval.mean_pred,
+        mean_true,
+        mean_random,
+        mean_pred,
     )
+
+    if primary_eval is not None:
+        baselines = getattr(primary_eval, "baseline_means", {}) or {}
+        for name, value in baselines.items():
+            logger.info("Baseline '%s' mean toxicity: %.3f", name, value)
 
 
 # ----------------------------- Full pipeline ----------------------------- #
