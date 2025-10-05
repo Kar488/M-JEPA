@@ -261,19 +261,19 @@ def demonstration(device: str = "cpu", devices: int = 1, use_scaffold: bool = Fa
 
     # Tox21 case study using real labels
     csv = "samples/tox21_mini.csv"
-    mean_true, mean_rand, mean_pred = run_tox21_case_study(
+    result = run_tox21_case_study(
         csv_path=csv,
         task_name="NR-AR",
         pretrain_epochs=1,
         finetune_epochs=1,
-        num_top_exclude=1,
         device=device,
     )
+    primary_eval = result.evaluations[0]
     logger.info(
         "Tox21 case study – mean true: %.3f, random: %.3f, predicted: %.3f",
-        mean_true,
-        mean_rand,
-        mean_pred,
+        primary_eval.mean_true,
+        primary_eval.mean_random,
+        primary_eval.mean_pred,
     )
 
 
@@ -555,18 +555,18 @@ def run_full_mode(args: argparse.Namespace) -> None:
     tox21_csv = getattr(args, "tox21_csv", None)
     tox21_task = getattr(args, "tox21_task", None)
     if _HAS_CASE_STUDY and tox21_csv and tox21_task:
-        tox_metrics = run_tox21_case_study(
-            tox21_csv=tox21_csv,
-            task=tox21_task,
-            add_3d=args.add_3d,
+        case_result = run_tox21_case_study(
+            csv_path=tox21_csv,
+            task_name=tox21_task,
             pretrain_epochs=getattr(args, "tox21_epochs", 10),
             finetune_epochs=getattr(args, "tox21_epochs", 10),
             device=args.device,
-            top_fraction=getattr(args, "tox21_topk", 0.05),
+            triage_pct=getattr(args, "tox21_topk", 0.05),
         )
+        primary_eval = case_result.evaluations[0]
         logger.info(
             "Tox21 case study (mean_true, mean_random_after, mean_predicted_after): %s",
-            tox_metrics,
+            (primary_eval.mean_true, primary_eval.mean_random, primary_eval.mean_pred),
         )
 
 

@@ -22,12 +22,16 @@ def test_tox21_case_study_smoke(monkeypatch):
 
     from experiments.case_study import run_tox21_case_study
 
-    results = run_tox21_case_study(
+    result = run_tox21_case_study(
         csv_path="samples/tox21_mini.csv",
         task_name="NR-AR",
         pretrain_epochs=1,
         finetune_epochs=1,
         triage_pct=0.10,
     )
-    assert all(isinstance(x, float) for x in results[:3])
-    assert isinstance(results[3], dict)
+    assert result.evaluations, "Expected at least one evaluation"
+    primary = result.evaluations[0]
+    assert isinstance(primary.mean_true, float)
+    assert isinstance(primary.mean_random, float)
+    assert isinstance(primary.mean_pred, float)
+    assert isinstance(primary.baseline_means, dict)
