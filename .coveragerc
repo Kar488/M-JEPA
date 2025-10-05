@@ -2,10 +2,10 @@
 
 [run]
 omit =
-    main.py
+    */main.py
     */__init__.py
     third_party/*
-    data/_graph_pickle.py
+    */_graph_pickle.py
     tests/*
     */site-packages/*
     */dist-packages/*
