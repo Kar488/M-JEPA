@@ -361,6 +361,16 @@ def _iter_params(m):
             return list(ps())
         except Exception:
             return []
+    for attr in ("encoder", "module", "backbone"):
+        sub = getattr(m, attr, None)
+        if sub is None:
+            continue
+        sub_params = getattr(sub, "parameters", None)
+        if callable(sub_params):
+            try:
+                return list(sub_params())
+            except Exception:
+                return []
     return []
 
 

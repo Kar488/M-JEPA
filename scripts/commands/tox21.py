@@ -131,6 +131,19 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         report_dir = os.path.join(csv_dir, "reports")
     os.makedirs(report_dir, exist_ok=True)
 
+    gate_passed_flag = False
+
+    def _export_gate_env(passed: bool) -> None:
+        env_value = "true" if passed else "false"
+        os.environ["TOX21_MET_GATE"] = env_value
+        env_path = os.environ.get("GITHUB_ENV")
+        if env_path:
+            try:
+                with open(env_path, "a", encoding="utf-8") as fh:
+                    fh.write(f"TOX21_MET_GATE={env_value}\n")
+            except Exception:
+                logger.debug("Failed to write TOX21_MET_GATE to %s", env_path, exc_info=True)
+
     wb = maybe_init_wandb(
         getattr(args, "use_wandb", False),
         project=getattr(args, "wandb_project", "m-jepa"),
@@ -226,6 +239,16 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             else None
         )
 
+        primary_metrics = getattr(primary, "metrics", {}) or {}
+        gate_metric_name = getattr(primary, "benchmark_metric", None)
+        gate_threshold = getattr(primary, "benchmark_threshold", None)
+        gate_metric_value = None
+        if gate_metric_name is not None:
+            gate_metric_value = primary_metrics.get(str(gate_metric_name))
+        gate_flag_attr = getattr(primary, "met_benchmark", None)
+        gate_passed_flag = bool(gate_flag_attr) if gate_flag_attr is not None else False
+        source_for_gate = getattr(primary, "encoder_source", getattr(args, "encoder_source", "unknown"))
+
         summary_payload = {
             "phase": "tox21",
             "status": "success",
@@ -237,6 +260,19 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "calibrate": calibrate,
             **threshold_payload,
         }
+        summary_payload["encoder_source"] = source_for_gate
+        summary_payload["tox21_gate_passed"] = bool(gate_passed_flag)
+        if gate_metric_name is not None and "benchmark_metric" not in summary_payload:
+            summary_payload["benchmark_metric"] = gate_metric_name
+        if gate_threshold is not None and "benchmark_threshold" not in summary_payload:
+            summary_payload["benchmark_threshold"] = float(gate_threshold)
+        if gate_metric_value is not None:
+            try:
+                metric_val = float(gate_metric_value)
+                if not math.isnan(metric_val):
+                    summary_payload["benchmark_metric_value"] = metric_val
+            except Exception:
+                pass
         frozen_auc = _lookup_auc("pretrain_frozen", "frozen", "checkpoint")
         fine_tuned_auc = _lookup_auc("fine_tuned", "fine-tuned", "scratch")
         if frozen_auc is not None:
@@ -247,6 +283,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             summary_payload["selected_path"] = selected_source
         if selected_benchmark is not None:
             summary_payload["met_benchmark_selected"] = bool(selected_benchmark)
+        _export_gate_env(gate_passed_flag)
         _wandb_log_safe(wb, summary_payload)
 
         multi_eval = len(evaluations) > 1
@@ -268,6 +305,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 payload[f"{prefix}benchmark_threshold"] = float(benchmark_threshold)
             if met_benchmark is not None:
                 payload[f"{prefix}met_benchmark"] = bool(met_benchmark)
+            payload[f"{prefix}tox21_gate_passed"] = bool(met_benchmark) if met_benchmark is not None else False
 
             metrics_block: Dict[str, Any] = getattr(eval_res, "metrics", {}) or {}
             for name, value in metrics_block.items():
@@ -304,6 +342,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "auc_summary": auc_summary,
             "selected_path": selected_source,
             "met_benchmark_selected": selected_benchmark,
+            "tox21_gate_passed": bool(gate_passed_flag),
+            "benchmark_metric_value": summary_payload.get("benchmark_metric_value"),
             "evaluations": [],
         }
 
@@ -326,6 +366,11 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                     "benchmark_metric": getattr(eval_res, "benchmark_metric", None),
                     "benchmark_threshold": getattr(eval_res, "benchmark_threshold", None),
                     "met_benchmark": getattr(eval_res, "met_benchmark", None),
+                    "tox21_gate_passed": (
+                        bool(getattr(eval_res, "met_benchmark", None))
+                        if getattr(eval_res, "met_benchmark", None) is not None
+                        else None
+                    ),
                     "encoder_manifest": getattr(eval_res, "manifest_path", None),
                 }
             )
@@ -368,6 +413,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 "selected_path": selected_source,
                 "selected_auc": auc_summary.get(selected_source) if selected_source else None,
                 "met_benchmark": selected_benchmark,
+                "tox21_gate_passed": bool(gate_passed_flag),
                 "auc_summary": auc_summary,
                 "evaluations": [
                     {
@@ -376,6 +422,11 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                             getattr(ev, "encoder_source", getattr(ev, "name", "unknown"))
                         ),
                         "met_benchmark": getattr(ev, "met_benchmark", None),
+                        "tox21_gate_passed": (
+                            bool(getattr(ev, "met_benchmark", None))
+                            if getattr(ev, "met_benchmark", None) is not None
+                            else None
+                        ),
                         "manifest_path": manifest_lookup.get(
                             getattr(ev, "encoder_source", getattr(ev, "name", "unknown"))
                         ),
@@ -393,6 +444,10 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         error_log = {"phase": "tox21", "status": "error", "error": str(exc)}
         error_log.update(threshold_payload)
         _wandb_log_safe(wb, error_log)
+        try:
+            _export_gate_env(False)
+        except Exception:
+            logger.debug("Failed to export failure gate status", exc_info=True)
         sys.exit(5)
     finally:
         try:

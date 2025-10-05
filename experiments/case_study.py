@@ -141,6 +141,24 @@ class CaseStudyResult:
     threshold_rule: Optional["BenchmarkRule"] = None
 
 
+def _to_list(x: Any) -> List[Any]:
+    """Convert arrays/tensors/sequences to plain Python lists."""
+
+    try:
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy().tolist()
+    except Exception:
+        pass
+
+    if hasattr(x, "tolist"):
+        try:
+            return x.tolist()  # type: ignore[return-value]
+        except Exception:
+            pass
+
+    return np.asarray(x).tolist()
+
+
 def _canonical_metric_name(name: Optional[str]) -> Optional[str]:
     if name is None:
         return None
@@ -260,8 +278,8 @@ def _evaluate_case_study(
     if not isinstance(test_idx_arr, np.ndarray):
         test_idx_arr = np.asarray(list(test_idx_arr), dtype=int)
 
-    val_indices = val_idx_arr.reshape(-1).tolist()
-    test_indices = test_idx_arr.reshape(-1).tolist()
+    val_indices = _to_list(val_idx_arr.reshape(-1))
+    test_indices = _to_list(test_idx_arr.reshape(-1))
 
     val_logits, val_probs = _predict_logits_probs_in_chunks(
         dataset, val_indices, encoder, head, device, edge_dim
@@ -445,8 +463,8 @@ def run_tox21_case_study(
         raise ValueError(f"Task column '{task_name}' not found in {csv_path}")
 
     df = df[[smiles_col, task_name]].dropna(subset=[task_name])
-    smiles_list = df[smiles_col].astype(str).tolist()
-    labels_list = df[task_name].astype(float).tolist()
+    smiles_list = _to_list(df[smiles_col].astype(str))
+    labels_list = _to_list(df[task_name].astype(float))
     logger.debug("Loaded %d molecules", len(smiles_list))
 
     set_seed(seed)
@@ -492,9 +510,9 @@ def run_tox21_case_study(
             val_frac=val_fraction,
             seed=seed,
         )
-        train_idx = np.asarray(train_split, dtype=int).tolist()
-        val_idx = np.asarray(val_split, dtype=int).tolist()
-        test_idx = np.asarray(test_split, dtype=int).tolist()
+        train_idx = _to_list(np.asarray(train_split, dtype=int))
+        val_idx = _to_list(np.asarray(val_split, dtype=int))
+        test_idx = _to_list(np.asarray(test_split, dtype=int))
         logger.info(
             "Scaffold split: train=%d val=%d test=%d",
             len(train_idx),
@@ -620,9 +638,11 @@ def run_tox21_case_study(
 
     encoder_source = "scratch"
     eval_name = "fine_tuned"
+    should_pretrain = True
     if encoder_checkpoint:
         encoder_source = "checkpoint"
         eval_name = "frozen"
+        should_pretrain = False
         if enc_state:
             if load_state_dict_forgiving is not None:
                 load_state_dict_forgiving(encoder, enc_state)
@@ -633,10 +653,17 @@ def run_tox21_case_study(
                 "Encoder checkpoint %s contained no weights; using random initialisation",
                 encoder_checkpoint,
             )
+        params_fn = getattr(encoder, "parameters", None)
+        if callable(params_fn):
+            try:
+                for param in params_fn():
+                    param.requires_grad = False
+            except Exception:
+                pass
     if encoder_source_override:
         encoder_source = str(encoder_source_override)
         eval_name = str(encoder_source_override)
-    else:
+    if should_pretrain:
         ema_encoder = build_encoder(
             gnn_type=final_gnn_type,
             input_dim=input_dim,
@@ -678,6 +705,8 @@ def run_tox21_case_study(
             bf16=bf16,
             time_budget_mins=pretrain_time_budget_mins,
         )
+    else:
+        logger.info("Skipping JEPA pretraining; using provided encoder checkpoint.")
 
     encoder = encoder.to(device)
 
