@@ -20,7 +20,12 @@ build/
 dist/
 *.egg-info/
 docs/_build/
-reports/
+# Generated W&B exports will typically live in ``reports/``; allow tracked source
+# files while keeping the directory for ad-hoc assets.
+reports/*.html
+reports/*.ipynb
+reports/*.png
+reports/*.jpg
 ckpts/
 ouputs/
 analysis/

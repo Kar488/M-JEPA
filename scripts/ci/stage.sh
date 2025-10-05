@@ -15,6 +15,7 @@ stage_dir() {
     finetune) echo "$FINETUNE_DIR" ;;
     bench|benchmark) echo "$BENCH_DIR" ;;
     tox21) echo "$TOX21_DIR" ;;
+    report) echo "$REPORTS_DIR" ;;
     *) echo "$EXP_ROOT/$1" ;;
   esac
 }
@@ -40,6 +41,18 @@ stage_needs() {
     finetune) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" "$PRETRAIN_DIR/encoder.pt" ;;
     bench|benchmark) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" "$FINETUNE_DIR/seed_0/ft_best.pt" ;;
     tox21) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" "$APP_DIR/scripts/ci/data/tox21/data.csv" ;;
+    report)
+      printf '%s\n' \
+        "$APP_DIR/reports/build_wandb_report.py" \
+        "$APP_DIR/reports/discover_schema.py" \
+        "$APP_DIR/reports/wandb_utils.py" \
+        "$APP_DIR/reports/plots_pretrain.py" \
+        "$APP_DIR/reports/plots_regression.py" \
+        "$APP_DIR/reports/plots_classification.py" \
+        "$APP_DIR/reports/plots_repr.py" \
+        "$APP_DIR/reports/plots_tox21.py" \
+        "$APP_DIR/reports/plots_compare.py"
+      ;;
     *) printf '%s\n' "${base[@]}" ;;
   esac
 }
@@ -49,10 +62,12 @@ build_stage_args() {
   local s="${1:?stage}"
   local section="$s"
   local subcmd="$s"
+  local skip_best=0
+  local skip_allowlist=0
   export TRAIN_JEPA_CI="$APP_DIR/scripts/ci/train_jepa_ci.yml"
 
   # YAML args
-  #snake to kebab case  
+  #snake to kebab case
   if [ "$s" = "grid_search" ]; then
     section="grid_search"   # YAML key
     subcmd="grid-search"    # argparse subcommand
@@ -62,40 +77,76 @@ build_stage_args() {
     section="bench"
     subcmd="benchmark"
   fi
-  
+
+  if [ "$s" = "report" ]; then
+    skip_best=1
+    skip_allowlist=1
+  fi
+
   build_argv_from_yaml "$section"
   expand_array_vars ARGV
   #echo "ARGV after expansion: ${ARGV[@]}"
 
   # Best (from grid) → append last so it overrides YAML
-  local -a BEST
-  mapfile -t BEST < <(best_config_args "$section")
-  expand_array_vars BEST
+  local -a BEST=()
+  if (( ! skip_best )); then
+    mapfile -t BEST < <(best_config_args "$section")
+    expand_array_vars BEST
+  fi
 
   local -a COMBINED=( "${ARGV[@]}" "${BEST[@]}" )
 
   # Dynamic allowlist from tool help (supports nargs='+')
-  local -a ALLOWED
-  mapfile -t ALLOWED < <(
-    PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-      "$MMBIN" run -n mjepa python "$APP_DIR/scripts/train_jepa.py" "$subcmd" --help |
-        sed -n 's/.*\(--[a-z0-9-]\+\).*/\1/p' | sort -u
-  )
-
   local -a OUT=()
-  local i=0 j=0
-  while (( i < ${#COMBINED[@]} )); do
-    local f="${COMBINED[$i]}"
-    if [[ "$f" == --* ]] && printf '%s\n' "${ALLOWED[@]}" | grep -qx -- "$f"; then
-      OUT+=("$f")
-      j=$((i+1))
-      while (( j < ${#COMBINED[@]} )) && [[ "${COMBINED[$j]}" != --* ]]; do
-        OUT+=("${COMBINED[$j]}"); ((j++))
-      done
-      i=$j; continue
-    fi
-    ((i++))
-  done
+  if (( skip_allowlist )); then
+    OUT=("${COMBINED[@]}")
+  else
+    local -a ALLOWED
+    mapfile -t ALLOWED < <(
+      PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+        "$MMBIN" run -n mjepa python "$APP_DIR/scripts/train_jepa.py" "$subcmd" --help |
+          sed -n 's/.*\(--[a-z0-9-]\+\).*/\1/p' | sort -u
+    )
+
+    local i=0 j=0
+    while (( i < ${#COMBINED[@]} )); do
+      local f="${COMBINED[$i]}"
+      if [[ "$f" == --* ]] && printf '%s\n' "${ALLOWED[@]}" | grep -qx -- "$f"; then
+        OUT+=("$f")
+        j=$((i+1))
+        while (( j < ${#COMBINED[@]} )) && [[ "${COMBINED[$j]}" != --* ]]; do
+          OUT+=("${COMBINED[$j]}"); ((j++))
+        done
+        i=$j; continue
+      fi
+      ((i++))
+    done
+  fi
+
+  if [ "$s" = "report" ]; then
+    local -a FILTERED=()
+    local idx=0
+    while (( idx < ${#OUT[@]} )); do
+      local token="${OUT[$idx]}"
+      if [[ "$token" == --* ]]; then
+        local next=$((idx + 1))
+        if (( next < ${#OUT[@]} )) && [[ "${OUT[$next]}" != --* ]]; then
+          local value="${OUT[$next]}"
+          if [[ -z "$value" ]]; then
+            idx=$((next + 1))
+            continue
+          fi
+          FILTERED+=("$token" "$value")
+          idx=$((next + 1))
+          continue
+        fi
+      fi
+      FILTERED+=("$token")
+      ((idx++))
+    done
+    OUT=("${FILTERED[@]}")
+  fi
+
   STAGE_ARGS=("${OUT[@]}")
 }
 
@@ -138,6 +189,35 @@ run_with_timeout() {
 
     # --- JEPA mode: run_stage passes an array name ---
   if [[ "$s" != "wandb_agent" ]]; then
+    if [ "$s" = "report" ]; then
+      local BUDGET_MINS="${REPORT_TIME_BUDGET_MINS:-${HARD_WALL_MINS:-30}}"
+      local SOFT=$((BUDGET_MINS*60))
+      local GRACE="${KILL_AFTER_SECS:-60}"
+      echo "[stage] wall budget=${BUDGET_MINS}m (${SOFT}s), grace=${GRACE}s"
+
+      mkdir -p "$LOG_DIR"
+      LOG="${LOG_DIR}/${s}.log"
+
+      timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
+        env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+        "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
+        python -m reports.build_wandb_report "${arr[@]}" \
+        2>&1 | tee "$LOG_DIR/${s}.log"
+
+      rc=${PIPESTATUS[0]}
+      if [[ $rc -eq 0 ]]; then
+        :
+      elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
+        echo "[INFO][$s] graceful stop (rc=$rc); not marking stage done; outputs should be flushed."
+        mark_graceful_stop "$s"
+        return 0
+      else
+        echo "[ERROR][$s] build_wandb_report failed with exit code $rc" >&2
+        exit $rc
+      fi
+      return 0
+    fi
+
     local -n arr="$1"; shift
     local subcmd; subcmd="$(stage_subcmd "$s")"
 
