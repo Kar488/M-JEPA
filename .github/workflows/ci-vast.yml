@@ -85,6 +85,7 @@ env:
   BENCH_DIR: /data/mjepa/experiments/${{ github.run_id }}/bench
   TOX21_DIR: /data/mjepa/experiments/${{ github.run_id }}/tox21
   LOG_DIR: /data/mjepa/experiments/${{ github.run_id }}/logs
+  REPORTS_DIR: /data/mjepa/experiments/${{ github.run_id }}/reports
   # as such this cache is used inside a single run only
   #Changing cache to be used across runs, change to fixed directory e.g. /data/mjepa/cache/grid
   # either delete stamp (rm /data/mjepa/cache/grid/.stamp) or point to empty directory ("") for forced reruns
@@ -98,6 +99,7 @@ env:
   FINETUNE_CACHE_DIR: /data/mjepa/cache/finetune
   BENCH_CACHE_DIR: /data/mjepa/cache/bench
   TOX21_CACHE_DIR: /data/mjepa/cache/tox21
+  REPORTS_CACHE_DIR: /data/mjepa/cache/reports
 
 jobs:
   tests_quick:
@@ -472,3 +474,27 @@ jobs:
           PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1" # use best config without reloading any epochs
+
+  vast_report:
+    name: Generate reports
+    runs-on: ubuntu-latest
+    needs: [vast_benchmark, vast_tox21]
+    if:
+      ${{
+          inputs.run_vast_jobs != 'false' &&
+          needs.vast_benchmark.result == 'success' &&
+          needs.vast_tox21.result == 'success' }}
+    steps:
+      - name: Publish Vast report
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          request_pty: true
+          command_timeout: 60m
+          envs: APP_DIR,REPORTS_DIR,REPORTS_CACHE_DIR,LOG_DIR,WANDB_API_KEY,WANDB_ENTITY,WANDB_PROJECT,WANDB_RUN_ID,WANDB_RUN_GROUP,WANDB_RESUME,WANDB_DIR
+          script: |
+            bash "$APP_DIR/scripts/ci/run-report.sh"
