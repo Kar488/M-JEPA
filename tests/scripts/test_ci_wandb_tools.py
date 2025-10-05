@@ -1376,3 +1376,63 @@ def test_recheck_topk_summary_and_empty(monkeypatch, tmp_path):
     data = json.loads(out.read_text())
     assert data["results"] == []
     assert calls["run_once"] == 0
+
+    def test_recheck_topk_handles_string_seeds(monkeypatch, tmp_path):
+        monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+        top_cfg = {"training_method": "jepa", "mask_ratio": 0.1}
+        sweep_runs = [
+            FakeRun("r1", top_cfg, {"val_rmse": 0.2}),
+        ]
+
+        class FakeApi:
+            def __init__(self):
+                self._sweep = FakeSweep(sweep_runs)
+
+            def sweep(self, sweep_id):
+                return self._sweep
+
+            def runs(self, path, filters=None):
+                return [
+                    FakeRun("a", {**top_cfg, "seed": "1000"}, {"val_rmse": 0.25}),
+                    FakeRun("b", {**top_cfg, "seed": "1001"}, {"val_rmse": 0.35}),
+                ]
+
+        monkeypatch.setattr(rc, "wandb", types.SimpleNamespace(Api=lambda: FakeApi()))
+        monkeypatch.setattr(rc, "run_once", lambda *a, **k: 0)
+        monkeypatch.setattr(rc, "time", types.SimpleNamespace(sleep=lambda x: None))
+
+        out = tmp_path / "summary.json"
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "rc",
+                "--sweep",
+                "ent/proj/sw1",
+                "--program",
+                "prog.py",
+                "--unlabeled-dir",
+                "u",
+                "--labeled-dir",
+                "l",
+                "--topk",
+                "1",
+                "--extra_seeds",
+                "2",
+                "--project",
+                "proj",
+                "--group",
+                "grp",
+                "--metric",
+                "val_rmse",
+                "--direction",
+                "min",
+                "--out",
+                str(out),
+            ],
+        )
+        rc.main()
+        data = json.loads(out.read_text())
+        assert data["results"][0]["n"] == 2
+        assert pytest.approx(data["results"][0]["mean"], rel=1e-6) == 0.3

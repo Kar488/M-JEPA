@@ -144,6 +144,26 @@ def _coerce_numeric(value: Any) -> Optional[float]:
         return None
     return result if math.isfinite(result) else None
 
+def _norm_key(k: Any) -> str:
+    """Canonicalise config keys so hyphen/underscore forms match."""
+    return str(k).strip().lower().replace("-", "_")
+
+def _num_close(a: Any, b: Any, rtol: float = 1e-6, atol: float = 1e-8) -> bool:
+    """Numeric-safe equality with tolerance; falls back to exact match for non-numerics."""
+    try:
+        fa = float(a); fb = float(b)
+        if not (math.isfinite(fa) and math.isfinite(fb)):
+            return False
+        return abs(fa - fb) <= max(atol, rtol * max(abs(fa), abs(fb)))
+    except Exception:
+        return a == b
+
+def _norm_cfg(cfg: Mapping[str, Any]) -> Dict[str, Any]:
+    """Flatten W&B wrappers, normalise keys, leave values comparable."""
+    out: Dict[str, Any] = {}
+    for k, v in cfg.items():
+        out[_norm_key(k)] = _unwrap_config_value(v)
+    return out
 
 def _metric_candidates(metric: str) -> List[str]:
     candidates = [metric]
@@ -311,7 +331,7 @@ def pick_topk(api: wandb.Api, sweep: Any, metric: str, maximize: bool, k: int,
         for run in runs:
             config_payload = _safe_getattr(run, "config", {})
             config = _coerce_config(config_payload)
-            method = str(config.get("training_method", "unknown")).lower()
+            method = str(_unwrap_config_value(config.get("training_method", "unknown"))).lower()
             diagnostics["method_counts"][method] += 1
 
             value = metric_of(run, metric)
@@ -565,15 +585,6 @@ def main() -> None:
     print(f"  attempts   = {attempts}", flush=True)
     print(f"  delay      = {delay}", flush=True)
 
-    def _serialize_diag(diag: Dict[str, Any]) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {}
-        for key, value in (diag or {}).items():
-            if isinstance(value, Counter):
-                payload[key] = dict(value)
-            else:
-                payload[key] = value
-        return payload
-
     def _parse_entity_project(sweep: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Try to infer (entity, project) from a sweep path or URL.
@@ -746,7 +757,7 @@ def main() -> None:
                 raise RuntimeError(f"recheck run failed with exit code {rc} (seed {seed})")
             time.sleep(1.0)
 
-       # Post-seed fetch with small retry to absorb W&B eventual consistency.
+            # Post-seed fetch with small retry to absorb W&B eventual consistency.
         collect_attempts = max(1, int(os.getenv("RECHECK_COLLECT_ATTEMPTS", "5")))
         collect_delay    = max(0.0, float(os.getenv("RECHECK_COLLECT_DELAY", "5")))
         seed_to_val: Dict[int, float] = {}
@@ -755,23 +766,47 @@ def main() -> None:
             fetched_runs: Sequence[Any] = []
             if project_path:
                 try:
-                    fetched_runs = list(api.runs(project_path, filters={"group": args.group}))
+                    # Restrict to this group and recheck job type to avoid sweep noise
+                    fetched_runs = list(api.runs(project_path, filters={"group": args.group, "jobType": "recheck"}))
                 except Exception as exc:
                     print(f"[recheck] fetch attempt #{_try} failed: {exc}", flush=True)
                     fetched_runs = []
-           # Match by config & seed; accumulate per-seed so we can wait for all of them
+            # Match by minimal identity & seed; accumulate per-seed so we can wait for all of them
+            exp = _norm_cfg(cfg)
+            # minimal identity set that should survive CLI/logger renaming
+            ident_keys = ("training_method", "gnn_type", "hidden_dim", "num_layers", "contiguity")
             for run in fetched_runs:
                 run_cfg = _coerce_config(getattr(run, "config", {}))
-                matches = True
-                for key, value in cfg.items():
-                    if _unwrap_config_value(run_cfg.get(key)) != value:
-                        matches = False
-                        break
+                rc = _norm_cfg(run_cfg)
+                # seed must match
                 run_seed = _unwrap_config_value(run_cfg.get("seed"))
-                if matches and run_seed in seeds and run_seed not in seed_to_val:
-                    mv = metric_of(run, args.metric)
-                    if mv is not None:
-                        seed_to_val[int(run_seed)] = float(mv)
+                try:
+                    run_seed_int = int(run_seed)
+                except Exception:
+                    continue
+                if run_seed_int in seeds:
+                    # require the minimal identity set to match (with tolerance for numerics)
+                    ok = True
+                    for k in ident_keys:
+                        ev = exp.get(k)
+                        rv = rc.get(k)
+                        if rv is None:
+                            rv = rc.get(k.replace("_", "-"))
+                        if ev is None or rv is None:
+                            continue
+                        if not _num_close(rv, ev):
+                            ok = False
+                            break
+                    if ok:
+                        mv = metric_of(run, args.metric)
+                        if mv is not None:
+                            seed_to_val[run_seed_int] = float(mv)
+
+                    if not ok and _try == 1:
+                        # Help debug first mismatch
+                        print("[recheck][debug] mismatch details:", flush=True)
+                        for k in ident_keys:
+                            print(f"  {k}: exp={exp.get(k)!r} got={rc.get(k) or rc.get(k.replace('_','-'))!r}", flush=True)
             if len(seed_to_val) == len(seeds):
                 break
             if _try < collect_attempts:
