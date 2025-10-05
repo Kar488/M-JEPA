@@ -167,33 +167,34 @@ fi
 
 # === materialize Phase-2 winner as fixed CLI for downstream ===
 BEST_JSON="${GRID_DIR:-$APP_DIR/grid}/best_grid_config.json"
-if [[ ! -s "$BEST_JSON" ]]; then
-  echo "[phase2][fatal] missing $BEST_JSON" >&2
-  exit 2
-fi
 
 if ! BEST_JSON_PATH="$BEST_JSON" RECHECK_LOG="$LOG" python - <<'PY'
-import json, os, sys
+import json
+import os
+import sys
 
 path = os.environ["BEST_JSON_PATH"]
 log_path = os.environ.get("RECHECK_LOG")
+hint = f"; see {log_path}" if log_path else ""
+
+if not os.path.exists(path):
+    print(f"[phase2][fatal] expected {path} but it was not created{hint}", file=sys.stderr)
+    sys.exit(2)
 
 try:
     with open(path, "r", encoding="utf-8") as handle:
         payload = json.load(handle)
 except Exception as exc:  # noqa: BLE001 - surface the error to the shell
-    print(f"[phase2][fatal] unable to parse {path}: {exc}", file=sys.stderr)
+    print(f"[phase2][fatal] unable to parse {path}: {exc}{hint}", file=sys.stderr)
     sys.exit(2)
 
 config = payload.get("config") if isinstance(payload, dict) else None
 if not isinstance(config, dict) or not config:
-    hint = f"; inspect {log_path}" if log_path else ""
-    print(f"[phase2][fatal] {path} contains an empty config{hint}", file=sys.stderr)
+    print(f"[phase2][fatal] {path} is missing a non-empty config{hint}", file=sys.stderr)
     sys.exit(3)
 
 sys.exit(0)
 PY
 then
-  rc=$?
-  exit "$rc"
+  exit "$?"
 fi
