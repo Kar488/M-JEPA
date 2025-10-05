@@ -91,3 +91,11 @@ tox21:
   pretrain_time_budget_mins: 90
   finetune_time_budget_mins: 60
   use_wandb: true
+
+report:
+  project: ${WANDB_PROJECT:-m-jepa}
+  entity: ${WANDB_ENTITY:-}
+  manifest_path: ${REPORTS_DIR}/FIGURE_MANIFEST.md
+  schema_path: ${REPORTS_DIR}/schema.json
+  max_runs: ${REPORT_MAX_RUNS:-500}
+  refresh: true
