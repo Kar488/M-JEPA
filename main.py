@@ -563,11 +563,43 @@ def run_full_mode(args: argparse.Namespace) -> None:
             device=args.device,
             triage_pct=getattr(args, "tox21_topk", 0.05),
         )
-        primary_eval = case_result.evaluations[0]
+        baselines: dict[str, float] = {}
+        if hasattr(case_result, "evaluations") and getattr(case_result, "evaluations", None):
+            primary_eval = case_result.evaluations[0]
+            mean_true = float(getattr(primary_eval, "mean_true", 0.0))
+            mean_rand = float(
+                getattr(primary_eval, "mean_random", getattr(primary_eval, "mean_rand", 0.0))
+            )
+            mean_pred = float(getattr(primary_eval, "mean_pred", 0.0))
+            baselines = {
+                k: float(v)
+                for k, v in (getattr(primary_eval, "baseline_means", {}) or {}).items()
+            }
+        elif isinstance(case_result, (list, tuple)) and len(case_result) >= 3:
+            mean_true = float(case_result[0])
+            mean_rand = float(case_result[1])
+            mean_pred = float(case_result[2])
+            if len(case_result) >= 4 and isinstance(case_result[3], dict):
+                baselines = {k: float(v) for k, v in case_result[3].items()}
+        elif isinstance(case_result, dict):
+            mean_true = float(case_result.get("mean_true", 0.0))
+            mean_rand = float(case_result.get("mean_random", case_result.get("mean_rand", 0.0)))
+            mean_pred = float(case_result.get("mean_pred", 0.0))
+            baselines = {
+                k: float(v)
+                for k, v in (
+                    case_result.get("baseline_means", case_result.get("baselines", {})) or {}
+                ).items()
+            }
+        else:
+            mean_true = mean_rand = mean_pred = 0.0
+
         logger.info(
             "Tox21 case study (mean_true, mean_random_after, mean_predicted_after): %s",
-            (primary_eval.mean_true, primary_eval.mean_random, primary_eval.mean_pred),
+            (mean_true, mean_rand, mean_pred),
         )
+        for name, val in baselines.items():
+            logger.info("Tox21 baseline '%s': %s", name, val)
 
 
 def run_full(args: argparse.Namespace) -> None:

@@ -482,9 +482,9 @@ def run_tox21_case_study(
             val_frac=val_fraction,
             seed=seed,
         )
-        train_idx = train_split.tolist()
-        val_idx = val_split.tolist()
-        test_idx = test_split.tolist()
+        train_idx = np.asarray(train_split, dtype=int).tolist()
+        val_idx = np.asarray(val_split, dtype=int).tolist()
+        test_idx = np.asarray(test_split, dtype=int).tolist()
         logger.info(
             "Scaffold split: train=%d val=%d test=%d",
             len(train_idx),

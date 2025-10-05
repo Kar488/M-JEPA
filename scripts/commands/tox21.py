@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from typing import Any, Dict, List
+from types import SimpleNamespace
+from typing import Any, Dict, List, Tuple
 
 from . import log_effective_gnn
 
@@ -38,6 +39,58 @@ def _wandb_save_safe(wb: Any, path: str) -> None:
             wb.run.save(path)
     except Exception:
         pass
+
+
+def _coerce_case_study_result(result: Any) -> Tuple[List[Any], Any]:
+    """Normalise legacy return types from ``run_tox21_case_study``.
+
+    Historically the case-study entry point returned a simple tuple of
+    ``(mean_true, mean_random, mean_pred)`` (optionally followed by baseline
+    dictionaries).  Modern implementations return a dataclass with an
+    ``evaluations`` attribute.  Tests and scripted entry points may monkeypatch
+    the function with either shape, so this helper converts the response into a
+    uniform ``List`` of evaluation objects and propagates the optional
+    ``threshold_rule`` when available.
+    """
+
+    rule_from_result = getattr(result, "threshold_rule", None)
+
+    evaluations = list(getattr(result, "evaluations", []) or [])
+    if evaluations:
+        return evaluations, rule_from_result
+
+    def _build_eval(mean_true: Any, mean_rand: Any, mean_pred: Any, baselines: Dict[str, Any], metrics: Dict[str, Any]):
+        return SimpleNamespace(
+            name="evaluation",
+            encoder_source=getattr(result, "encoder_source", "unknown"),
+            mean_true=float(mean_true),
+            mean_random=float(mean_rand),
+            mean_pred=float(mean_pred),
+            baseline_means={str(k): float(v) for k, v in (baselines or {}).items()},
+            metrics={str(k): float(v) for k, v in (metrics or {}).items()},
+            benchmark_metric=getattr(result, "benchmark_metric", None),
+            benchmark_threshold=getattr(result, "benchmark_threshold", None),
+            met_benchmark=getattr(result, "met_benchmark", None),
+            manifest_path=getattr(result, "manifest_path", None),
+        )
+
+    if isinstance(result, (list, tuple)) and len(result) >= 3:
+        baselines = result[3] if len(result) >= 4 and isinstance(result[3], dict) else {}
+        metrics = result[4] if len(result) >= 5 and isinstance(result[4], dict) else {}
+        evaluation = _build_eval(result[0], result[1], result[2], baselines, metrics)
+        return [evaluation], rule_from_result
+
+    if isinstance(result, dict):
+        mean_true = result.get("mean_true")
+        mean_rand = result.get("mean_random", result.get("mean_rand"))
+        mean_pred = result.get("mean_pred")
+        if mean_true is not None and mean_rand is not None and mean_pred is not None:
+            baselines_dict = result.get("baseline_means", result.get("baselines", {}))
+            metrics_dict = result.get("metrics", {})
+            evaluation = _build_eval(mean_true, mean_rand, mean_pred, baselines_dict, metrics_dict)
+            return [evaluation], rule_from_result
+
+    return [], rule_from_result
 def cmd_tox21(args: argparse.Namespace) -> None:
     """Run the Tox21 ranking case study."""
     logger.info("Starting Tox21 case study with args: %s", args)
@@ -128,11 +181,10 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             strict_encoder_config=getattr(args, "strict_encoder_config", False),
         )
 
-        evaluations: List[Any] = list(getattr(result, "evaluations", []) or [])
+        evaluations, rule_from_result = _coerce_case_study_result(result)
         if not evaluations:
             raise RuntimeError("run_tox21_case_study returned no evaluation results")
 
-        rule_from_result = getattr(result, "threshold_rule", None)
         if rule_from_result is not None:
             threshold_rule = rule_from_result
             threshold_payload = {
