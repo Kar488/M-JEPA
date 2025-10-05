@@ -184,7 +184,12 @@ def _metric_is_better(new: Dict[str, Any], old: Optional[Dict[str, Any]]) -> boo
         return True
     higher = new.get("higher_is_better")
     if higher is None:
-        higher = _infer_metric_direction(new.get("name"))
+        old_direction = None
+        if isinstance(old, dict):
+            old_direction = _infer_metric_direction(
+                old.get("name"), old.get("higher_is_better")
+            )
+        higher = _infer_metric_direction(new.get("name"), old_direction)
     if higher is None:
         higher = True
     if higher:
