@@ -788,6 +788,7 @@ def train_linear_head(
     early_stopper = (
         EarlyStopping(patience=patience, mode=monitor_mode) if patience > 0 else None
     )
+    best_val_snapshot: Dict[str, float] = {}
 
     cache_state = {"enabled": bool(cache_graph_embeddings)}
 
@@ -1158,11 +1159,31 @@ def train_linear_head(
                     early_stopper.mode = current_mode
                     early_stopper.best = None
                     early_stopper.counter = 0
+                    best_val_snapshot = {}
 
-                if early_stopper.step(monitor_value):
+                val_snapshot: Dict[str, float] = {"val_loss": float(avg_val_loss)}
+                for name, value in val_metric_values.items():
+                    if value is None:
+                        continue
+                    try:
+                        cast_value = float(value)
+                    except Exception:
+                        continue
+                    if math.isnan(cast_value):
+                        continue
+                    val_snapshot[f"val_{name}"] = cast_value
+
+                prev_best = early_stopper.best
+                should_stop = early_stopper.step(monitor_value)
+                if early_stopper.best != prev_best:
+                    best_val_snapshot = dict(val_snapshot)
+                elif not best_val_snapshot:
+                    best_val_snapshot = dict(val_snapshot)
+
+                if should_stop:
                     logger.info("Early stopping at epoch %d", epoch)
                     break
-            
+
             if scheduler is not None and epoch_batches > 0:
                 scheduler.step()
 
@@ -1212,6 +1233,10 @@ def train_linear_head(
             metrics = compute_classification_metrics(y_true, y_pred)
         else:
             metrics = compute_regression_metrics(y_true, y_pred)
+        if best_val_snapshot:
+            metrics.update(best_val_snapshot)
+        elif val_loader is not None:
+            metrics.setdefault("val_loss", float("nan"))
         metrics["head"] = head_param_source
 
     if distributed:
