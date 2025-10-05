@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from . import log_effective_gnn
+
+try:  # pragma: no cover - optional relative import depending on entry point
+    from ..bench import BenchmarkRule, resolve_metric_threshold
+except ImportError:  # pragma: no cover - fallback when executed as a script
+    from scripts.bench import BenchmarkRule, resolve_metric_threshold
+
+
+HIGHER_IS_BETTER = {"roc_auc", "pr_auc", "acc", "accuracy"}
 def cmd_benchmark(args: argparse.Namespace) -> None:
     """Compare JEPA and contrastive encoders on the same labelled dataset  with flexible loading + report.
 
@@ -21,6 +29,22 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         logger.warning("Benchmark modules are unavailable.")
         sys.exit(6)
 
+    dataset_name = getattr(args, "dataset", None)
+    task_name = getattr(args, "task", None)
+    threshold_rule: Optional[BenchmarkRule] = None
+    if dataset_name:
+        try:
+            threshold_rule = resolve_metric_threshold(dataset_name, task_name)
+        except KeyError:
+            threshold_rule = None
+
+    threshold_payload: Dict[str, Any] = {}
+    if threshold_rule is not None:
+        threshold_payload = {
+            "benchmark_metric": threshold_rule.metric,
+            "benchmark_threshold": threshold_rule.threshold,
+        }
+
     seeds: List[int]
     arg_seeds = getattr(args, "seeds", None)
     if arg_seeds is not None and len(arg_seeds) > 0:
@@ -28,19 +52,26 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     else:
         seeds = CONFIG.get("benchmark", {}).get("seeds", [0])  # type: ignore[assignment]
 
+    config_payload: Dict[str, Any] = {
+        "labeled_dir": args.labeled_dir,
+        "test_dir": getattr(args, "test_dir", None),
+        "task_type": args.task_type,
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "seeds": seeds,
+    }
+    if dataset_name:
+        config_payload["dataset"] = dataset_name
+    if task_name:
+        config_payload["task"] = task_name
+    config_payload.update(threshold_payload)
+
     wb = maybe_init_wandb(
         args.use_wandb,
         project=args.wandb_project,
         tags=args.wandb_tags,
-        config={
-            "labeled_dir": args.labeled_dir,
-            "test_dir": getattr(args, "test_dir", None),
-            "task_type": args.task_type,
-            "epochs": args.epochs,
-            "batch_size": args.batch_size,
-            "lr": args.lr,
-            "seeds": seeds,
-        },
+        config=config_payload,
     )
     log_effective_gnn(args, logger, wb)
 
@@ -125,7 +156,9 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     # If a separate test directory is provided, run in eval-only mode using the
     # fine-tuned checkpoint and return early.
     if getattr(args, "test_dir", None):
-        _wb_log({"phase": "benchmark", "status": "start"})
+        start_payload = {"phase": "benchmark", "status": "start"}
+        start_payload.update(threshold_payload)
+        _wb_log(start_payload)
         # Don’t resolve here—tests monkey-patch evaluate_finetuned_head().
         # Pass through what the CLI provided.
         agg_ft = evaluate_finetuned_head(args.ft_ckpt, labeled, args, device)
@@ -134,11 +167,19 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             for k, v in agg_ft.items():
                 _wb_log({f"finetuned/{k}": v})
         verdict = "finetuned"
-        _wb_log({"phase": "benchmark", "status": "success", "best_method": verdict})
+        success_payload = {"phase": "benchmark", "status": "success", "best_method": verdict}
+        success_payload.update(threshold_payload)
+        _wb_log(success_payload)
         logger.info(f"Benchmark completed. Best method: {verdict}")
 
         try:
             payload = {"results": all_results, "best_method": verdict}
+            if threshold_rule is not None:
+                payload["threshold"] = {
+                    "dataset": dataset_name,
+                    "task": task_name,
+                    **threshold_payload,
+                }
             with open(report_json, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2, sort_keys=True)
             import csv
@@ -148,6 +189,9 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
                 w.writerow(["method", "metric", "value"])
                 for k, v in agg_ft.items():
                     w.writerow(["finetuned", k, v])
+                if threshold_rule is not None:
+                    w.writerow(["threshold/metric", threshold_rule.metric])
+                    w.writerow(["threshold/value", float(threshold_rule.threshold)])
             logger.info("Wrote reports: %s , %s", report_json, report_csv)
         except Exception:
             logger.warning("Failed to write reports", exc_info=True)
@@ -246,7 +290,9 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             return {}
         return evaluate_state(state, "finetuned")
 
-    _wb_log({"phase": "benchmark", "status": "start"})
+    main_start_payload = {"phase": "benchmark", "status": "start"}
+    main_start_payload.update(threshold_payload)
+    _wb_log(main_start_payload)
     # Evaluate JEPA
     agg_jepa = evaluate_encoder(args.jepa_encoder, "jepa")
     all_results["jepa"] = agg_jepa
@@ -314,12 +360,56 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             ) < all_results.get(verdict, {}).get(key, float("inf")):
                 verdict = "finetuned"
 
-    _wb_log({"phase": "benchmark", "status": "success", "best_method": verdict})
+    metric_value_key: Optional[str] = None
+    threshold_report: Optional[Dict[str, Any]] = None
+    metric_pass: Optional[bool] = None
+    best_metric_value: Optional[float] = None
+    if threshold_rule is not None:
+        for candidate in (f"{threshold_rule.metric}_mean", threshold_rule.metric):
+            if any(candidate in mets for mets in all_results.values()):
+                metric_value_key = candidate
+                break
+        if metric_value_key is not None:
+            higher_is_better = threshold_rule.metric in HIGHER_IS_BETTER
+            threshold_report = {
+                "dataset": dataset_name,
+                "task": task_name,
+                "metric": threshold_rule.metric,
+                "threshold": threshold_rule.threshold,
+                "metric_key": metric_value_key,
+                "orientation": "higher" if higher_is_better else "lower",
+                "results": {},
+            }
+            for method, metrics in all_results.items():
+                if metric_value_key in metrics:
+                    value = metrics[metric_value_key]
+                    passed = bool(
+                        value >= threshold_rule.threshold
+                        if higher_is_better
+                        else value <= threshold_rule.threshold
+                    )
+                    threshold_report["results"][method] = {
+                        "value": value,
+                        "passed": passed,
+                    }
+                    if method == verdict:
+                        best_metric_value = value
+                        metric_pass = passed
+
+    success_payload = {"phase": "benchmark", "status": "success", "best_method": verdict}
+    success_payload.update(threshold_payload)
+    if best_metric_value is not None:
+        success_payload["benchmark_metric_value"] = best_metric_value
+    if metric_pass is not None:
+        success_payload["benchmark_pass"] = metric_pass
     logger.info(f"Benchmark completed. Best method: {verdict}")
+    _wb_log(success_payload)
 
     # --- Write JSON/CSV report with all results + verdict ---
     try:
         payload = {"results": all_results, "best_method": verdict}
+        if threshold_report is not None:
+            payload["threshold"] = threshold_report
         with open(report_json, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, sort_keys=True)
         # CSV: method,metric,value
@@ -331,6 +421,20 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             for method, mets in all_results.items():
                 for k, v in mets.items():
                     w.writerow([method, k, v])
+            if threshold_rule is not None:
+                w.writerow(["threshold/info", "metric", threshold_rule.metric])
+                w.writerow(["threshold/info", "threshold", float(threshold_rule.threshold)])
+                if metric_value_key is not None:
+                    for method, info in (threshold_report or {}).get("results", {}).items():
+                        value = info.get("value")
+                        if value is not None:
+                            w.writerow([f"threshold/{method}", metric_value_key, float(value)])
+                        w.writerow([f"threshold/{method}", "passed", info.get("passed")])
+                if best_metric_value is not None:
+                    w.writerow(["threshold/best_method", "name", verdict])
+                    w.writerow(["threshold/best_method", metric_value_key or "value", float(best_metric_value)])
+                    if metric_pass is not None:
+                        w.writerow(["threshold/best_method", "passed", metric_pass])
         logger.info("Wrote reports: %s , %s", report_json, report_csv)
     except Exception:
         logger.warning("Failed to write reports", exc_info=True)

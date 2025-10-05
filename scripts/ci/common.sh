@@ -431,10 +431,13 @@ finetune_only = {
 benchmark_only = {
     "jepa_encoder": "--jepa-encoder",
     "ft_ckpt": "--ft-ckpt",
+    "dataset": "--dataset",
+    "task": "--task",
 }
 
 tox21_only = {
     "task": "--task",
+    "dataset": "--dataset",
     "pretrain_epochs": "--pretrain-epochs",
     "finetune_epochs": "--finetune-epochs",
     "pretrain_time_budget_mins": "--pretrain-time-budget-mins",
