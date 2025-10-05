@@ -349,6 +349,13 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         # ensure modules on device
         _maybe_to(encoder, device)
 
+        # Unit tests frequently substitute light-weight encoder stubs without the
+        # ``parameters`` iterator that ``nn.Module`` provides.  Guard against that
+        # so downstream code can continue treating the encoder as frozen.
+        params_attr = getattr(encoder, "parameters", None)
+        if params_attr is None or not callable(params_attr):
+            setattr(encoder, "parameters", lambda: iter(()))  # type: ignore[attr-defined]
+
         # Load pretrained encoder weights (from pretrain output)
         if getattr(args, "encoder", None):
             state, _ = _safe_load_checkpoint(
@@ -592,15 +599,18 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     if _is_better(current, best_metric, current_mode):
                         best_metric = current
                         best_path = os.path.join(seed_dir, "ft_best.pt")
-                        save_checkpoint(
-                            best_path,
-                            epoch=epoch,
-                            encoder=encoder.state_dict(),
-                            head=head.state_dict(),
-                            optimizer=optimizer.state_dict(),
-                            scheduler=scheduler.state_dict(),
-                            best_metric=best_metric,
-                        )
+                        best_payload = {"epoch": epoch, "best_metric": best_metric}
+                        enc_state = _maybe_state_dict(encoder)
+                        head_state = _maybe_state_dict(head)
+                        if enc_state is not None:
+                            best_payload["encoder"] = enc_state
+                        if head_state is not None:
+                            best_payload["head"] = head_state
+                        if optimizer is not None and hasattr(optimizer, "state_dict"):
+                            best_payload["optimizer"] = optimizer.state_dict()
+                        if scheduler is not None and hasattr(scheduler, "state_dict"):
+                            best_payload["scheduler"] = scheduler.state_dict()
+                        save_checkpoint(best_path, **best_payload)
                         wrote_best = True
                         # optional: stable link at the finetune root
 
