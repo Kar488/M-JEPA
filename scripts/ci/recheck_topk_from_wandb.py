@@ -406,6 +406,8 @@ def run_once(mm: str, program: str, subcmd: str, cfg: Dict[str, Any], seed: int,
         forwarded.append((flag, value))
 
     args += ["--use-wandb", "1"]
+    # help triage recheck runs in the UI
+    args += ["--wandb-tags", "phase2-recheck"]
     forwarded.append(("--use-wandb", 1))
 
     args += ["--seed", str(seed)]
@@ -552,19 +554,25 @@ def main() -> None:
                 payload[key] = value
         return payload
 
-    def _write_summary(results: List[Dict[str, Any]], diag: Dict[str, Any]) -> None:
-        payload: Dict[str, Any] = {
-            "metric": args.metric,
-            "direction": args.direction,
-            "topk": args.topk,
-            "extra_seeds": args.extra_seeds,
-            "results": results,
-        }
-        serialized = _serialize_diag(diag)
-        if serialized:
-            payload["diagnostics"] = serialized
-        with open(args.out, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
+    def _parse_entity_project(sweep: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Try to infer (entity, project) from a sweep path or URL.
+        Accepts: 'entity/project/sweeps/<id>' or 'entity/project/<id>' or full https URL.
+        """
+        s = (sweep or "").strip()
+        parts: List[str] = []
+        if s.startswith("http://") or s.startswith("https://"):
+            try:
+                path = urlparse(s).path.strip("/")
+                parts = [p for p in path.split("/") if p]
+            except Exception:
+                parts = []
+        else:
+            parts = [p for p in s.strip("/").split("/") if p]
+        if len(parts) >= 2:
+            # Common patterns put entity at 0 and project at 1
+            return parts[0], parts[1]
+        return None, None
 
     def _serialize_diagnostics(diag: Dict[str, Any]) -> Dict[str, Any]:
         payload: Dict[str, Any] = {}
@@ -591,6 +599,12 @@ def main() -> None:
         return payload
 
     api = wandb.Api()
+    # Derive entity/project if env vars are missing (avoids empty fetches).
+    derived_entity, derived_project = _parse_entity_project(args.sweep)
+    entity = os.getenv("WANDB_ENTITY") or derived_entity
+    if not args.project:
+        args.project = derived_project
+
     maximize = args.direction == "max"
     top_entries, diagnostics = pick_topk(api, args.sweep, args.metric, maximize, args.topk, attempts, delay)
 
@@ -712,24 +726,37 @@ def main() -> None:
                 raise RuntimeError(f"recheck run failed with exit code {rc} (seed {seed})")
             time.sleep(1.0)
 
-        entity = os.getenv("WANDB_ENTITY")
-        project = args.project
-        project_path = f"{entity}/{project}" if entity and project else None
-        fetched_runs: Sequence[Any] = []
-        if project_path:
-            fetched_runs = list(api.runs(project_path, filters={"group": args.group}))
-        for run in fetched_runs:
-            run_cfg = _coerce_config(getattr(run, "config", {}))
-            matches = True
-            for key, value in cfg.items():
-                if _unwrap_config_value(run_cfg.get(key)) != value:
-                    matches = False
-                    break
-            run_seed = _unwrap_config_value(run_cfg.get("seed"))
-            if matches and run_seed in seeds:
-                value = metric_of(run, args.metric)
-                if value is not None:
-                    values.append(float(value))
+       # Post-seed fetch with small retry to absorb W&B eventual consistency.
+        collect_attempts = max(1, int(os.getenv("RECHECK_COLLECT_ATTEMPTS", "5")))
+        collect_delay    = max(0.0, float(os.getenv("RECHECK_COLLECT_DELAY", "5")))
+        for _try in range(1, collect_attempts + 1):
+            project_path = f"{entity}/{args.project}" if entity and args.project else None
+            fetched_runs: Sequence[Any] = []
+            if project_path:
+                try:
+                    fetched_runs = list(api.runs(project_path, filters={"group": args.group}))
+                except Exception as exc:
+                    print(f"[recheck] fetch attempt #{_try} failed: {exc}", flush=True)
+                    fetched_runs = []
+            # Match by config & seed
+            values.clear()
+            for run in fetched_runs:
+                run_cfg = _coerce_config(getattr(run, "config", {}))
+                matches = True
+                for key, value in cfg.items():
+                    if _unwrap_config_value(run_cfg.get(key)) != value:
+                        matches = False
+                        break
+                run_seed = _unwrap_config_value(run_cfg.get("seed"))
+                if matches and run_seed in seeds:
+                    mv = metric_of(run, args.metric)
+                    if mv is not None:
+                        values.append(float(mv))
+            if values:
+                break
+            if _try < collect_attempts:
+                print(f"[recheck] waiting for metrics to sync ({_try}/{collect_attempts}); found 0 values", flush=True)
+                time.sleep(collect_delay)
 
         if values:
             mean_value = float(np.mean(values))
