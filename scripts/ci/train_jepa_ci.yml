@@ -92,6 +92,9 @@ tox21:
   finetune_epochs: ${FINETUNE_EPOCHS:-18}    # maps to --finetune-epochs for "tox21"
   pretrain_time_budget_mins: 90
   finetune_time_budget_mins: 60
+  encoder_checkpoint: ${TOX21_ENCODER_CHECKPOINT}
+  encoder_manifest: ${TOX21_ENCODER_MANIFEST:-${PRETRAIN_MANIFEST}}
+  encoder_source: ${TOX21_ENCODER_SOURCE:-pretrain_frozen}
   use_wandb: true
 
 report:

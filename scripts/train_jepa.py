@@ -827,6 +827,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="JEPA training and evaluation pipeline"
     )
+    bool_action = getattr(argparse, "BooleanOptionalAction", None)
     sub = parser.add_subparsers(dest="command", required=True)
 
     # Pretrain subcommand
@@ -860,9 +861,65 @@ def build_parser() -> argparse.ArgumentParser:
     ft.add_argument("--resume-ckpt", type=str, default="", help="resume fine-tune from this checkpoint")
     ft.add_argument("--save-every", type=int, default=1, help="save checkpoint every N epochs")
     ft.add_argument("--save-final", action="store_true", help="also save ft_last.pt at the end")
-    ft.add_argument("--metric", type=str, default="val_loss", choices=["val_loss", "acc", "auroc","val_rmse"])
+    ft.add_argument(
+        "--metric",
+        "--early-stop-metric",
+        dest="metric",
+        type=str,
+        default="val_auc",
+        choices=["val_loss", "val_auc", "auc", "auroc", "roc_auc", "val_rmse", "val_mae", "val_r2"],
+        help="Validation metric used for early stopping and checkpoint selection",
+    )
     ft.add_argument("--task-type", choices=["classification", "regression"], default="classification")
     ft.add_argument("--patience", type=int, default=CONFIG.get("finetune", {}).get("patience", 10), help="Early stopping patience")
+    ft.add_argument(
+        "--load-encoder-checkpoint",
+        dest="load_encoder_checkpoint",
+        type=str,
+        default=None,
+        help="Optional checkpoint containing encoder weights to load before fine-tuning",
+    )
+    if bool_action is not None:
+        ft.add_argument(
+            "--freeze-encoder",
+            action=bool_action,
+            default=True,
+            help="Freeze encoder weights during fine-tuning (use --no-freeze-encoder to train them)",
+        )
+    else:
+        ft.add_argument(
+            "--freeze-encoder",
+            dest="freeze_encoder",
+            action="store_true",
+            default=True,
+            help="Freeze encoder weights during fine-tuning",
+        )
+        ft.add_argument(
+            "--no-freeze-encoder",
+            dest="freeze_encoder",
+            action="store_false",
+            help="Allow encoder weights to update during fine-tuning",
+        )
+    ft.add_argument(
+        "--unfreeze-top-layers",
+        type=int,
+        default=0,
+        help="When freezing the encoder, unfreeze the top-N child modules",
+    )
+    ft.add_argument(
+        "--encoder-lr",
+        dest="encoder_lr",
+        type=float,
+        default=None,
+        help="Learning rate for encoder parameters when trainable",
+    )
+    ft.add_argument(
+        "--head-lr",
+        dest="head_lr",
+        type=float,
+        default=None,
+        help="Learning rate for the fine-tuning head",
+    )
     _add_common_args(ft, "finetune")
     _add_model_args(ft)
     ft.set_defaults(func=cmd_finetune)
@@ -925,6 +982,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Optional manifest JSON describing the encoder checkpoint",
+    )
+    tox.add_argument(
+        "--encoder-source",
+        dest="encoder_source",
+        type=str,
+        default=None,
+        help="Label describing the encoder variant being evaluated (e.g. pretrain_frozen, fine_tuned)",
     )
     tox.add_argument(
         "--strict-encoder-config",
