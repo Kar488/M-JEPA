@@ -913,6 +913,32 @@ def build_parser() -> argparse.ArgumentParser:
     tox.add_argument("--contrastive", action="store_true",
                      help="Use contrastive pretraining instead of JEPA during the case study")
     tox.add_argument(
+        "--encoder-checkpoint",
+        dest="encoder_checkpoint",
+        type=str,
+        default=None,
+        help="Optional pretrained encoder checkpoint to evaluate without additional pretraining",
+    )
+    tox.add_argument(
+        "--encoder-manifest",
+        dest="encoder_manifest",
+        type=str,
+        default=None,
+        help="Optional manifest JSON describing the encoder checkpoint",
+    )
+    tox.add_argument(
+        "--strict-encoder-config",
+        dest="strict_encoder_config",
+        action="store_true",
+        help="Require CLI model arguments to match the encoder checkpoint configuration",
+    )
+    tox.add_argument(
+        "--bf16-head",
+        dest="bf16_head",
+        action="store_true",
+        help="Enable bfloat16 mixed precision when training the linear head",
+    )
+    tox.add_argument(
         "--pretrain-time-budget-mins",
         type=int,
         default=0,
