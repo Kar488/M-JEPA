@@ -446,11 +446,11 @@ jobs:
   vast_tox21:
     name: Tox21 Evaluation
     runs-on: ubuntu-latest
-    needs: vast_sweep_phase2
+    needs: vast_finetune
     if:
       ${{
           inputs.run_vast_jobs != 'false' &&
-          needs.vast_sweep_phase2.result == 'success' }}
+          needs.vast_finetune.result == 'success' }}
     steps:
       - name: Tox21 on Vast
         uses: appleboy/ssh-action@v1
