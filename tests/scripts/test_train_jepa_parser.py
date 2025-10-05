@@ -95,6 +95,8 @@ def test_benchmark_parser_defaults_and_handler(tmp_path):
     assert args.labeled_dir == str(tmp_path)
     assert args.test_dir is None
     assert args.jepa_encoder == "jepa.pt"
+    assert args.dataset is None
+    assert args.task is None
     assert args.epochs == CONFIG["benchmark"]["epochs"]
     assert args.batch_size == CONFIG["benchmark"]["batch_size"]
     assert args.lr == CONFIG["benchmark"]["lr"]
@@ -115,6 +117,7 @@ def test_tox21_parser_defaults_and_handler(tmp_path):
     assert args.func is cmd_tox21
     assert args.csv == str(tmp_path / "tox.csv")
     assert args.task == "NR-AR"
+    assert args.dataset == "tox21"
     case_cfg = CONFIG["case_study"]
     assert args.pretrain_epochs == case_cfg["pretrain_epochs"]
     assert args.finetune_epochs == case_cfg["finetune_epochs"]

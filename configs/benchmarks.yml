@@ -1,0 +1,57 @@
+# Benchmark thresholds for downstream evaluations.
+#
+# The structure is organised as:
+#   <dataset>:
+#     <task>:
+#       metric: <metric name>
+#       threshold: <float>
+#
+# Tasks inherit from the ``__default__`` entry when present.
+# Metric names follow the keys produced by evaluation summaries
+# (e.g. ``roc_auc`` or ``rmse``).
+
+tox21:
+  __default__:
+    metric: roc_auc
+    threshold: 0.65
+  NR-AR:
+    metric: roc_auc
+    threshold: 0.65
+  NR-AR-LBD:
+    metric: roc_auc
+    threshold: 0.65
+  NR-AhR:
+    metric: roc_auc
+    threshold: 0.65
+  NR-Aromatase:
+    metric: roc_auc
+    threshold: 0.65
+  NR-ER:
+    metric: roc_auc
+    threshold: 0.65
+  NR-ER-LBD:
+    metric: roc_auc
+    threshold: 0.65
+  NR-PPAR-gamma:
+    metric: roc_auc
+    threshold: 0.65
+  SR-ARE:
+    metric: roc_auc
+    threshold: 0.65
+  SR-ATAD5:
+    metric: roc_auc
+    threshold: 0.65
+  SR-HSE:
+    metric: roc_auc
+    threshold: 0.65
+  SR-MMP:
+    metric: roc_auc
+    threshold: 0.65
+  SR-p53:
+    metric: roc_auc
+    threshold: 0.65
+
+esol:
+  __default__:
+    metric: rmse
+    threshold: 0.60

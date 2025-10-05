@@ -94,6 +94,7 @@ def test_cmd_benchmark_selects_best_method(tmp_path, monkeypatch):
         seeds=[0],
         jepa_encoder="jepa.pt",
         contrastive_encoder="cont.pt",
+        dataset="esol",
         gnn_type="gcn",
         hidden_dim=16,
         num_layers=2,
@@ -108,6 +109,7 @@ def test_cmd_benchmark_selects_best_method(tmp_path, monkeypatch):
 
     logs = holder["wb"].logs
     assert any(log.get("best_method") == "contrastive" for log in logs)
+    assert any(log.get("benchmark_metric") == "rmse" for log in logs)
 
 
 def test_cmd_benchmark_modules_missing(monkeypatch):
@@ -152,6 +154,7 @@ def test_cmd_benchmark_eval_only_uses_test_dir(tmp_path, monkeypatch):
         seeds=[0],
         jepa_encoder="jepa.pt",
         contrastive_encoder=None,
+        dataset="esol",
         gnn_type="gcn",
         hidden_dim=16,
         num_layers=2,
@@ -202,6 +205,7 @@ def test_cmd_benchmark_passes_loader_knobs(tmp_path, monkeypatch):
         seeds=[0],
         jepa_encoder="jepa.pt",
         contrastive_encoder=None,
+        dataset="esol",
         gnn_type="gcn",
         hidden_dim=16,
         num_layers=2,
@@ -286,6 +290,7 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
     args = argparse.Namespace(
         csv=str(tmp_path / "tox.csv"),
         task="NR-AR",
+        dataset="tox21",
         pretrain_epochs=1,
         finetune_epochs=1,
         triage_pct=0.10,
@@ -312,6 +317,7 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         and log.get("mean_true") == 0.3
         for log in logs
     )
+    assert any(log.get("benchmark_metric") == "roc_auc" for log in logs)
 
     assert captures == {
         "num_workers": 4,
@@ -344,6 +350,7 @@ def test_cmd_tox21_failure(tmp_path,monkeypatch):
     args = argparse.Namespace(
         csv="c",
         task="t",
+        dataset="tox21",
         pretrain_epochs=1,
         finetune_epochs=1,
         triage_pct=0.10,
