@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 from . import log_effective_gnn
-import sys
+
+try:  # pragma: no cover - optional relative import depending on entry point
+    from ..bench import BenchmarkRule, resolve_metric_threshold
+except ImportError:  # pragma: no cover - fallback when executed as a script
+    from scripts.bench import BenchmarkRule, resolve_metric_threshold
 def cmd_tox21(args: argparse.Namespace) -> None:
     """Run the Tox21 ranking case study."""
     logger.info("Starting Tox21 case study with args: %s", args)
@@ -12,9 +17,24 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         sys.exit(5)
 
     import os, json, csv
-    
+
     triage_pct = getattr(args, "triage_pct", 0.10)
     calibrate  = not getattr(args, "no_calibrate", False)
+
+    dataset_name = getattr(args, "dataset", "tox21") or "tox21"
+    task_name = getattr(args, "task", None)
+    threshold_rule: BenchmarkRule | None = None
+    try:
+        threshold_rule = resolve_metric_threshold(dataset_name, task_name)
+    except KeyError:
+        threshold_rule = None
+
+    threshold_payload = {}
+    if threshold_rule is not None:
+        threshold_payload = {
+            "benchmark_metric": threshold_rule.metric,
+            "benchmark_threshold": threshold_rule.threshold,
+        }
 
     # choose a writable report dir (arg → env → <csv_dir>/reports)
     report_dir = getattr(args, "tox21_dir", None) \
@@ -33,18 +53,22 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         config={
             "csv": args.csv,
             "task": args.task,
+            "dataset": dataset_name,
             "pretrain_epochs": getattr(args, "pretrain_epochs", 5),
             "finetune_epochs": getattr(args, "finetune_epochs", 20),
             "triage_pct": triage_pct,
             "calibrate": calibrate,
             "pretrain_time_budget_mins": getattr(args, "pretrain_time_budget_mins", 0),
             "finetune_time_budget_mins": getattr(args, "finetune_time_budget_mins", 0),
+            **threshold_payload,
         },
     )
     log_effective_gnn(args, logger, wb)
 
     try:
-        wb.log({"phase": "tox21", "status": "start"})
+        start_log = {"phase": "tox21", "status": "start"}
+        start_log.update(threshold_payload)
+        wb.log(start_log)
         mean_true, mean_random, mean_jepa, baseline_means = run_tox21_case_study(
             csv_path=getattr(args, "csv"),
             task_name=getattr(args, "task"),
@@ -83,14 +107,16 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "task": args.task,
             "triage_pct": triage_pct,
             "calibrate": calibrate,
+            **threshold_payload,
          })
-        
+
         metrics = {
             "phase": "tox21",
             "status": "success",
             "mean_true": mean_true,
             "mean_random_after": mean_random,
             "mean_jepa_after": mean_jepa,
+            **threshold_payload,
         }
         for name, val in baseline_means.items():
             metrics[f"baseline/{name}"] = val
@@ -98,12 +124,22 @@ def cmd_tox21(args: argparse.Namespace) -> None:
 
         stem = f"tox21_{args.task}"
         with open(os.path.join(report_dir, f"{stem}.json"), "w", encoding="utf-8") as f:
-            json.dump({
-                "mean_true": float(mean_true),
-                "mean_rand": float(mean_random),
-                "mean_pred": float(mean_jepa),
-                "baselines": {k: float(v) for k, v in (baseline_means or {}).items()},
-            }, f, indent=2, sort_keys=True)
+            json.dump(
+                {
+                    "mean_true": float(mean_true),
+                    "mean_rand": float(mean_random),
+                    "mean_pred": float(mean_jepa),
+                    "baselines": {k: float(v) for k, v in (baseline_means or {}).items()},
+                    "threshold": {
+                        "dataset": dataset_name,
+                        "task": task_name,
+                        **threshold_payload,
+                    },
+                },
+                f,
+                indent=2,
+                sort_keys=True,
+            )
 
         with open(os.path.join(report_dir, f"{stem}.csv"), "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
@@ -113,11 +149,16 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             w.writerow(["mean_pred", float(mean_jepa)])
             for k, v in (baseline_means or {}).items():
                 w.writerow([f"baseline/{k}", float(v)])
+            if threshold_rule is not None:
+                w.writerow(["threshold/metric", threshold_rule.metric])
+                w.writerow(["threshold/value", float(threshold_rule.threshold)])
 
     except Exception as e:
         # Log full traceback and surface the message to W&B
         logger.exception("Tox21 case study failed")
-        wb.log({"phase": "tox21", "status": "error", "error": str(e)})
+        error_log = {"phase": "tox21", "status": "error", "error": str(e)}
+        error_log.update(threshold_payload)
+        wb.log(error_log)
         sys.exit(5)
     finally:
         wb.finish()

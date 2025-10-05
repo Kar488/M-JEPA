@@ -74,6 +74,7 @@ bench:
   labeled_dir: ${APP_DIR}/data/katielinkmoleculenet_benchmark/test
   test_dir:   ${BENCH_DATA_DIR}
   label_col: "measured log solubility in mols per litre"
+  dataset: esol
   task_type: regression
   jepa_encoder: ${PRETRAIN_DIR}/encoder.pt
   ft_ckpt: ${FINETUNE_DIR}/head.pt
@@ -85,6 +86,7 @@ tox21:
   <<: *common
   csv: ${APP_DIR}/data/tox21/data.csv
   task: NR-AR
+  dataset: tox21
   tox21_dir: ${TOX21_DIR}
   pretrain_epochs: ${PRETRAIN_EPOCHS:-70}   # maps to --pretrain-epochs for "tox21"
   finetune_epochs: ${FINETUNE_EPOCHS:-18}    # maps to --finetune-epochs for "tox21"

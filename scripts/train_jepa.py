@@ -882,25 +882,28 @@ def build_parser() -> argparse.ArgumentParser:
     _add_model_args(ev)
     ev.set_defaults(func=cmd_evaluate)
     # Benchmark subcommand
-    bench = sub.add_parser("benchmark", help="Compare JEPA and contrastive encoders on labelled data"); 
-    bench.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs"); 
-    bench.add_argument("--test-dir", required=False, default=None, help="Optional directory of test graphs for eval-only benchmarking"); 
-    bench.add_argument("--label-col", type=str, default="label", help="Label column name"); 
-    bench.add_argument("--jepa-encoder", required=True, help="Path to a JEPA encoder checkpoint (.pt)"); 
-    bench.add_argument("--contrastive-encoder", required=False, help="Path to a contrastive encoder checkpoint (.pt)"); 
-    bench.add_argument("--task-type", choices=["classification", "regression"], default="classification"); 
-    bench.add_argument("--patience", type=int, default=CONFIG.get("benchmark", {}).get("patience", 10), help="Early stopping patience"); 
-    bench.add_argument("--ft-ckpt", type=str, default="", help="fine-tuned checkpoint (expects encoder and optionally head)"); 
-    bench.add_argument("--report-dir", type=str, default="reports", help="where to write JSON/CSV"); 
+    bench = sub.add_parser("benchmark", help="Compare JEPA and contrastive encoders on labelled data");
+    bench.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs");
+    bench.add_argument("--test-dir", required=False, default=None, help="Optional directory of test graphs for eval-only benchmarking");
+    bench.add_argument("--label-col", type=str, default="label", help="Label column name");
+    bench.add_argument("--jepa-encoder", required=True, help="Path to a JEPA encoder checkpoint (.pt)");
+    bench.add_argument("--contrastive-encoder", required=False, help="Path to a contrastive encoder checkpoint (.pt)");
+    bench.add_argument("--dataset", type=str, default=None, help="Dataset name for benchmark threshold lookup");
+    bench.add_argument("--task", type=str, default=None, help="Optional task identifier for benchmark threshold lookup");
+    bench.add_argument("--task-type", choices=["classification", "regression"], default="classification");
+    bench.add_argument("--patience", type=int, default=CONFIG.get("benchmark", {}).get("patience", 10), help="Early stopping patience");
+    bench.add_argument("--ft-ckpt", type=str, default="", help="fine-tuned checkpoint (expects encoder and optionally head)");
+    bench.add_argument("--report-dir", type=str, default="reports", help="where to write JSON/CSV");
     bench.add_argument("--report-stem", type=str, default="", help="filename stem; defaults to timestamped benchmark_*")
     _add_common_args(bench, "benchmark")
     _add_model_args(bench)
     bench.set_defaults(func=cmd_benchmark)
     # Tox21 case study
     tox = sub.add_parser("tox21", help="Run the Tox21 case study experiment")
-    tox.add_argument("--csv", required=True, help="Path to the Tox21 CSV containing SMILES and labels"); 
-    tox.add_argument("--task", required=True, help="Name of the toxicity column to predict"); 
-    case_cfg = CONFIG.get("case_study", {}); 
+    tox.add_argument("--csv", required=True, help="Path to the Tox21 CSV containing SMILES and labels");
+    tox.add_argument("--task", required=True, help="Name of the toxicity column to predict");
+    tox.add_argument("--dataset", type=str, default="tox21", help="Dataset name for threshold lookup");
+    case_cfg = CONFIG.get("case_study", {});
     tox.add_argument("--pretrain-epochs", type=int, default=case_cfg.get("pretrain_epochs", 5), help="JEPA pretrain epochs for case study"); 
     tox.add_argument("--finetune-epochs", type=int, default=case_cfg.get("finetune_epochs", 20), help="Epochs to train regression head in case study"); 
     tox.add_argument("--tox21-dir", dest="tox21_dir", type=str, required=False, default=None, help="Directory of Tox21 outputs"); 
