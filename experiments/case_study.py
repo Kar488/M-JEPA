@@ -52,7 +52,6 @@ except Exception:  # pragma: no cover - fallback for environments without checkp
 from models.ema import EMA
 from models.encoder import GNNEncoder
 from models.predictor import MLPPredictor
-from training.supervised import stratified_split, train_linear_head
 from training.unsupervised import train_jepa
 from utils.seed import set_seed
 from utils.metrics import expected_calibration_error
@@ -63,6 +62,94 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from data.mdataset import GraphDataset as GraphDatasetT
 
 logger = logging.getLogger(__name__)
+
+
+# ``training.supervised`` is a heavy module that is frequently monkeypatched in
+# tests.  ``run_tox21_case_study`` only needs ``train_linear_head`` and a simple
+# stratified split helper.  Import these symbols defensively so the module still
+# works when the real training stack is unavailable (e.g. unit tests provide a
+# lightweight stub).
+try:  # pragma: no cover - exercised mainly in tests
+    from training.supervised import train_linear_head  # type: ignore[import-not-found]
+except Exception as exc:  # pragma: no cover - fail fast if even the stub is missing
+    raise ImportError("train_linear_head is required to run the Tox21 case study") from exc
+
+try:  # pragma: no cover - optional during tests
+    from training.supervised import stratified_split as _lib_stratified_split  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover - provide a lightweight fallback
+    _lib_stratified_split = None
+
+
+def _fallback_stratified_split(
+    indices: Iterable[int],
+    labels: Iterable[Any],
+    *,
+    train_frac: float,
+    val_frac: float,
+) -> Tuple[List[int], List[int], List[int]]:
+    """Simple stratified split for binary labels.
+
+    Mirrors the behaviour of :func:`training.supervised.stratified_split` while
+    avoiding the import-time dependency on the full training module.  The
+    function operates purely on Python lists/Numpy arrays so that tests can
+    supply lightweight stubs.
+    """
+
+    idx_list = list(indices)
+    if not idx_list:
+        return [], [], []
+
+    labels_arr = np.asarray(labels)
+    if labels_arr.shape[0] != len(idx_list):
+        raise ValueError("labels must align with indices for stratified split")
+
+    mask_finite = np.isfinite(labels_arr)
+    observed = labels_arr[mask_finite]
+    if observed.size == 0:
+        observed = np.zeros((0,), dtype=int)
+
+    unique = np.unique(observed.astype(int, copy=False)) if observed.size else np.array([])
+    if unique.size < 2:
+        random.shuffle(idx_list)
+        n_total = len(idx_list)
+        train_end = int(train_frac * n_total)
+        val_end = int((train_frac + val_frac) * n_total)
+        return idx_list[:train_end], idx_list[train_end:val_end], idx_list[val_end:]
+
+    buckets: Dict[int, List[int]] = {int(k): [] for k in unique.tolist()}
+    remainder: List[int] = []
+    for idx in idx_list:
+        lbl = labels_arr[idx]
+        if not np.isfinite(lbl):
+            remainder.append(idx)
+            continue
+        buckets.setdefault(int(lbl), []).append(idx)
+
+    train_idx: List[int] = []
+    val_idx: List[int] = []
+    test_idx: List[int] = []
+
+    for values in buckets.values():
+        random.shuffle(values)
+        n_class = len(values)
+        if n_class == 0:
+            continue
+        train_end = int(train_frac * n_class)
+        val_end = int((train_frac + val_frac) * n_class)
+        train_idx.extend(values[:train_end])
+        val_idx.extend(values[train_end:val_end])
+        test_idx.extend(values[val_end:])
+
+    random.shuffle(remainder)
+    test_idx.extend(remainder)
+
+    random.shuffle(train_idx)
+    random.shuffle(val_idx)
+    random.shuffle(test_idx)
+    return train_idx, val_idx, test_idx
+
+
+stratified_split = _lib_stratified_split or _fallback_stratified_split
 
 def _load_real_graphdataset():
     repo_root = Path(__file__).resolve().parents[1]
