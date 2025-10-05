@@ -25,13 +25,24 @@ import wandb
 # General helpers
 # ---------------------------------------------------------------------------
 
+def _safe_getattr(obj: Any, name: str, default: Any = None) -> Any:
+    """Like ``getattr`` but tolerates wrappers that raise ``KeyError``."""
+
+    try:
+        return getattr(obj, name)
+    except (AttributeError, KeyError):
+        return default
+    except Exception:  # pragma: no cover - defensive
+        return default
+
+
 def _coerce_config(config: Any) -> Dict[str, Any]:
     """Convert a W&B config/summary object into a standard dictionary."""
 
     if isinstance(config, Mapping):
         return dict(config)
 
-    to_dict = getattr(config, "to_dict", None)
+    to_dict = _safe_getattr(config, "to_dict")
     if callable(to_dict):
         try:
             converted = to_dict()
@@ -48,11 +59,11 @@ def _coerce_config(config: Any) -> Dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
 
-    json_dict = getattr(config, "_json_dict", None)
+    json_dict = _safe_getattr(config, "_json_dict")
     if isinstance(json_dict, dict):
         return dict(json_dict)
 
-    items = getattr(config, "items", None)
+    items = _safe_getattr(config, "items")
     if callable(items):
         try:
             return dict(items())
@@ -144,7 +155,7 @@ def _metric_candidates(metric: str) -> List[str]:
 
 
 def _history_latest(run: Any, candidates: Sequence[str], limit: int = 512) -> Tuple[Optional[float], Optional[str]]:
-    history = getattr(run, "history", None)
+    history = _safe_getattr(run, "history")
     if not callable(history):
         return None, None
 
@@ -197,7 +208,7 @@ def metric_of(run: Any, name: str, default: Optional[float] = None) -> Optional[
         if isinstance(obj, Mapping):
             return obj
         # W&B Summary is a custom object; try to get a dict view
-        to_dict = getattr(obj, "to_dict", None)
+        to_dict = _safe_getattr(obj, "to_dict")
         if callable(to_dict):
             try:
                 d = to_dict()
@@ -207,7 +218,7 @@ def metric_of(run: Any, name: str, default: Optional[float] = None) -> Optional[
                 pass
         # Some versions expose private dicts
         for attr in ("_json_dict", "_root"):
-            inner = getattr(obj, attr, None)
+            inner = _safe_getattr(obj, attr)
             if isinstance(inner, Mapping):
                 return inner
         # Fall back to repo's coercer if available
@@ -219,11 +230,12 @@ def metric_of(run: Any, name: str, default: Optional[float] = None) -> Optional[
     # 1) Collect all plausible summary sources
     summary_sources: List[Mapping[str, Any]] = []
     for attr in ("summary", "summary_metrics", "summaryMetrics"):
-        payload = _as_mapping(getattr(run, attr, None))
+        source = _safe_getattr(run, attr)
+        payload = _as_mapping(source)
         if payload:
             summary_sources.append(payload)
 
-    attrs = getattr(run, "_attrs", None)
+    attrs = _safe_getattr(run, "_attrs")
     if isinstance(attrs, Mapping):
         for key in ("summaryMetrics", "summary_metrics"):
             payload = _as_mapping(attrs.get(key))
@@ -266,9 +278,9 @@ def pick_topk(api: wandb.Api, sweep: Any, metric: str, maximize: bool, k: int,
     if isinstance(sweep, str):
         sweep_path = sweep
     else:
-        sweep_path = getattr(sweep, "path", None) or getattr(sweep, "sweep_path", None)
+        sweep_path = _safe_getattr(sweep, "path") or _safe_getattr(sweep, "sweep_path")
         if not sweep_path:
-            sweep_path = getattr(sweep, "id", None)
+            sweep_path = _safe_getattr(sweep, "id")
         if sweep_path:
             sweep_path = str(sweep_path)
     if not sweep_path:
@@ -289,20 +301,24 @@ def pick_topk(api: wandb.Api, sweep: Any, metric: str, maximize: bool, k: int,
                 continue
             break
 
-        runs = list(getattr(sweep_obj, "runs", []))
+        runs_attr = _safe_getattr(sweep_obj, "runs", [])
+        runs = list(runs_attr)
         diagnostics["total_runs"] = len(runs)
         diagnostics["missing"] = []
         diagnostics["method_counts"] = Counter()
 
         ranked: List[Tuple[Any, float]] = []
         for run in runs:
-            config = _coerce_config(getattr(run, "config", {}))
+            config_payload = _safe_getattr(run, "config", {})
+            config = _coerce_config(config_payload)
             method = str(config.get("training_method", "unknown")).lower()
             diagnostics["method_counts"][method] += 1
 
             value = metric_of(run, metric)
             if value is None:
-                run_id = getattr(run, "id", None) or getattr(run, "name", None)
+                run_id = _safe_getattr(run, "id")
+                if run_id is None:
+                    run_id = _safe_getattr(run, "name")
                 diagnostics["missing"].append(str(run_id))
                 continue
             ranked.append((run, value))
