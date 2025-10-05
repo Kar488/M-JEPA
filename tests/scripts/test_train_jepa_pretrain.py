@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 
 import pytest
@@ -271,3 +272,92 @@ def test_cmd_pretrain_with_contrastive_branch(tmp_path, monkeypatch):
     monkeypatch.setattr(tj, "cmd_pretrain", _shim_cmd_pretrain, raising=False)
     tj.cmd_pretrain(args)
     assert called["pretrain"] == 1
+
+def test_cmd_pretrain_writes_manifest(tmp_path, monkeypatch):
+    calls = {
+        "load_directory_dataset": 0,
+        "build_encoder": 0,
+        "EMA": 0,
+        "MLPPredictor": 0,
+        "train_jepa": 0,
+        "train_contrastive": 0,
+        "maybe_init_wandb": 0,
+        "train_jepa_kwargs": {},
+        "train_contrastive_kwargs": {},
+        "plot_training_curves": 0,
+        "saved_plot": None,
+    }
+    setup_stubs(monkeypatch, calls)
+
+    experiment_dir = tmp_path / "experiment"
+    stage_outputs = tmp_path / "stage_outputs"
+    monkeypatch.setenv("EXPERIMENT_DIR", str(experiment_dir))
+    monkeypatch.setenv("ARTIFACTS_DIR", str(experiment_dir / "artifacts"))
+    monkeypatch.setenv("PRETRAIN_MANIFEST", str(experiment_dir / "artifacts" / "encoder_manifest.json"))
+    monkeypatch.setenv("STAGE_OUTPUTS_DIR", str(stage_outputs))
+
+    args = make_args(tmp_path)
+    args.val_metric = 0.42
+    args.val_metric_name = "val_rmse"
+    args.val_metric_higher_is_better = False
+
+    tj.cmd_pretrain(args)
+
+    manifest_path = experiment_dir / "artifacts" / "encoder_manifest.json"
+    assert manifest_path.exists()
+    payload = json.loads(manifest_path.read_text())
+    assert payload["paths"]["encoder"] == str(args.output)
+    metric = payload["metrics"]["validation"]
+    assert metric["value"] == pytest.approx(0.42)
+    assert metric["higher_is_better"] is False
+
+    stage_file = stage_outputs / "pretrain.json"
+    assert stage_file.exists()
+    stage_payload = json.loads(stage_file.read_text())
+    assert stage_payload["manifest_path"] == str(manifest_path)
+    assert stage_payload["validation_metric"]["value"] == pytest.approx(0.42)
+
+
+def test_cmd_pretrain_manifest_only_updates_on_improvement(tmp_path, monkeypatch):
+    calls = {
+        "load_directory_dataset": 0,
+        "build_encoder": 0,
+        "EMA": 0,
+        "MLPPredictor": 0,
+        "train_jepa": 0,
+        "train_contrastive": 0,
+        "maybe_init_wandb": 0,
+        "train_jepa_kwargs": {},
+        "train_contrastive_kwargs": {},
+        "plot_training_curves": 0,
+        "saved_plot": None,
+    }
+    setup_stubs(monkeypatch, calls)
+
+    experiment_dir = tmp_path / "experiment"
+    stage_outputs = tmp_path / "stage_outputs"
+    monkeypatch.setenv("EXPERIMENT_DIR", str(experiment_dir))
+    monkeypatch.setenv("ARTIFACTS_DIR", str(experiment_dir / "artifacts"))
+    monkeypatch.setenv("PRETRAIN_MANIFEST", str(experiment_dir / "artifacts" / "encoder_manifest.json"))
+    monkeypatch.setenv("STAGE_OUTPUTS_DIR", str(stage_outputs))
+
+    args = make_args(tmp_path)
+    args.val_metric = 0.30
+    args.val_metric_name = "val_rmse"
+    args.val_metric_higher_is_better = False
+
+    tj.cmd_pretrain(args)
+
+    manifest_path = experiment_dir / "artifacts" / "encoder_manifest.json"
+    payload = json.loads(manifest_path.read_text())
+    assert payload["metrics"]["validation"]["value"] == pytest.approx(0.30)
+
+    args2 = make_args(tmp_path)
+    args2.val_metric = 0.45
+    args2.val_metric_name = "val_rmse"
+    args2.val_metric_higher_is_better = False
+
+    tj.cmd_pretrain(args2)
+
+    payload_after = json.loads(manifest_path.read_text())
+    assert payload_after["metrics"]["validation"]["value"] == pytest.approx(0.30)

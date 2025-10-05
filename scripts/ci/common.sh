@@ -11,6 +11,8 @@ set -euo pipefail
 : "${SWEEP_CACHE_DIR:=$CACHE_DIR}"
 : "${RUN_ID:=$(date +%s)}"
 : "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
+: "${EXPERIMENT_DIR:=${EXP_ROOT}}"
+: "${ARTIFACTS_DIR:=${EXPERIMENT_DIR}/artifacts}"
 : "${WANDB_DIR:=/data/mjepa/wandb}"
 : "${LOG_DIR:=${APP_DIR}/logs}"
 
@@ -134,8 +136,11 @@ split_gpu_ids() {
 : "${REPORTS_DIR:=${REPORTS_CACHE_DIR:-$EXP_ROOT/report}}"
 
 mkdir -p "$CACHE_DIR" "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" \
-  "$TOX21_DIR" "$REPORTS_DIR" "$LOG_DIR" "$WANDB_DIR"
+  "$TOX21_DIR" "$REPORTS_DIR" "$LOG_DIR" "$WANDB_DIR" "$ARTIFACTS_DIR"
 export GRID_DIR PRETRAIN_DIR FINETUNE_DIR BENCH_DIR TOX21_DIR REPORTS_DIR LOG_DIR
+export EXPERIMENT_DIR ARTIFACTS_DIR
+: "${PRETRAIN_MANIFEST:=${ARTIFACTS_DIR}/encoder_manifest.json}"
+export PRETRAIN_MANIFEST
 
 # --- micromamba bootstrap ---
 ensure_micromamba() {
