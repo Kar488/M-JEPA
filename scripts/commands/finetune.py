@@ -77,6 +77,55 @@ def _ensure_dataset_has_pos(dataset) -> None:
         break
 
 
+def _configure_encoder_trainability(
+    encoder: nn.Module,
+    *,
+    freeze_encoder: bool,
+    unfreeze_top_layers: int,
+) -> List[nn.Parameter]:
+    """Apply fine-tuning freeze/unfreeze policy and return trainable params."""
+
+    if not isinstance(encoder, nn.Module):
+        return []
+
+    if not freeze_encoder and unfreeze_top_layers <= 0:
+        for param in encoder.parameters():
+            param.requires_grad = True
+        return list(encoder.parameters())
+
+    for param in encoder.parameters():
+        param.requires_grad = False
+
+    if not freeze_encoder and unfreeze_top_layers > 0:
+        # Treat negative/positive unfreeze counts as full unfreeze when freeze disabled.
+        for param in encoder.parameters():
+            param.requires_grad = True
+        return list(encoder.parameters())
+
+    if unfreeze_top_layers < 0:
+        for param in encoder.parameters():
+            param.requires_grad = True
+        return list(encoder.parameters())
+
+    if unfreeze_top_layers == 0:
+        return []
+
+    modules = list(encoder.children())
+    if not modules:
+        modules = [encoder]
+    selected = modules[-unfreeze_top_layers:]
+    seen: set[int] = set()
+    trainable: List[nn.Parameter] = []
+    for module in selected:
+        for param in module.parameters():
+            param.requires_grad = True
+            pid = id(param)
+            if pid not in seen:
+                seen.add(pid)
+                trainable.append(param)
+    return trainable
+
+
 def cmd_finetune(args: argparse.Namespace) -> None:
     """Fine‑tune a linear head on labelled data across multiple seeds resume & checkpoints."""
     logger.info("Starting finetune with args: %s", args)
@@ -139,9 +188,13 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "lr": args.lr,
+            "encoder_lr": getattr(args, "encoder_lr", None),
+            "head_lr": getattr(args, "head_lr", None),
             "ema_decay": args.ema_decay,
             "seeds": seeds,
             "add_3d": bool(getattr(args, "add_3d", False)),
+            "freeze_encoder": bool(getattr(args, "freeze_encoder", True)),
+            "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
         },
     )
     log_effective_gnn(args, logger, wb)
@@ -194,6 +247,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         "accuracy",
         "auc",
         "auroc",
+        "roc_auc",
         "val_auc",
         "f1",
         "f1_macro",
@@ -213,7 +267,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         aliases = {
             "val_rmse": ["rmse_mean", "rmse"],
             "val_mae": ["mae_mean", "mae"],
-            "val_auc": ["auc", "auroc"],
+            "val_auc": ["auc", "auroc", "roc_auc"],
             "acc": ["accuracy", "val_acc"],
             "accuracy": ["acc", "val_acc"],
             "r2": ["val_r2"],
@@ -270,12 +324,65 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     args.encoder,
                 )
 
+        extra_encoder_ckpt = getattr(args, "load_encoder_checkpoint", None)
+        if extra_encoder_ckpt:
+            state, _ = _safe_load_checkpoint(
+                primary=extra_encoder_ckpt,
+                ckpt_dir=None,
+                default_name="encoder.pt",
+                map_location=device,
+                allow_missing=True,
+            )
+            enc_weights = state.get("encoder", state) if isinstance(state, dict) else {}
+            if enc_weights:
+                logger.info(
+                    "[finetune] loaded additional encoder weights from %s",
+                    extra_encoder_ckpt,
+                )
+                _load_state_dict_forgiving(encoder, enc_weights)
+            else:
+                logger.warning(
+                    "[finetune] encoder checkpoint %s lacked weights; ignoring",
+                    extra_encoder_ckpt,
+                )
+
         # If resuming a fine-tune checkpoint, it may contain a fresher encoder
         if "encoder" in resume_state:
             logger.info("Overriding encoder from resume checkpoint")
             _load_state_dict_forgiving(encoder, resume_state["encoder"])
 
         # Build linear head for fine-tuning
+        freeze_flag = bool(getattr(args, "freeze_encoder", True))
+        unfreeze_top = int(getattr(args, "unfreeze_top_layers", 0) or 0)
+        trainable_encoder_params = _configure_encoder_trainability(
+            encoder,
+            freeze_encoder=freeze_flag,
+            unfreeze_top_layers=unfreeze_top,
+        )
+        trainable_param_count = sum(int(p.numel()) for p in trainable_encoder_params)
+        if trainable_param_count > 0:
+            logger.info(
+                "Encoder fine-tuning enabled (%d trainable parameters, freeze=%s, unfreeze_top_layers=%d)",
+                trainable_param_count,
+                freeze_flag,
+                unfreeze_top,
+            )
+        else:
+            logger.info(
+                "Encoder frozen during fine-tuning (freeze=%s, unfreeze_top_layers=%d)",
+                freeze_flag,
+                unfreeze_top,
+            )
+        if wb is not None:
+            try:
+                wb.log(
+                    {
+                        "encoder/trainable_params": float(trainable_param_count),
+                        "encoder/freeze_flag": bool(freeze_flag),
+                    }
+                )
+            except Exception:
+                pass
         # compute num_classes robustly for classification; for regression we won’t use it
         _in_dim = getattr(encoder, "hidden_dim", getattr(args, "hidden_dim", None))
         assert (
@@ -317,10 +424,38 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         _maybe_to(head, device)
 
         # Optimizer & scheduler
-        params = _iter_params(encoder) + _iter_params(head)
+        encoder_params = [p for p in encoder.parameters() if p.requires_grad]
+        head_params = [p for p in head.parameters() if p.requires_grad]
+        optimizer_groups = []
+        if encoder_params:
+            optimizer_groups.append(
+                {
+                    "params": encoder_params,
+                    "lr": getattr(args, "encoder_lr", None) or args.lr,
+                }
+            )
+        if head_params:
+            optimizer_groups.append(
+                {
+                    "params": head_params,
+                    "lr": getattr(args, "head_lr", None) or args.lr,
+                }
+            )
+
         optimizer = (
-            torch.optim.AdamW(params, lr=args.lr, weight_decay=1e-4) if params else None
+            torch.optim.AdamW(
+                optimizer_groups,
+                lr=(
+                    getattr(args, "head_lr", None)
+                    or getattr(args, "encoder_lr", None)
+                    or args.lr
+                ),
+                weight_decay=1e-4,
+            )
+            if optimizer_groups
+            else None
         )
+        cache_embeddings = not bool(encoder_params)
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=args.epochs
@@ -377,6 +512,11 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     persistent_workers=getattr(args, "persistent_workers", True),
                     prefetch_factor=getattr(args, "prefetch_factor", 4),
                     bf16=getattr(args, "bf16", False),
+                    encoder_lr=getattr(args, "encoder_lr", None),
+                    head_lr=getattr(args, "head_lr", None),
+                    freeze_encoder=False,
+                    early_stop_metric=getattr(args, "metric", "val_loss"),
+                    cache_graph_embeddings=cache_embeddings,
                 )
 
                 trained_head = metrics.pop("head", None)

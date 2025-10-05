@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import sys
 from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
@@ -179,6 +180,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             encoder_checkpoint=getattr(args, "encoder_checkpoint", None),
             encoder_manifest=getattr(args, "encoder_manifest", None),
             strict_encoder_config=getattr(args, "strict_encoder_config", False),
+            encoder_source_override=getattr(args, "encoder_source", None),
         )
 
         evaluations, rule_from_result = _coerce_case_study_result(result)
@@ -193,6 +195,37 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             }
 
         primary = evaluations[0]
+        auc_summary: Dict[str, float] = {}
+        benchmark_flags: Dict[str, bool] = {}
+        manifest_lookup: Dict[str, str] = {}
+        for eval_res in evaluations:
+            source = getattr(eval_res, "encoder_source", getattr(eval_res, "name", "unknown"))
+            metrics_block = getattr(eval_res, "metrics", {}) or {}
+            roc_auc = metrics_block.get("roc_auc")
+            if roc_auc is not None and not math.isnan(roc_auc):
+                auc_summary[source] = float(roc_auc)
+            met_flag = getattr(eval_res, "met_benchmark", None)
+            if met_flag is not None:
+                benchmark_flags[source] = bool(met_flag)
+            manifest_path = getattr(eval_res, "manifest_path", None)
+            if manifest_path:
+                manifest_lookup[source] = manifest_path
+
+        def _lookup_auc(*keys: str) -> float | None:
+            for key in keys:
+                if key in auc_summary:
+                    return auc_summary[key]
+            return None
+
+        selected_source = None
+        if auc_summary:
+            selected_source = max(auc_summary.items(), key=lambda kv: kv[1])[0]
+        selected_benchmark = (
+            benchmark_flags[selected_source]
+            if selected_source in benchmark_flags
+            else None
+        )
+
         summary_payload = {
             "phase": "tox21",
             "status": "success",
@@ -204,6 +237,16 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "calibrate": calibrate,
             **threshold_payload,
         }
+        frozen_auc = _lookup_auc("pretrain_frozen", "frozen", "checkpoint")
+        fine_tuned_auc = _lookup_auc("fine_tuned", "fine-tuned", "scratch")
+        if frozen_auc is not None:
+            summary_payload["auc_pretrain_frozen"] = frozen_auc
+        if fine_tuned_auc is not None:
+            summary_payload["auc_fine_tuned"] = fine_tuned_auc
+        if selected_source is not None:
+            summary_payload["selected_path"] = selected_source
+        if selected_benchmark is not None:
+            summary_payload["met_benchmark_selected"] = bool(selected_benchmark)
         _wandb_log_safe(wb, summary_payload)
 
         multi_eval = len(evaluations) > 1
@@ -258,6 +301,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 "task": task_name,
                 **threshold_payload,
             },
+            "auc_summary": auc_summary,
+            "selected_path": selected_source,
+            "met_benchmark_selected": selected_benchmark,
             "evaluations": [],
         }
 
@@ -311,6 +357,36 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 manifest_path = getattr(eval_res, "manifest_path", None)
                 if manifest_path:
                     writer.writerow([name, "encoder_manifest", manifest_path])
+
+        try:
+            stage_dir = os.path.join(report_dir, "stage-outputs")
+            os.makedirs(stage_dir, exist_ok=True)
+            stage_name = getattr(args, "encoder_source", None) or getattr(primary, "encoder_source", "run")
+            stage_path = os.path.join(stage_dir, f"tox21_{stage_name}.json")
+            stage_payload = {
+                "encoder_source": getattr(args, "encoder_source", None),
+                "selected_path": selected_source,
+                "selected_auc": auc_summary.get(selected_source) if selected_source else None,
+                "met_benchmark": selected_benchmark,
+                "auc_summary": auc_summary,
+                "evaluations": [
+                    {
+                        "encoder_source": getattr(ev, "encoder_source", getattr(ev, "name", "unknown")),
+                        "roc_auc": auc_summary.get(
+                            getattr(ev, "encoder_source", getattr(ev, "name", "unknown"))
+                        ),
+                        "met_benchmark": getattr(ev, "met_benchmark", None),
+                        "manifest_path": manifest_lookup.get(
+                            getattr(ev, "encoder_source", getattr(ev, "name", "unknown"))
+                        ),
+                    }
+                    for ev in evaluations
+                ],
+            }
+            with open(stage_path, "w", encoding="utf-8") as fh:
+                json.dump(stage_payload, fh, indent=2, sort_keys=True)
+        except Exception:
+            logger.debug("Failed to write tox21 stage outputs", exc_info=True)
 
     except Exception as exc:
         logger.exception("Tox21 case study failed")

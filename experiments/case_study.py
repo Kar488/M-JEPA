@@ -421,6 +421,7 @@ def run_tox21_case_study(
     encoder_manifest: Optional[str] = None,
     strict_encoder_config: bool = False,
     bf16_head: Optional[bool] = None,
+    encoder_source_override: Optional[str] = None,
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
 
@@ -623,6 +624,9 @@ def run_tox21_case_study(
                 "Encoder checkpoint %s contained no weights; using random initialisation",
                 encoder_checkpoint,
             )
+    if encoder_source_override:
+        encoder_source = str(encoder_source_override)
+        eval_name = str(encoder_source_override)
     else:
         ema_encoder = build_encoder(
             gnn_type=final_gnn_type,
@@ -748,9 +752,9 @@ def run_tox21_case_study(
         baseline_means={k: float(v) for k, v in baseline_means.items()},
         metrics={k: float(v) for k, v in metrics.items()},
         benchmark_metric=benchmark_metric,
-        benchmark_threshold=float(threshold_rule.threshold)
-        if threshold_rule is not None
-        else None,
+        benchmark_threshold=(
+            float(threshold_rule.threshold) if threshold_rule is not None else None
+        ),
         met_benchmark=met_benchmark,
         manifest_path=encoder_manifest if encoder_checkpoint else None,
     )

@@ -588,6 +588,11 @@ def train_linear_head(
     head: Optional[nn.Module] = None,
     optimizer: Optional[Optimizer] = None,
     scheduler: Optional[_LRScheduler] = None,
+    encoder_lr: Optional[float] = None,
+    head_lr: Optional[float] = None,
+    freeze_encoder: bool = True,
+    early_stop_metric: str = "val_loss",
+    early_stop_mode: Optional[str] = None,
     cache_graph_embeddings: bool = True,
     **unused,
 ) -> Dict[str, float]:
@@ -651,8 +656,15 @@ def train_linear_head(
         device_t = enc_param.device
 
     encoder = encoder.to(device_t)
-    for p in encoder.parameters():
-        p.requires_grad = False
+    if freeze_encoder:
+        for p in encoder.parameters():
+            p.requires_grad = False
+    encoder_has_trainable = any(p.requires_grad for p in encoder.parameters())
+    if encoder_has_trainable and cache_graph_embeddings:
+        logger.info(
+            "Disabling graph embedding cache because encoder parameters are trainable."
+        )
+        cache_graph_embeddings = False
     num_graphs = _dataset_size(dataset)
 
     requested_workers = num_workers
@@ -729,16 +741,54 @@ def train_linear_head(
     if optimizer is not None:
         optimiser = optimizer
     else:
-        params = head_module.parameters()
-        optimiser = torch.optim.Adam(params, lr=lr)
-    early_stopper = EarlyStopping(patience=patience) if patience > 0 else None
+        enc_for_opt = (
+            encoder.module
+            if isinstance(encoder, nn.parallel.DistributedDataParallel)
+            else encoder
+        )
+        enc_params = [p for p in enc_for_opt.parameters() if p.requires_grad]
+        head_params = [p for p in head_param_source.parameters() if p.requires_grad]
+        param_groups = []
+        if enc_params:
+            param_groups.append({"params": enc_params, "lr": encoder_lr or lr})
+        if head_params:
+            param_groups.append({"params": head_params, "lr": head_lr or lr})
 
+        if param_groups:
+            base_lr = head_lr or encoder_lr or lr
+            optimiser = torch.optim.Adam(param_groups, lr=base_lr)
+        elif head_params:
+            optimiser = torch.optim.Adam(head_params, lr=head_lr or lr)
+        else:
+            raise ValueError("No trainable parameters found for optimiser")
     rank = get_rank() if distributed else 0
     world = get_world_size() if distributed else 1
     train_idx_rank = train_idx[rank::world]
 
     collate_fn = _GraphBatchCollator(dataset, task_type)
     pin_memory_enabled = bool(pin_memory and device_t.type == "cuda")
+    metric_aliases = {
+        "val_loss": "val_loss",
+        "loss": "val_loss",
+        "val_auc": "roc_auc",
+        "auc": "roc_auc",
+        "auroc": "roc_auc",
+        "roc_auc": "roc_auc",
+        "val_pr_auc": "pr_auc",
+        "pr_auc": "pr_auc",
+        "val_rmse": "rmse",
+        "rmse": "rmse",
+        "val_mae": "mae",
+        "mae": "mae",
+        "val_r2": "r2",
+        "r2": "r2",
+    }
+    metric_key = metric_aliases.get(str(early_stop_metric).lower(), "val_loss")
+    monitor_mode = early_stop_mode or ("max" if metric_key in {"roc_auc", "pr_auc", "r2"} else "min")
+    early_stopper = (
+        EarlyStopping(patience=patience, mode=monitor_mode) if patience > 0 else None
+    )
+
     cache_state = {"enabled": bool(cache_graph_embeddings)}
 
     def _effective_worker_count(split_size: int) -> int:
@@ -1039,6 +1089,8 @@ def train_linear_head(
                 encoder.eval()
                 head_module.eval()
                 val_losses = []
+                val_preds_store: List[np.ndarray] = []
+                val_targets_store: List[np.ndarray] = []
 
                 for batch in _yield_batches("val"):
                     batch_x, batch_adj, batch_ptr, batch_labels, batch_meta = _move_batch_to_device(
@@ -1055,6 +1107,12 @@ def train_linear_head(
                     with _amp_context():
                         preds = head_module(graph_emb).squeeze(1)
                     preds = torch.nan_to_num(preds)
+                    val_preds_store.append(
+                        preds.detach().to(torch.float32).cpu().numpy()
+                    )
+                    val_targets_store.append(
+                        batch_labels.detach().to(torch.float32).cpu().numpy()
+                    )
                     targets = batch_labels.to(dtype=preds.dtype)
                     vloss = loss_fn(preds, targets).item()
                     val_losses.append(vloss)
@@ -1064,7 +1122,32 @@ def train_linear_head(
                 if distributed:
                     torch.distributed.all_reduce(avg_t, op=torch.distributed.ReduceOp.AVG)
                 avg_val_loss = avg_t.item()
-                if early_stopper.step(avg_val_loss):
+                val_metric_values: Dict[str, float] = {}
+                if val_preds_store and val_targets_store:
+                    y_true_val = np.concatenate(val_targets_store)
+                    y_pred_val = np.concatenate(val_preds_store)
+                    y_true_val = np.nan_to_num(y_true_val, nan=0.0, posinf=0.0, neginf=0.0)
+                    y_pred_val = np.nan_to_num(y_pred_val, nan=0.0, posinf=0.0, neginf=0.0)
+                    if task_type == "classification":
+                        val_metric_values = compute_classification_metrics(
+                            y_true_val, y_pred_val
+                        )
+                    else:
+                        val_metric_values = compute_regression_metrics(y_true_val, y_pred_val)
+
+                monitor_value = avg_val_loss
+                if metric_key != "val_loss":
+                    metric_val = val_metric_values.get(metric_key)
+                    if metric_val is not None and not np.isnan(metric_val):
+                        monitor_value = float(metric_val)
+                    else:
+                        logger.debug(
+                            "Validation metric '%s' unavailable; falling back to val_loss.",
+                            early_stop_metric,
+                        )
+                        monitor_value = avg_val_loss
+
+                if early_stopper.step(monitor_value):
                     logger.info("Early stopping at epoch %d", epoch)
                     break
             
