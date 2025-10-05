@@ -144,6 +144,10 @@ class CaseStudyResult:
 def _to_list(x: Any) -> List[Any]:
     """Convert arrays/tensors/sequences to plain Python lists."""
 
+    if isinstance(x, list):
+        return list(x)
+    if isinstance(x, tuple):
+        return list(x)
     try:
         if isinstance(x, torch.Tensor):
             return x.detach().cpu().numpy().tolist()
