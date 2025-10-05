@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import wandb
-
+from urllib.parse import urlparse
 
 # ---------------------------------------------------------------------------
 # General helpers
@@ -422,8 +422,12 @@ def run_once(mm: str, program: str, subcmd: str, cfg: Dict[str, Any], seed: int,
         forwarded.append((flag, value))
 
     args += ["--use-wandb", "1"]
-    # help triage recheck runs in the UI
-    args += ["--wandb-tags", "phase2-recheck"]
+    # Tag recheck runs without relying on trainer CLI support
+    existing_tags = env.get("WANDB_TAGS", "")
+    tags = [t for t in (s.strip() for s in existing_tags.split(",")) if t]
+    if "phase2-recheck" not in tags:
+        tags.append("phase2-recheck")
+    env["WANDB_TAGS"] = ",".join(tags)
     forwarded.append(("--use-wandb", 1))
 
     args += ["--seed", str(seed)]
@@ -745,6 +749,7 @@ def main() -> None:
        # Post-seed fetch with small retry to absorb W&B eventual consistency.
         collect_attempts = max(1, int(os.getenv("RECHECK_COLLECT_ATTEMPTS", "5")))
         collect_delay    = max(0.0, float(os.getenv("RECHECK_COLLECT_DELAY", "5")))
+        seed_to_val: Dict[int, float] = {}
         for _try in range(1, collect_attempts + 1):
             project_path = f"{entity}/{args.project}" if entity and args.project else None
             fetched_runs: Sequence[Any] = []
@@ -754,8 +759,7 @@ def main() -> None:
                 except Exception as exc:
                     print(f"[recheck] fetch attempt #{_try} failed: {exc}", flush=True)
                     fetched_runs = []
-            # Match by config & seed
-            values.clear()
+           # Match by config & seed; accumulate per-seed so we can wait for all of them
             for run in fetched_runs:
                 run_cfg = _coerce_config(getattr(run, "config", {}))
                 matches = True
@@ -764,16 +768,19 @@ def main() -> None:
                         matches = False
                         break
                 run_seed = _unwrap_config_value(run_cfg.get("seed"))
-                if matches and run_seed in seeds:
+                if matches and run_seed in seeds and run_seed not in seed_to_val:
                     mv = metric_of(run, args.metric)
                     if mv is not None:
-                        values.append(float(mv))
-            if values:
+                        seed_to_val[int(run_seed)] = float(mv)
+            if len(seed_to_val) == len(seeds):
                 break
             if _try < collect_attempts:
-                print(f"[recheck] waiting for metrics to sync ({_try}/{collect_attempts}); found 0 values", flush=True)
+                have = len(seed_to_val)
+                need = len(seeds)
+                print(f"[recheck] waiting for metrics to sync ({_try}/{collect_attempts}); have {have}/{need} seeds", flush=True)
                 time.sleep(collect_delay)
 
+        values = [seed_to_val[s] for s in seeds if s in seed_to_val]
         if values:
             mean_value = float(np.mean(values))
             low, high = ci95(values)
