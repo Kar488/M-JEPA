@@ -532,6 +532,30 @@ def main() -> None:
         with open(args.out, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
 
+    def _serialize_diagnostics(diag: Dict[str, Any]) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        for key, value in (diag or {}).items():
+            if isinstance(value, Counter):
+                payload[key] = dict(value)
+            else:
+                payload[key] = value
+        return payload
+
+    def _write_summary(results: List[Dict[str, Any]], diag: Dict[str, Any]) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "metric": args.metric,
+            "direction": args.direction,
+            "topk": args.topk,
+            "extra_seeds": args.extra_seeds,
+            "results": results,
+        }
+        serialized_diag = _serialize_diagnostics(diag)
+        if serialized_diag:
+            payload["diagnostics"] = serialized_diag
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        return payload
+
     api = wandb.Api()
     maximize = args.direction == "max"
     top_entries, diagnostics = pick_topk(api, args.sweep, args.metric, maximize, args.topk, attempts, delay)
@@ -539,6 +563,7 @@ def main() -> None:
     if not top_entries:
         total_runs = diagnostics.get("total_runs", 0)
         missing = diagnostics.get("missing", [])
+
         if total_runs:
             print(
                 f"[recheck][fatal] unable to locate metric '{args.metric}' in sweep {args.sweep} "
@@ -676,6 +701,7 @@ def main() -> None:
                 "config": cfg,
             })
         else:
+
             results.append({
                 "index": index,
                 "mean": None,
