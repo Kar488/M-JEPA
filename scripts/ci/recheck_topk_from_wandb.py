@@ -25,18 +25,24 @@ from urllib.parse import urlparse
 # General helpers
 # ---------------------------------------------------------------------------
 
+def _safe_getattr(obj: Any, name: str, default: Any = None) -> Any:
+    """Like ``getattr`` but tolerates wrappers that raise ``KeyError``."""
+
+    try:
+        return getattr(obj, name)
+    except (AttributeError, KeyError):
+        return default
+    except Exception:  # pragma: no cover - defensive
+        return default
+
+
 def _coerce_config(config: Any) -> Dict[str, Any]:
     """Convert a W&B config/summary object into a standard dictionary."""
 
     if isinstance(config, Mapping):
         return dict(config)
 
-    try:
-        to_dict = getattr(config, "to_dict", None)
-    except (AttributeError, KeyError):
-        to_dict = None
-    except Exception:  # pragma: no cover - defensive
-        to_dict = None
+    to_dict = _safe_getattr(config, "to_dict")
     if callable(to_dict):
         try:
             converted = to_dict()
@@ -53,21 +59,11 @@ def _coerce_config(config: Any) -> Dict[str, Any]:
         if isinstance(parsed, dict):
             return parsed
 
-    try:
-        json_dict = getattr(config, "_json_dict", None)
-    except (AttributeError, KeyError):
-        json_dict = None
-    except Exception:  # pragma: no cover - defensive
-        json_dict = None
+    json_dict = _safe_getattr(config, "_json_dict")
     if isinstance(json_dict, dict):
         return dict(json_dict)
 
-    try:
-        items = getattr(config, "items", None)
-    except (AttributeError, KeyError):
-        items = None
-    except Exception:  # pragma: no cover - defensive
-        items = None
+    items = _safe_getattr(config, "items")
     if callable(items):
         try:
             return dict(items())
@@ -159,12 +155,7 @@ def _metric_candidates(metric: str) -> List[str]:
 
 
 def _history_latest(run: Any, candidates: Sequence[str], limit: int = 512) -> Tuple[Optional[float], Optional[str]]:
-    try:
-        history = getattr(run, "history", None)
-    except (AttributeError, KeyError):
-        history = None
-    except Exception:  # pragma: no cover - defensive
-        history = None
+    history = _safe_getattr(run, "history")
     if not callable(history):
         return None, None
 
@@ -217,12 +208,7 @@ def metric_of(run: Any, name: str, default: Optional[float] = None) -> Optional[
         if isinstance(obj, Mapping):
             return obj
         # W&B Summary is a custom object; try to get a dict view
-        try:
-            to_dict = getattr(obj, "to_dict", None)
-        except (AttributeError, KeyError):
-            to_dict = None
-        except Exception:  # pragma: no cover - defensive
-            to_dict = None
+        to_dict = _safe_getattr(obj, "to_dict")
         if callable(to_dict):
             try:
                 d = to_dict()
@@ -232,12 +218,7 @@ def metric_of(run: Any, name: str, default: Optional[float] = None) -> Optional[
                 pass
         # Some versions expose private dicts
         for attr in ("_json_dict", "_root"):
-            try:
-                inner = getattr(obj, attr, None)
-            except (AttributeError, KeyError):
-                inner = None
-            except Exception:  # pragma: no cover - defensive
-                inner = None
+            inner = _safe_getattr(obj, attr)
             if isinstance(inner, Mapping):
                 return inner
         # Fall back to repo's coercer if available
@@ -249,22 +230,12 @@ def metric_of(run: Any, name: str, default: Optional[float] = None) -> Optional[
     # 1) Collect all plausible summary sources
     summary_sources: List[Mapping[str, Any]] = []
     for attr in ("summary", "summary_metrics", "summaryMetrics"):
-        try:
-            source = getattr(run, attr, None)
-        except (AttributeError, KeyError):
-            source = None
-        except Exception:  # pragma: no cover - defensive
-            source = None
+        source = _safe_getattr(run, attr)
         payload = _as_mapping(source)
         if payload:
             summary_sources.append(payload)
 
-    try:
-        attrs = getattr(run, "_attrs", None)
-    except (AttributeError, KeyError):
-        attrs = None
-    except Exception:  # pragma: no cover - defensive
-        attrs = None
+    attrs = _safe_getattr(run, "_attrs")
     if isinstance(attrs, Mapping):
         for key in ("summaryMetrics", "summary_metrics"):
             payload = _as_mapping(attrs.get(key))
@@ -307,9 +278,9 @@ def pick_topk(api: wandb.Api, sweep: Any, metric: str, maximize: bool, k: int,
     if isinstance(sweep, str):
         sweep_path = sweep
     else:
-        sweep_path = getattr(sweep, "path", None) or getattr(sweep, "sweep_path", None)
+        sweep_path = _safe_getattr(sweep, "path") or _safe_getattr(sweep, "sweep_path")
         if not sweep_path:
-            sweep_path = getattr(sweep, "id", None)
+            sweep_path = _safe_getattr(sweep, "id")
         if sweep_path:
             sweep_path = str(sweep_path)
     if not sweep_path:
@@ -330,12 +301,7 @@ def pick_topk(api: wandb.Api, sweep: Any, metric: str, maximize: bool, k: int,
                 continue
             break
 
-        try:
-            runs_attr = getattr(sweep_obj, "runs", [])
-        except (AttributeError, KeyError):
-            runs_attr = []
-        except Exception:  # pragma: no cover - defensive
-            runs_attr = []
+        runs_attr = _safe_getattr(sweep_obj, "runs", [])
         runs = list(runs_attr)
         diagnostics["total_runs"] = len(runs)
         diagnostics["missing"] = []
@@ -343,31 +309,16 @@ def pick_topk(api: wandb.Api, sweep: Any, metric: str, maximize: bool, k: int,
 
         ranked: List[Tuple[Any, float]] = []
         for run in runs:
-            try:
-                config_payload = getattr(run, "config", {})
-            except (AttributeError, KeyError):
-                config_payload = {}
-            except Exception:  # pragma: no cover - defensive
-                config_payload = {}
+            config_payload = _safe_getattr(run, "config", {})
             config = _coerce_config(config_payload)
             method = str(config.get("training_method", "unknown")).lower()
             diagnostics["method_counts"][method] += 1
 
             value = metric_of(run, metric)
             if value is None:
-                try:
-                    run_id = getattr(run, "id", None)
-                except (AttributeError, KeyError):
-                    run_id = None
-                except Exception:  # pragma: no cover - defensive
-                    run_id = None
+                run_id = _safe_getattr(run, "id")
                 if run_id is None:
-                    try:
-                        run_id = getattr(run, "name", None)
-                    except (AttributeError, KeyError):
-                        run_id = None
-                    except Exception:  # pragma: no cover - defensive
-                        run_id = None
+                    run_id = _safe_getattr(run, "name")
                 diagnostics["missing"].append(str(run_id))
                 continue
             ranked.append((run, value))
