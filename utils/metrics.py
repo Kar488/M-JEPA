@@ -32,7 +32,12 @@ def compute_classification_metrics(
     yp = np.asarray(y_pred_logits, dtype=np.float64).reshape(-1)
 
     yt = np.nan_to_num(yt, nan=0.0, posinf=0.0, neginf=0.0)
-    yp = np.nan_to_num(yp, nan=0.0, posinf=0.0, neginf=0.0)
+    yp = np.nan_to_num(
+        yp,
+        nan=0.0,
+        posinf=np.finfo(np.float64).max,
+        neginf=-np.finfo(np.float64).max,
+    )
 
     metrics: Dict[str, float] = {
         "roc_auc": float("nan"),
