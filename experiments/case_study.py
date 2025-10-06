@@ -70,7 +70,11 @@ logger = logging.getLogger(__name__)
 # works when the real training stack is unavailable (e.g. unit tests provide a
 # lightweight stub).
 try:  # pragma: no cover - exercised mainly in tests
-    from training.supervised import train_linear_head  # type: ignore[import-not-found]
+    #from training.supervised import train_linear_head  # type: ignore[import-not-found]
+    if "training" not in sys.modules:
+        sys.modules["training"] = types.ModuleType("training")
+    sup  = importlib.import_module("training.supervised")
+    unsup = importlib.import_module("training.unsupervised")
 except Exception as exc:  # pragma: no cover - fail fast if even the stub is missing
     raise ImportError("train_linear_head is required to run the Tox21 case study") from exc
 
@@ -869,12 +873,12 @@ def run_tox21_case_study(
         n_neg = max(0, n_all - n_pos)
         if n_pos > 0 and n_neg > 0:
             pos_weight = torch.tensor([n_neg / max(1, n_pos)], device=device, dtype=torch.float32)
-            if "pos_weight" in inspect.signature(train_linear_head).parameters:
+            if "pos_weight" in inspect.signature(train_linear_head).parameters: # type: ignore
                 extra_args["pos_weight"] = pos_weight
-            elif "class_weight" in inspect.signature(train_linear_head).parameters:
+            elif "class_weight" in inspect.signature(train_linear_head).parameters: # pyright: ignore[reportUndefinedVariable]
                 extra_args["class_weight"] = {0: 1.0, 1: float(n_neg / max(1, n_pos))}
 
-    clf_metrics = train_linear_head(
+    clf_metrics = train_linear_head( # type: ignore
         dataset=dataset,
         encoder=encoder,
         task_type="classification",
