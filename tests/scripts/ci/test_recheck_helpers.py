@@ -1,8 +1,17 @@
 from collections import Counter
+import json
+import sys
+import types
 
-import numpy as np
+if "wandb" not in sys.modules:
+    stub = types.ModuleType("wandb")
+    stub.Api = lambda *args, **kwargs: None
+    stub.run = None
+    sys.modules["wandb"] = stub
 
 import scripts.ci.recheck_topk_from_wandb as rc
+
+np = rc.np
 
 
 class DummyRun:
@@ -78,6 +87,11 @@ def test_pick_topk_orders_runs(monkeypatch):
     assert diagnostics["method_counts"] == Counter({"jepa": 1, "unknown": 1})
 
 
+def test_expected_name_group_mapping():
+    assert rc._expected_group(3) == "recheck_cfg3"
+    assert rc._expected_run_name(3, 1001) == "recheck_cfg3_seed1001"
+
+
 def test_run_once_writes_log(tmp_path, monkeypatch):
     log_dir = tmp_path / "logs"
     started = {}
@@ -93,6 +107,7 @@ def test_run_once_writes_log(tmp_path, monkeypatch):
 
     def fake_popen(args, stdout, stderr, env):
         started["args"] = args
+        started["env"] = env
         return FakeProc()
 
     times = iter([0.0, 30.0, 65.0, 120.0])
@@ -112,6 +127,8 @@ def test_run_once_writes_log(tmp_path, monkeypatch):
         log_dir=str(log_dir),
         project="proj",
         group="grp",
+        config_idx=2,
+        exp_id="exp123",
     )
 
     log_file = log_dir / "recheck_jepa_seed7.log"
@@ -119,6 +136,108 @@ def test_run_once_writes_log(tmp_path, monkeypatch):
     content = log_file.read_text()
     assert "--hidden-dim" in content
     assert started["args"][0] == "micromamba"
+    assert started["env"]["WANDB_NAME"] == "recheck_cfg2_seed7"
+    assert started["env"]["WANDB_RUN_GROUP"] == "recheck_cfg2"
+
+
+def test_collect_seed_metrics_prefers_wandb(monkeypatch):
+    config_idx = 1
+    seeds = [1000]
+    cfg = {"training_method": "jepa", "gnn_type": "gine", "hidden_dim": 64, "num_layers": 3, "contiguity": 0}
+
+    class DummyRunObj:
+        def __init__(self):
+            self.config = {**cfg, "seed": seeds[0]}
+            self.summary = {"val_rmse": 0.25}
+            self.group = rc._expected_group(config_idx)
+            self.name = rc._expected_run_name(config_idx, seeds[0])
+
+    class DummyApi:
+        def runs(self, project_path, filters):
+            assert filters["group"] == rc._expected_group(config_idx)
+            return [DummyRunObj()]
+
+    monkeypatch.setattr(rc.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(rc, "_best_effort_wandb_sync", lambda: None)
+    metrics = rc._collect_seed_metrics(
+        DummyApi(),
+        "entity/project",
+        cfg,
+        seeds,
+        "val_rmse",
+        config_idx,
+        "exp",
+        attempts=2,
+        delay=0.0,
+    )
+    assert metrics == {seeds[0]: 0.25}
+
+
+def test_collect_seed_metrics_uses_local_fallback(monkeypatch, tmp_path, capsys):
+    config_idx = 2
+    seeds = [1001]
+    cfg = {"training_method": "jepa", "gnn_type": "gine", "hidden_dim": 64, "num_layers": 3, "contiguity": 0}
+
+    class DummyApi:
+        def runs(self, *_a, **_k):
+            return []
+
+    artifact_path = tmp_path / "cfg2_seed1001.json"
+    artifact_path.write_text(json.dumps({"val_rmse": 0.34, "best_step": 7}))
+
+    monkeypatch.setattr(rc, "_local_result_path", lambda _exp, _cfg, _seed: artifact_path)
+    monkeypatch.setattr(rc.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(rc, "_best_effort_wandb_sync", lambda: None)
+
+    metrics = rc._collect_seed_metrics(
+        DummyApi(),
+        "entity/project",
+        cfg,
+        seeds,
+        "val_rmse",
+        config_idx,
+        "exp",
+        attempts=1,
+        delay=0.0,
+    )
+    captured = capsys.readouterr().out
+    assert "using local fallback" in captured
+    assert metrics == {seeds[0]: 0.34}
+
+
+def test_collect_seed_metrics_handles_missing(monkeypatch, tmp_path, capsys):
+    config_idx = 3
+    seeds = [1002]
+    cfg = {"training_method": "jepa", "gnn_type": "gine", "hidden_dim": 64, "num_layers": 3, "contiguity": 0}
+
+    class DummyApi:
+        def runs(self, *_a, **_k):
+            return []
+
+    # ensure no local file exists
+    monkeypatch.setattr(rc, "_local_result_path", lambda _exp, _cfg, _seed: tmp_path / "missing.json")
+    sleep_calls = []
+    monkeypatch.setattr(rc.time, "sleep", lambda d: sleep_calls.append(d))
+    monkeypatch.setattr(rc, "_best_effort_wandb_sync", lambda: None)
+
+    metrics = rc._collect_seed_metrics(
+        DummyApi(),
+        "entity/project",
+        cfg,
+        seeds,
+        "val_rmse",
+        config_idx,
+        "exp",
+        attempts=1,
+        delay=0.0,
+    )
+    assert metrics == {}
+    assert sleep_calls == []
+
+    rc._warn_missing_metric("val_rmse", seeds[0])
+    captured = capsys.readouterr().out
+    assert "missing metric 'val_rmse'" in captured
+    assert "skipping" in captured
 
 
 def test_ci95_monkeypatched(monkeypatch):
@@ -126,4 +245,3 @@ def test_ci95_monkeypatched(monkeypatch):
     monkeypatch.setattr(np.random, "choice", lambda xs, size, replace: np.tile(xs.mean(), size))
     lo, hi = rc.ci95(samples)
     assert lo == hi == samples.mean()
-

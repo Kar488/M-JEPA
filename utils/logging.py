@@ -113,9 +113,11 @@ def maybe_init_wandb(
                 job_type = env.get("WANDB_JOB_TYPE",job_type),        # optional
                 dir  = env.get("WANDB_DIR"),             # e.g., /data/mjepa/wandb
                 mode     = env.get("WANDB_MODE"),            # online/offline/disabled
-                project  = env.get("WANDB_PROJECT", project), 
+                project  = env.get("WANDB_PROJECT", project),
+                entity   = env.get("WANDB_ENTITY"),
                 config=config or {},
                 tags=list(tags) if tags else None,
+                reinit=True,
             )
             kw = {k: v for k, v in kw.items() if v is not None}
             wandb.init(**kw)

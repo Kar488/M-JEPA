@@ -4,7 +4,37 @@ import hashlib, json
 import os
 import pathlib
 import pickle
-from typing import Optional
+import time
+from typing import Optional, Dict, Any
+
+
+def _env_int(name: str) -> Optional[int]:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    try:
+        return int(str(raw))
+    except Exception:
+        return None
+
+
+def _infer_best_step(payload: Dict[str, Any]) -> int:
+    for key in ("best_step", "best_epoch", "epoch", "epochs", "step", "global_step"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except Exception:
+            continue
+    return 0
+
+
+def _local_result_file(exp_id: Optional[str], config_idx: Optional[int], seed: Optional[int]) -> Optional[pathlib.Path]:
+    if exp_id is None or config_idx is None or seed is None:
+        return None
+    base = pathlib.Path("/data/mjepa/experiments") / exp_id / "recheck_results"
+    return base / f"cfg{config_idx}_seed{seed}.json"
 
 def cmd_sweep_run(args: argparse.Namespace) -> None:
     """
@@ -467,7 +497,60 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         if key not in payload and value is not None:
             payload[key] = value
 
-    _wb_get_or_init(args) # re-open if an inner path finished it
+    config_idx = _env_int("RECHECK_CONFIG_INDEX")
+    seed_idx = _env_int("RECHECK_SEED")
+    exp_id = os.getenv("RECHECK_EXP_ID")
+    run_name = os.getenv("WANDB_NAME")
+
+    raw_val = payload.get("val_rmse")
+    try:
+        val_rmse = float(raw_val) if raw_val is not None else None
+    except Exception:
+        val_rmse = None
+    if val_rmse is not None:
+        payload["val_rmse"] = val_rmse
+
+    best_step = _infer_best_step(payload)
+    payload["best_step"] = best_step
+
+    _wb_get_or_init(args)  # re-open if an inner path finished it
+    try:
+        import wandb as _wandb_mod  # type: ignore
+    except Exception:
+        _wandb_mod = None
+    if _wandb_mod is not None:
+        run = getattr(_wandb_mod, "run", None)
+        if run is not None:
+            if val_rmse is not None:
+                run.summary["val_rmse"] = float(val_rmse)
+            run.summary["best_step"] = int(best_step)
+            if run_name and getattr(run, "name", None) != run_name:
+                try:
+                    run.name = run_name
+                    run.save()
+                except Exception:
+                    pass
+
     _wb_summary_update(payload)
+
+    result_path = _local_result_file(exp_id, config_idx, seed_idx)
+    if result_path is not None:
+        try:
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = result_path.with_suffix(".tmp")
+            artifact = {
+                "val_rmse": val_rmse,
+                "best_step": int(best_step),
+                "run_name": run_name,
+                "config_idx": config_idx,
+                "seed": seed_idx,
+                "updated_at": time.time(),
+            }
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                json.dump({k: v for k, v in artifact.items() if v is not None}, handle, indent=2)
+            os.replace(tmp_path, result_path)
+        except Exception as exc:
+            print(f"[sweep-run] unable to write fallback metrics to {result_path}: {exc}", flush=True)
+
     _wb_finish_safely()
 
