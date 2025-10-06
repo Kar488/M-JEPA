@@ -10,11 +10,20 @@ source "$(dirname "$0")/stage.sh"
 export WANDB_NAME="finetune"
 export WANDB_JOB_TYPE="finetune"
 
-encoder_ckpt="${PRETRAIN_DIR}/encoder.pt"
 manifest_path="${PRETRAIN_MANIFEST}"
+encoder_ckpt="$(resolve_encoder_checkpoint)"
 
 echo "[finetune] using pretrain experiment id=${PRETRAIN_EXP_ID} checkpoint=${encoder_ckpt}" >&2
 echo "[finetune] encoder manifest=${manifest_path}" >&2
+
+if [[ -z "$encoder_ckpt" ]]; then
+  echo "[finetune] unable to resolve encoder checkpoint path. PRETRAIN_ENCODER_PATH=${PRETRAIN_ENCODER_PATH:-<unset>}" >&2
+  exit 1
+fi
+
+if [[ -n "${PRETRAIN_ENCODER_PATH:-}" && "$encoder_ckpt" != "${PRETRAIN_ENCODER_PATH:-}" ]]; then
+  echo "[finetune] PRETRAIN_ENCODER_PATH pointed to ${PRETRAIN_ENCODER_PATH}; using manifest-derived path ${encoder_ckpt}" >&2
+fi
 
 if [[ ! -f "$encoder_ckpt" ]]; then
   echo "[finetune] required encoder checkpoint missing: $encoder_ckpt" >&2

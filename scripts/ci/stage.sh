@@ -38,7 +38,11 @@ stage_needs() {
   case "$s" in
     grid)   printf '%s\n' "${base[@]}" ;;
     pretrain) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" ;;
-    finetune) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" "$PRETRAIN_DIR/encoder.pt" ;;
+    finetune)
+      local encoder_dep
+      encoder_dep="$(resolve_encoder_checkpoint)"
+      printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" "$encoder_dep"
+      ;;
     bench|benchmark) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" "$FINETUNE_DIR/seed_0/ft_best.pt" ;;
     tox21) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" "$APP_DIR/scripts/ci/data/tox21/data.csv" ;;
     report)
