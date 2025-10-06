@@ -152,6 +152,12 @@ def _expected_calibration_error(
     if p.shape[0] != y.shape[0]:
         raise ValueError(f"y_score and y_true have different lengths: {p.shape[0]} vs {y.shape[0]}")
 
+    if p.size == 0 or y.size == 0:
+        return float("nan")
+
+    if p.shape[1] == 0:
+        return float("nan")
+
     # predicted class + confidence
     pred = np.argmax(p, axis=1)
     conf = np.take_along_axis(p, pred[:, None], axis=1).squeeze(1)  # (N,)

@@ -520,7 +520,7 @@ def _evaluate_case_study(
             except Exception:
                 metrics["brier"] = float("nan")
             try:
-                metrics["ece"] = float(expected_calibration_error(yy, pp, n_bins=10))
+                metrics["ece"] = float(expected_calibration_error(pp, yy, n_bins=10))
             except Exception:
                 metrics["ece"] = float("nan")
 
