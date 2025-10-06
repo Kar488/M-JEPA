@@ -22,6 +22,15 @@ def test_compute_classification_metrics():
     assert 0.0 <= m["acc"] <= 1.0
 
 
+def test_compute_classification_metrics_with_inf_logits():
+    y_true = np.array([0, 1])
+    logits = np.array([-np.inf, np.inf])
+    m = compute_classification_metrics(y_true, logits)
+    assert pytest.approx(m["brier"]) == 0.0
+    assert pytest.approx(m["acc"]) == 1.0
+    assert pytest.approx(m["roc_auc"]) == 1.0
+
+
 def test_compute_classification_metrics_single_class():
     y_true = np.zeros(5)
     logits = np.zeros(5)
