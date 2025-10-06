@@ -1022,8 +1022,14 @@ def _collect_seed_metrics(
                 continue
 
             run_name = _safe_getattr(run, "name")
-            if run_name and run_name != _expected_run_name(config_idx, run_seed_int):
-                continue
+            if run_name:
+                expected_name = _expected_run_name(config_idx, run_seed_int)
+                # Only enforce the strict naming convention when the run name
+                # follows the recheck pattern. Historical runs (or locally
+                # triggered evaluations) might use arbitrary names; we still
+                # want to collect their metrics as long as the config matches.
+                if str(run_name).startswith("recheck_cfg") and run_name != expected_name:
+                    continue
             run_group = _safe_getattr(run, "group")
             if run_group and run_group != expected_group:
                 continue
