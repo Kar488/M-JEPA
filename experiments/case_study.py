@@ -52,7 +52,6 @@ except Exception:  # pragma: no cover - fallback for environments without checkp
 from models.ema import EMA
 from models.encoder import GNNEncoder
 from models.predictor import MLPPredictor
-from training.unsupervised import train_jepa
 from utils.seed import set_seed
 from utils.metrics import expected_calibration_error
 
@@ -64,23 +63,25 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 logger = logging.getLogger(__name__)
 
 
-# ``training.supervised`` is a heavy module that is frequently monkeypatched in
-# tests.  ``run_tox21_case_study`` only needs ``train_linear_head`` and a simple
-# stratified split helper.  Import these symbols defensively so the module still
-# works when the real training stack is unavailable (e.g. unit tests provide a
-# lightweight stub).
+# ``training.supervised`` and ``training.unsupervised`` are heavy modules that are
+# frequently monkeypatched in tests.  ``run_tox21_case_study`` only needs
+# ``train_linear_head`` and ``train_jepa`` so import them defensively to honour
+# test stubs.
 try:  # pragma: no cover - exercised mainly in tests
-    #from training.supervised import train_linear_head  # type: ignore[import-not-found]
     if "training" not in sys.modules:
         sys.modules["training"] = types.ModuleType("training")
 
-    _sup  = importlib.import_module("training.supervised")
-    _unsup = importlib.import_module("training.unsupervised")
-    # Bind function names used below
-    train_linear_head = getattr(_sup,  "train_linear_head")
-    train_jepa        = getattr(_unsup, "train_jepa")
+    supervised_mod = importlib.import_module("training.supervised")
+    unsupervised_mod = importlib.import_module("training.unsupervised")
+
+    train_linear_head = getattr(supervised_mod, "train_linear_head", None)
+    train_jepa = getattr(unsupervised_mod, "train_jepa", None)
+    if train_linear_head is None or train_jepa is None:
+        raise AttributeError("Expected train_linear_head and train_jepa to exist")
 except Exception as exc:  # pragma: no cover - fail fast if even the stub is missing
-    raise ImportError("train_linear_head is required to run the Tox21 case study") from exc
+    raise ImportError(
+        "train_linear_head and train_jepa are required to run the Tox21 case study"
+    ) from exc
 
 try:  # pragma: no cover - optional during tests
     from training.supervised import stratified_split as _lib_stratified_split  # type: ignore[import-not-found]

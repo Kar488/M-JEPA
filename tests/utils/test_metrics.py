@@ -16,16 +16,24 @@ def test_compute_classification_metrics():
     y_true = np.array([0, 1] * 5)
     logits = np.linspace(-1, 1, 10)
     m = compute_classification_metrics(y_true, logits)
-    assert set(m.keys()) == {"roc_auc", "pr_auc", "brier"}
+    assert set(m.keys()) == {"roc_auc", "pr_auc", "brier", "ece", "acc"}
     assert not math.isnan(m["roc_auc"]) and not math.isnan(m["pr_auc"])
+    assert not math.isnan(m["brier"]) and not math.isnan(m["ece"])
+    assert 0.0 <= m["acc"] <= 1.0
 
 
 def test_compute_classification_metrics_single_class():
     y_true = np.zeros(5)
     logits = np.zeros(5)
     m = compute_classification_metrics(y_true, logits)
-    assert math.isnan(m["roc_auc"]) and m["pr_auc"] == 0.0
-    assert m["brier"] == pytest.approx(0.25, rel=1e-6)
+    for key in ("roc_auc", "pr_auc", "brier", "ece", "acc"):
+        assert math.isnan(m[key])
+
+
+def test_compute_classification_metrics_empty():
+    m = compute_classification_metrics(np.array([]), np.array([]))
+    for key in ("roc_auc", "pr_auc", "brier", "ece", "acc"):
+        assert math.isnan(m[key])
 
 
 def test_compute_regression_metrics():
