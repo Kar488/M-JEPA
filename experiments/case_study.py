@@ -405,9 +405,29 @@ def _evaluate_case_study(
             logger.warning("Calibration skipped due to error: %s", exc)
             calibrated_probs = test_probs_np
 
-    calibrated_probs = np.asarray(calibrated_probs).reshape(-1)
-    if calibrated_probs.size != test_idx_arr.size:
-        calibrated_probs = np.resize(calibrated_probs, test_idx_arr.size)
+    expected_len = int(test_idx_arr.size)
+    calibrated_probs = np.asarray(calibrated_probs, dtype=float).reshape(-1)
+    if expected_len == 0:
+        calibrated_probs = np.zeros((0,), dtype=float)
+    else:
+        if calibrated_probs.size == 0:
+            logger.warning(
+                "No calibrated probabilities were produced for %d test molecules; defaulting to zeros.",
+                expected_len,
+            )
+            calibrated_probs = np.zeros(expected_len, dtype=float)
+        elif calibrated_probs.size != expected_len:
+            logger.warning(
+                "Resizing calibrated probabilities from %d to match %d test molecules.",
+                calibrated_probs.size,
+                expected_len,
+            )
+            calibrated_probs = np.resize(calibrated_probs, expected_len).reshape(-1)
+        if calibrated_probs.size != expected_len:
+            logger.warning(
+                "Calibrated probabilities still mismatched after resizing; padding with zeros.",
+            )
+            calibrated_probs = np.zeros(expected_len, dtype=float)
 
     k = max(1, int(triage_pct * test_idx_arr.size))
     k = min(k, test_idx_arr.size) if test_idx_arr.size else 0
@@ -439,7 +459,15 @@ def _evaluate_case_study(
     y_true = all_labels[test_idx_arr].astype(float)
     mask_valid = ~np.isnan(y_true)
     y_true_m = y_true[mask_valid]
-    y_pred_m = calibrated_probs[mask_valid]
+    try:
+        y_pred_m = calibrated_probs[mask_valid]
+    except IndexError:
+        num_valid = int(mask_valid.sum())
+        logger.warning(
+            "Failed to align calibrated probabilities with %d valid test labels; substituting zeros.",
+            num_valid,
+        )
+        y_pred_m = np.zeros(num_valid, dtype=float)
 
     if y_true_m.size > 0 and np.unique(y_true_m).size > 1:
         yy = y_true_m.astype(int)
