@@ -24,6 +24,71 @@ run_stage pretrain
 
 encoder_ckpt="${PRETRAIN_DIR}/encoder.pt"
 manifest_path="${PRETRAIN_MANIFEST}"
+stage_outputs_json="${STAGE_OUTPUTS_DIR}/pretrain.json"
+
+# Resolve a Python interpreter for the parsing and bookkeeping steps below.
+# Prefer an existing "python" binary, otherwise fall back to micromamba.
+python_cmd=()
+if py=$(python_bin 2>/dev/null); then
+  python_cmd=(env PYTHONUNBUFFERED=1 "$py" -u)
+else
+  ensure_micromamba
+  python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
+fi
+
+# If the training command emitted a stage outputs JSON, honour the absolute
+# paths recorded there.  This guards against mismatched environment variables
+# (e.g. stale PRETRAIN_* overrides) and gives us a concrete file to copy.
+recorded_manifest=""
+recorded_encoder=""
+
+if [[ -f "$stage_outputs_json" ]]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      manifest_path)
+        recorded_manifest="$value"
+        ;;
+      encoder_checkpoint)
+        recorded_encoder="$value"
+        ;;
+    esac
+  done < <("${python_cmd[@]}" - "$stage_outputs_json" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh) or {}
+except Exception:
+    sys.exit(0)
+
+def emit(key, value):
+    if isinstance(value, str) and value.strip():
+        print(f"{key}={value.strip()}")
+
+emit("manifest_path", data.get("manifest_path"))
+emit("encoder_checkpoint", data.get("encoder_checkpoint"))
+PY
+  )
+
+  if [[ -n "${recorded_encoder:-}" ]]; then
+    encoder_ckpt="$recorded_encoder"
+  fi
+
+  if [[ -n "${recorded_manifest:-}" ]]; then
+    if [[ "$recorded_manifest" != "$manifest_path" && -f "$recorded_manifest" ]]; then
+      mkdir -p "$(dirname "$manifest_path")"
+      cp "$recorded_manifest" "$manifest_path"
+    else
+      manifest_path="$recorded_manifest"
+    fi
+  fi
+fi
+
+export PRETRAIN_MANIFEST="$manifest_path"
+export PRETRAIN_ENCODER_PATH="$encoder_ckpt"
 
 if [[ ! -f "$encoder_ckpt" ]]; then
   echo "[pretrain] expected encoder checkpoint missing: $encoder_ckpt" >&2
@@ -52,7 +117,7 @@ state_path="${PRETRAIN_STATE_FILE}"
 state_dir="$(dirname "$state_path")"
 mkdir -p "$state_dir"
 
-python - "$state_path" "$PRETRAIN_EXP_ID" "$PRETRAIN_EXPERIMENT_ROOT" \
+"${python_cmd[@]}" - "$state_path" "$PRETRAIN_EXP_ID" "$PRETRAIN_EXPERIMENT_ROOT" \
   "$PRETRAIN_ARTIFACTS_DIR" "$manifest_path" "$encoder_ckpt" <<'PY'
 import json
 import os
