@@ -2,6 +2,9 @@
 # Common helpers for Vast GPU CI stages
 set -euo pipefail
 
+: "${MJEPACI_STAGE:=}"
+: "${PRETRAIN_STATE_FILE:=/data/mjepa/experiments/pretrain_state.json}"
+
 # --- centralised environment variables ---
 : "${APP_DIR:=/srv/mjepa}"
 : "${VENV_DIR:=/srv/mjepa/.venv}"
@@ -37,6 +40,70 @@ python_bin() {
   else
     return 1
   fi
+}
+
+__load_pretrain_state_from_file() {
+  local state_path="$PRETRAIN_STATE_FILE"
+  [[ -f "$state_path" ]] || return 1
+
+  local py
+  py=$(python_bin 2>/dev/null) || return 1
+
+  local output
+  output="$("$py" - "$state_path" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh) or {}
+except FileNotFoundError:
+    sys.exit(0)
+
+def emit(key, value):
+    if value is None:
+        value = ""
+    if isinstance(value, (dict, list)):
+        return
+    print(f"{key}={value}")
+
+emit("pretrain_exp_id", data.get("pretrain_exp_id"))
+emit("experiment_root", data.get("experiment_root"))
+emit("artifacts_dir", data.get("artifacts_dir"))
+emit("encoder_manifest", data.get("encoder_manifest"))
+emit("encoder_checkpoint", data.get("encoder_checkpoint"))
+emit("tox21_env", data.get("tox21_env"))
+PY
+  )" || return 1
+
+  local line key value
+  while IFS='=' read -r key value; do
+    [[ -z "$key" ]] && continue
+    case "$key" in
+      pretrain_exp_id)
+        [[ -n "${PRETRAIN_EXP_ID:-}" ]] || PRETRAIN_EXP_ID="$value"
+        ;;
+      experiment_root)
+        [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]] || PRETRAIN_EXPERIMENT_ROOT="$value"
+        ;;
+      artifacts_dir)
+        [[ -n "${PRETRAIN_ARTIFACTS_DIR:-}" ]] || PRETRAIN_ARTIFACTS_DIR="$value"
+        ;;
+      encoder_manifest)
+        [[ -n "${PRETRAIN_MANIFEST:-}" ]] || PRETRAIN_MANIFEST="$value"
+        ;;
+      encoder_checkpoint)
+        [[ -n "${PRETRAIN_ENCODER_PATH:-}" ]] || PRETRAIN_ENCODER_PATH="$value"
+        ;;
+      tox21_env)
+        [[ -n "${PRETRAIN_TOX21_ENV:-}" ]] || PRETRAIN_TOX21_ENV="$value"
+        ;;
+    esac
+  done <<<"$output"
+
+  return 0
 }
 
 # --- accelerator discovery helpers ---
@@ -129,18 +196,76 @@ split_gpu_ids() {
 
 # Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
 : "${GRID_DIR:=${GRID_CACHE_DIR:-$EXP_ROOT/grid}}"
-: "${PRETRAIN_DIR:=${PRETRAIN_CACHE_DIR:-$EXP_ROOT/pretrain}}"
+
+if [[ "${MJEPACI_STAGE}" != "pretrain" ]]; then
+  __load_pretrain_state_from_file || true
+fi
+
+if [[ "${MJEPACI_STAGE}" == "pretrain" && -z "${PRETRAIN_EXP_ID:-}" ]]; then
+  PRETRAIN_EXP_ID="$RUN_ID"
+fi
+
+_needs_pretrain_state=0
+case "${MJEPACI_STAGE}" in
+  finetune|bench|benchmark|tox21|report)
+    _needs_pretrain_state=1
+    ;;
+esac
+
+if (( _needs_pretrain_state )) && [[ -z "${PRETRAIN_EXP_ID:-}" ]]; then
+  echo "[ci] error: pretrain experiment id missing. Expected state at ${PRETRAIN_STATE_FILE}" >&2
+  exit 1
+fi
+
+if [[ -z "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+  if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
+    PRETRAIN_EXPERIMENT_ROOT="/data/mjepa/experiments/${PRETRAIN_EXP_ID}"
+  else
+    PRETRAIN_EXPERIMENT_ROOT="$EXP_ROOT"
+  fi
+fi
+
+if [[ -z "${PRETRAIN_ARTIFACTS_DIR:-}" ]]; then
+  PRETRAIN_ARTIFACTS_DIR="${PRETRAIN_EXPERIMENT_ROOT}/artifacts"
+fi
+
+if [[ -z "${PRETRAIN_DIR:-}" ]]; then
+  if [[ -n "${PRETRAIN_CACHE_DIR:-}" ]]; then
+    PRETRAIN_DIR="$PRETRAIN_CACHE_DIR"
+  else
+    PRETRAIN_DIR="${PRETRAIN_EXPERIMENT_ROOT}/pretrain"
+  fi
+fi
+
+if [[ -z "${PRETRAIN_MANIFEST:-}" ]]; then
+  PRETRAIN_MANIFEST="${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json"
+fi
+
+if [[ -z "${PRETRAIN_ENCODER_PATH:-}" ]]; then
+  PRETRAIN_ENCODER_PATH="${PRETRAIN_DIR}/encoder.pt"
+fi
+
+if [[ -z "${PRETRAIN_TOX21_ENV:-}" ]]; then
+  PRETRAIN_TOX21_ENV="${PRETRAIN_EXPERIMENT_ROOT}/tox21_gate.env"
+fi
+
 : "${FINETUNE_DIR:=${FINETUNE_CACHE_DIR:-$EXP_ROOT/finetune}}"
 : "${BENCH_DIR:=${BENCH_CACHE_DIR:-$EXP_ROOT/bench}}"
 : "${TOX21_DIR:=${TOX21_CACHE_DIR:-$EXP_ROOT/tox21}}"
 : "${REPORTS_DIR:=${REPORTS_CACHE_DIR:-$EXP_ROOT/report}}"
 
 mkdir -p "$CACHE_DIR" "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" \
-  "$TOX21_DIR" "$REPORTS_DIR" "$LOG_DIR" "$WANDB_DIR" "$ARTIFACTS_DIR"
+  "$TOX21_DIR" "$REPORTS_DIR" "$LOG_DIR" "$WANDB_DIR" "$ARTIFACTS_DIR" \
+  "$PRETRAIN_ARTIFACTS_DIR"
 export GRID_DIR PRETRAIN_DIR FINETUNE_DIR BENCH_DIR TOX21_DIR REPORTS_DIR LOG_DIR
 export EXPERIMENT_DIR ARTIFACTS_DIR
-: "${PRETRAIN_MANIFEST:=${ARTIFACTS_DIR}/encoder_manifest.json}"
-export PRETRAIN_MANIFEST
+export PRETRAIN_MANIFEST PRETRAIN_EXP_ID PRETRAIN_EXPERIMENT_ROOT PRETRAIN_ARTIFACTS_DIR \
+  PRETRAIN_STATE_FILE PRETRAIN_ENCODER_PATH PRETRAIN_TOX21_ENV
+
+if (( _needs_pretrain_state )) && [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
+  echo "[ci] using pretrain experiment id=${PRETRAIN_EXP_ID} root=${PRETRAIN_EXPERIMENT_ROOT}" >&2
+  echo "[ci] pretrain manifest path=${PRETRAIN_MANIFEST}" >&2
+fi
 
 # --- micromamba bootstrap ---
 ensure_micromamba() {

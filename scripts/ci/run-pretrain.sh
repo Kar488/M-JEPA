@@ -2,6 +2,7 @@
 set -euo pipefail
 
 export BESTCFG_NO_EPOCHS=1              # drop both epochs from best_config
+export MJEPACI_STAGE="pretrain"
 
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
@@ -9,12 +10,32 @@ source "$(dirname "$0")/stage.sh"
 export WANDB_NAME="pretrain"
 export WANDB_JOB_TYPE="pretrain"
 
+echo "[pretrain] using experiment id=${PRETRAIN_EXP_ID} root=${PRETRAIN_EXPERIMENT_ROOT}" >&2
+echo "[pretrain] artifacts dir=${PRETRAIN_ARTIFACTS_DIR}" >&2
+echo "[pretrain] manifest path=${PRETRAIN_MANIFEST}" >&2
+mkdir -p "$PRETRAIN_ARTIFACTS_DIR"
+
 export STAGE_OUTPUTS_DIR="${PRETRAIN_DIR}/stage-outputs"
 mkdir -p "$STAGE_OUTPUTS_DIR"
 
 #ensure the parm matches train_jepa_ci.yml
 
 run_stage pretrain
+
+encoder_ckpt="${PRETRAIN_DIR}/encoder.pt"
+manifest_path="${PRETRAIN_MANIFEST}"
+
+if [[ ! -f "$encoder_ckpt" ]]; then
+  echo "[pretrain] expected encoder checkpoint missing: $encoder_ckpt" >&2
+  exit 1
+fi
+
+if [[ ! -f "$manifest_path" ]]; then
+  echo "[pretrain] expected encoder manifest missing: $manifest_path" >&2
+  exit 1
+fi
+
+mkdir -p "${PRETRAIN_ARTIFACTS_DIR}"
 
 # Preserve key artifacts alongside checkpoints so downstream jobs can fetch them easily.
 if [[ -f "$PRETRAIN_DIR/encoder.pt" ]]; then
@@ -26,5 +47,38 @@ if [[ -f "$PRETRAIN_MANIFEST" ]]; then
   cp "$PRETRAIN_MANIFEST" "${PRETRAIN_DIR}/artifacts/encoder_manifest.json"
   ln -sf "$PRETRAIN_MANIFEST" "$STAGE_OUTPUTS_DIR/encoder_manifest.json"
 fi
+
+state_path="${PRETRAIN_STATE_FILE}" 
+state_dir="$(dirname "$state_path")"
+mkdir -p "$state_dir"
+
+python - "$state_path" "$PRETRAIN_EXP_ID" "$PRETRAIN_EXPERIMENT_ROOT" \
+  "$PRETRAIN_ARTIFACTS_DIR" "$manifest_path" "$encoder_ckpt" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+state_path, exp_id, exp_root, artifacts_dir, manifest_path, encoder_path = sys.argv[1:7]
+
+tox21_env = os.path.abspath(os.path.join(exp_root, "tox21_gate.env"))
+
+payload = {
+    "pretrain_exp_id": exp_id,
+    "experiment_root": os.path.abspath(exp_root),
+    "artifacts_dir": os.path.abspath(artifacts_dir),
+    "encoder_manifest": os.path.abspath(manifest_path),
+    "encoder_checkpoint": os.path.abspath(encoder_path),
+    "tox21_env": tox21_env,
+    "state_updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+
+tmp_path = state_path + ".tmp"
+with open(tmp_path, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+os.replace(tmp_path, state_path)
+print(f"[pretrain] wrote state to {state_path} (id={exp_id})")
+PY
 
 unset BESTCFG_NO_EPOCHS                     # avoid leaking to other stages

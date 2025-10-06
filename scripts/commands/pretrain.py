@@ -633,8 +633,18 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 if 'csv_path' in locals():
                     manifest_paths["loss_csv"] = os.path.abspath(csv_path)
 
+                pretrain_exp_id = os.getenv("PRETRAIN_EXP_ID") or os.getenv("RUN_ID")
+                if not pretrain_exp_id:
+                    try:
+                        pretrain_exp_id = experiment_root.name
+                    except Exception:
+                        pretrain_exp_id = None
+                experiment_root_str = os.path.abspath(str(experiment_root))
+
                 manifest_payload = {
                     "created_at": timestamp,
+                    "pretrain_exp_id": pretrain_exp_id,
+                    "experiment_root": experiment_root_str,
                     "paths": manifest_paths,
                     "hyperparameters": hyperparameters,
                     "run": _collect_run_metadata(wb),
