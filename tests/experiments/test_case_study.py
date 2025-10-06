@@ -75,3 +75,43 @@ def test_evaluate_case_study_handles_probability_mismatch(monkeypatch):
     assert mean_rand == pytest.approx(0.0)
     assert mean_pred == pytest.approx(1.0)
     assert baselines == {}
+
+
+def test_evaluate_case_study_handles_resize_failure(monkeypatch):
+    import experiments.case_study as case_study
+
+    dataset = types.SimpleNamespace(graphs=[types.SimpleNamespace(), types.SimpleNamespace()])
+    labels = np.array([0.0, 1.0])
+
+    def fake_predict(dataset, indices, encoder, head, device, edge_dim, batch_size=256):
+        # Return logits/probabilities shorter than requested to trigger the resize path.
+        return torch.zeros((1, 1)), torch.zeros((1, 1))
+
+    monkeypatch.setattr(case_study, "_predict_logits_probs_in_chunks", fake_predict)
+
+    def failing_resize(arr, new_len):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(case_study.np, "resize", failing_resize)
+
+    mean_true, mean_rand, mean_pred, baselines, metrics = case_study._evaluate_case_study(
+        dataset=dataset,
+        encoder=None,
+        head=None,
+        all_labels=labels,
+        train_idx=[0],
+        val_idx=[0, 1],
+        test_idx=[0, 1],
+        triage_pct=0.1,
+        calibrate=False,
+        device="cpu",
+        edge_dim=0,
+        seed=0,
+        baseline_embeddings=None,
+    )
+
+    assert mean_true == pytest.approx(0.5)
+    assert mean_rand == pytest.approx(0.0)
+    assert mean_pred == pytest.approx(1.0)
+    assert baselines == {}
+    assert metrics["roc_auc"] == pytest.approx(0.5)
