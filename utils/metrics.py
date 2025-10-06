@@ -10,7 +10,7 @@ routines.
 
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Dict, Iterable, Literal, Tuple
 
 import numpy as np
 from sklearn.metrics import (
@@ -26,38 +26,57 @@ from sklearn.metrics import (
 def compute_classification_metrics(
     y_true: np.ndarray, y_pred_logits: np.ndarray
 ) -> Dict[str, float]:
-    """Compute ROC‑AUC, PR‑AUC and Brier score for binary classification.
+    """Compute classification metrics with robust guards for degenerate splits."""
 
-    The logits are converted to probabilities using the sigmoid
-    transformation. If the true labels contain only one class the
-    AUC metrics are undefined; in this case NaN values are returned.
+    yt = np.asarray(y_true, dtype=np.float64).reshape(-1)
+    yp = np.asarray(y_pred_logits, dtype=np.float64).reshape(-1)
 
-    Args:
-        y_true: Array of binary labels (0 or 1).
-        y_pred_logits: Array of predicted logits.
+    yt = np.nan_to_num(yt, nan=0.0, posinf=0.0, neginf=0.0)
+    yp = np.nan_to_num(yp, nan=0.0, posinf=0.0, neginf=0.0)
 
-    Returns:
-        Dictionary with keys "roc_auc", "pr_auc" and "brier".
-    """
-    # Convert logits to probabilities
-    probs = 1.0 / (1.0 + np.exp(-y_pred_logits))
-    metrics: Dict[str, float] = {}
+    metrics: Dict[str, float] = {
+        "roc_auc": float("nan"),
+        "pr_auc": float("nan"),
+        "brier": float("nan"),
+        "ece": float("nan"),
+        "acc": float("nan"),
+    }
+
+    if yt.size == 0 or yp.size == 0:
+        return metrics
+
+    y_int = yt.astype(np.int64, copy=False)
+    if np.unique(y_int).size < 2:
+        return metrics
+
+    probs = 1.0 / (1.0 + np.exp(-yp))
+
     try:
-        roc_auc = roc_auc_score(y_true, probs)
+        metrics["roc_auc"] = float(roc_auc_score(y_int, probs))
     except ValueError:
-        roc_auc = float("nan")
+        metrics["roc_auc"] = float("nan")
+
     try:
-        pr_auc = average_precision_score(y_true, probs)
+        metrics["pr_auc"] = float(average_precision_score(y_int, probs))
     except ValueError:
-        pr_auc = float("nan")
+        metrics["pr_auc"] = float("nan")
+
     try:
-        brier = brier_score_loss(y_true, probs)
+        metrics["brier"] = float(brier_score_loss(y_int, probs))
     except ValueError:
-        brier = float("nan")
-        
-    metrics["roc_auc"] = roc_auc
-    metrics["pr_auc"] = pr_auc
-    metrics["brier"] = brier
+        metrics["brier"] = float("nan")
+
+    try:
+        metrics["ece"] = float(expected_calibration_error(probs, y_int, n_bins=15))
+    except Exception:
+        metrics["ece"] = float("nan")
+
+    try:
+        preds = (probs >= 0.5).astype(np.int64, copy=False)
+        metrics["acc"] = float(np.mean(preds == y_int)) if y_int.size else float("nan")
+    except Exception:
+        metrics["acc"] = float("nan")
+
     return metrics
 
 
@@ -81,10 +100,6 @@ def compute_regression_metrics(
     r2   = float("nan") if np.std(yt) < 1e-12 else float(r2_score(yt, yp))
     return {"rmse": rmse, "mae": mae, "r2": r2, "n": int(yt.size)}
 
-
-from typing import Iterable, Literal, Tuple
-
-import numpy as np
 
 try:
     import torch
