@@ -8,6 +8,7 @@ import json
 import math
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -369,15 +370,35 @@ def pick_topk(api: wandb.Api, sweep: Any, metric: str, maximize: bool, k: int,
 # Training launcher
 # ---------------------------------------------------------------------------
 
-def run_once(mm: str, program: str, subcmd: str, cfg: Dict[str, Any], seed: int,
-             unlabeled: str, labeled: str, log_dir: str,
-             project: Optional[str], group: Optional[str]) -> int:
+def run_once(
+    mm: str,
+    program: str,
+    subcmd: str,
+    cfg: Dict[str, Any],
+    seed: int,
+    unlabeled: str,
+    labeled: str,
+    log_dir: str,
+    project: Optional[str],
+    group: Optional[str],
+    config_idx: int,
+    exp_id: Optional[str],
+) -> int:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    env.pop("WANDB_RUN_ID", None)
     if project and "WANDB_PROJECT" not in env:
         env["WANDB_PROJECT"] = project
-    if group and "WANDB_RUN_GROUP" not in env:
-        env["WANDB_RUN_GROUP"] = group
+    expected_group = f"recheck_cfg{config_idx}"
+    env["WANDB_RUN_GROUP"] = expected_group
+    run_name = f"recheck_cfg{config_idx}_seed{seed}"
+    env["WANDB_NAME"] = run_name
+    env["RECHECK_CONFIG_INDEX"] = str(config_idx)
+    env["RECHECK_SEED"] = str(seed)
+    if exp_id:
+        env["RECHECK_EXP_ID"] = exp_id
+    if group:
+        env.setdefault("RECHECK_PARENT_GROUP", group)
     env.setdefault("WANDB_JOB_TYPE", "recheck")
 
     args = [
@@ -727,9 +748,11 @@ def main() -> None:
         top_configs.append(cfg)
 
     results: List[Dict[str, Any]] = []
+    offline_mode = (os.getenv("WANDB_MODE", "").lower() == "offline")
     for index, cfg in enumerate(top_configs):
         seeds = [1000 + index * 10 + s for s in range(args.extra_seeds)]
-        values: List[float] = []
+        exp_id = _resolve_exp_id(args.group)
+        _print_config_banner(index, seeds, args.project, entity, offline_mode)
         print(f"[recheck] launching seeds {seeds} for config index {index}", flush=True)
         for seed in seeds:
             rc = run_once(
@@ -743,6 +766,8 @@ def main() -> None:
                 args.log_dir,
                 args.project,
                 args.group,
+                index,
+                exp_id,
             )
             print(f"[recheck][seed {seed}] finished with exit code {rc}", flush=True)
             if rc != 0:
@@ -757,63 +782,34 @@ def main() -> None:
                 raise RuntimeError(f"recheck run failed with exit code {rc} (seed {seed})")
             time.sleep(1.0)
 
-            # Post-seed fetch with small retry to absorb W&B eventual consistency.
-        collect_attempts = max(1, int(os.getenv("RECHECK_COLLECT_ATTEMPTS", "5")))
-        collect_delay    = max(0.0, float(os.getenv("RECHECK_COLLECT_DELAY", "5")))
-        seed_to_val: Dict[int, float] = {}
-        for _try in range(1, collect_attempts + 1):
-            project_path = f"{entity}/{args.project}" if entity and args.project else None
-            fetched_runs: Sequence[Any] = []
-            if project_path:
-                try:
-                    # Restrict to this group and recheck job type to avoid sweep noise
-                    fetched_runs = list(api.runs(project_path, filters={"group": args.group, "jobType": "recheck"}))
-                except Exception as exc:
-                    print(f"[recheck] fetch attempt #{_try} failed: {exc}", flush=True)
-                    fetched_runs = []
-            # Match by minimal identity & seed; accumulate per-seed so we can wait for all of them
-            exp = _norm_cfg(cfg)
-            # minimal identity set that should survive CLI/logger renaming
-            ident_keys = ("training_method", "gnn_type", "hidden_dim", "num_layers", "contiguity")
-            for run in fetched_runs:
-                run_cfg = _coerce_config(getattr(run, "config", {}))
-                rc = _norm_cfg(run_cfg)
-                # seed must match
-                run_seed = _unwrap_config_value(run_cfg.get("seed"))
-                try:
-                    run_seed_int = int(run_seed)
-                except Exception:
-                    continue
-                if run_seed_int in seeds:
-                    # require the minimal identity set to match (with tolerance for numerics)
-                    ok = True
-                    for k in ident_keys:
-                        ev = exp.get(k)
-                        rv = rc.get(k)
-                        if rv is None:
-                            rv = rc.get(k.replace("_", "-"))
-                        if ev is None or rv is None:
-                            continue
-                        if not _num_close(rv, ev):
-                            ok = False
-                            break
-                    if ok:
-                        mv = metric_of(run, args.metric)
-                        if mv is not None:
-                            seed_to_val[run_seed_int] = float(mv)
+        attempts_env = os.getenv("RECHECK_COLLECT_ATTEMPTS")
+        try:
+            collect_attempts = int(attempts_env) if attempts_env else 5
+        except Exception:
+            collect_attempts = 5
+        collect_attempts = max(1, collect_attempts)
+        delay_env = os.getenv("RECHECK_COLLECT_DELAY")
+        try:
+            collect_delay = float(delay_env) if delay_env else 15.0
+        except Exception:
+            collect_delay = 15.0
+        collect_delay = max(0.0, collect_delay)
+        project_path = f"{entity}/{args.project}" if entity and args.project else None
+        seed_to_val = _collect_seed_metrics(
+            api,
+            project_path,
+            cfg,
+            seeds,
+            args.metric,
+            index,
+            exp_id,
+            collect_attempts,
+            collect_delay,
+        )
 
-                    if not ok and _try == 1:
-                        # Help debug first mismatch
-                        print("[recheck][debug] mismatch details:", flush=True)
-                        for k in ident_keys:
-                            print(f"  {k}: exp={exp.get(k)!r} got={rc.get(k) or rc.get(k.replace('_','-'))!r}", flush=True)
-            if len(seed_to_val) == len(seeds):
-                break
-            if _try < collect_attempts:
-                have = len(seed_to_val)
-                need = len(seeds)
-                print(f"[recheck] waiting for metrics to sync ({_try}/{collect_attempts}); have {have}/{need} seeds", flush=True)
-                time.sleep(collect_delay)
+        missing_seeds = [s for s in seeds if s not in seed_to_val]
+        for missing_seed in missing_seeds:
+            _warn_missing_metric(args.metric, missing_seed)
 
         values = [seed_to_val[s] for s in seeds if s in seed_to_val]
         if values:
@@ -893,3 +889,192 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+def _resolve_exp_id(group_hint: Optional[str]) -> Optional[str]:
+    candidate = (
+        os.getenv("RECHECK_EXP_ID")
+        or group_hint
+        or os.getenv("WANDB_RUN_GROUP")
+        or os.getenv("WANDB_NAME")
+    )
+    if not candidate:
+        return None
+    sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", str(candidate))
+    sanitized = sanitized.strip("_")
+    return sanitized or None
+
+
+def _expected_group(config_idx: int) -> str:
+    return f"recheck_cfg{config_idx}"
+
+
+def _expected_run_name(config_idx: int, seed: int) -> str:
+    return f"{_expected_group(config_idx)}_seed{seed}"
+
+
+def _local_result_path(exp_id: Optional[str], config_idx: int, seed: int) -> Optional[pathlib.Path]:
+    if not exp_id:
+        return None
+    base = pathlib.Path("/data/mjepa/experiments") / exp_id / "recheck_results"
+    return base / f"cfg{config_idx}_seed{seed}.json"
+
+
+def _read_local_result(path: Optional[pathlib.Path]) -> Tuple[Optional[float], Optional[int]]:
+    if path is None:
+        return None, None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except FileNotFoundError:
+        return None, None
+    except Exception:
+        return None, None
+    val = payload.get("val_rmse")
+    best = payload.get("best_step")
+    try:
+        val_f = float(val) if val is not None else None
+    except Exception:
+        val_f = None
+    try:
+        best_i = int(best) if best is not None else None
+    except Exception:
+        best_i = None
+    return val_f, best_i
+
+
+def _print_config_banner(
+    config_idx: int,
+    seeds: Sequence[int],
+    project: Optional[str],
+    entity: Optional[str],
+    offline_mode: bool,
+) -> None:
+    sample_seed = seeds[0] if seeds else 0
+    run_name = _expected_run_name(config_idx, sample_seed)
+    group = _expected_group(config_idx)
+    offline = "yes" if offline_mode else "no"
+    print(
+        f"[recheck] config {config_idx}: project={project or '-'} entity={entity or '-'} offline={offline}; "
+        f"expected group={group} run≈{run_name}",
+        flush=True,
+    )
+
+
+def _warn_missing_metric(metric: str, seed: int) -> None:
+    print(
+        f"[recheck][warn] missing metric '{metric}' for seed {seed} after retries; skipping",
+        flush=True,
+    )
+
+
+def _best_effort_wandb_sync() -> None:
+    cache_dir = os.getenv("WANDB_CACHE_DIR") or os.getenv("WANDB_DIR")
+    if not cache_dir:
+        return
+    path = pathlib.Path(cache_dir)
+    if not path.exists():
+        return
+    cmd = ["wandb", "sync", "--include-offline", str(path)]
+    try:
+        print(f"[recheck] triggering wandb sync via: {' '.join(cmd)}", flush=True)
+        subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError:
+        print("[recheck][warn] wandb CLI not available for offline sync", flush=True)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[recheck][warn] wandb sync command failed: {exc}", flush=True)
+
+
+def _collect_seed_metrics(
+    api: wandb.Api,
+    project_path: Optional[str],
+    cfg: Mapping[str, Any],
+    seeds: Sequence[int],
+    metric: str,
+    config_idx: int,
+    exp_id: Optional[str],
+    attempts: int,
+    delay: float,
+) -> Dict[int, float]:
+    seeds = [int(s) for s in seeds]
+    seed_to_val: Dict[int, float] = {}
+    used_fallback: set[int] = set()
+    expected_group = _expected_group(config_idx)
+    exp_norm = _norm_cfg(cfg)
+    ident_keys = ("training_method", "gnn_type", "hidden_dim", "num_layers", "contiguity")
+    total_attempts = max(1, attempts)
+
+    for attempt in range(1, total_attempts + 1):
+        fetched_runs: Sequence[Any] = []
+        if project_path:
+            try:
+                fetched_runs = list(api.runs(project_path, filters={"group": expected_group, "jobType": "recheck"}))
+            except Exception as exc:
+                print(f"[recheck] fetch attempt #{attempt} failed: {exc}", flush=True)
+                fetched_runs = []
+
+        for run in fetched_runs:
+            run_cfg = _coerce_config(getattr(run, "config", {}))
+            run_seed = _unwrap_config_value(run_cfg.get("seed"))
+            try:
+                run_seed_int = int(run_seed)
+            except Exception:
+                continue
+            if run_seed_int not in seeds or run_seed_int in seed_to_val:
+                continue
+
+            run_name = _safe_getattr(run, "name")
+            if run_name and run_name != _expected_run_name(config_idx, run_seed_int):
+                continue
+            run_group = _safe_getattr(run, "group")
+            if run_group and run_group != expected_group:
+                continue
+
+            rc = _norm_cfg(run_cfg)
+            ok = True
+            for k in ident_keys:
+                ev = exp_norm.get(k)
+                rv = rc.get(k)
+                if rv is None and "_" in k:
+                    rv = rc.get(k.replace("_", "-"))
+                if ev is None or rv is None:
+                    continue
+                if not _num_close(rv, ev):
+                    ok = False
+                    break
+            if not ok:
+                continue
+
+            mv = metric_of(run, metric)
+            if mv is None:
+                continue
+            try:
+                seed_to_val[run_seed_int] = float(mv)
+            except Exception:
+                continue
+
+        missing = [s for s in seeds if s not in seed_to_val]
+        for seed_id in missing:
+            path = _local_result_path(exp_id, config_idx, seed_id)
+            val, _ = _read_local_result(path)
+            if val is None:
+                continue
+            seed_to_val[seed_id] = val
+            if seed_id not in used_fallback and path is not None:
+                print(f"[recheck] using local fallback for seed {seed_id}: {path}", flush=True)
+                used_fallback.add(seed_id)
+
+        if len(seed_to_val) == len(seeds):
+            break
+
+        if attempt == 3:
+            _best_effort_wandb_sync()
+
+        if attempt < total_attempts:
+            remaining = [s for s in seeds if s not in seed_to_val]
+            print(
+                f"[recheck] waiting for metrics or fallback ({attempt}/{total_attempts}); missing seeds={remaining}",
+                flush=True,
+            )
+            time.sleep(max(0.0, delay))
+
+    return seed_to_val
+

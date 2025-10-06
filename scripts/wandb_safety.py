@@ -1,7 +1,7 @@
 # scripts/mjepa/wandb_safety.py
 from __future__ import annotations
 from typing import Optional, Dict, Any, TYPE_CHECKING
-import os, contextlib, json, time, pathlib
+import os, json, time, pathlib
 
 if TYPE_CHECKING:
     from wandb.sdk.wandb_run import Run  # for the Optional["Run"] annotation
@@ -48,6 +48,8 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
         try:
             run = wandb.init(
                 project=os.getenv("WANDB_PROJECT", "m-jepa"),
+                entity=os.getenv("WANDB_ENTITY"),
+                name=os.getenv("WANDB_NAME"),
                 group=os.getenv("WANDB_RUN_GROUP"),
                 job_type="sweep-run",
                 config=vars(args) if args is not None else None,
@@ -99,12 +101,30 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
             except Exception:
                 v = None
 
+        best_step_val = payload.get("best_step")
+        try:
+            best_step = int(best_step_val) if best_step_val is not None else None
+        except Exception:
+            best_step = None
+
+        log_payload = {}
         if v is not None:
-            _dbg(f"logging val_rmse={v} (from key={v_key or 'val_rmse'})")
-            wandb.log({"val_rmse": float(v)})
-            run.summary["val_rmse"] = float(v)
+            log_payload["val_rmse"] = float(v)
+        if best_step is not None:
+            log_payload["best_step"] = int(best_step)
+        if log_payload:
+            _dbg(
+                "logging metrics:",
+                {k: log_payload[k] for k in sorted(log_payload)},
+            )
+            wandb.log(log_payload)
         elif any(k in payload for k in METRIC_CANDIDATES):
             _dbg("no RMSE candidate in payload; keys=", list(payload.keys()))
+
+        if v is not None:
+            run.summary["val_rmse"] = float(v)
+        if best_step is not None:
+            run.summary["best_step"] = int(best_step)
 
         # val_mae aliasing
         if "val_mae" not in payload and payload.get("mae_mean") is not None:
@@ -133,6 +153,20 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
     except Exception as e:
         _dbg("wb_summary_update exception:", e)
 
-def wb_finish_safely() -> None:
-    with contextlib.suppress(Exception):
-        import wandb; wandb.finish()
+def wb_finish_safely(timeout: float = 30.0) -> None:
+    try:
+        import wandb
+    except Exception:
+        return
+
+    run = getattr(wandb, "run", None)
+    if run is None:
+        return
+
+    try:
+        wandb.finish(quiet=True)
+        start = time.time()
+        while getattr(wandb, "run", None) is not None and time.time() - start < timeout:
+            time.sleep(0.5)
+    except Exception:
+        pass
