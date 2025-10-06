@@ -73,8 +73,12 @@ try:  # pragma: no cover - exercised mainly in tests
     #from training.supervised import train_linear_head  # type: ignore[import-not-found]
     if "training" not in sys.modules:
         sys.modules["training"] = types.ModuleType("training")
-    sup  = importlib.import_module("training.supervised")
-    unsup = importlib.import_module("training.unsupervised")
+
+    _sup  = importlib.import_module("training.supervised")
+    _unsup = importlib.import_module("training.unsupervised")
+    # Bind function names used below
+    train_linear_head = getattr(_sup,  "train_linear_head")
+    train_jepa        = getattr(_unsup, "train_jepa")
 except Exception as exc:  # pragma: no cover - fail fast if even the stub is missing
     raise ImportError("train_linear_head is required to run the Tox21 case study") from exc
 
@@ -873,12 +877,12 @@ def run_tox21_case_study(
         n_neg = max(0, n_all - n_pos)
         if n_pos > 0 and n_neg > 0:
             pos_weight = torch.tensor([n_neg / max(1, n_pos)], device=device, dtype=torch.float32)
-            if "pos_weight" in inspect.signature(train_linear_head).parameters: # type: ignore
+            if "pos_weight" in inspect.signature(train_linear_head).parameters:
                 extra_args["pos_weight"] = pos_weight
-            elif "class_weight" in inspect.signature(train_linear_head).parameters: # pyright: ignore[reportUndefinedVariable]
+            elif "class_weight" in inspect.signature(train_linear_head).parameters:
                 extra_args["class_weight"] = {0: 1.0, 1: float(n_neg / max(1, n_pos))}
 
-    clf_metrics = train_linear_head( # type: ignore
+    clf_metrics = train_linear_head(
         dataset=dataset,
         encoder=encoder,
         task_type="classification",
