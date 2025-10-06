@@ -422,7 +422,14 @@ def _evaluate_case_study(
                 calibrated_probs.size,
                 expected_len,
             )
-            calibrated_probs = np.resize(calibrated_probs, expected_len).reshape(-1)
+            try:
+                calibrated_probs = np.resize(calibrated_probs, expected_len).reshape(-1)
+            except Exception as exc:
+                logger.warning(
+                    "Resizing calibrated probabilities failed (%s); padding with zeros instead.",
+                    exc,
+                )
+                calibrated_probs = np.zeros(expected_len, dtype=float)
         if calibrated_probs.size != expected_len:
             logger.warning(
                 "Calibrated probabilities still mismatched after resizing; padding with zeros.",
@@ -457,39 +464,57 @@ def _evaluate_case_study(
     }
 
     y_true = all_labels[test_idx_arr].astype(float)
-    mask_valid = ~np.isnan(y_true)
-    y_true_m = y_true[mask_valid]
-    try:
-        y_pred_m = calibrated_probs[mask_valid]
-    except IndexError:
-        num_valid = int(mask_valid.sum())
-        logger.warning(
-            "Failed to align calibrated probabilities with %d valid test labels; substituting zeros.",
-            num_valid,
-        )
-        y_pred_m = np.zeros(num_valid, dtype=float)
+    mask_valid = np.isfinite(y_true)
+    num_valid = int(mask_valid.sum())
 
-    if y_true_m.size > 0 and np.unique(y_true_m).size > 1:
-        yy = y_true_m.astype(int)
-        pp = np.nan_to_num(y_pred_m, nan=0.5, posinf=1.0, neginf=0.0)
-        try:
-            metrics["roc_auc"] = float(roc_auc_score(yy, pp))
-        except Exception:
-            metrics["roc_auc"] = float("nan")
-        try:
-            metrics["pr_auc"] = float(average_precision_score(yy, pp))
-        except Exception:
-            metrics["pr_auc"] = float("nan")
-        try:
-            metrics["brier"] = float(brier_score_loss(yy, pp))
-        except Exception:
-            metrics["brier"] = float("nan")
-        try:
-            metrics["ece"] = float(expected_calibration_error(yy, pp, n_bins=10))
-        except Exception:
-            metrics["ece"] = float("nan")
+    if num_valid < 2:
+        if num_valid == 0:
+            logger.warning("TEST split empty or without finite labels. Skipping AUC/Brier/ECE.")
+        else:
+            logger.warning("TEST split has fewer than two finite labels. Skipping AUC/Brier/ECE.")
     else:
-        logger.warning("TEST split degenerate (one class/empty). Skipping AUC/Brier/ECE.")
+        y_true_m = y_true[mask_valid]
+        if np.unique(y_true_m).size < 2:
+            logger.warning("TEST split degenerate (one class/empty). Skipping AUC/Brier/ECE.")
+        else:
+            try:
+                y_pred_m = calibrated_probs[mask_valid]
+            except IndexError:
+                logger.warning(
+                    "Failed to align calibrated probabilities with %d valid test labels; substituting zeros.",
+                    num_valid,
+                )
+                y_pred_m = np.zeros(num_valid, dtype=float)
+            else:
+                if y_pred_m.size != num_valid:
+                    logger.warning(
+                        "Probability array length %d mismatched with %d valid labels; resizing.",
+                        y_pred_m.size,
+                        num_valid,
+                    )
+                    if y_pred_m.size == 0:
+                        y_pred_m = np.zeros(num_valid, dtype=float)
+                    else:
+                        y_pred_m = np.resize(y_pred_m, num_valid)
+
+            pp = np.nan_to_num(y_pred_m, nan=0.5, posinf=1.0, neginf=0.0)
+            yy = y_true_m.astype(int)
+            try:
+                metrics["roc_auc"] = float(roc_auc_score(yy, pp))
+            except Exception:
+                metrics["roc_auc"] = float("nan")
+            try:
+                metrics["pr_auc"] = float(average_precision_score(yy, pp))
+            except Exception:
+                metrics["pr_auc"] = float("nan")
+            try:
+                metrics["brier"] = float(brier_score_loss(yy, pp))
+            except Exception:
+                metrics["brier"] = float("nan")
+            try:
+                metrics["ece"] = float(expected_calibration_error(yy, pp, n_bins=10))
+            except Exception:
+                metrics["ece"] = float("nan")
 
     baseline_means: Dict[str, float] = {}
     if baseline_embeddings:
