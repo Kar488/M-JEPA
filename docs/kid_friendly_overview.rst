@@ -184,6 +184,18 @@ Automation scripts keep the lab humming, especially inside CI.
   Materialise the top configurations from phase 1 and refresh the shortlist
   if new runs arrive late.
 
+  .. warning::
+
+     When ``recheck_topk_from_wandb.py`` relaunches phase-2 seeds, every run is
+     forced into an internal group named ``recheck_cfg{idx}``. The collector
+     subsequently queries W&B for that hard-coded group and accepts the first
+     matching run named ``recheck_cfg{idx}_seed{seed}``. Because neither the
+     group nor the run name incorporate a unique experiment identifier, running
+     the recheck multiple times inside the same W&B project will surface stale
+     metrics from earlier attempts. Until the tooling grows more precise filters,
+     clean up the old runs (or execute the follow-up in a fresh project) before
+     launching another recheck cycle.
+
 ``scripts/ci/run-grid-phase2.sh``
   Starts the Bayesian phase 2 sweep for the winning method. It plugs the top
   configs exported above into a new spec stored under ``grid/`` so tracked
