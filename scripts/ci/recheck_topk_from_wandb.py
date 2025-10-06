@@ -887,22 +887,6 @@ def main() -> None:
     print(f"[recheck] wrote Phase-2 winner → {best_path}", flush=True)
 
 
-if __name__ == "__main__":
-    main()
-def _resolve_exp_id(group_hint: Optional[str]) -> Optional[str]:
-    candidate = (
-        os.getenv("RECHECK_EXP_ID")
-        or group_hint
-        or os.getenv("WANDB_RUN_GROUP")
-        or os.getenv("WANDB_NAME")
-    )
-    if not candidate:
-        return None
-    sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", str(candidate))
-    sanitized = sanitized.strip("_")
-    return sanitized or None
-
-
 def _expected_group(config_idx: int) -> str:
     return f"recheck_cfg{config_idx}"
 
@@ -981,6 +965,20 @@ def _best_effort_wandb_sync() -> None:
         print("[recheck][warn] wandb CLI not available for offline sync", flush=True)
     except Exception as exc:  # pragma: no cover - defensive
         print(f"[recheck][warn] wandb sync command failed: {exc}", flush=True)
+
+
+def _resolve_exp_id(group_hint: Optional[str]) -> Optional[str]:
+    candidate = (
+        os.getenv("RECHECK_EXP_ID")
+        or group_hint
+        or os.getenv("WANDB_RUN_GROUP")
+        or os.getenv("WANDB_NAME")
+    )
+    if not candidate:
+        return None
+    sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", str(candidate))
+    sanitized = sanitized.strip("_")
+    return sanitized or None
 
 
 def _collect_seed_metrics(
@@ -1083,4 +1081,8 @@ def _collect_seed_metrics(
             time.sleep(max(0.0, delay))
 
     return seed_to_val
+
+
+if __name__ == "__main__":
+    main()
 
