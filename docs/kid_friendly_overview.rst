@@ -2,322 +2,304 @@ M-JEPA: A Kid-Friendly Guide
 ============================
 
 Welcome to the M-JEPA project! Think of this repository as a giant science
-lab where computers learn to understand molecules.  Each folder is like a
-different lab room with its own tools. Here's a tour that explains
-everything in simple, kid-friendly language.
+lab where computers learn to understand molecules. Each folder is a
+different room with its own tools. This tour explains the whole package in
+simple, kid-friendly language while pointing you to the exact files that
+drive the latest logic.
 
-Main Entrance: ``main.py``
-----------------------------------------
-This is the control center of the whole lab. It lets you:
+Mission Control
+---------------
 
-- Run tiny experiments just to see if things work (``demo`` mode).
-- Train a full model with real data (``full`` mode).
-- Try lots of combinations of settings to find the best one (``grid`` mode).
+``main.py``
+  The big switchboard of the lab. It can run:
 
-You choose what to run using command-line switches like ``--mode``,
-``--device``, or ``--method``.
+  - ``demo`` – tiny smoke tests that pit JEPA against a contrastive baseline
+    and even run a miniature Tox21 case study.
+  - ``full`` – full self-supervised pretraining followed by fine-tuning and
+    evaluation on labelled benchmarks.
+  - ``grid`` – YAML/JSON-driven sweeps powered by the tools in
+    ``experiments/``.
+
+``scripts/train_jepa.py``
+  A command-line friendlier control panel. It exposes subcommands such as
+  ``pretrain``, ``finetune``, ``evaluate``, ``benchmark`` and ``tox21``. Each
+  stage reuses the shared helpers in ``training/`` and ``experiments/`` so the
+  whole pipeline can run from one script.
+
+``scripts/commands/``
+  Modular commands that mirror the subcommands above. They are reused by the
+  sweep launcher so that automation and local runs stay in sync.
 
 Data Lab: ``data/``
-----------------------------------------
-This room creates and handles the molecules.
+-------------------
 
-``dataset.py``
-  Defines a ``GraphData`` class (a molecule as a graph) and a
-  ``GraphDataset`` class (a collection of them).  Can turn SMILES strings
-  (a text way to describe molecules) into usable graph data for the models.
-  Offers mini-batch helpers so multiple molecules can be processed together.
+This room builds datasets and augmentation recipes.
+
+``mdataset.py``
+  Stores molecule graphs as ``GraphData`` objects and bundles them into
+  ``GraphDataset`` collections. It can ingest SMILES strings, numpy arrays,
+  or cached pickles and keeps track of node, edge and positional features.
 
 ``augment.py``
-  Adds a bit of playful randomness to molecules:
+  Generates alternative molecular views. Recent updates added structured
+  configs for rotation, angle masking, dihedral noise, atom/bond masking and
+  subgraph removal. Helpers like ``generate_views`` and ``apply_graph_augmentations``
+  are imported directly by the training loops.
 
-  - Spin them (``random_rotation``).
-  - Freeze one of their angles (``mask_random_angle``).
-  - Twist them slightly (``perturb_dihedral``).
+``parquet_loader.py`` & ``moleculenet_dc.py``
+  Efficient readers that batch large Parquet/CSV corpora. They respect cache
+  directories so repeated sweeps can reuse featurised graphs.
 
-Other helpers
-  Files like ``parquet_loader.py`` and ``scaffold_split.py`` help load
-  real datasets.  When 3D coordinates are needed (for example, with
-  SchNet3D models), ``rdkit_geometry.py`` provides utilities to embed
-  molecules in 3D space so that node positions (``g.pos``) are available.
+``scaffold_split.py``
+  Prepares deterministic train/validation/test splits based on Bemis-Murcko
+  scaffolds so downstream evaluation remains fair.
 
-Model Factory: ``models/``
-----------------------------------------
-These are different "brains" that understand molecular graphs.
+``BASF_AIPubChem_v4/`` and ``ZINC-canonicalized/``
+  Example shards stored in ``data/`` for offline experiments. The download
+  helpers in ``scripts/download_unlabeled.py`` know how to refresh them.
 
-``base.py``
-  Defines abstract classes so all models share the same structure.
+Model Workshop: ``models/``
+---------------------------
 
-``encoder.py``
-  A simple Graph Neural Network (GNN) that reads a molecule and makes an
-  embedding (a fancy word for a vector of numbers that describes it).
-
-``edge_encoder.py``
-  An upgraded GNN that also looks at information stored on the bonds (the
-  edges).
-
-``gnn_variants.py``
-  Several popular GNN flavors like GraphSAGE, GIN, a multi-head GAT,
-  the Directed Message Passing Neural Network (DMPNN), and SchNet3D.
-  Some variants (such as SchNet3D) require additional information like
-  3D coordinates; see the data helpers for details.
-
-``predictor.py``
-  A small neural network that tries to guess a target embedding from the
-  context embedding.
-
-``ema.py``
-  Implements Exponential Moving Average (EMA) to keep a smooth version
-  of the model's weights, which helps with stability.
+Every file here defines a different brain for molecules.
 
 ``factory.py``
-  A factory that builds models based on the configuration settings. It
-  can create different types of encoders and predictors.
+  The main entry point. Given a configuration, it instantiates the requested
+  encoder, predictor and optional exponential moving average (``models/ema.py``).
 
-Training Room: ``training/``
-----------------------------------------
-This is where models learn.
+``gnn_variants.py``
+  Implements the supported backbones: MPNN, GIN, GraphSAGE, multi-head GAT,
+  DMPNN and SchNet3D. The shared ``models/base.py`` interface keeps them
+  interchangeable.
+
+``predictor.py``
+  Builds the JEPA prediction head that compares context and target views.
+
+``edge_encoder.py``
+  Extends the base encoders so bond features can be encoded alongside atom
+  embeddings.
+
+Training Tracks: ``training/``
+------------------------------
+
+This is where models learn and where much of the rewritten logic lives.
 
 ``unsupervised.py``
-  Trains either the JEPA model or a contrastive baseline without
-  labels.  It can run in distributed settings and supports mixed
-  precision (bf16).  The module implements graph masking and
-  augmentation to teach models to predict missing parts, and it
-  supports multiple backbones (e.g. GINE, DMPNN, SchNet3D).
+  Runs JEPA and contrastive training end-to-end. It wires together
+  augmentations, masking strategies, the EMA teacher, multi-device support,
+  gradient scaling and W&B logging. Environment variables such as
+  ``SWEEP_CACHE_DIR`` and ``WANDB_*`` are respected so sweeps and local
+  experiments behave the same way.
 
-``supervised.py`` / ``supervised_with_val.py``
-  Train simple "heads" on top of embeddings when labels are available.
-  Optional validation for early stopping.
+``supervised.py`` and ``supervised_with_val.py``
+  Train lightweight heads on frozen encoders. The validation-aware variant
+  performs early stopping and metric aggregation across seeds.
+
+``supervised_multi.py`` and ``multitask.py``
+  Handle multi-output heads and multi-task learning where a single encoder
+  feeds several prediction heads.
+
+``pretrain.py`` and ``baselines.py``
+  Thin wrappers that prepare encoders and call into the unsupervised trainer.
+  ``baselines.py`` also integrates third-party methods so comparisons stay
+  apples-to-apples.
 
 ``train_on_embeddings.py``
-  Uses pre-computed embeddings with simple models (like logistic
-  regression) for quick evaluation.
+  Consumes saved embeddings and trains quick probes (logistic regression,
+  random forests, etc.) without rerunning the GNN backbone.
 
-``pretrain.py`` & ``baselines.py``
-  Helpers to run baseline methods and pretraining flows.
-  In particular, ``baselines.py`` wraps third‑party models so that
-  contrastive and JEPA methods can be compared fairly.
+Helpful Tools: ``utils/``
+-------------------------
 
-Toolbox: ``utils/``
-----------------------------------------
-Handy helper functions used all over the project.
+Shared utilities that every room borrows.
 
-``seed.py``
-  Makes experiments repeatable by setting random seeds.
+``dataset.py`` & ``dataloader.py``
+  Glue code that turns ``GraphDataset`` objects into PyTorch ``DataLoader``
+  instances. They include smart defaults for worker counts, file descriptor
+  limits and pinned memory.
 
 ``logging.py``
-  Adds ``maybe_init_wandb``, which starts a real Weights & Biases run
-  when available and otherwise falls back to a safe dummy logger.
-  Tests use a ``wb`` pytest fixture based on this helper, and both tests
-  and training scripts log metrics and artifacts to Weights & Biases.
-
-``pooling.py``
-  Squishes all node embeddings in a graph into one by averaging.
+  Provides ``maybe_init_wandb`` so scripts can safely log to Weights & Biases
+  or fall back to a no-op logger during tests.
 
 ``checkpoint.py``
-  Saves and loads model checkpoints.
+  Saves/restores encoder, predictor, EMA and optimizer state. Used by both
+  the training scripts and by the sweep agents to resume work.
 
-``schedule.py``
-  Helps control the learning rate with a warmup and a cosine curve.
+``schedule.py`` & ``early_stopping.py``
+  Implement cosine-with-warmup schedules, plateau detectors and patience-based
+  stopping criteria.
 
-``ddp.py``
-  Small helpers for distributed data parallel training.
+``graph_ops.py`` & ``pooling.py``
+  Encode raw graphs into tensors and reduce node embeddings to graph-level
+  vectors.
 
-Experiment Lab: ``experiments/``
-----------------------------------------
-Extra scripts to run special setups or gather results.
+``metrics.py`` & ``scatter.py``
+  Evaluate regression/classification scores and supply efficient scatter
+  operations for graph batching.
+
+Experiment Control Tower: ``experiments/``
+------------------------------------------
+
+Where sweeps, reports and exploratory studies live.
 
 ``grid_search.py``
-  Runs combinations of model settings (like different sizes or learning
-  rates) and collects results.
+  Reads YAML/JSON specs and spawns training runs with shared logging. This is
+  what the ``grid`` mode in ``main.py`` calls.
+
+``case_study.py`` & ``probing.py``
+  Run qualitative evaluations like the Tox21 toxicity case study or probing
+  classifiers over frozen embeddings.
+
+``ablation.py``
+  Systematically disables model components to measure their impact.
 
 ``baseline_integration.py``
-  Hooks up third-party baseline models so they can be compared fairly.
+  Wraps external repositories (MolCLR, HiMol, GeomGCL, etc.) so their encoders
+  can be pre-trained and evaluated using the same scripts.
 
-``case_study.py``, ``ablation.py``, ``probing.py``
-  Additional experiments like removing features to see their impact or
-  probing embeddings for meaning.
+``reporting.py``
+  Builds CSV summaries, 95% confidence intervals, bar charts and heatmaps for
+  sweep results.
 
-``paired_effect_from_wandb.py``
-  After a phase‑1 sweep finishes, this script groups runs by shared
-  hyper‑parameters and computes the difference between JEPA and
-  contrastive results.  It reports which method wins and writes a
-  summary JSON file.
+Automation & Agents: ``scripts/``
+---------------------------------
 
-``export_best_from_wandb.py``
-  Exports the top‑K configurations from a sweep and writes a new
-  phase‑2 YAML to continue the search for the winning method.
+Automation scripts keep the lab humming, especially inside CI.
 
-Handy Scripts: ``scripts/``
-----------------------------------------
-Small programs for everyday tasks.
+``scripts/ci/run-grid-or-phase1.sh``
+  Launches paired JEPA and contrastive sweeps. It rewrites sweep specs so both
+  methods share the same backbone/seed grid (controlled by ``PHASE1_BACKBONES``
+  and ``PHASE1_SEEDS``) and then spawns Weights & Biases agents.
 
-``download_unlabeled.py``
-  Grabs random molecules from the internet (ZINC and PubChem) and saves
-  them for pretraining.
+``scripts/ci/paired_effect_from_wandb.py``
+  Downloads sweep history, groups runs by shared architecture knobs and writes
+  ``paired_effect.json`` containing the per-method deltas.
 
-``eval_moleculenet.py``, ``make_scaffold_splits.py``, ``train_jepa.py``
-  Utilities for evaluation, dataset prep, or running a specific training
-  setup.  ``train_jepa.py`` also registers subcommands to run
-  phase‑1 sweeps (``sweep-run``) and individual runs.
+``scripts/ci/phase1_decision.py``
+  A new resolver that interprets ``paired_effect.json`` safely. It reports
+  whether JEPA, contrastive or a tie won and whether a tie-breaker was needed.
 
-``run-grid-or-phase1.sh``
-  A shell script used in continuous integration that creates phase‑1
-  sweeps for JEPA and the contrastive baseline.  It splits the sweeps
-  by backbone so that each GNN type is explored under the same
-  hyper‑parameter budget and invokes the paired‑effect analysis.
+``scripts/ci/export_best_from_wandb.py`` & ``scripts/ci/recheck_topk_from_wandb.py``
+  Materialise the top configurations from phase 1 and refresh the shortlist
+  if new runs arrive late.
 
-``run-grid-or-phase2.sh``
-  Launches the second phase of hyper‑parameter search using Bayesian
-  optimisation on the winning method from phase 1.
+``scripts/ci/run-grid-phase2.sh``
+  Starts the Bayesian phase 2 sweep for the winning method. It plugs the top
+  configs exported above into a new spec stored under ``grid/`` so tracked
+  templates are never overwritten.
 
-Docs and Configs
-----------------------------------------
-``scripts/default.yaml``
-  Example configuration settings.
+``scripts/ci/run-pretrain.sh``, ``scripts/ci/run-finetune.sh``, ``scripts/ci/run-bench.sh`` and ``scripts/ci/run-tox21.sh``
+  Stage-specific launchers used by GitHub Actions. They all rely on the shared
+  setup helpers in ``scripts/ci/common.sh`` and ``scripts/ci/stage.sh``.
 
-``docs/``
-  Sphinx documentation, ready to be expanded.
+``commands/sweep_run.py``
+  The entry point executed by each sweep agent. It logs the backbone, hidden
+  dimension, layer count and masking strategy that later identify matched run
+  pairs.
 
-``requirements.txt`` & ``pyproject.toml``
-  Lists of needed Python packages.
+Adapters & Third-Party Friends
+------------------------------
 
-Sample Data: ``samples/``
-----------------------------------------
-Contains tiny datasets for quick demos and tests.
+``adapters/``
+  Provides bridges into external baselines. ``cli_runner.py`` shells out to
+  other repos, while ``native_adapter.py`` imports them as Python packages. A
+  central ``config.yaml`` records paths and CLI templates.
 
-Hyperparameter Sweeps: ``sweeps/``
-----------------------------------------
-The YAML files here define Weights & Biases sweep setups to try many
-parameter combinations automatically.
+``third_party/``
+  Holds the vendor code (MolCLR, HiMol, GeomGCL, etc.) used during baseline
+  comparisons.
 
-Quality Check: ``tests/``
-----------------------------------------
-Scripts in this room make sure each lab tool works correctly.
-Running the tests keeps experiments reliable.
+Reports, Samples & Sweeps
+-------------------------
 
-Third-Party Friends: ``third_party/``
-----------------------------------------
-Contains external repositories (like MolCLR, HiMol, GeomGCL) used as
-baselines or references.
+``sweeps/``
+  YAML specs for phase-1 and phase-2 Weights & Biases sweeps. They expose all
+  tunable knobs and are edited on-the-fly by the CI scripts described above.
 
-Baseline Connectors: ``adapters/``
-----------------------------------------
-This room plugs our lab into baseline models from other projects.
+``reports/``
+  Where automated summaries land. Phase-1 runs generate decision artifacts,
+  phase-2 produces ranked CSVs and plots (thanks to ``experiments/reporting.py``).
 
-``cli_runner.py``
-  Orchestrates baseline training and embedding through the command line.
+``samples/``
+  Tiny CSV/Parquet files that let tests and demos run without downloading
+  millions of molecules.
 
-``native_adapter.py``
-  Loads baseline repositories directly as Python modules so they fit
-  right in.
+Quality Checks
+--------------
 
-``config.yaml``
-  Stores the paths and command templates that tell the adapters what
-  to run.
+``tests/``
+  Pytest suites that cover dataset loading, augmentation transforms, logging,
+  sweep wiring and training utilities. They make heavy use of the synthetic
+  samples and of the logging fallbacks in ``utils/logging.py``.
 
-Conclusion
-----------
-This repository is a playground for teaching computers how molecules
-behave.  It has tools for data, model building, training, experimenting,
-and evaluating.  Each module is built to be modular and reusable so you
-can mix and match pieces to fit your research needs.
+``training/README.md``
+  Quick reference for the training sub-packages and the expected entry points.
 
-Have fun exploring!
+What's New?
+-----------
 
-What's New
-----------
+Recent rewrites introduced:
 
-Since the initial version of this guide, the project has gained a more
-structured experimentation pipeline.  The new ``run-grid-or-phase1.sh``
-script splits the first hyper‑parameter sweep by GNN backbone to ensure
-that JEPA and its contrastive baseline are compared fairly even under
-tight training budgets.  A paired‑effect analysis then selects the
-better of the two methods for each backbone.  A second phase of sweeps
-explores a wider range of hyper‑parameters for the winning method.  See
-``agents.md`` in the repository root for a detailed description of how
-these agents and sweeps work.
+* A resilient phase-1 decision helper (``scripts/ci/phase1_decision.py``) that
+  guarantees automation can detect ties.
+* Expanded augmentations and masking strategies in ``data/augment.py`` and
+  ``training/unsupervised.py`` so JEPA and contrastive baselines share the same
+  view-generation code.
+* Confidence-interval reporting utilities in ``experiments/reporting.py`` that
+  feed the plots saved under ``reports/``.
+* Multi-task and multi-head training helpers under ``training/multitask.py`` and
+  ``training/supervised_multi.py``.
+* Improved sweep launchers that respect ``PHASE1_BACKBONES`` and ``PHASE1_SEEDS``
+  so larger paired comparisons can be run without editing the tracked YAML.
 
 FAQ
 ---
 
 Why did a 30-run phase-1 sweep report only nine pairs?
-  The phase-1 driver launches one sweep for JEPA and one for the
-  contrastive baseline, and each sweep reuses the same grid of shared
-  hyper-parameters: the backbone ``gnn_type`` values ``gine``, ``dmpnn``
-  and ``schnet3d`` and the random seeds ``{1, 2, 3}``.  The paired-effect
-  script only forms a pair when it finds matching runs from *both*
-  methods that share the same backbone and seed, so there can be at most
-  ``3 backbones × 3 seeds = 9`` such combinations.  Extra trials that a
-  sweep might launch beyond that grid explore method-specific knobs
-  (such as JEPA's ``mask_ratio`` or ``ema_decay``) and still feed phase-2
-  selection, but they do not increase the matched-pair count because they
-  lack a partner run from the other method with identical shared
-  settings.  Seeing nine pairs therefore means *both* methods populated
-  every backbone/seed slot the key expects; if JEPA were missing entirely
-  the report would exit with "No runs found" (under ``--strict``) instead
-  of printing a winner.
+  The phase-1 driver launches one sweep for JEPA and one for the contrastive
+  baseline. Both sweeps reuse the same grid of shared hyper-parameters: the
+  backbone ``gnn_type`` values ``gine``, ``dmpnn`` and ``schnet3d`` and the
+  random seeds ``{1, 2, 3}``. The paired-effect script only forms a pair when it
+  finds matching runs from *both* methods that share the same backbone and seed,
+  so there can be at most ``3 backbones × 3 seeds = 9`` such combinations. Extra
+  trials that a sweep might launch explore method-specific knobs (such as JEPA's
+  ``mask_ratio`` or EMA decay) and still feed phase-2 selection, but they do not
+  increase the matched-pair count because they lack a partner run from the other
+  method with identical shared settings.
 
 What happens when there is no clear winner on the primary metric?
-  ``paired_effect_from_wandb.py`` compares JEPA and contrastive runs only
-  on the requested metric (``val_rmse`` by default) and never consults a
-  secondary score.  It first tries to compute per-seed deltas using the
-  shared backbone/seed grid; if no overlapping seeds exist it falls back
-  to mean-per-method deltas for that ``pair_id`` and, as a last resort,
-  to a single global mean delta when *no* pairs survived the filters.
-  After those reductions, the mean delta decides the winner—lower is
-  better for metrics ending in ``rmse``/``loss`` and higher is better for
-  metrics like ``auc``.  A tie (exactly zero mean delta) implicitly goes
-  to JEPA because the code chooses contrastive only when the contrastive
-  mean beats JEPA by the chosen direction.  There is no hidden
-  tie-breaker or secondary metric to consult; instead, the script writes
-  out ``pairs_used`` and ``aggregate`` fields in ``paired_effect.json`` so
-  you can audit whether the decision came from seed-wise pairs, per-pair
-  means, or the global fallback.
+  ``scripts/ci/phase1_decision.py`` inspects ``paired_effect.json``. If the mean delta is
+  within the configured tolerance (``--tie-tol``), or if the JSON reports that a
+  tie-breaker was used, the script returns ``tie``. Otherwise it selects the
+  method that improves the requested metric (``val_rmse`` by default for
+  regression, ``val_auc`` for classification). Automation can then choose to run
+  both methods in phase 2 or stick with the winner.
 
 What configuration keys form a "pair" today?
-  The ``pair_id`` that links JEPA and contrastive runs is the hash of four
-  architecture knobs written by ``scripts/commands/sweep_run.py``:
-  ``gnn_type`` (which backbone was chosen), ``hidden_dim`` (model width),
-  ``num_layers`` (depth), and ``contiguity`` (whether the masking window
-  must stay contiguous).  Because both sweeps share those knobs, they act
-  as the common key when the paired-effect report groups runs.  There is
-  no need to adjust the key as long as new sweeps stick to the same
-  shared backbone grid—method-specific settings (like JEPA's ``mask_ratio``
-  or contrastive temperature) live outside the key on purpose so each
-  method can search them independently.  Only if we introduced another
-  architecture hyper-parameter that *both* methods tuned (for example, a
-  new notion of encoder width) would we extend the key to include it.
+  ``scripts/commands/sweep_run.py`` records four architecture knobs for every
+  run: ``gnn_type``, ``hidden_dim``, ``num_layers`` and ``contiguity``. The
+  paired-effect analysis hashes those into a ``pair_id`` so JEPA and contrastive
+  runs with matching settings can be compared fairly. Method-specific hyper-
+  parameters (like JEPA's ``mask_ratio``) are deliberately excluded so each
+  method can explore its own search space.
 
 How do we increase the number of matched pairs beyond ``3 × 3 = 9``?
-  If the variance of the paired comparison feels too high, you can grow the
-  shared backbone grid instead of editing the pairing key.  The phase-1
-  launcher ``scripts/ci/run-grid-or-phase1.sh`` now understands two
-  environment variables:
-
-  - ``PHASE1_BACKBONES`` – a comma-separated list of backbones to plug into
-    both sweep specs (for example ``gine,dmpnn,schnet3d,gin``).
-  - ``PHASE1_SEEDS`` – a comma-separated list of integer seeds to apply to
-    both sweeps (for example ``1,2,3,4,5``).
-
-  Setting either variable rewrites the temporary YAML files that the script
-  hands to Weights & Biases, so you can run
+  Set ``PHASE1_BACKBONES`` and/or ``PHASE1_SEEDS`` before running
+  ``scripts/ci/run-grid-or-phase1.sh``. The script rewrites temporary YAML files
+  so both sweeps cover the requested combinations without altering the tracked
+  templates in ``sweeps/``. For example,
   ``PHASE1_SEEDS=1,2,3,4,5 GRID_MODE=wandb bash scripts/ci/run-grid-or-phase1.sh``
-  and obtain ``3 backbones × 5 seeds = 15`` potential pairs without touching
-  the tracked sweep templates.  This keeps the shared pairing knobs explicit
-  while making it easy to dial up the number of matched runs when additional
-  budget is available.
+  yields ``3 backbones × 5 seeds = 15`` potential pairs.
 
-How many phase-1 runs do we need before ``pair_id``
-overlap becomes likely?
-  Phase-1 sweeps sample one of three backbones (``gine``, ``dmpnn``,
-  ``schnet3d``) at random for each run.  The ``pair_id`` only depends on the
-  chosen backbone because the other pairing knobs are fixed during the sweep.
-  With ``n`` runs per method, the probability that at least one backbone is
-  shared between the JEPA and contrastive sweeps is shown below alongside the
-  chance that **each** sweep covers all three backbones.
+How many phase-1 runs do we need before ``pair_id`` overlap becomes likely?
+  Phase-1 sweeps sample backbones uniformly. With ``n`` runs per method, the
+  chance that at least one backbone overlaps – and therefore that a ``pair_id``
+  match exists – increases quickly with ``n``. Historical plots and tables can be
+  regenerated with the helpers in ``reports/`` if you want to explore past
+  budgets before scheduling new sweeps.
 
-  .. list-table:: Pair-id coverage when backbones are sampled uniformly
-     :header-rows: 1
+Have fun exploring!
      :widths: 15 25 30
 
      * - Runs per method (``n``)
