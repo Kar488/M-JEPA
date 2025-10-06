@@ -300,23 +300,26 @@ How many phase-1 runs do we need before ``pair_id`` overlap becomes likely?
   budgets before scheduling new sweeps.
 
 Have fun exploring!
-     :widths: 15 25 30
 
-     * - Runs per method (``n``)
-       - Probability of a shared ``pair_id``
-       - Probability both sweeps cover all three backbones
-     * - 3
-       - 94.2%
-       - 4.9%
-     * - 4
-       - 98.6%
-       - 19.8%
-     * - 5
-       - 99.7%
-       - 38.1%
-     * - 6
-       - 99.9%
-       - 54.9%
+.. list-table:: Phase-1 run overlap probabilities
+   :widths: 15 25 30
+   :header-rows: 1
+
+   * - Runs per method (``n``)
+     - Probability of a shared ``pair_id``
+     - Probability both sweeps cover all three backbones
+   * - 3
+     - 94.2%
+     - 4.9%
+   * - 4
+     - 98.6%
+     - 19.8%
+   * - 5
+     - 99.7%
+     - 38.1%
+   * - 6
+     - 99.9%
+     - 54.9%
 
   Even with four runs per method there is already a 98.6% chance that the two
   sweeps share at least one ``pair_id``.  Increasing the run count mainly
