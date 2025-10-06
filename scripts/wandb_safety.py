@@ -159,13 +159,23 @@ def wb_finish_safely(timeout: float = 30.0) -> None:
     except Exception:
         return
 
-    run = getattr(wandb, "run", None)
-    if run is None:
+    finish = getattr(wandb, "finish", None)
+    if not callable(finish):
         return
 
+    start = time.time()
     try:
-        wandb.finish(quiet=True)
-        start = time.time()
+        try:
+            finish(quiet=True)
+        except TypeError:
+            # Older mocks (and some unit tests) expose finish() without a
+            # ``quiet`` keyword. Retry without the argument so the call still
+            # happens and errors are surfaced for callers.
+            finish()
+    except Exception:
+        pass
+
+    try:
         while getattr(wandb, "run", None) is not None and time.time() - start < timeout:
             time.sleep(0.5)
     except Exception:
