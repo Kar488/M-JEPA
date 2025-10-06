@@ -2,6 +2,7 @@
 set -euo pipefail
 
 export BESTCFG_NO_EPOCHS=1              # drop both epochs from best_config
+export MJEPACI_STAGE="tox21"
 
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
@@ -9,16 +10,27 @@ source "$(dirname "$0")/stage.sh"
 export WANDB_NAME="tox21"
 export WANDB_JOB_TYPE="tox21"
 
-: "${GITHUB_ENV:=${EXP_ROOT}/tox21_gate.env}"
+: "${GITHUB_ENV:=${PRETRAIN_TOX21_ENV}}"
 mkdir -p "$(dirname "$GITHUB_ENV")"
 : >"$GITHUB_ENV"
 export GITHUB_ENV
 
 SOURCE="${TOX21_ENCODER_SOURCE:-pretrain_frozen}"
-MANIFEST_DEFAULT="${PRETRAIN_MANIFEST:-${PRETRAIN_DIR}/artifacts/encoder_manifest.json}"
+MANIFEST_DEFAULT="${PRETRAIN_MANIFEST:-${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json}"
 MANIFEST_PATH="${TOX21_ENCODER_MANIFEST:-$MANIFEST_DEFAULT}"
 
-MET_ENV_FILE="${EXP_ROOT}/met_benchmark.env"
+echo "[tox21] using pretrain experiment id=${PRETRAIN_EXP_ID}" >&2
+echo "[tox21] tox21 env path=${GITHUB_ENV}" >&2
+echo "[tox21] encoder checkpoint source=${SOURCE}" >&2
+echo "[tox21] manifest path=${MANIFEST_PATH}" >&2
+
+if [[ ! -f "$MANIFEST_PATH" ]]; then
+  echo "[tox21] required manifest missing: $MANIFEST_PATH" >&2
+  exit 1
+fi
+
+MET_ENV_FILE="${PRETRAIN_EXPERIMENT_ROOT}/met_benchmark.env"
+mkdir -p "$(dirname "$MET_ENV_FILE")"
 if [[ "$SOURCE" == "fine_tuned" && -f "$MET_ENV_FILE" ]]; then
   while IFS='=' read -r key value; do
     [[ -z "$key" ]] && continue
@@ -69,6 +81,9 @@ fi
 
 ensure_dir "$TOX21_ENCODER_CHECKPOINT"
 
+env_file="$MET_ENV_FILE"
+echo "[tox21] writing summary env to ${env_file}" >&2
+
 export TOX21_ENCODER_SOURCE="$SOURCE"
 export TOX21_ENCODER_CHECKPOINT
 
@@ -76,7 +91,6 @@ export TOX21_ENCODER_CHECKPOINT
 run_stage tox21
 
 stage_file="${TOX21_DIR}/stage-outputs/tox21_${SOURCE}.json"
-env_file="${EXP_ROOT}/met_benchmark.env"
 python - <<'PY' "$stage_file" "$SOURCE" "$env_file"
 import json, os, sys
 stage_path, source, env_path = sys.argv[1:4]
