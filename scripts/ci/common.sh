@@ -42,6 +42,50 @@ python_bin() {
   fi
 }
 
+resolve_encoder_checkpoint() {
+  local candidate="${PRETRAIN_ENCODER_PATH:-}"
+  if [[ -n "$candidate" && -f "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  local manifest="${PRETRAIN_MANIFEST:-}"
+  if [[ -n "$manifest" && -f "$manifest" ]]; then
+    local py resolved=""
+    if py=$(python_bin 2>/dev/null); then
+      resolved="$("$py" - "$manifest" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh) or {}
+except Exception:
+    sys.exit(0)
+
+paths = data.get("paths") or {}
+for key in ("encoder", "encoder_symlink"):
+    value = paths.get(key)
+    if isinstance(value, str) and value.strip():
+        print(os.path.abspath(value))
+        break
+PY
+      )"
+    fi
+
+    if [[ -n "$resolved" ]]; then
+      printf '%s\n' "$resolved"
+      return 0
+    fi
+  fi
+
+  if [[ -n "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+  fi
+}
+
 __load_pretrain_state_from_file() {
   local state_path="$PRETRAIN_STATE_FILE"
   [[ -f "$state_path" ]] || return 1

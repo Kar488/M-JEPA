@@ -4,8 +4,18 @@ export MJEPACI_STAGE="bench"
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
 
-encoder_ckpt="${PRETRAIN_DIR}/encoder.pt"
+encoder_ckpt="$(resolve_encoder_checkpoint)"
 echo "[bench] using pretrain experiment id=${PRETRAIN_EXP_ID} checkpoint=${encoder_ckpt}" >&2
+
+if [[ -z "$encoder_ckpt" ]]; then
+  echo "[bench] unable to resolve encoder checkpoint path. PRETRAIN_ENCODER_PATH=${PRETRAIN_ENCODER_PATH:-<unset>}" >&2
+  exit 1
+fi
+
+if [[ -n "${PRETRAIN_ENCODER_PATH:-}" && "$encoder_ckpt" != "${PRETRAIN_ENCODER_PATH:-}" ]]; then
+  echo "[bench] PRETRAIN_ENCODER_PATH pointed to ${PRETRAIN_ENCODER_PATH}; using manifest-derived path ${encoder_ckpt}" >&2
+fi
+
 if [[ ! -f "$encoder_ckpt" ]]; then
   echo "[bench] required encoder checkpoint missing: $encoder_ckpt" >&2
   exit 1
