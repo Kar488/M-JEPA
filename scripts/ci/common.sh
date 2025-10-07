@@ -3,27 +3,46 @@
 set -euo pipefail
 
 : "${MJEPACI_STAGE:=}"
-: "${EXPERIMENTS_ROOT:=/data/mjepa/experiments}"
-: "${PRETRAIN_STATE_FILE_LEGACY:=${EXPERIMENTS_ROOT}/pretrain_state.json}"
 : "${PRETRAIN_STATE_FILE:=}"
 : "${EXP_ID:=}"
+: "${RUN_ID:=$(date +%s)}"
 
 # --- centralised environment variables ---
 : "${APP_DIR:=/srv/mjepa}"
 : "${VENV_DIR:=/srv/mjepa/.venv}"
-: "${MAMBA_ROOT_PREFIX:=/data/mjepa/micromamba}"
-: "${CACHE_DIR:=/data/mjepa/cache/graphs_50k}"
-# Allow sweeps to reuse the standard graph cache unless the workflow overrides it.
-: "${SWEEP_CACHE_DIR:=$CACHE_DIR}"
-: "${RUN_ID:=$(date +%s)}"
-: "${EXP_ROOT:=}"
-: "${EXPERIMENT_DIR:=}"
-: "${ARTIFACTS_DIR:=}"
+: "${LOG_DIR:=${APP_DIR}/logs}"
 : "${PRETRAIN_EXP_ID:=}"
 : "${PRETRAIN_EXPERIMENT_ROOT:=}"
 : "${PRETRAIN_ARTIFACTS_DIR:=}"
-: "${WANDB_DIR:=/data/mjepa/wandb}"
-: "${LOG_DIR:=${APP_DIR}/logs}"
+
+__resolve_data_root() {
+  local runner_tmp="${RUNNER_TEMP:-/tmp}"
+  local env_root="${MJEPA_DATA_ROOT:-}"
+
+  if [[ -n "$env_root" ]]; then
+    if mkdir -p "$env_root" 2>/dev/null; then
+      printf '%s\n' "$env_root"
+      return 0
+    fi
+    echo "[ci] warn: unable to use MJEPA_DATA_ROOT=$env_root; falling back to /data/mjepa" >&2
+  fi
+
+  local vast_root="/data/mjepa"
+  if mkdir -p "$vast_root" 2>/dev/null; then
+    printf '%s\n' "$vast_root"
+    return 0
+  fi
+
+  local emergency="${runner_tmp%/}/mjepa"
+  echo "[ci] warn: /data/mjepa not writable; using ${emergency}" >&2
+  if mkdir -p "$emergency" 2>/dev/null; then
+    printf '%s\n' "$emergency"
+    return 0
+  fi
+
+  echo "[ci] error: unable to create DATA_ROOT at ${env_root:-'<unset>'}, /data/mjepa, or ${emergency}" >&2
+  return 1
+}
 
 if [[ -z "${APP_DIR:-}" ]]; then
   _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"      # .../scripts/ci
@@ -32,6 +51,27 @@ if [[ -z "${APP_DIR:-}" ]]; then
     APP_DIR="$_root"
   fi
 fi
+
+if [[ -n "${DATA_ROOT:-}" ]]; then
+  if ! mkdir -p "$DATA_ROOT" 2>/dev/null; then
+    echo "[ci] warn: DATA_ROOT=$DATA_ROOT not writable; falling back to resolver" >&2
+    DATA_ROOT=""
+  fi
+fi
+
+if [[ -z "${DATA_ROOT:-}" ]]; then
+  DATA_ROOT="$(__resolve_data_root)"
+fi
+
+: "${EXPERIMENTS_ROOT:=${DATA_ROOT}/experiments}"
+: "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
+: "${CACHE_DIR:=${DATA_ROOT}/cache/graphs_50k}"
+# Allow sweeps to reuse the standard graph cache unless the workflow overrides it.
+: "${SWEEP_CACHE_DIR:=$CACHE_DIR}"
+: "${WANDB_DIR:=${DATA_ROOT}/wandb}"
+: "${PRETRAIN_STATE_FILE_LEGACY:=${EXPERIMENTS_ROOT}/pretrain_state.json}"
+
+export DATA_ROOT
 export APP_DIR
 export PYTHONPATH="${APP_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 export CACHE_DIR
@@ -297,7 +337,6 @@ split_gpu_ids() {
 }
 
 # Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
-: "${GRID_DIR:=${GRID_CACHE_DIR:-$EXP_ROOT/grid}}"
 
 if [[ "${MJEPACI_STAGE}" != "pretrain" ]]; then
   __load_pretrain_state || true
@@ -328,69 +367,84 @@ if (( _needs_pretrain_state )) && [[ -z "${EXP_ID:-}" ]]; then
   exit 1
 fi
 
-if [[ -z "${EXP_ROOT:-}" ]]; then
-  if [[ -n "${EXP_ID:-}" ]]; then
-    EXP_ROOT="${EXPERIMENTS_ROOT}/${EXP_ID}"
-  else
-    EXP_ROOT="${EXPERIMENTS_ROOT}/${RUN_ID}"
-  fi
-fi
-
-if [[ -z "${EXPERIMENT_DIR:-}" && -n "${EXP_ROOT:-}" ]]; then
-  EXPERIMENT_DIR="$EXP_ROOT"
-fi
-
 ensure_dir_var() {
   local var_name="$1"
-  local fallback="$2"
+  local fallback="${2:-}"
+  local emergency_rel="${3:-}"
   local current="${!var_name:-}"
+  local runner_tmp="${RUNNER_TEMP:-/tmp}/mjepa"
+  local -a attempts=()
 
-  if [[ -z "$current" ]]; then
-    printf -v "$var_name" '%s' "$fallback"
-    return 0
-  fi
+  add_candidate() {
+    local path="$1"
+    local label="$2"
+    [[ -z "$path" ]] && return
+    local existing
+    for existing in "${attempts[@]}"; do
+      if [[ "$existing" == "$path" ]]; then
+        return
+      fi
+    done
+    attempts+=("$path")
+  }
 
-  if mkdir -p "$current" 2>/dev/null; then
-    return 0
-  fi
+  add_candidate "$current" "current"
+  add_candidate "$fallback" "fallback"
 
-  if [[ -n "$fallback" ]]; then
-    echo "[ci] warning: unable to create $var_name at $current; falling back to $fallback" >&2
-    printf -v "$var_name" '%s' "$fallback"
-    mkdir -p "$fallback"
-  else
-    echo "[ci] error: unable to create $var_name at $current and no fallback provided" >&2
-    return 1
+  local suffix="${emergency_rel#/}"
+  if [[ -z "$suffix" && -n "$fallback" ]]; then
+    suffix="${fallback#$DATA_ROOT/}"
+    suffix="${suffix#/}"
   fi
+  if [[ -z "$suffix" ]]; then
+    suffix="${var_name,,}"
+  fi
+  local emergency="${runner_tmp%/}"
+  if [[ -n "$suffix" ]]; then
+    emergency="${emergency}/${suffix}"
+  fi
+  add_candidate "$emergency" "emergency"
+
+  local -a tried=()
+  local idx
+  for idx in "${!attempts[@]}"; do
+    local path="${attempts[$idx]}"
+    [[ -z "$path" ]] && continue
+    if mkdir -p "$path" 2>/dev/null; then
+      printf -v "$var_name" '%s' "$path"
+      if (( idx > 0 )); then
+        echo "[ci] warn: falling back to $var_name=$path" >&2
+      fi
+      return 0
+    fi
+    tried+=("$path")
+  done
+
+  echo "[ci] error: unable to create $var_name (attempted: ${tried[*]:-none})" >&2
+  return 1
 }
 
-if [[ -z "${ARTIFACTS_DIR:-}" && -n "${EXPERIMENT_DIR:-}" ]]; then
-  ARTIFACTS_DIR="${EXPERIMENT_DIR}/artifacts"
+if [[ -z "${EXP_ID:-}" ]]; then
+  EXP_ID="$RUN_ID"
 fi
 
-if [[ -z "${PRETRAIN_EXPERIMENT_ROOT:-}" && -n "${EXP_ID:-}" ]]; then
-  PRETRAIN_EXPERIMENT_ROOT="${EXPERIMENTS_ROOT}/${EXP_ID}"
+EXPERIMENT_DIR="${EXPERIMENTS_ROOT}/${EXP_ID}"
+EXP_ROOT="$EXPERIMENT_DIR"
+
+: "${ARTIFACTS_DIR:=${EXPERIMENT_DIR}/artifacts}"
+
+if [[ -z "${PRETRAIN_EXP_ID:-}" ]]; then
+  PRETRAIN_EXP_ID="$EXP_ID"
 fi
 
-if [[ -z "${PRETRAIN_ARTIFACTS_DIR:-}" ]]; then
-  PRETRAIN_ARTIFACTS_DIR="${PRETRAIN_EXPERIMENT_ROOT}/artifacts"
-fi
+: "${PRETRAIN_EXPERIMENT_ROOT:=${EXPERIMENTS_ROOT}/${PRETRAIN_EXP_ID}}"
+: "${PRETRAIN_ARTIFACTS_DIR:=${ARTIFACTS_DIR}}"
 
-_artifacts_fallback=""
-if [[ -n "${EXPERIMENT_DIR:-}" ]]; then
-  _artifacts_fallback="${EXPERIMENT_DIR}/artifacts"
-elif [[ -n "${EXP_ROOT:-}" ]]; then
-  _artifacts_fallback="${EXP_ROOT}/artifacts"
-fi
-ensure_dir_var ARTIFACTS_DIR "${_artifacts_fallback}"
-unset _artifacts_fallback
+# Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
+: "${GRID_DIR:=${GRID_CACHE_DIR:-$EXP_ROOT/grid}}"
 
-_pretrain_artifacts_fallback=""
-if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
-  _pretrain_artifacts_fallback="${PRETRAIN_EXPERIMENT_ROOT}/artifacts"
-fi
-ensure_dir_var PRETRAIN_ARTIFACTS_DIR "${_pretrain_artifacts_fallback}"
-unset _pretrain_artifacts_fallback
+ensure_dir_var ARTIFACTS_DIR "${EXPERIMENT_DIR}/artifacts" "experiments/${EXP_ID}/artifacts"
+ensure_dir_var PRETRAIN_ARTIFACTS_DIR "${ARTIFACTS_DIR}" "experiments/${PRETRAIN_EXP_ID}/artifacts"
 
 if [[ -n "${EXP_ID:-}" ]]; then
   PRETRAIN_STATE_FILE_CANONICAL="${EXPERIMENTS_ROOT}/${EXP_ID}/pretrain_state.json"
@@ -440,9 +494,11 @@ export PRETRAIN_MANIFEST PRETRAIN_EXP_ID PRETRAIN_EXPERIMENT_ROOT PRETRAIN_ARTIF
   PRETRAIN_STATE_FILE PRETRAIN_STATE_FILE_CANONICAL PRETRAIN_STATE_FILE_LEGACY \
   PRETRAIN_ENCODER_PATH PRETRAIN_TOX21_ENV EXP_ID
 
-if [[ -n "${EXP_ID:-}" ]]; then
-  echo "[ci] resolved EXP_ID=${EXP_ID}" >&2
-fi
+echo "[ci] EXP_ID=${EXP_ID}" >&2
+echo "[ci] DATA_ROOT=${DATA_ROOT}" >&2
+echo "[ci] EXPERIMENT_DIR=${EXPERIMENT_DIR}" >&2
+echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR}" >&2
+echo "[ci] PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR}" >&2
 
 if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
   echo "[ci] resolved experiment root=${PRETRAIN_EXPERIMENT_ROOT}" >&2
