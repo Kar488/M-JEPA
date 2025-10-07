@@ -19,6 +19,9 @@ set -euo pipefail
 : "${EXP_ROOT:=}"
 : "${EXPERIMENT_DIR:=}"
 : "${ARTIFACTS_DIR:=}"
+: "${PRETRAIN_EXP_ID:=}"
+: "${PRETRAIN_EXPERIMENT_ROOT:=}"
+: "${PRETRAIN_ARTIFACTS_DIR:=}"
 : "${WANDB_DIR:=/data/mjepa/wandb}"
 : "${LOG_DIR:=${APP_DIR}/logs}"
 
