@@ -140,6 +140,63 @@ def test_run_once_writes_log(tmp_path, monkeypatch):
     assert started["env"]["WANDB_RUN_GROUP"] == "recheck_cfg2"
 
 
+def test_run_once_retries_transient(tmp_path, monkeypatch, capsys):
+    log_dir = tmp_path / "logs"
+    started = {"calls": 0}
+
+    class FakeProc:
+        def __init__(self, exit_code):
+            self.pid = 200 + started["calls"]
+            self._calls = 0
+            self._exit = exit_code
+
+        def poll(self):
+            self._calls += 1
+            return self._exit if self._calls > 1 else None
+
+    exit_codes = [255, 0]
+
+    def fake_popen(args, stdout, stderr, env):
+        started["calls"] += 1
+        started.setdefault("env", env)
+        return FakeProc(exit_codes.pop(0))
+
+    times = iter([0.0, 61.0, 0.0, 61.0])
+
+    monkeypatch.setenv("RECHECK_RUN_RETRIES", "2")
+    monkeypatch.setenv("RECHECK_TRANSIENT_RCS", "255")
+    monkeypatch.setenv("RECHECK_RUN_RETRY_DELAY", "0")
+    monkeypatch.setattr(rc.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(rc.time, "time", lambda: next(times))
+    monkeypatch.setattr(rc.time, "sleep", lambda *_: None)
+
+    rc.run_once(
+        mm="micromamba",
+        program="train.py",
+        subcmd="finetune",
+        cfg={"training_method": "jepa", "hidden_dim": 64},
+        seed=7,
+        unlabeled="ul",  # type: ignore[arg-type]
+        labeled="lb",  # type: ignore[arg-type]
+        log_dir=str(log_dir),
+        project="proj",
+        group="grp",
+        config_idx=2,
+        exp_id="exp123",
+    )
+
+    assert started["calls"] == 2
+    assert not exit_codes
+
+    log_file = log_dir / "recheck_jepa_seed7.log"
+    content = log_file.read_text()
+    assert "retry attempt 2" in content
+    assert "exit code 255" in content
+
+    captured = capsys.readouterr()
+    assert "transient exit code 255" in captured.out
+
+
 def test_collect_seed_metrics_prefers_wandb(monkeypatch):
     config_idx = 1
     seeds = [1000]

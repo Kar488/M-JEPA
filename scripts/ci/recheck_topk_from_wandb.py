@@ -475,36 +475,117 @@ def run_once(
 
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f"recheck_{method}_seed{seed}.log")
+    forwarded_flags = list(forwarded)
 
-    with open(log_path, "w", encoding="utf-8") as handle:
-        if forwarded:
-            handle.write("[recheck] forwarded flags: " + repr(forwarded) + "\n")
-        process = subprocess.Popen(
-            args,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            env=env,
+    raw_retry_env = os.environ.get("RECHECK_RUN_RETRIES")
+    try:
+        retries = int(raw_retry_env) if raw_retry_env is not None else 1
+    except ValueError:
+        print(
+            f"[recheck][warn] invalid int for RECHECK_RUN_RETRIES={raw_retry_env!r}; using 1",
+            flush=True,
         )
+        retries = 1
+    retries = max(1, retries)
 
-    print(f"[recheck][seed {seed}] started PID {process.pid}; streaming logs to {log_path}", flush=True)
+    raw_delay_env = os.environ.get("RECHECK_RUN_RETRY_DELAY")
+    try:
+        retry_delay = float(raw_delay_env) if raw_delay_env is not None else 5.0
+    except ValueError:
+        print(
+            f"[recheck][warn] invalid float for RECHECK_RUN_RETRY_DELAY={raw_delay_env!r}; using 5.0",
+            flush=True,
+        )
+        retry_delay = 5.0
+    retry_delay = max(0.0, retry_delay)
 
-    start = time.time()
-    next_ping = start + 60.0
-    while True:
-        rc = process.poll()
-        if rc is not None:
-            return rc
-
-        now = time.time()
-        if now >= next_ping:
-            mins = max(1, int((now - start) // 60))
+    default_transient = {255, 254}
+    raw_transient = os.environ.get("RECHECK_TRANSIENT_RCS")
+    transient_codes = set(default_transient)
+    if raw_transient:
+        tokens = [tok.strip() for tok in re.split(r"[;,\s]+", raw_transient) if tok.strip()]
+        parsed_codes: set[int] = set()
+        invalid_tokens: List[str] = []
+        for token in tokens:
+            try:
+                parsed_codes.add(int(token))
+            except ValueError:
+                invalid_tokens.append(token)
+        if parsed_codes:
+            transient_codes = parsed_codes
+        if invalid_tokens:
+            joined = ", ".join(sorted(invalid_tokens))
             print(
-                f"[recheck][seed {seed}] still running after {mins} min; tail -f {log_path} for live output",
+                f"[recheck][warn] ignoring non-integer codes in RECHECK_TRANSIENT_RCS: {joined}",
                 flush=True,
             )
-            next_ping = now + 60.0
 
-        time.sleep(5.0)
+    last_rc: Optional[int] = None
+
+    def _append_log(message: str) -> None:
+        try:
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write(message + "\n")
+        except Exception:  # pragma: no cover - diagnostics only
+            pass
+
+    def _launch(attempt: int) -> int:
+        mode = "w" if attempt == 1 else "a"
+        with open(log_path, mode, encoding="utf-8") as handle:
+            if attempt == 1 and forwarded_flags:
+                handle.write("[recheck] forwarded flags: " + repr(forwarded_flags) + "\n")
+            elif attempt > 1:
+                suffix = f" (previous exit={last_rc})" if last_rc is not None else ""
+                handle.write(f"[recheck] retry attempt {attempt}{suffix}\n")
+            process = subprocess.Popen(
+                args,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                env=env,
+            )
+
+        msg = f"[recheck][seed {seed}] started PID {process.pid}; streaming logs to {log_path}"
+        if retries > 1:
+            msg += f" (attempt {attempt}/{retries})"
+        print(msg, flush=True)
+
+        start = time.time()
+        next_ping = start + 60.0
+        while True:
+            rc_local = process.poll()
+            if rc_local is not None:
+                return rc_local
+
+            now = time.time()
+            if now >= next_ping:
+                mins = max(1, int((now - start) // 60))
+                print(
+                    f"[recheck][seed {seed}] still running after {mins} min; tail -f {log_path} for live output",
+                    flush=True,
+                )
+                next_ping = now + 60.0
+
+            time.sleep(5.0)
+
+    for attempt in range(1, retries + 1):
+        rc = _launch(attempt)
+        if rc == 0:
+            return 0
+
+        last_rc = rc
+        _append_log(f"[recheck] exit code {rc} on attempt {attempt}/{retries}")
+        if rc in transient_codes and attempt < retries:
+            print(
+                f"[recheck][seed {seed}] transient exit code {rc}; retrying ({attempt + 1}/{retries}) in {retry_delay:.1f}s",
+                flush=True,
+            )
+            if retry_delay > 0:
+                time.sleep(retry_delay)
+            continue
+
+        return rc
+
+    return last_rc if last_rc is not None else 1
 
 
 # ---------------------------------------------------------------------------
