@@ -9,15 +9,17 @@ export MJEPACI_STAGE="pretrain"
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
 
-echo "[ci] EXP_ID=${EXP_ID}" >&2
-echo "[ci] EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT}" >&2
-echo "[ci] DATA_ROOT=${DATA_ROOT:-<unset>}" >&2
-echo "[ci] EXPERIMENT_DIR=${EXPERIMENT_DIR}" >&2
-echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR}" >&2
-echo "[ci] PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR}" >&2
+if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+  STAGE_BIN="${MJEPACI_STAGE_SHIM}"
+elif [[ -z "${STAGE_BIN:-}" ]]; then
+  STAGE_BIN="run_stage"
+fi
+
+export STAGE_BIN
+ci_print_env_diag "$STAGE_BIN"
 
 # ensure key directories are exported for shims
-export PRETRAIN_DIR PRETRAIN_ARTIFACTS_DIR
+export EXP_ID EXPERIMENTS_ROOT EXPERIMENT_DIR PRETRAIN_DIR ARTIFACTS_DIR PRETRAIN_ARTIFACTS_DIR
 
 export WANDB_NAME="pretrain"
 export WANDB_JOB_TYPE="pretrain"
@@ -31,13 +33,7 @@ mkdir -p "$PRETRAIN_ARTIFACTS_DIR"
 export STAGE_OUTPUTS_DIR="${PRETRAIN_DIR}/stage-outputs"
 mkdir -p "$STAGE_OUTPUTS_DIR"
 
-#ensure the parm matches train_jepa_ci.yml
-
-if [[ -n "${STAGE_BIN:-}" ]]; then
-  "$STAGE_BIN" pretrain
-else
-  run_stage pretrain
-fi
+"$STAGE_BIN" pretrain
 
 encoder_ckpt="${PRETRAIN_DIR}/encoder.pt"
 manifest_path="${PRETRAIN_MANIFEST}"
@@ -106,12 +102,7 @@ export PRETRAIN_MANIFEST="$manifest_path"
 export PRETRAIN_ENCODER_PATH="$encoder_ckpt"
 
 if [[ ! -f "$encoder_ckpt" ]]; then
-  echo "[pretrain] expected encoder checkpoint missing: $encoder_ckpt" >&2
-  exit 1
-fi
-
-if [[ ! -f "$manifest_path" ]]; then
-  echo "[pretrain] expected encoder manifest missing: $manifest_path" >&2
+  echo "[ci] error: expected encoder checkpoint at ${encoder_ckpt}" >&2
   exit 1
 fi
 
