@@ -340,6 +340,30 @@ if [[ -z "${EXPERIMENT_DIR:-}" && -n "${EXP_ROOT:-}" ]]; then
   EXPERIMENT_DIR="$EXP_ROOT"
 fi
 
+ensure_dir_var() {
+  local var_name="$1"
+  local fallback="$2"
+  local current="${!var_name:-}"
+
+  if [[ -z "$current" ]]; then
+    printf -v "$var_name" '%s' "$fallback"
+    return 0
+  fi
+
+  if mkdir -p "$current" 2>/dev/null; then
+    return 0
+  fi
+
+  if [[ -n "$fallback" ]]; then
+    echo "[ci] warning: unable to create $var_name at $current; falling back to $fallback" >&2
+    printf -v "$var_name" '%s' "$fallback"
+    mkdir -p "$fallback"
+  else
+    echo "[ci] error: unable to create $var_name at $current and no fallback provided" >&2
+    return 1
+  fi
+}
+
 if [[ -z "${ARTIFACTS_DIR:-}" && -n "${EXPERIMENT_DIR:-}" ]]; then
   ARTIFACTS_DIR="${EXPERIMENT_DIR}/artifacts"
 fi
@@ -351,6 +375,22 @@ fi
 if [[ -z "${PRETRAIN_ARTIFACTS_DIR:-}" ]]; then
   PRETRAIN_ARTIFACTS_DIR="${PRETRAIN_EXPERIMENT_ROOT}/artifacts"
 fi
+
+_artifacts_fallback=""
+if [[ -n "${EXPERIMENT_DIR:-}" ]]; then
+  _artifacts_fallback="${EXPERIMENT_DIR}/artifacts"
+elif [[ -n "${EXP_ROOT:-}" ]]; then
+  _artifacts_fallback="${EXP_ROOT}/artifacts"
+fi
+ensure_dir_var ARTIFACTS_DIR "${_artifacts_fallback}"
+unset _artifacts_fallback
+
+_pretrain_artifacts_fallback=""
+if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+  _pretrain_artifacts_fallback="${PRETRAIN_EXPERIMENT_ROOT}/artifacts"
+fi
+ensure_dir_var PRETRAIN_ARTIFACTS_DIR "${_pretrain_artifacts_fallback}"
+unset _pretrain_artifacts_fallback
 
 if [[ -n "${EXP_ID:-}" ]]; then
   PRETRAIN_STATE_FILE_CANONICAL="${EXPERIMENTS_ROOT}/${EXP_ID}/pretrain_state.json"
