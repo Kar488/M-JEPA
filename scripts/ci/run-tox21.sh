@@ -45,7 +45,13 @@ if [[ ! -f "$MANIFEST_PATH" ]]; then
 fi
 
 python_cmd=()
-resolve_ci_python python_cmd
+if ensure_micromamba >/dev/null 2>&1; then
+  python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
+elif [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+  resolve_ci_python python_cmd
+else
+  ensure_micromamba
+fi
 
 MET_ENV_FILE="${PRETRAIN_EXPERIMENT_ROOT}/met_benchmark.env"
 mkdir -p "$(dirname "$MET_ENV_FILE")"

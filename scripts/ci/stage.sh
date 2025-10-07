@@ -344,8 +344,12 @@ run_with_timeout() {
 run_stage() {
   local s="${1:?stage}"
 
-  if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+  if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then
+    local dir
+    dir="$(stage_dir "$s")"
+    mkdir -p "$dir" "$dir/stage-outputs"
     "$MJEPACI_STAGE_SHIM" "$s"
+    mark_stage_done "$dir"
     return 0
   fi
 
