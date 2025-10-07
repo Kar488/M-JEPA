@@ -639,11 +639,6 @@ tm = cfg.get("training_method") or cfg.get("method")
 if isinstance(tm, str) and tm.lower().startswith("con"):
     cfg["contrastive"] = True
 
-# Translate single-choice method to a boolean CLI toggle
-tm = cfg.get("training_method") or cfg.get("method")
-if isinstance(tm, str) and tm.lower().startswith("con"):
-    print("--contrastive")
-
 # --- Unified, refactor-safe mappings (kebab-case) ---
 # 1) Dataset / loader / device knobs that multiple stages accept
 dataset_loader = {
@@ -804,15 +799,20 @@ for k in list(skip):
     cfg.pop(k, None)
 
 mapping = maps.get(stage, {})
+seen_flags = set()
 for key, flag in mapping.items():
     if key not in cfg:
+        continue
+    if flag in seen_flags:
         continue
     val = cfg[key]
     if isinstance(val, bool):
         if val:
             print(flag)
+            seen_flags.add(flag)
     else:
         print(flag)
+        seen_flags.add(flag)
         print(val)
 PY
 }
