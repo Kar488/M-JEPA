@@ -94,19 +94,33 @@ if [[ -z "${APP_DIR:-}" ]]; then
   unset __ci_here __ci_root
 fi
 
-if [[ -n "${DATA_ROOT:-}" ]] && ! mjepa_try_dir "${DATA_ROOT}"; then
-  mjepa_log_warn "DATA_ROOT=${DATA_ROOT} not writable; ignoring"
-  DATA_ROOT=""
-fi
-
-if [[ -n "${EXPERIMENTS_ROOT:-}" ]]; then
-  if ! mjepa_try_dir "${EXPERIMENTS_ROOT}"; then
-    mjepa_log_warn "EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT} not writable; falling back"
-    EXPERIMENTS_ROOT=""
+requested_experiments="${EXPERIMENTS_ROOT-}"
+if [[ -n "$requested_experiments" ]]; then
+  if mjepa_try_dir "$requested_experiments"; then
+    EXPERIMENTS_ROOT="$requested_experiments"
+  else
+    mjepa_log_warn "EXPERIMENTS_ROOT=$requested_experiments not writable; falling back"
+    unset EXPERIMENTS_ROOT
   fi
 fi
 
 if [[ -z "${DATA_ROOT:-}" ]]; then
+  if [[ -z "${EXPERIMENTS_ROOT:-}" ]]; then
+    if ! DATA_ROOT="$(mjepa_detect_data_root)"; then
+      exit 1
+    fi
+  else
+    parent_dir="$(dirname "${EXPERIMENTS_ROOT}")"
+    if [[ -z "$parent_dir" || "$parent_dir" == "." ]]; then
+      DATA_ROOT="$EXPERIMENTS_ROOT"
+    else
+      DATA_ROOT="$parent_dir"
+    fi
+  fi
+fi
+
+if [[ -n "${DATA_ROOT:-}" ]] && ! mjepa_try_dir "${DATA_ROOT}"; then
+  mjepa_log_warn "DATA_ROOT=${DATA_ROOT} not writable; detecting fallback"
   if ! DATA_ROOT="$(mjepa_detect_data_root)"; then
     exit 1
   fi
@@ -117,36 +131,25 @@ if [[ -z "${EXPERIMENTS_ROOT:-}" ]]; then
 fi
 
 if ! mjepa_try_dir "${EXPERIMENTS_ROOT}"; then
-  __ci_runner_tmp="${RUNNER_TEMP:-/tmp}"
-  __ci_fallback_experiments="${__ci_runner_tmp%/}/mjepa/experiments"
-  if mjepa_try_dir "${__ci_fallback_experiments}"; then
-    mjepa_log_warn "falling back EXPERIMENTS_ROOT=${__ci_fallback_experiments}"
-    EXPERIMENTS_ROOT="${__ci_fallback_experiments}"
-    DATA_ROOT="$(dirname "${EXPERIMENTS_ROOT}")"
+  runner_tmp_root="${RUNNER_TEMP:-/tmp}"
+  fallback_experiments="${runner_tmp_root%/}/mjepa/experiments"
+  if mjepa_try_dir "$fallback_experiments"; then
+    mjepa_log_warn "falling back EXPERIMENTS_ROOT=$fallback_experiments"
+    EXPERIMENTS_ROOT="$fallback_experiments"
+    DATA_ROOT="$(dirname "$fallback_experiments")"
   else
     mjepa_log_error "unable to ensure writable EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT}"
     exit 1
   fi
-  unset __ci_runner_tmp __ci_fallback_experiments
+  unset runner_tmp_root fallback_experiments
 fi
 
 if [[ -z "${DATA_ROOT:-}" ]]; then
-  DATA_ROOT="$(dirname "${EXPERIMENTS_ROOT}")"
-fi
-
-if [[ -z "${DATA_ROOT:-}" || "${DATA_ROOT}" == "." ]]; then
-  DATA_ROOT="${EXPERIMENTS_ROOT}"
-fi
-
-if [[ -n "${DATA_ROOT:-}" ]] && ! mjepa_try_dir "${DATA_ROOT}"; then
-  mjepa_log_warn "DATA_ROOT=${DATA_ROOT} derived from experiments root is not writable; using detected fallback"
-  if ! DATA_ROOT="$(mjepa_detect_data_root)"; then
-    exit 1
-  fi
-  EXPERIMENTS_ROOT="${DATA_ROOT%/}/experiments"
-  if ! mjepa_try_dir "${EXPERIMENTS_ROOT}"; then
-    mjepa_log_error "unable to ensure writable EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT}"
-    exit 1
+  derived_parent="$(dirname "${EXPERIMENTS_ROOT}")"
+  if [[ -z "$derived_parent" || "$derived_parent" == "." ]]; then
+    DATA_ROOT="$EXPERIMENTS_ROOT"
+  else
+    DATA_ROOT="$derived_parent"
   fi
 fi
 
@@ -449,8 +452,8 @@ case "${MJEPACI_STAGE}" in
 esac
 
 if (( _needs_pretrain_state )) && [[ -z "${EXP_ID:-}" ]]; then
-  local_hint="${EXPERIMENTS_ROOT}/<EXP_ID>/pretrain_state.json"
-  echo "[ci] error: pretrain experiment id missing. Expected EXP_ID env var or state at ${local_hint}" >&2
+  hint_path="${EXPERIMENTS_ROOT}/<EXP_ID>/pretrain_state.json"
+  echo "[ci] error: pretrain experiment id missing. Expected EXP_ID env var or state at ${hint_path}" >&2
   exit 1
 fi
 
@@ -562,7 +565,7 @@ fi
 
 : "${FINETUNE_DIR:=${FINETUNE_CACHE_DIR:-$EXP_ROOT/finetune}}"
 : "${BENCH_DIR:=${BENCH_CACHE_DIR:-$EXP_ROOT/bench}}"
-: "${TOX21_DIR:=${TOX21_CACHE_DIR:-$EXP_ROOT/tox21}}"
+: "${TOX21_DIR:=${TOX21_CACHE_DIR:-$EXPERIMENT_DIR}}"
 : "${REPORTS_DIR:=${REPORTS_CACHE_DIR:-$EXP_ROOT/report}}"
 
 mkdir -p "$CACHE_DIR" "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" \
@@ -579,26 +582,10 @@ ci_print_env_diag() {
   echo "[ci] EXP_ID=${EXP_ID:-<unset>}" >&2
   echo "[ci] EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>}" >&2
   echo "[ci] EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>}" >&2
-  echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR:-<unset>}" >&2
   echo "[ci] PRETRAIN_DIR=${PRETRAIN_DIR:-<unset>}" >&2
+  echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR:-<unset>}" >&2
   echo "[ci] PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>}" >&2
   echo "[ci] STAGE_BIN=${stage_bin_value}" >&2
-
-  if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
-    echo "[ci] resolved experiment root=${PRETRAIN_EXPERIMENT_ROOT}" >&2
-  fi
-
-  if [[ -n "${PRETRAIN_MANIFEST:-}" ]]; then
-    echo "[ci] resolved pretrain manifest path=${PRETRAIN_MANIFEST}" >&2
-  fi
-
-  if [[ -n "${PRETRAIN_STATE_FILE_CANONICAL:-}" ]]; then
-    echo "[ci] resolved pretrain state canonical=${PRETRAIN_STATE_FILE_CANONICAL}" >&2
-  fi
-
-  if [[ -n "${PRETRAIN_STATE_FILE:-}" && "${PRETRAIN_STATE_FILE}" != "${PRETRAIN_STATE_FILE_CANONICAL:-}" ]]; then
-    echo "[ci] active pretrain state path=${PRETRAIN_STATE_FILE}" >&2
-  fi
 }
 
 # --- micromamba bootstrap ---

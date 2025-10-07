@@ -18,16 +18,11 @@ fi
 export STAGE_BIN
 ci_print_env_diag "$STAGE_BIN"
 
-# ensure key directories are exported for shims
 export EXP_ID EXPERIMENTS_ROOT EXPERIMENT_DIR PRETRAIN_DIR ARTIFACTS_DIR PRETRAIN_ARTIFACTS_DIR
 
 export WANDB_NAME="pretrain"
 export WANDB_JOB_TYPE="pretrain"
 
-echo "[pretrain] using experiment id=${PRETRAIN_EXP_ID} root=${PRETRAIN_EXPERIMENT_ROOT}" >&2
-echo "[pretrain] artifacts dir=${PRETRAIN_ARTIFACTS_DIR}" >&2
-echo "[pretrain] manifest path=${PRETRAIN_MANIFEST}" >&2
-echo "[pretrain] state path=${PRETRAIN_STATE_FILE} (legacy=${PRETRAIN_STATE_FILE_LEGACY:-n/a})" >&2
 mkdir -p "$PRETRAIN_ARTIFACTS_DIR"
 
 export STAGE_OUTPUTS_DIR="${PRETRAIN_DIR}/stage-outputs"
@@ -35,23 +30,18 @@ mkdir -p "$STAGE_OUTPUTS_DIR"
 
 "$STAGE_BIN" pretrain
 
-encoder_ckpt="${PRETRAIN_DIR}/encoder.pt"
-manifest_path="${PRETRAIN_MANIFEST}"
-stage_outputs_json="${STAGE_OUTPUTS_DIR}/pretrain.json"
+expected_stage_outputs="${STAGE_OUTPUTS_DIR}/pretrain.json"
+expected_manifest="${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json"
+expected_encoder="${PRETRAIN_DIR}/encoder.pt"
 
-if [[ ! -f "$stage_outputs_json" ]]; then
-  echo "[ci] error: expected pretrain.json at ${stage_outputs_json}" >&2
+if [[ ! -f "$expected_stage_outputs" ]]; then
+  echo "[ci] error: expected file ${expected_stage_outputs} not found" >&2
   exit 1
 fi
 
-# Resolve a Python interpreter for the parsing and bookkeeping steps below.
-# Prefer an existing "python" binary, otherwise fall back to micromamba.
 python_cmd=()
 resolve_ci_python python_cmd
 
-# If the training command emitted a stage outputs JSON, honour the absolute
-# paths recorded there.  This guards against mismatched environment variables
-# (e.g. stale PRETRAIN_* overrides) and gives us a concrete file to copy.
 recorded_manifest=""
 recorded_encoder=""
 
@@ -64,7 +54,7 @@ while IFS='=' read -r key value; do
       recorded_encoder="$value"
       ;;
   esac
-done < <("${python_cmd[@]}" - "$stage_outputs_json" <<'PY'
+done < <("${python_cmd[@]}" - "$expected_stage_outputs" <<'PY'
 import json
 import os
 import sys
@@ -74,7 +64,7 @@ try:
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh) or {}
 except Exception:
-    sys.exit(1)
+    sys.exit(0)
 
 def emit(key, value):
     if isinstance(value, str) and value.strip():
@@ -85,42 +75,43 @@ emit("encoder_checkpoint", data.get("encoder_checkpoint"))
 PY
 )
 
-if [[ -n "${recorded_encoder:-}" ]]; then
-  encoder_ckpt="$recorded_encoder"
-fi
+manifest_path="$expected_manifest"
+encoder_ckpt="$expected_encoder"
 
 if [[ -n "${recorded_manifest:-}" ]]; then
   manifest_path="$recorded_manifest"
 fi
 
-if [[ ! -f "$manifest_path" ]]; then
-  echo "[ci] error: expected pretrain.json at ${stage_outputs_json} and manifest at ${manifest_path}" >&2
+if [[ -n "${recorded_encoder:-}" ]]; then
+  encoder_ckpt="$recorded_encoder"
+fi
+
+if [[ -f "$manifest_path" && "$manifest_path" != "$expected_manifest" ]]; then
+  mkdir -p "$(dirname "$expected_manifest")"
+  cp "$manifest_path" "$expected_manifest"
+fi
+
+if [[ -f "$encoder_ckpt" && "$encoder_ckpt" != "$expected_encoder" ]]; then
+  mkdir -p "$(dirname "$expected_encoder")"
+  ln -sf "$encoder_ckpt" "$expected_encoder"
+fi
+
+if [[ ! -f "$expected_manifest" ]]; then
+  echo "[ci] error: expected file ${expected_manifest} not found" >&2
   exit 1
 fi
 
-export PRETRAIN_MANIFEST="$manifest_path"
-export PRETRAIN_ENCODER_PATH="$encoder_ckpt"
-
-if [[ ! -f "$encoder_ckpt" ]]; then
-  echo "[ci] error: expected encoder checkpoint at ${encoder_ckpt}" >&2
+if [[ ! -f "$expected_encoder" ]]; then
+  echo "[ci] error: expected file ${expected_encoder} not found" >&2
   exit 1
 fi
 
-mkdir -p "${PRETRAIN_ARTIFACTS_DIR}"
+export PRETRAIN_MANIFEST="$expected_manifest"
+export PRETRAIN_ENCODER_PATH="$expected_encoder"
 
-# Preserve key artifacts alongside checkpoints so downstream jobs can fetch them easily.
-if [[ -f "$PRETRAIN_DIR/encoder.pt" ]]; then
-  ln -sf "$PRETRAIN_DIR/encoder.pt" "$STAGE_OUTPUTS_DIR/encoder.pt"
-fi
-
-if [[ -f "$PRETRAIN_MANIFEST" ]]; then
-  mkdir -p "${PRETRAIN_DIR}/artifacts"
-  local_manifest="${PRETRAIN_DIR}/artifacts/encoder_manifest.json"
-  if [[ "$PRETRAIN_MANIFEST" != "$local_manifest" ]]; then
-    cp "$PRETRAIN_MANIFEST" "$local_manifest"
-  fi
-  ln -sf "$PRETRAIN_MANIFEST" "$STAGE_OUTPUTS_DIR/encoder_manifest.json"
-fi
+mkdir -p "${PRETRAIN_DIR}/artifacts"
+ln -sf "$expected_encoder" "$STAGE_OUTPUTS_DIR/encoder.pt"
+ln -sf "$expected_manifest" "$STAGE_OUTPUTS_DIR/encoder_manifest.json"
 
 state_path="${PRETRAIN_STATE_FILE}"
 state_legacy="${PRETRAIN_STATE_FILE_LEGACY:-}"
@@ -128,7 +119,7 @@ state_dir="$(dirname "$state_path")"
 mkdir -p "$state_dir"
 
 "${python_cmd[@]}" - "$state_path" "$state_legacy" "$PRETRAIN_EXP_ID" "$PRETRAIN_EXPERIMENT_ROOT" \
-  "$PRETRAIN_ARTIFACTS_DIR" "$manifest_path" "$encoder_ckpt" <<'PY'
+  "$PRETRAIN_ARTIFACTS_DIR" "$expected_manifest" "$expected_encoder" <<'PY'
 import json
 import os
 import sys
