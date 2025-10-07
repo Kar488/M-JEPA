@@ -116,6 +116,11 @@ def test_wandb_shape_injects_model_flags_for_bench():
     # method should toggle --contrastive
     assert "--contrastive" in out
 
+    # Tokens should not be duplicated when aliases collapse (regression test).
+    tokens = out.split()
+    assert tokens.count("--lr") == 1
+    assert tokens.count("--contrastive") == 1
+
 def test_flat_shape_also_works_and_epochs_can_be_skipped_for_tox21():
     # Simulate flat JSON keys
     cfg = {
