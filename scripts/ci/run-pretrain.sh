@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+trap 'echo "[ci] error at line $LINENO; last cmd: $BASH_COMMAND" >&2' ERR
+
 export BESTCFG_NO_EPOCHS=1              # drop both epochs from best_config
 export MJEPACI_STAGE="pretrain"
 
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
+
+# ensure key directories are exported for shims
+export PRETRAIN_DIR PRETRAIN_ARTIFACTS_DIR
 
 export WANDB_NAME="pretrain"
 export WANDB_JOB_TYPE="pretrain"
@@ -21,11 +26,20 @@ mkdir -p "$STAGE_OUTPUTS_DIR"
 
 #ensure the parm matches train_jepa_ci.yml
 
-run_stage pretrain
+if [[ -n "${STAGE_BIN:-}" ]]; then
+  "$STAGE_BIN" pretrain
+else
+  run_stage pretrain
+fi
 
 encoder_ckpt="${PRETRAIN_DIR}/encoder.pt"
 manifest_path="${PRETRAIN_MANIFEST}"
 stage_outputs_json="${STAGE_OUTPUTS_DIR}/pretrain.json"
+
+if [[ ! -f "$stage_outputs_json" ]]; then
+  echo "[ci] error: expected pretrain.json at ${stage_outputs_json}" >&2
+  exit 1
+fi
 
 # Resolve a Python interpreter for the parsing and bookkeeping steps below.
 # Prefer an existing "python" binary, otherwise fall back to micromamba.
@@ -38,17 +52,16 @@ resolve_ci_python python_cmd
 recorded_manifest=""
 recorded_encoder=""
 
-if [[ -f "$stage_outputs_json" ]]; then
-  while IFS='=' read -r key value; do
-    case "$key" in
-      manifest_path)
-        recorded_manifest="$value"
-        ;;
-      encoder_checkpoint)
-        recorded_encoder="$value"
-        ;;
-    esac
-  done < <("${python_cmd[@]}" - "$stage_outputs_json" <<'PY'
+while IFS='=' read -r key value; do
+  case "$key" in
+    manifest_path)
+      recorded_manifest="$value"
+      ;;
+    encoder_checkpoint)
+      recorded_encoder="$value"
+      ;;
+  esac
+done < <("${python_cmd[@]}" - "$stage_outputs_json" <<'PY'
 import json
 import os
 import sys
@@ -58,7 +71,7 @@ try:
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh) or {}
 except Exception:
-    sys.exit(0)
+    sys.exit(1)
 
 def emit(key, value):
     if isinstance(value, str) and value.strip():
@@ -67,20 +80,19 @@ def emit(key, value):
 emit("manifest_path", data.get("manifest_path"))
 emit("encoder_checkpoint", data.get("encoder_checkpoint"))
 PY
-  )
+)
 
-  if [[ -n "${recorded_encoder:-}" ]]; then
-    encoder_ckpt="$recorded_encoder"
-  fi
+if [[ -n "${recorded_encoder:-}" ]]; then
+  encoder_ckpt="$recorded_encoder"
+fi
 
-  if [[ -n "${recorded_manifest:-}" ]]; then
-    if [[ "$recorded_manifest" != "$manifest_path" && -f "$recorded_manifest" ]]; then
-      mkdir -p "$(dirname "$manifest_path")"
-      cp "$recorded_manifest" "$manifest_path"
-    else
-      manifest_path="$recorded_manifest"
-    fi
-  fi
+if [[ -n "${recorded_manifest:-}" ]]; then
+  manifest_path="$recorded_manifest"
+fi
+
+if [[ ! -f "$manifest_path" ]]; then
+  echo "[ci] error: expected pretrain.json at ${stage_outputs_json} and manifest at ${manifest_path}" >&2
+  exit 1
 fi
 
 export PRETRAIN_MANIFEST="$manifest_path"
@@ -105,7 +117,10 @@ fi
 
 if [[ -f "$PRETRAIN_MANIFEST" ]]; then
   mkdir -p "${PRETRAIN_DIR}/artifacts"
-  cp "$PRETRAIN_MANIFEST" "${PRETRAIN_DIR}/artifacts/encoder_manifest.json"
+  local_manifest="${PRETRAIN_DIR}/artifacts/encoder_manifest.json"
+  if [[ "$PRETRAIN_MANIFEST" != "$local_manifest" ]]; then
+    cp "$PRETRAIN_MANIFEST" "$local_manifest"
+  fi
   ln -sf "$PRETRAIN_MANIFEST" "$STAGE_OUTPUTS_DIR/encoder_manifest.json"
 fi
 
