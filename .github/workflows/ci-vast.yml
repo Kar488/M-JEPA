@@ -352,6 +352,9 @@ jobs:
       pretrain_encoder: ${{ steps.pretrain_state.outputs.encoder_path }}
       pretrain_tox21_env: ${{ steps.pretrain_state.outputs.tox21_env }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Pretrain on Vast
         uses: appleboy/ssh-action@v1
         with:
