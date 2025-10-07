@@ -155,17 +155,11 @@ fi
 
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
-: "${CACHE_DIR:=${DATA_ROOT}/cache/graphs_50k}"
-# Allow sweeps to reuse the standard graph cache unless the workflow overrides it.
-: "${SWEEP_CACHE_DIR:=$CACHE_DIR}"
-: "${WANDB_DIR:=${DATA_ROOT}/wandb}"
 : "${PRETRAIN_STATE_FILE_LEGACY:=${EXPERIMENTS_ROOT}/pretrain_state.json}"
 
 export DATA_ROOT
 export APP_DIR
 export PYTHONPATH="${APP_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
-export CACHE_DIR
-export SWEEP_CACHE_DIR
 
 # Determine an available Python interpreter. Prefer 'python', fallback to 'python3'.
 python_bin() {
@@ -522,6 +516,29 @@ fi
 
 : "${PRETRAIN_EXPERIMENT_ROOT:=${EXPERIMENT_DIR}}"
 : "${PRETRAIN_ARTIFACTS_DIR:=${ARTIFACTS_DIR}}"
+
+if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+  if [[ -z "${WANDB_DIR:-}" ]]; then
+    WANDB_DIR="${EXPERIMENT_DIR}/wandb"
+  fi
+  if [[ -z "${CACHE_DIR:-}" ]]; then
+    CACHE_DIR="${EXPERIMENT_DIR}/cache/graphs_50k"
+  fi
+else
+  if [[ -z "${CACHE_DIR:-}" ]]; then
+    CACHE_DIR="${DATA_ROOT}/cache/graphs_50k"
+  fi
+  if [[ -z "${WANDB_DIR:-}" ]]; then
+    WANDB_DIR="${DATA_ROOT}/wandb"
+  fi
+fi
+
+if [[ -z "${SWEEP_CACHE_DIR:-}" ]]; then
+  SWEEP_CACHE_DIR="$CACHE_DIR"
+fi
+
+export CACHE_DIR
+export SWEEP_CACHE_DIR
 
 # Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
 : "${GRID_DIR:=${GRID_CACHE_DIR:-$EXP_ROOT/grid}}"
