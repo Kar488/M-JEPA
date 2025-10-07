@@ -524,6 +524,8 @@ if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
   if [[ -z "${CACHE_DIR:-}" ]]; then
     CACHE_DIR="${EXPERIMENT_DIR}/cache/graphs_50k"
   fi
+  default_cache_root="${EXPERIMENT_DIR}/cache/graphs_50k"
+  default_wandb_root="${EXPERIMENT_DIR}/wandb"
 else
   if [[ -z "${CACHE_DIR:-}" ]]; then
     CACHE_DIR="${DATA_ROOT}/cache/graphs_50k"
@@ -531,7 +533,12 @@ else
   if [[ -z "${WANDB_DIR:-}" ]]; then
     WANDB_DIR="${DATA_ROOT}/wandb"
   fi
+  default_cache_root="${DATA_ROOT}/cache/graphs_50k"
+  default_wandb_root="${DATA_ROOT}/wandb"
 fi
+
+ensure_dir_var CACHE_DIR "$default_cache_root" "${EXP_ID:+experiments/${EXP_ID}/}cache"
+ensure_dir_var WANDB_DIR "$default_wandb_root" "${EXP_ID:+experiments/${EXP_ID}/}wandb"
 
 if [[ -z "${SWEEP_CACHE_DIR:-}" ]]; then
   SWEEP_CACHE_DIR="$CACHE_DIR"
@@ -542,6 +549,8 @@ export SWEEP_CACHE_DIR
 
 # Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
 : "${GRID_DIR:=${GRID_CACHE_DIR:-$EXP_ROOT/grid}}"
+
+ensure_dir_var GRID_DIR "$EXP_ROOT/grid" "${EXP_ID:+experiments/${EXP_ID}/}grid"
 
 ensure_dir_var ARTIFACTS_DIR "${EXPERIMENT_DIR}/artifacts" "experiments/${EXP_ID}/artifacts"
 ensure_dir_var PRETRAIN_ARTIFACTS_DIR "${ARTIFACTS_DIR}" "experiments/${PRETRAIN_EXP_ID}/artifacts"
@@ -568,6 +577,8 @@ if [[ -z "${PRETRAIN_DIR:-}" ]]; then
   fi
 fi
 
+ensure_dir_var PRETRAIN_DIR "$EXPERIMENT_DIR" "experiments/${EXP_ID}"
+
 if [[ -z "${PRETRAIN_MANIFEST:-}" ]]; then
   PRETRAIN_MANIFEST="${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json"
 fi
@@ -586,6 +597,12 @@ fi
 # collide with pretrain's cache stamp when both default to EXPERIMENT_DIR.
 : "${TOX21_DIR:=${TOX21_CACHE_DIR:-$EXP_ROOT/tox21}}"
 : "${REPORTS_DIR:=${REPORTS_CACHE_DIR:-$EXP_ROOT/report}}"
+
+ensure_dir_var FINETUNE_DIR "$EXP_ROOT/finetune" "${EXP_ID:+experiments/${EXP_ID}/}finetune"
+ensure_dir_var BENCH_DIR "$EXP_ROOT/bench" "${EXP_ID:+experiments/${EXP_ID}/}bench"
+ensure_dir_var TOX21_DIR "$EXP_ROOT/tox21" "${EXP_ID:+experiments/${EXP_ID}/}tox21"
+ensure_dir_var REPORTS_DIR "$EXP_ROOT/report" "${EXP_ID:+experiments/${EXP_ID}/}report"
+ensure_dir_var LOG_DIR "${APP_DIR}/logs" "logs"
 
 mkdir -p "$CACHE_DIR" "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" \
   "$TOX21_DIR" "$REPORTS_DIR" "$LOG_DIR" "$WANDB_DIR" "$ARTIFACTS_DIR" \
