@@ -565,7 +565,9 @@ fi
 
 : "${FINETUNE_DIR:=${FINETUNE_CACHE_DIR:-$EXP_ROOT/finetune}}"
 : "${BENCH_DIR:=${BENCH_CACHE_DIR:-$EXP_ROOT/bench}}"
-: "${TOX21_DIR:=${TOX21_CACHE_DIR:-$EXPERIMENT_DIR}}"
+# Keep tox21 outputs under a dedicated subdirectory so stage stamps don't
+# collide with pretrain's cache stamp when both default to EXPERIMENT_DIR.
+: "${TOX21_DIR:=${TOX21_CACHE_DIR:-$EXP_ROOT/tox21}}"
 : "${REPORTS_DIR:=${REPORTS_CACHE_DIR:-$EXP_ROOT/report}}"
 
 mkdir -p "$CACHE_DIR" "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" \
@@ -581,10 +583,12 @@ ci_print_env_diag() {
   local stage_bin_value="${1:-${STAGE_BIN:-<unset>}}"
   echo "[ci] EXP_ID=${EXP_ID:-<unset>}" >&2
   echo "[ci] EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>}" >&2
+  echo "[ci] EXP_ROOT=${EXP_ROOT:-<unset>}" >&2
   echo "[ci] EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>}" >&2
   echo "[ci] PRETRAIN_DIR=${PRETRAIN_DIR:-<unset>}" >&2
   echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR:-<unset>}" >&2
   echo "[ci] PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>}" >&2
+  echo "[ci] TOX21_DIR=${TOX21_DIR:-<unset>}" >&2
   echo "[ci] STAGE_BIN=${stage_bin_value}" >&2
 }
 
