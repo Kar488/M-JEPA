@@ -23,11 +23,16 @@ echo "[tox21] using pretrain experiment id=${PRETRAIN_EXP_ID}" >&2
 echo "[tox21] tox21 env path=${GITHUB_ENV}" >&2
 echo "[tox21] encoder checkpoint source=${SOURCE}" >&2
 echo "[tox21] manifest path=${MANIFEST_PATH}" >&2
+echo "[tox21] state path=${PRETRAIN_STATE_FILE} (canonical=${PRETRAIN_STATE_FILE_CANONICAL:-n/a})" >&2
+echo "[tox21] expected tox21 env seed=${PRETRAIN_TOX21_ENV}" >&2
 
 if [[ ! -f "$MANIFEST_PATH" ]]; then
   echo "[tox21] required manifest missing: $MANIFEST_PATH" >&2
   exit 1
 fi
+
+python_cmd=()
+resolve_ci_python python_cmd
 
 MET_ENV_FILE="${PRETRAIN_EXPERIMENT_ROOT}/met_benchmark.env"
 mkdir -p "$(dirname "$MET_ENV_FILE")"
@@ -52,7 +57,7 @@ ensure_dir() {
 
 if [[ "$SOURCE" == "pretrain_frozen" ]]; then
   ensure_dir "$MANIFEST_PATH"
-  TOX21_ENCODER_CHECKPOINT=$(python - "$MANIFEST_PATH" <<'PY'
+  TOX21_ENCODER_CHECKPOINT=$("${python_cmd[@]}" - "$MANIFEST_PATH" <<'PY'
 import json, os, sys
 manifest = json.load(open(sys.argv[1]))
 paths = manifest.get("paths") if isinstance(manifest, dict) else {}
@@ -91,7 +96,7 @@ export TOX21_ENCODER_CHECKPOINT
 run_stage tox21
 
 stage_file="${TOX21_DIR}/stage-outputs/tox21_${SOURCE}.json"
-python - <<'PY' "$stage_file" "$SOURCE" "$env_file"
+"${python_cmd[@]}" - <<'PY' "$stage_file" "$SOURCE" "$env_file"
 import json, os, sys
 stage_path, source, env_path = sys.argv[1:4]
 data = {}

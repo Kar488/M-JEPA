@@ -3,7 +3,10 @@
 set -euo pipefail
 
 : "${MJEPACI_STAGE:=}"
-: "${PRETRAIN_STATE_FILE:=/data/mjepa/experiments/pretrain_state.json}"
+: "${EXPERIMENTS_ROOT:=/data/mjepa/experiments}"
+: "${PRETRAIN_STATE_FILE_LEGACY:=${EXPERIMENTS_ROOT}/pretrain_state.json}"
+: "${PRETRAIN_STATE_FILE:=}"
+: "${EXP_ID:=}"
 
 # --- centralised environment variables ---
 : "${APP_DIR:=/srv/mjepa}"
@@ -13,9 +16,9 @@ set -euo pipefail
 # Allow sweeps to reuse the standard graph cache unless the workflow overrides it.
 : "${SWEEP_CACHE_DIR:=$CACHE_DIR}"
 : "${RUN_ID:=$(date +%s)}"
-: "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
-: "${EXPERIMENT_DIR:=${EXP_ROOT}}"
-: "${ARTIFACTS_DIR:=${EXPERIMENT_DIR}/artifacts}"
+: "${EXP_ROOT:=}"
+: "${EXPERIMENT_DIR:=}"
+: "${ARTIFACTS_DIR:=}"
 : "${WANDB_DIR:=/data/mjepa/wandb}"
 : "${LOG_DIR:=${APP_DIR}/logs}"
 
@@ -39,6 +42,17 @@ python_bin() {
     echo python3
   else
     return 1
+  fi
+}
+
+resolve_ci_python() {
+  local target="${1:-PYTHON_CMD}"
+  local -n ref="$target"
+  if py=$(python_bin 2>/dev/null); then
+    ref=(env PYTHONUNBUFFERED=1 "$py" -u)
+  else
+    ensure_micromamba
+    ref=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
   fi
 }
 
@@ -86,8 +100,8 @@ PY
   fi
 }
 
-__load_pretrain_state_from_file() {
-  local state_path="$PRETRAIN_STATE_FILE"
+__parse_pretrain_state_file() {
+  local state_path="$1"
   [[ -f "$state_path" ]] || return 1
 
   local py
@@ -113,6 +127,7 @@ def emit(key, value):
         return
     print(f"{key}={value}")
 
+emit("id", data.get("id"))
 emit("pretrain_exp_id", data.get("pretrain_exp_id"))
 emit("experiment_root", data.get("experiment_root"))
 emit("artifacts_dir", data.get("artifacts_dir"))
@@ -126,6 +141,12 @@ PY
   while IFS='=' read -r key value; do
     [[ -z "$key" ]] && continue
     case "$key" in
+      id)
+        if [[ -n "$value" ]]; then
+          [[ -n "${EXP_ID:-}" ]] || EXP_ID="$value"
+          [[ -n "${PRETRAIN_EXP_ID:-}" ]] || PRETRAIN_EXP_ID="$value"
+        fi
+        ;;
       pretrain_exp_id)
         [[ -n "${PRETRAIN_EXP_ID:-}" ]] || PRETRAIN_EXP_ID="$value"
         ;;
@@ -148,6 +169,40 @@ PY
   done <<<"$output"
 
   return 0
+}
+
+__load_pretrain_state() {
+  local -a candidates=()
+
+  if [[ -n "${EXP_ID:-}" ]]; then
+    candidates+=("${EXPERIMENTS_ROOT}/${EXP_ID}/pretrain_state.json")
+  fi
+
+  if [[ -n "${PRETRAIN_STATE_FILE:-}" ]]; then
+    candidates+=("$PRETRAIN_STATE_FILE")
+  fi
+
+  candidates+=("$PRETRAIN_STATE_FILE_LEGACY")
+
+  local seen=""
+  local path
+  for path in "${candidates[@]}"; do
+    [[ -n "$path" ]] || continue
+    [[ -f "$path" ]] || continue
+    if __parse_pretrain_state_file "$path"; then
+      PRETRAIN_STATE_FILE="$path"
+      if [[ -n "${EXP_ID:-}" ]]; then
+        local canonical="${EXPERIMENTS_ROOT}/${EXP_ID}/pretrain_state.json"
+        if [[ "$canonical" != "$path" && -f "$canonical" ]]; then
+          PRETRAIN_STATE_FILE="$canonical"
+          __parse_pretrain_state_file "$canonical" || true
+        fi
+      fi
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 # --- accelerator discovery helpers ---
@@ -242,11 +297,19 @@ split_gpu_ids() {
 : "${GRID_DIR:=${GRID_CACHE_DIR:-$EXP_ROOT/grid}}"
 
 if [[ "${MJEPACI_STAGE}" != "pretrain" ]]; then
-  __load_pretrain_state_from_file || true
+  __load_pretrain_state || true
 fi
 
-if [[ "${MJEPACI_STAGE}" == "pretrain" && -z "${PRETRAIN_EXP_ID:-}" ]]; then
-  PRETRAIN_EXP_ID="$RUN_ID"
+if [[ -z "${EXP_ID:-}" && -n "${PRETRAIN_EXP_ID:-}" ]]; then
+  EXP_ID="$PRETRAIN_EXP_ID"
+fi
+
+if [[ "${MJEPACI_STAGE}" == "pretrain" && -z "${EXP_ID:-}" ]]; then
+  EXP_ID="$RUN_ID"
+fi
+
+if [[ -z "${PRETRAIN_EXP_ID:-}" && -n "${EXP_ID:-}" ]]; then
+  PRETRAIN_EXP_ID="$EXP_ID"
 fi
 
 _needs_pretrain_state=0
@@ -256,21 +319,48 @@ case "${MJEPACI_STAGE}" in
     ;;
 esac
 
-if (( _needs_pretrain_state )) && [[ -z "${PRETRAIN_EXP_ID:-}" ]]; then
-  echo "[ci] error: pretrain experiment id missing. Expected state at ${PRETRAIN_STATE_FILE}" >&2
+if (( _needs_pretrain_state )) && [[ -z "${EXP_ID:-}" ]]; then
+  local_hint="${EXPERIMENTS_ROOT}/<EXP_ID>/pretrain_state.json"
+  echo "[ci] error: pretrain experiment id missing. Expected EXP_ID env var or state at ${local_hint}" >&2
   exit 1
 fi
 
-if [[ -z "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
-  if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
-    PRETRAIN_EXPERIMENT_ROOT="/data/mjepa/experiments/${PRETRAIN_EXP_ID}"
+if [[ -z "${EXP_ROOT:-}" ]]; then
+  if [[ -n "${EXP_ID:-}" ]]; then
+    EXP_ROOT="${EXPERIMENTS_ROOT}/${EXP_ID}"
   else
-    PRETRAIN_EXPERIMENT_ROOT="$EXP_ROOT"
+    EXP_ROOT="${EXPERIMENTS_ROOT}/${RUN_ID}"
   fi
+fi
+
+if [[ -z "${EXPERIMENT_DIR:-}" && -n "${EXP_ROOT:-}" ]]; then
+  EXPERIMENT_DIR="$EXP_ROOT"
+fi
+
+if [[ -z "${ARTIFACTS_DIR:-}" && -n "${EXPERIMENT_DIR:-}" ]]; then
+  ARTIFACTS_DIR="${EXPERIMENT_DIR}/artifacts"
+fi
+
+if [[ -z "${PRETRAIN_EXPERIMENT_ROOT:-}" && -n "${EXP_ID:-}" ]]; then
+  PRETRAIN_EXPERIMENT_ROOT="${EXPERIMENTS_ROOT}/${EXP_ID}"
 fi
 
 if [[ -z "${PRETRAIN_ARTIFACTS_DIR:-}" ]]; then
   PRETRAIN_ARTIFACTS_DIR="${PRETRAIN_EXPERIMENT_ROOT}/artifacts"
+fi
+
+if [[ -n "${EXP_ID:-}" ]]; then
+  PRETRAIN_STATE_FILE_CANONICAL="${EXPERIMENTS_ROOT}/${EXP_ID}/pretrain_state.json"
+else
+  PRETRAIN_STATE_FILE_CANONICAL=""
+fi
+
+if [[ -z "${PRETRAIN_STATE_FILE:-}" ]]; then
+  if [[ -n "${PRETRAIN_STATE_FILE_CANONICAL:-}" ]]; then
+    PRETRAIN_STATE_FILE="$PRETRAIN_STATE_FILE_CANONICAL"
+  else
+    PRETRAIN_STATE_FILE="$PRETRAIN_STATE_FILE_LEGACY"
+  fi
 fi
 
 if [[ -z "${PRETRAIN_DIR:-}" ]]; then
@@ -302,13 +392,29 @@ mkdir -p "$CACHE_DIR" "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" \
   "$TOX21_DIR" "$REPORTS_DIR" "$LOG_DIR" "$WANDB_DIR" "$ARTIFACTS_DIR" \
   "$PRETRAIN_ARTIFACTS_DIR"
 export GRID_DIR PRETRAIN_DIR FINETUNE_DIR BENCH_DIR TOX21_DIR REPORTS_DIR LOG_DIR
-export EXPERIMENT_DIR ARTIFACTS_DIR
+export EXPERIMENT_DIR ARTIFACTS_DIR EXP_ROOT EXPERIMENTS_ROOT
 export PRETRAIN_MANIFEST PRETRAIN_EXP_ID PRETRAIN_EXPERIMENT_ROOT PRETRAIN_ARTIFACTS_DIR \
-  PRETRAIN_STATE_FILE PRETRAIN_ENCODER_PATH PRETRAIN_TOX21_ENV
+  PRETRAIN_STATE_FILE PRETRAIN_STATE_FILE_CANONICAL PRETRAIN_STATE_FILE_LEGACY \
+  PRETRAIN_ENCODER_PATH PRETRAIN_TOX21_ENV EXP_ID
 
-if (( _needs_pretrain_state )) && [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
-  echo "[ci] using pretrain experiment id=${PRETRAIN_EXP_ID} root=${PRETRAIN_EXPERIMENT_ROOT}" >&2
-  echo "[ci] pretrain manifest path=${PRETRAIN_MANIFEST}" >&2
+if [[ -n "${EXP_ID:-}" ]]; then
+  echo "[ci] resolved EXP_ID=${EXP_ID}" >&2
+fi
+
+if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+  echo "[ci] resolved experiment root=${PRETRAIN_EXPERIMENT_ROOT}" >&2
+fi
+
+if [[ -n "${PRETRAIN_MANIFEST:-}" ]]; then
+  echo "[ci] resolved pretrain manifest path=${PRETRAIN_MANIFEST}" >&2
+fi
+
+if [[ -n "${PRETRAIN_STATE_FILE_CANONICAL:-}" ]]; then
+  echo "[ci] resolved pretrain state canonical=${PRETRAIN_STATE_FILE_CANONICAL}" >&2
+fi
+
+if [[ -n "${PRETRAIN_STATE_FILE:-}" && "${PRETRAIN_STATE_FILE}" != "${PRETRAIN_STATE_FILE_CANONICAL:-}" ]]; then
+  echo "[ci] active pretrain state path=${PRETRAIN_STATE_FILE}" >&2
 fi
 
 # --- micromamba bootstrap ---
