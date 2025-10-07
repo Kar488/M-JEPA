@@ -16,6 +16,7 @@ stage_dir() {
     bench|benchmark) echo "$BENCH_DIR" ;;
     tox21) echo "$TOX21_DIR" ;;
     report) echo "$REPORTS_DIR" ;;
+    phase2_sweep|phase2_recheck|phase2_export) echo "${GRID_DIR}/$1" ;;
     *) echo "$EXP_ROOT/$1" ;;
   esac
 }
@@ -45,6 +46,29 @@ stage_needs() {
       ;;
     bench|benchmark) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" "$FINETUNE_DIR/seed_0/ft_best.pt" ;;
     tox21) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" "$APP_DIR/scripts/ci/data/tox21/data.csv" ;;
+    phase2_sweep)
+      printf '%s\n' \
+        "${base[@]}" \
+        "$GRID_DIR/phase2_sweep_id.txt"
+      ;;
+    phase2_recheck)
+      local sweep_stamp
+      sweep_stamp="$(stage_dir phase2_sweep)"
+      printf '%s\n' \
+        "${base[@]}" \
+        "$APP_DIR/scripts/ci/recheck_topk_from_wandb.py" \
+        "$GRID_DIR/phase2_sweep_id.txt" \
+        "${sweep_stamp}/.stamp"
+      ;;
+    phase2_export)
+      local recheck_stamp
+      recheck_stamp="$(stage_dir phase2_recheck)"
+      printf '%s\n' \
+        "${base[@]}" \
+        "$GRID_DIR/best_grid_config.json" \
+        "$GRID_DIR/recheck_summary.json" \
+        "${recheck_stamp}/.stamp"
+      ;;
     report)
       printf '%s\n' \
         "$APP_DIR/reports/build_wandb_report.py" \
@@ -59,6 +83,374 @@ stage_needs() {
       ;;
     *) printf '%s\n' "${base[@]}" ;;
   esac
+}
+
+# ---------- phase-2 helpers ----------
+phase2_step_diag() {
+  local step="$1"
+  echo "[ci] EXP_ID=${EXP_ID:-<unset>} EXP_ROOT=${EXP_ROOT:-<unset>} GRID_DIR=${GRID_DIR:-<unset>} STEP=${step}" >&2
+}
+
+restore_env_var() {
+  local name="$1" previous="$2"
+  if [[ -n "$previous" ]]; then
+    printf -v "$name" '%s' "$previous"
+    export "$name"
+  else
+    unset "$name"
+  fi
+}
+
+run_phase2_sweep_stage() {
+  local dir="$1" step="$2"
+
+  phase2_step_diag "$step"
+
+  local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
+  if [[ ! -f "$sweep_id_file" ]]; then
+    echo "[$step][fatal] sweep id file not found: $sweep_id_file" >&2
+    return 2
+  fi
+
+  local sweep_id
+  sweep_id="$(<"$sweep_id_file")"
+  export WANDB_SWEEP_ID2="$sweep_id"
+  export SWEEP_ID="${WANDB_ENTITY}/${WANDB_PROJECT}/${WANDB_SWEEP_ID2}"
+
+  local prev_log_dir="${LOG_DIR:-}"
+  local step_log_dir="${dir}/logs"
+  mkdir -p "$step_log_dir"
+  export LOG_DIR="$step_log_dir"
+
+  local prev_wall="${HARD_WALL_MINS:-}"
+  local sweep_wall="${PHASE2_SWEEP_WALL_MINS:-920}"
+  export HARD_WALL_MINS="$sweep_wall"
+
+  mapfile -t GRID_VISIBLE_GPUS < <(visible_gpu_ids)
+  local gpu_count="${#GRID_VISIBLE_GPUS[@]}"
+
+  if [[ -z "${WANDB_COUNT:-}" ]]; then
+    export WANDB_COUNT=100
+  fi
+  local phase2_total_count="$WANDB_COUNT"
+
+  : "${PHASE2_LABELED_DIR:=$APP_DIR/data/katielinkmoleculenet_benchmark/train}"
+  : "${PHASE2_UNLABELED_DIR:=$APP_DIR/data/ZINC-canonicalized}"
+
+  if [[ ! -d "$PHASE2_LABELED_DIR" ]]; then
+    echo "[$step][fatal] not a dir: $PHASE2_LABELED_DIR" >&2
+    restore_env_var LOG_DIR "$prev_log_dir"
+    restore_env_var HARD_WALL_MINS "$prev_wall"
+    return 2
+  fi
+  if [[ ! -d "$PHASE2_UNLABELED_DIR" ]]; then
+    echo "[$step][fatal] not a dir: $PHASE2_UNLABELED_DIR" >&2
+    restore_env_var LOG_DIR "$prev_log_dir"
+    restore_env_var HARD_WALL_MINS "$prev_wall"
+    return 2
+  fi
+
+  local agent_workers=1
+  if [[ -n "${PHASE2_AGENT_COUNT:-}" ]]; then
+    if [[ "$PHASE2_AGENT_COUNT" =~ ^[0-9]+$ ]]; then
+      agent_workers="$PHASE2_AGENT_COUNT"
+    else
+      echo "[$step][warn] ignoring non-numeric PHASE2_AGENT_COUNT='${PHASE2_AGENT_COUNT}'" >&2
+      agent_workers=1
+    fi
+  elif (( gpu_count > 1 )); then
+    agent_workers="$gpu_count"
+  fi
+
+  if (( gpu_count > 0 && agent_workers > gpu_count )); then
+    agent_workers="$gpu_count"
+  fi
+  if (( agent_workers < 1 )); then
+    agent_workers=1
+  fi
+
+  local launched=0
+
+  if (( agent_workers == 1 || gpu_count <= 1 )); then
+    export WANDB_COUNT="$phase2_total_count"
+    if ! run_with_timeout wandb_agent; then
+      restore_env_var LOG_DIR "$prev_log_dir"
+      restore_env_var HARD_WALL_MINS "$prev_wall"
+      return 1
+    fi
+    launched=1
+  else
+    local -a gpu_splits=()
+    split_gpu_ids gpu_splits "$agent_workers" "${GRID_VISIBLE_GPUS[@]}"
+
+    local -a agent_counts=()
+    local base=$(( phase2_total_count / agent_workers ))
+    local remainder=$(( phase2_total_count % agent_workers ))
+    for ((i=0; i<agent_workers; ++i)); do
+      local count="$base"
+      if (( i < remainder )); then
+        count=$((count + 1))
+      fi
+      agent_counts+=("$count")
+    done
+
+    local -a pids=()
+    local -a labels=()
+    for ((i=0; i<agent_workers; ++i)); do
+      local count="${agent_counts[$i]}"
+      if (( count <= 0 )); then
+        continue
+      fi
+      (
+        export LOG_DIR="${step_log_dir}/agent_${i}"
+        mkdir -p "$LOG_DIR"
+        if [[ -n "${gpu_splits[$i]:-}" ]]; then
+          export CUDA_VISIBLE_DEVICES="${gpu_splits[$i]}"
+        else
+          unset CUDA_VISIBLE_DEVICES
+        fi
+        export WANDB_COUNT="$count"
+        run_with_timeout wandb_agent
+      ) &
+      pids+=($!)
+      labels+=("agent#$i")
+      ((launched++))
+    done
+
+    if (( launched == 0 )); then
+      export WANDB_COUNT="$phase2_total_count"
+      if ! run_with_timeout wandb_agent; then
+        restore_env_var LOG_DIR "$prev_log_dir"
+        restore_env_var HARD_WALL_MINS "$prev_wall"
+        return 1
+      fi
+      launched=1
+    else
+      local fail_rc=0
+      for idx in "${!pids[@]}"; do
+        local pid="${pids[$idx]}"
+        if wait "$pid"; then
+          :
+        else
+          local rc=$?
+          echo "[$step][error] ${labels[$idx]} failed (rc=$rc)" >&2
+          fail_rc=$rc
+        fi
+      done
+      if (( fail_rc != 0 )); then
+        restore_env_var LOG_DIR "$prev_log_dir"
+        restore_env_var HARD_WALL_MINS "$prev_wall"
+        return "$fail_rc"
+      fi
+    fi
+  fi
+
+  if find "$step_log_dir" -name 'wandb_agent.graceful_stop' -print -quit >/dev/null 2>&1; then
+    mark_graceful_stop "$step"
+  fi
+
+  local metadata="${dir}/stage-outputs/${step}.json"
+  python - <<'PY' "$metadata" "$sweep_id" "$phase2_total_count" "$agent_workers"
+import json
+import sys
+from datetime import datetime, timezone
+
+path, sweep_id, total, workers = sys.argv[1:5]
+
+payload = {
+    "sweep_id": sweep_id,
+    "requested_trials": int(total),
+    "agent_workers": int(workers),
+    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2)
+    handle.write("\n")
+import os
+os.replace(tmp, path)
+PY
+
+  restore_env_var LOG_DIR "$prev_log_dir"
+  restore_env_var HARD_WALL_MINS "$prev_wall"
+
+  return 0
+}
+
+run_phase2_recheck_stage() {
+  local dir="$1" step="$2"
+
+  phase2_step_diag "$step"
+
+  : "${TOPK_RECHECK:=5}"
+  : "${EXTRA_SEEDS:=3}"
+  : "${PHASE2_METRIC:=val_rmse}"
+  : "${PHASE2_DIRECTION:=min}"
+  : "${PHASE2_UNLABELED_DIR:=$APP_DIR/data/ZINC-canonicalized}"
+  : "${PHASE2_LABELED_DIR:=$APP_DIR/data/katielinkmoleculenet_benchmark/train}"
+
+  local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
+  if [[ ! -f "$sweep_id_file" ]]; then
+    echo "[$step][fatal] sweep id file not found: $sweep_id_file" >&2
+    return 2
+  fi
+
+  local sweep_id
+  sweep_id="$(<"$sweep_id_file")"
+  export WANDB_SWEEP_ID2="$sweep_id"
+
+  local prev_log_dir="${LOG_DIR:-}"
+  local step_log_dir="${dir}/logs"
+  mkdir -p "$step_log_dir"
+  export LOG_DIR="$step_log_dir"
+
+  local wall_mins="${PHASE2_RECHECK_WALL_MINS:-180}"
+  local soft=$(( wall_mins * 60 ))
+  local grace="${KILL_AFTER_SECS:-120}"
+  local log_path="${step_log_dir}/recheck_topk.log"
+
+  echo "[$step] wall budget=${wall_mins}m (${soft}s), grace=${grace}s"
+
+  timeout --signal=SIGTERM --kill-after="$grace" "$soft" \
+    "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
+    python -u "$APP_DIR/scripts/ci/recheck_topk_from_wandb.py" \
+      --sweep "${WANDB_ENTITY}/${WANDB_PROJECT}/${WANDB_SWEEP_ID2}" \
+      --metric "${PHASE2_METRIC}" \
+      --direction "${PHASE2_DIRECTION}" \
+      --topk "${TOPK_RECHECK}" \
+      --extra_seeds "${EXTRA_SEEDS}" \
+      --program "$APP_DIR/scripts/train_jepa.py" \
+      --subcmd "sweep-run" \
+      --unlabeled-dir "${PHASE2_UNLABELED_DIR}" \
+      --labeled-dir   "${PHASE2_LABELED_DIR}" \
+      --out "${GRID_DIR}/recheck_summary.json" \
+    2>&1 | tee "$log_path"
+
+  local rc=${PIPESTATUS[0]}
+  if [[ $rc -eq 0 ]]; then
+    :
+  elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
+    echo "[$step] graceful stop (rc=$rc); letting outputs flush." >&2
+    mark_graceful_stop "$step"
+    restore_env_var LOG_DIR "$prev_log_dir"
+    return 0
+  else
+    restore_env_var LOG_DIR "$prev_log_dir"
+    return "$rc"
+  fi
+
+  local metadata="${dir}/stage-outputs/${step}.json"
+  python - <<'PY' "$metadata" "$sweep_id" "${GRID_DIR}/recheck_summary.json" "${GRID_DIR}/best_grid_config.json" "${PHASE2_METRIC}" "${PHASE2_DIRECTION}" "${TOPK_RECHECK}" "${EXTRA_SEEDS}"
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path, sweep_id, summary_path, best_path, metric, direction, topk, extra = sys.argv[1:9]
+
+payload = {
+    "sweep_id": sweep_id,
+    "summary_path": summary_path,
+    "best_config_path": best_path,
+    "metric": metric,
+    "direction": direction,
+    "topk": int(topk),
+    "extra_seeds": int(extra),
+    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2)
+    handle.write("\n")
+os.replace(tmp, path)
+PY
+
+  restore_env_var LOG_DIR "$prev_log_dir"
+  return 0
+}
+
+run_phase2_export_stage() {
+  local dir="$1" step="$2"
+
+  phase2_step_diag "$step"
+
+  local prev_log_dir="${LOG_DIR:-}"
+  local step_log_dir="${dir}/logs"
+  mkdir -p "$step_log_dir"
+  export LOG_DIR="$step_log_dir"
+
+  local best_json="${GRID_DIR}/best_grid_config.json"
+  local summary_json="${GRID_DIR}/recheck_summary.json"
+
+  if [[ ! -f "$best_json" ]]; then
+    echo "[$step][fatal] expected ${best_json} but it was not created" >&2
+    restore_env_var LOG_DIR "$prev_log_dir"
+    return 3
+  fi
+
+  python - <<'PY' "$best_json"
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+if not isinstance(payload, dict) or not payload.get("config"):
+    raise SystemExit(4)
+PY
+
+  local outputs_dir="${dir}/stage-outputs"
+  mkdir -p "$outputs_dir"
+
+  cp -f "$best_json" "${outputs_dir}/best_grid_config.json"
+  if [[ -f "$summary_json" ]]; then
+    cp -f "$summary_json" "${outputs_dir}/recheck_summary.json"
+  fi
+
+  local helper_dir="${outputs_dir}/helpers"
+  mkdir -p "$helper_dir"
+
+  while IFS= read -r rel; do
+    [[ -z "$rel" || "$rel" == "." ]] && continue
+    if [[ -f "${GRID_DIR}/${rel}" ]]; then
+      cp -f "${GRID_DIR}/${rel}" "${helper_dir}/"
+    fi
+  done < <(cd "$GRID_DIR" && find . -maxdepth 1 -type f \( -name 'phase2_winner*' -o -name 'winner_*' -o -name 'phase2_cli*' \) -printf '%P\n' 2>/dev/null || true)
+
+  local metadata="${dir}/stage-outputs/${step}.json"
+  python - <<'PY' "$metadata" "$best_json" "$summary_json" "$helper_dir"
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path, best_path, summary_path, helper_dir = sys.argv[1:5]
+
+helpers = []
+if os.path.isdir(helper_dir):
+    for entry in sorted(os.listdir(helper_dir)):
+        helpers.append(os.path.join(helper_dir, entry))
+
+payload = {
+    "best_config_path": best_path,
+    "summary_path": summary_path if os.path.exists(summary_path) else None,
+    "helper_files": helpers,
+    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2)
+    handle.write("\n")
+os.replace(tmp, path)
+PY
+
+  printf '[%s] validated Phase-2 best configuration\n' "$step" | tee -a "${step_log_dir}/export.log" >/dev/null
+
+  restore_env_var LOG_DIR "$prev_log_dir"
+  return 0
 }
 
 # ---------- build & filter args ----------
@@ -361,10 +753,24 @@ run_stage() {
   local dir; dir="$(stage_dir "$s")"
   if needs_stage "$dir" $(stage_needs "$s"); then
     echo "[$s] starting"
-    build_stage_args "$s"
-    stage_dataset_preflight STAGE_ARGS
+    mkdir -p "$dir" "$dir/stage-outputs"
 
-    run_with_timeout "$s" STAGE_ARGS
+    case "$s" in
+      phase2_sweep)
+        run_phase2_sweep_stage "$dir" "$s"
+        ;;
+      phase2_recheck)
+        run_phase2_recheck_stage "$dir" "$s"
+        ;;
+      phase2_export)
+        run_phase2_export_stage "$dir" "$s"
+        ;;
+      *)
+        build_stage_args "$s"
+        stage_dataset_preflight STAGE_ARGS
+        run_with_timeout "$s" STAGE_ARGS
+        ;;
+    esac
     if was_graceful_stop "$s"; then
       echo "[$s] stopped gracefully; leaving cache unstamped so it can resume."
       return 0

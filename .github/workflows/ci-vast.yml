@@ -293,16 +293,24 @@ jobs:
           # W&B sweeps pair runs via PHASE1_BACKBONES/PHASE1_SEEDS; PHASE1_SWEEP_SEED is deprecated.
           PHASE1_BACKBONES: gine,dmpnn,schnet3d
           PHASE1_SEEDS: 1,2,3,4,5
-
-
+# Option X: keep a single Vast job running sweep → recheck → export sequentially.
   vast_sweep_phase2:
     if: ${{ (inputs.hyperparam_mode || 'wandb') == 'wandb' }}
-    name: Sweep Phase 2 (Bayes refinement)
+    name: Phase 2 (sweep → recheck → export)
     runs-on: ubuntu-latest
     #timeout-minutes: 1860
     needs: vast_learn_hyperparameters
+    concurrency:
+      group: phase2-${{ github.ref }}-${{ github.run_id }}
+      cancel-in-progress: true
+    env:
+      RUN_ID: ${{ github.run_id }}
+      EXP_ID: ${{ github.run_id }}
+      PHASE2_SWEEP_WALL_MINS: 920
+      PHASE2_RECHECK_WALL_MINS: 180
+      PHASE2_EXPORT_WALL_MINS: 30
     steps:
-      - name: Launch W&B Sweep (Phase 2)
+      - name: Run Phase-2 stages on Vast
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VAST_HOST }}
@@ -314,13 +322,15 @@ jobs:
           command_timeout: 940m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,
-            GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,
-            GRID_MODE,WANDB_COUNT, TOPK_RECHECK,EXTRA_SEEDS,PHASE2_METRIC,PHASE2_DIRECTION,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR
+            GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,RUN_ID,EXP_ID,
+            PHASE2_SWEEP_WALL_MINS,PHASE2_RECHECK_WALL_MINS,PHASE2_EXPORT_WALL_MINS,
+            GRID_MODE,WANDB_COUNT, TOPK_RECHECK,EXTRA_SEEDS,PHASE2_METRIC,PHASE2_DIRECTION,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR,
+            PHASE2_AGENT_COUNT
           script: |
             bash "$APP_DIR/scripts/ci/run-grid-phase2.sh"
         env:
-           # agent knobs (already have these)
-          HARD_WALL_MINS: 920
+          # agent knobs (already have these)
+          HARD_WALL_MINS: ${{ env.PHASE2_SWEEP_WALL_MINS }}
           KILL_AFTER_SECS: 120
           WANDB_COUNT: 2
           # recheck knobs (separate budget)
@@ -330,6 +340,50 @@ jobs:
           PHASE2_DIRECTION: min
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
+
+      - name: Collect Phase-2 artifacts
+        if: always()
+        env:
+          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+          VAST_USER: ${{ secrets.VAST_USER }}
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
+          EXP_ID: ${{ env.EXP_ID }}
+          EXPERIMENTS_ROOT: ${{ env.EXPERIMENTS_ROOT }}
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/collect-phase2-artifacts.sh" "$RUNNER_TEMP/phase2"
+
+      - name: Upload Phase-2 sweep logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-phase2-sweep
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/phase2/phase2_sweep
+
+      - name: Upload Phase-2 recheck logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-phase2-recheck
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/phase2/phase2_recheck
+
+      - name: Upload Phase-2 export logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-phase2-export
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/phase2/phase2_export
+
+      - name: Upload Phase-2 grid outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-phase2-grid
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/phase2/grid
 
   vast_pretrain:
     name: Pretain Model
