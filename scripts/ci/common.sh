@@ -24,7 +24,7 @@ __resolve_data_root() {
       printf '%s\n' "$env_root"
       return 0
     fi
-    echo "[ci] warn: unable to use MJEPA_DATA_ROOT=$env_root; falling back to /data/mjepa" >&2
+    echo "[ci] warn: unable to use MJEPA_DATA_ROOT=$env_root" >&2
   fi
 
   local vast_root="/data/mjepa"
@@ -34,7 +34,7 @@ __resolve_data_root() {
   fi
 
   local emergency="${runner_tmp%/}/mjepa"
-  echo "[ci] warn: /data/mjepa not writable; using ${emergency}" >&2
+  echo "[ci] warn: using fallback DATA_ROOT=${emergency}" >&2
   if mkdir -p "$emergency" 2>/dev/null; then
     printf '%s\n' "$emergency"
     return 0
@@ -52,6 +52,18 @@ if [[ -z "${APP_DIR:-}" ]]; then
   fi
 fi
 
+if [[ -n "${EXPERIMENTS_ROOT:-}" ]]; then
+  if ! mkdir -p "$EXPERIMENTS_ROOT" 2>/dev/null; then
+    local fallback_root="${RUNNER_TEMP:-/tmp}/mjepa/experiments"
+    echo "[ci] warn: falling back EXPERIMENTS_ROOT=$fallback_root" >&2
+    EXPERIMENTS_ROOT="$fallback_root"
+    mkdir -p "$EXPERIMENTS_ROOT" 2>/dev/null || {
+      echo "[ci] error: unable to create EXPERIMENTS_ROOT=$EXPERIMENTS_ROOT" >&2
+      exit 1
+    }
+  fi
+fi
+
 if [[ -n "${DATA_ROOT:-}" ]]; then
   if ! mkdir -p "$DATA_ROOT" 2>/dev/null; then
     echo "[ci] warn: DATA_ROOT=$DATA_ROOT not writable; falling back to resolver" >&2
@@ -60,10 +72,27 @@ if [[ -n "${DATA_ROOT:-}" ]]; then
 fi
 
 if [[ -z "${DATA_ROOT:-}" ]]; then
-  DATA_ROOT="$(__resolve_data_root)"
+  if [[ -n "${EXPERIMENTS_ROOT:-}" ]]; then
+    DATA_ROOT="$(dirname "${EXPERIMENTS_ROOT}")"
+  else
+    DATA_ROOT="$(__resolve_data_root)"
+  fi
 fi
 
-: "${EXPERIMENTS_ROOT:=${DATA_ROOT}/experiments}"
+if [[ -z "${EXPERIMENTS_ROOT:-}" ]]; then
+  EXPERIMENTS_ROOT="${DATA_ROOT%/}/experiments"
+  mkdir -p "$EXPERIMENTS_ROOT" 2>/dev/null || {
+    local fallback_root="${RUNNER_TEMP:-/tmp}/mjepa/experiments"
+    echo "[ci] warn: falling back EXPERIMENTS_ROOT=$fallback_root" >&2
+    EXPERIMENTS_ROOT="$fallback_root"
+    mkdir -p "$EXPERIMENTS_ROOT" 2>/dev/null || {
+      echo "[ci] error: unable to create EXPERIMENTS_ROOT=$EXPERIMENTS_ROOT" >&2
+      exit 1
+    }
+  }
+fi
+
+: "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
 : "${CACHE_DIR:=${DATA_ROOT}/cache/graphs_50k}"
 # Allow sweeps to reuse the standard graph cache unless the workflow overrides it.
@@ -372,7 +401,7 @@ ensure_dir_var() {
   local fallback="${2:-}"
   local emergency_rel="${3:-}"
   local current="${!var_name:-}"
-  local runner_tmp="${RUNNER_TEMP:-/tmp}/mjepa"
+  local runner_tmp_base="${RUNNER_TEMP:-/tmp}/mjepa"
   local -a attempts=()
 
   add_candidate() {
@@ -391,17 +420,10 @@ ensure_dir_var() {
   add_candidate "$current" "current"
   add_candidate "$fallback" "fallback"
 
-  local suffix="${emergency_rel#/}"
-  if [[ -z "$suffix" && -n "$fallback" ]]; then
-    suffix="${fallback#$DATA_ROOT/}"
-    suffix="${suffix#/}"
-  fi
-  if [[ -z "$suffix" ]]; then
-    suffix="${var_name,,}"
-  fi
-  local emergency="${runner_tmp%/}"
-  if [[ -n "$suffix" ]]; then
-    emergency="${emergency}/${suffix}"
+  local suffix="${var_name,,}"
+  local emergency="${runner_tmp_base%/}/fallback/${suffix}"
+  if [[ -n "${EXP_ID:-}" ]]; then
+    emergency="${emergency}/${EXP_ID}"
   fi
   add_candidate "$emergency" "emergency"
 
@@ -428,7 +450,7 @@ if [[ -z "${EXP_ID:-}" ]]; then
   EXP_ID="$RUN_ID"
 fi
 
-EXPERIMENT_DIR="${EXPERIMENTS_ROOT}/${EXP_ID}"
+EXPERIMENT_DIR="${EXPERIMENTS_ROOT%/}/${EXP_ID}"
 EXP_ROOT="$EXPERIMENT_DIR"
 
 : "${ARTIFACTS_DIR:=${EXPERIMENT_DIR}/artifacts}"
@@ -437,7 +459,7 @@ if [[ -z "${PRETRAIN_EXP_ID:-}" ]]; then
   PRETRAIN_EXP_ID="$EXP_ID"
 fi
 
-: "${PRETRAIN_EXPERIMENT_ROOT:=${EXPERIMENTS_ROOT}/${PRETRAIN_EXP_ID}}"
+: "${PRETRAIN_EXPERIMENT_ROOT:=${EXPERIMENT_DIR}}"
 : "${PRETRAIN_ARTIFACTS_DIR:=${ARTIFACTS_DIR}}"
 
 # Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
@@ -464,7 +486,7 @@ if [[ -z "${PRETRAIN_DIR:-}" ]]; then
   if [[ -n "${PRETRAIN_CACHE_DIR:-}" ]]; then
     PRETRAIN_DIR="$PRETRAIN_CACHE_DIR"
   else
-    PRETRAIN_DIR="${PRETRAIN_EXPERIMENT_ROOT}/pretrain"
+    PRETRAIN_DIR="$EXPERIMENT_DIR"
   fi
 fi
 
@@ -494,27 +516,35 @@ export PRETRAIN_MANIFEST PRETRAIN_EXP_ID PRETRAIN_EXPERIMENT_ROOT PRETRAIN_ARTIF
   PRETRAIN_STATE_FILE PRETRAIN_STATE_FILE_CANONICAL PRETRAIN_STATE_FILE_LEGACY \
   PRETRAIN_ENCODER_PATH PRETRAIN_TOX21_ENV EXP_ID
 
-echo "[ci] EXP_ID=${EXP_ID}" >&2
-echo "[ci] DATA_ROOT=${DATA_ROOT}" >&2
-echo "[ci] EXPERIMENT_DIR=${EXPERIMENT_DIR}" >&2
-echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR}" >&2
-echo "[ci] PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR}" >&2
+ci_print_env_diag() {
+  local stage_bin_value="${1:-${STAGE_BIN:-<unset>}}"
+  echo "[ci] EXP_ID=${EXP_ID}" >&2
+  echo "[ci] EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT}" >&2
+  echo "[ci] DATA_ROOT=${DATA_ROOT}" >&2
+  echo "[ci] EXPERIMENT_DIR=${EXPERIMENT_DIR}" >&2
+  echo "[ci] PRETRAIN_DIR=${PRETRAIN_DIR}" >&2
+  echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR}" >&2
+  echo "[ci] PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR}" >&2
+  echo "[ci] STAGE_BIN=${stage_bin_value}" >&2
 
-if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
-  echo "[ci] resolved experiment root=${PRETRAIN_EXPERIMENT_ROOT}" >&2
-fi
+  if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+    echo "[ci] resolved experiment root=${PRETRAIN_EXPERIMENT_ROOT}" >&2
+  fi
 
-if [[ -n "${PRETRAIN_MANIFEST:-}" ]]; then
-  echo "[ci] resolved pretrain manifest path=${PRETRAIN_MANIFEST}" >&2
-fi
+  if [[ -n "${PRETRAIN_MANIFEST:-}" ]]; then
+    echo "[ci] resolved pretrain manifest path=${PRETRAIN_MANIFEST}" >&2
+  fi
 
-if [[ -n "${PRETRAIN_STATE_FILE_CANONICAL:-}" ]]; then
-  echo "[ci] resolved pretrain state canonical=${PRETRAIN_STATE_FILE_CANONICAL}" >&2
-fi
+  if [[ -n "${PRETRAIN_STATE_FILE_CANONICAL:-}" ]]; then
+    echo "[ci] resolved pretrain state canonical=${PRETRAIN_STATE_FILE_CANONICAL}" >&2
+  fi
 
-if [[ -n "${PRETRAIN_STATE_FILE:-}" && "${PRETRAIN_STATE_FILE}" != "${PRETRAIN_STATE_FILE_CANONICAL:-}" ]]; then
-  echo "[ci] active pretrain state path=${PRETRAIN_STATE_FILE}" >&2
-fi
+  if [[ -n "${PRETRAIN_STATE_FILE:-}" && "${PRETRAIN_STATE_FILE}" != "${PRETRAIN_STATE_FILE_CANONICAL:-}" ]]; then
+    echo "[ci] active pretrain state path=${PRETRAIN_STATE_FILE}" >&2
+  fi
+}
+
+ci_print_env_diag
 
 # --- micromamba bootstrap ---
 ensure_micromamba() {
