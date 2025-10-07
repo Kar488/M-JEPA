@@ -2,9 +2,28 @@
 #set -x   # bash prints each command before executing
 set -euo pipefail
 
-grace_marker() { echo "$LOG_DIR/${1}.graceful_stop"; }
-mark_graceful_stop() { mkdir -p "$LOG_DIR"; : >"$(grace_marker "$1")"; }
-was_graceful_stop() { [[ -f "$(grace_marker "$1")" ]]; }
+grace_marker() {
+  local stage="${1:?stage}" log_dir="${2:-${LOG_DIR:-}}"
+  if [[ -z "$log_dir" ]]; then
+    log_dir="${APP_DIR:-.}/logs"
+  fi
+  echo "${log_dir}/${stage}.graceful_stop"
+}
+mark_graceful_stop() {
+  local stage="${1:?stage}" log_dir="${2:-${LOG_DIR:-}}"
+  if [[ -z "$log_dir" ]]; then
+    log_dir="${APP_DIR:-.}/logs"
+  fi
+  mkdir -p "$log_dir"
+  : >"$(grace_marker "$stage" "$log_dir")"
+}
+was_graceful_stop() {
+  local stage="${1:?stage}" log_dir="${2:-${LOG_DIR:-}}"
+  if [[ -z "$log_dir" ]]; then
+    log_dir="${APP_DIR:-.}/logs"
+  fi
+  [[ -f "$(grace_marker "$stage" "$log_dir")" ]]
+}
 
 # requires: common.sh (ensure_micromamba, build_argv_from_yaml, expand_array_vars, best_config_args)
 # ---------- stage → dirs / subcommands / dependencies ----------
@@ -755,26 +774,43 @@ run_stage() {
     echo "[$s] starting"
     mkdir -p "$dir" "$dir/stage-outputs"
 
+    local stage_log_dir="${LOG_DIR:-}"
+
     case "$s" in
       phase2_sweep)
+        stage_log_dir="${dir}/logs"
         run_phase2_sweep_stage "$dir" "$s"
         ;;
       phase2_recheck)
+        stage_log_dir="${dir}/logs"
         run_phase2_recheck_stage "$dir" "$s"
         ;;
       phase2_export)
+        stage_log_dir="${dir}/logs"
         run_phase2_export_stage "$dir" "$s"
         ;;
       *)
+        stage_log_dir="${LOG_DIR:-}"
         build_stage_args "$s"
         stage_dataset_preflight STAGE_ARGS
         run_with_timeout "$s" STAGE_ARGS
         ;;
     esac
-    if was_graceful_stop "$s"; then
-      echo "[$s] stopped gracefully; leaving cache unstamped so it can resume."
-      return 0
+
+    local -a grace_dirs=()
+    if [[ -n "$stage_log_dir" ]]; then
+      grace_dirs+=("$stage_log_dir")
     fi
+    if [[ -n "${LOG_DIR:-}" && "${LOG_DIR:-}" != "$stage_log_dir" ]]; then
+      grace_dirs+=("${LOG_DIR:-}")
+    fi
+
+    for candidate in "${grace_dirs[@]}"; do
+      if [[ -n "$candidate" ]] && was_graceful_stop "$s" "$candidate"; then
+        echo "[$s] stopped gracefully; leaving cache unstamped so it can resume."
+        return 0
+      fi
+    done
 
 
     mark_stage_done "$dir"
