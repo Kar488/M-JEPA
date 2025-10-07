@@ -343,6 +343,12 @@ run_with_timeout() {
 # ---------- one-call entry ----------
 run_stage() {
   local s="${1:?stage}"
+
+  if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+    "$MJEPACI_STAGE_SHIM" "$s"
+    return 0
+  fi
+
   ensure_micromamba
   : "${WANDB_NAME:=$s}"; export WANDB_NAME
   : "${WANDB_JOB_TYPE:=$s}"; export WANDB_JOB_TYPE

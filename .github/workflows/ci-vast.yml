@@ -76,19 +76,7 @@ env:
   GRID_MODE: wandb
   CACHE_DIR: /data/mjepa/cache/graphs_50k
   SWEEP_CACHE_DIR: ${{ github.event.inputs.sweep_cache_dir || '/data/mjepa/cache/graphs_50k' }}
-  RUN_ID: ${{ github.run_id }}
-  EXP_ROOT: /data/mjepa/experiments/${{ github.run_id }}
-  EXPERIMENT_DIR: /data/mjepa/experiments/${{ github.run_id }}
-  GRID_DIR: /data/mjepa/experiments/${{ github.run_id }}/grid
-  PRETRAIN_DIR: /data/mjepa/experiments/${{ github.run_id }}/pretrain
-  FINETUNE_DIR: /data/mjepa/experiments/${{ github.run_id }}/finetune
-  CKPT_DIR: /data/mjepa/experiments/${{ github.run_id }}/finetune
-  BENCH_DIR: /data/mjepa/experiments/${{ github.run_id }}/bench
-  TOX21_DIR: /data/mjepa/experiments/${{ github.run_id }}/tox21
-  LOG_DIR: /data/mjepa/experiments/${{ github.run_id }}/logs
-  REPORTS_DIR: /data/mjepa/experiments/${{ github.run_id }}/reports
-  ARTIFACTS_DIR: /data/mjepa/experiments/${{ github.run_id }}/artifacts
-  PRETRAIN_MANIFEST: /data/mjepa/experiments/${{ github.run_id }}/artifacts/encoder_manifest.json
+  EXPERIMENTS_ROOT: /data/mjepa/experiments
   # as such this cache is used inside a single run only
   #Changing cache to be used across runs, change to fixed directory e.g. /data/mjepa/cache/grid
   # either delete stamp (rm /data/mjepa/cache/grid/.stamp) or point to empty directory ("") for forced reruns
@@ -357,6 +345,12 @@ jobs:
           inputs.run_vast_jobs != 'false' &&
           needs.vast_learn_hyperparameters.result == 'success')
       }}
+    outputs:
+      exp_id: ${{ steps.pretrain_state.outputs.exp_id }}
+      pretrain_root: ${{ steps.pretrain_state.outputs.experiment_root }}
+      pretrain_manifest: ${{ steps.pretrain_state.outputs.manifest_path }}
+      pretrain_encoder: ${{ steps.pretrain_state.outputs.encoder_path }}
+      pretrain_tox21_env: ${{ steps.pretrain_state.outputs.tox21_env }}
     steps:
       - name: Pretrain on Vast
         uses: appleboy/ssh-action@v1
@@ -372,7 +366,7 @@ jobs:
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             GRID_MODE,WANDB_COUNT,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS
+            BESTCFG_NO_EPOCHS,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,EXPERIMENTS_ROOT
           script: |
             bash "$APP_DIR/scripts/ci/run-pretrain.sh"
         env:
@@ -382,23 +376,25 @@ jobs:
           FINETUNE_EPOCHS: "8"
           BESTCFG_NO_EPOCHS: "1"
 
+      - name: Fetch pretrain state snapshot
+        id: pretrain_state
+        if: always()
+        env:
+          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+          VAST_USER: ${{ secrets.VAST_USER }}
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
+          EXPERIMENTS_ROOT: ${{ env.EXPERIMENTS_ROOT }}
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/fetch-pretrain-state.sh" pretrain_artifacts
+
       - name: Collect pretrain artifacts
         if: always()
         env:
           SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/vast_key
-          chmod 600 ~/.ssh/vast_key
-          mkdir -p pretrain_artifacts
-          rsync -avz --chmod=ugo=rwX -e "ssh -i ~/.ssh/vast_key -p ${{ secrets.VAST_PORT }} -o StrictHostKeyChecking=no" \
-            "${{ secrets.VAST_USER }}@${{ secrets.VAST_HOST }}:${{ env.PRETRAIN_DIR }}/encoder.pt" pretrain_artifacts/ || true
-          rsync -avz --chmod=ugo=rwX -e "ssh -i ~/.ssh/vast_key -p ${{ secrets.VAST_PORT }} -o StrictHostKeyChecking=no" \
-            "${{ secrets.VAST_USER }}@${{ secrets.VAST_HOST }}:${{ env.PRETRAIN_MANIFEST }}" pretrain_artifacts/ || true
-          rsync -avz --chmod=ugo=rwX -e "ssh -i ~/.ssh/vast_key -p ${{ secrets.VAST_PORT }} -o StrictHostKeyChecking=no" \
-            "${{ secrets.VAST_USER }}@${{ secrets.VAST_HOST }}:${{ env.PRETRAIN_DIR }}/stage-outputs/pretrain.json" pretrain_artifacts/ || true
-          rm -f ~/.ssh/vast_key
+          VAST_USER: ${{ secrets.VAST_USER }}
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/collect-pretrain-artifacts.sh" pretrain_artifacts
 
       - name: Upload pretrain artifacts
         if: always()
@@ -418,6 +414,17 @@ jobs:
           needs.vast_pretrain.result == 'success' }}
     outputs:
       tox21_gate: ${{ steps.tox21_gate.outputs.value }}
+    env:
+      EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
+      PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
+      PRETRAIN_EXPERIMENT_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
+      EXP_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
+      PRETRAIN_MANIFEST: ${{ needs.vast_pretrain.outputs.pretrain_manifest }}
+      PRETRAIN_ENCODER_PATH: ${{ needs.vast_pretrain.outputs.pretrain_encoder }}
+      PRETRAIN_TOX21_ENV: ${{ needs.vast_pretrain.outputs.pretrain_tox21_env }}
+      PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
+      PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
+      EXPERIMENTS_ROOT: /data/mjepa/experiments
     steps:
       - name: Tox21 baseline on Vast
         uses: appleboy/ssh-action@v1
@@ -432,7 +439,7 @@ jobs:
           envs: APP_DIR,GRID_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE
+            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
           script: |
             bash "$APP_DIR/scripts/ci/run-tox21.sh"
         env:
@@ -486,6 +493,16 @@ jobs:
           needs.vast_pretrain.result == 'success' &&
           needs.vast_tox21_baseline.result == 'success' &&
           needs.vast_tox21_baseline.outputs.tox21_gate == 'false' }}
+    env:
+      EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
+      PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
+      PRETRAIN_EXPERIMENT_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
+      EXP_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
+      PRETRAIN_MANIFEST: ${{ needs.vast_pretrain.outputs.pretrain_manifest }}
+      PRETRAIN_ENCODER_PATH: ${{ needs.vast_pretrain.outputs.pretrain_encoder }}
+      PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
+      PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
+      EXPERIMENTS_ROOT: /data/mjepa/experiments
     steps:
       - name: Finetune on Vast
         uses: appleboy/ssh-action@v1
@@ -500,7 +517,7 @@ jobs:
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,CKPT_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS
+            BESTCFG_NO_EPOCHS,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
           script: |
             bash "$APP_DIR/scripts/ci/run-finetune.sh"
         env:
@@ -513,11 +530,21 @@ jobs:
   vast_benchmark:
     name: Benchmark
     runs-on: ubuntu-latest
-    needs: [vast_tox21_baseline, vast_finetune]
+    needs: [vast_pretrain, vast_tox21_baseline, vast_finetune]
     if:
       ${{
           always() &&
           inputs.run_vast_jobs != 'false' }}
+    env:
+      EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
+      PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
+      PRETRAIN_EXPERIMENT_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
+      EXP_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
+      PRETRAIN_MANIFEST: ${{ needs.vast_pretrain.outputs.pretrain_manifest }}
+      PRETRAIN_ENCODER_PATH: ${{ needs.vast_pretrain.outputs.pretrain_encoder }}
+      PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
+      PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
+      EXPERIMENTS_ROOT: /data/mjepa/experiments
     steps:
       - name: Summarise tox21 gate outcome
         run: |
@@ -538,7 +565,7 @@ jobs:
             BENCH_VAL_DIR,BENCH_TEST_DIR,PHASE2_LABELED_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,TOX21_MET_GATE
+            BESTCFG_NO_EPOCHS,TOX21_MET_GATE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
         env:
           HARD_WALL_MINS: 120
           KILL_AFTER_SECS: 120
@@ -549,11 +576,22 @@ jobs:
   vast_tox21:
     name: Tox21 Evaluation
     runs-on: ubuntu-latest
-    needs: vast_finetune
+    needs: [vast_pretrain, vast_finetune]
     if:
       ${{
           inputs.run_vast_jobs != 'false' &&
           needs.vast_finetune.result == 'success' }}
+    env:
+      EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
+      PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
+      PRETRAIN_EXPERIMENT_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
+      EXP_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
+      PRETRAIN_MANIFEST: ${{ needs.vast_pretrain.outputs.pretrain_manifest }}
+      PRETRAIN_ENCODER_PATH: ${{ needs.vast_pretrain.outputs.pretrain_encoder }}
+      PRETRAIN_TOX21_ENV: ${{ needs.vast_pretrain.outputs.pretrain_tox21_env }}
+      PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
+      PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
+      EXPERIMENTS_ROOT: /data/mjepa/experiments
     steps:
       - name: Tox21 on Vast
         uses: appleboy/ssh-action@v1
@@ -568,7 +606,7 @@ jobs:
           envs: APP_DIR,GRID_DIR,TOX21_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE
+            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
           script: |
             bash "$APP_DIR/scripts/ci/run-tox21.sh"
         env:

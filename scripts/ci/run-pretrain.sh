@@ -13,6 +13,7 @@ export WANDB_JOB_TYPE="pretrain"
 echo "[pretrain] using experiment id=${PRETRAIN_EXP_ID} root=${PRETRAIN_EXPERIMENT_ROOT}" >&2
 echo "[pretrain] artifacts dir=${PRETRAIN_ARTIFACTS_DIR}" >&2
 echo "[pretrain] manifest path=${PRETRAIN_MANIFEST}" >&2
+echo "[pretrain] state path=${PRETRAIN_STATE_FILE} (legacy=${PRETRAIN_STATE_FILE_LEGACY:-n/a})" >&2
 mkdir -p "$PRETRAIN_ARTIFACTS_DIR"
 
 export STAGE_OUTPUTS_DIR="${PRETRAIN_DIR}/stage-outputs"
@@ -29,12 +30,7 @@ stage_outputs_json="${STAGE_OUTPUTS_DIR}/pretrain.json"
 # Resolve a Python interpreter for the parsing and bookkeeping steps below.
 # Prefer an existing "python" binary, otherwise fall back to micromamba.
 python_cmd=()
-if py=$(python_bin 2>/dev/null); then
-  python_cmd=(env PYTHONUNBUFFERED=1 "$py" -u)
-else
-  ensure_micromamba
-  python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
-fi
+resolve_ci_python python_cmd
 
 # If the training command emitted a stage outputs JSON, honour the absolute
 # paths recorded there.  This guards against mismatched environment variables
@@ -113,22 +109,24 @@ if [[ -f "$PRETRAIN_MANIFEST" ]]; then
   ln -sf "$PRETRAIN_MANIFEST" "$STAGE_OUTPUTS_DIR/encoder_manifest.json"
 fi
 
-state_path="${PRETRAIN_STATE_FILE}" 
+state_path="${PRETRAIN_STATE_FILE}"
+state_legacy="${PRETRAIN_STATE_FILE_LEGACY:-}"
 state_dir="$(dirname "$state_path")"
 mkdir -p "$state_dir"
 
-"${python_cmd[@]}" - "$state_path" "$PRETRAIN_EXP_ID" "$PRETRAIN_EXPERIMENT_ROOT" \
+"${python_cmd[@]}" - "$state_path" "$state_legacy" "$PRETRAIN_EXP_ID" "$PRETRAIN_EXPERIMENT_ROOT" \
   "$PRETRAIN_ARTIFACTS_DIR" "$manifest_path" "$encoder_ckpt" <<'PY'
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
-state_path, exp_id, exp_root, artifacts_dir, manifest_path, encoder_path = sys.argv[1:7]
+state_path, legacy_path, exp_id, exp_root, artifacts_dir, manifest_path, encoder_path = sys.argv[1:8]
 
 tox21_env = os.path.abspath(os.path.join(exp_root, "tox21_gate.env"))
 
 payload = {
+    "id": exp_id,
     "pretrain_exp_id": exp_id,
     "experiment_root": os.path.abspath(exp_root),
     "artifacts_dir": os.path.abspath(artifacts_dir),
@@ -144,6 +142,17 @@ with open(tmp_path, "w", encoding="utf-8") as fh:
     fh.write("\n")
 os.replace(tmp_path, state_path)
 print(f"[pretrain] wrote state to {state_path} (id={exp_id})")
+
+legacy_path = legacy_path.strip()
+if legacy_path and os.path.abspath(legacy_path) != os.path.abspath(state_path):
+    legacy_dir = os.path.dirname(legacy_path)
+    os.makedirs(legacy_dir, exist_ok=True)
+    tmp_legacy = legacy_path + ".tmp"
+    with open(tmp_legacy, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    os.replace(tmp_legacy, legacy_path)
+    print(f"[pretrain] synced legacy state to {legacy_path}")
 PY
 
 unset BESTCFG_NO_EPOCHS                     # avoid leaking to other stages
