@@ -60,45 +60,14 @@ mjepa_detect_data_root() {
   local runner_tmp="${RUNNER_TEMP:-/tmp}"
   local fallback="${runner_tmp%/}/mjepa"
   if mjepa_try_dir "$fallback"; then
-    mjepa_log_warn "falling back DATA_ROOT=$fallback"
+    if [[ "$fallback" != "$requested_data" ]]; then
+      mjepa_log_warn "falling back DATA_ROOT=$fallback"
+    fi
     printf '%s\n' "$fallback"
     return 0
   fi
 
   mjepa_log_error "unable to detect writable DATA_ROOT (tried ${requested_data:-<unset>}, ${env_root:-<unset>}, /data/mjepa, $fallback)"
-  return 1
-}
-
-mjepa_resolve_experiments_root() {
-  local data_root="$1"
-  local requested="${2:-}"
-
-  if [[ -n "$requested" ]]; then
-    if mjepa_try_dir "$requested"; then
-      printf '%s\n' "$requested"
-      return 0
-    fi
-    mjepa_log_warn "EXPERIMENTS_ROOT=$requested not writable; falling back"
-  fi
-
-  local default_root=""
-  if [[ -n "$data_root" ]]; then
-    default_root="${data_root%/}/experiments"
-    if mjepa_try_dir "$default_root"; then
-      printf '%s\n' "$default_root"
-      return 0
-    fi
-  fi
-
-  local runner_tmp="${RUNNER_TEMP:-/tmp}"
-  local fallback="${runner_tmp%/}/mjepa/experiments"
-  if mjepa_try_dir "$fallback"; then
-    mjepa_log_warn "falling back EXPERIMENTS_ROOT=$fallback"
-    printf '%s\n' "$fallback"
-    return 0
-  fi
-
-  mjepa_log_error "unable to detect writable EXPERIMENTS_ROOT (tried ${requested:-<unset>}${default_root:+, $default_root}, $fallback)"
   return 1
 }
 
@@ -117,11 +86,12 @@ mjepa_ensure_dir() {
 }
 
 if [[ -z "${APP_DIR:-}" ]]; then
-  _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"      # .../scripts/ci
-  _root="$(cd "${_here}/../.." && pwd)"                      # repo root guess
-  if [[ -f "$_root/scripts/train_jepa.py" ]]; then
-    APP_DIR="$_root"
+  __ci_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  __ci_root="$(cd "${__ci_here}/../.." && pwd)"
+  if [[ -f "${__ci_root}/scripts/train_jepa.py" ]]; then
+    APP_DIR="${__ci_root}"
   fi
+  unset __ci_here __ci_root
 fi
 
 if [[ -n "${DATA_ROOT:-}" ]] && ! mjepa_try_dir "${DATA_ROOT}"; then
@@ -129,30 +99,56 @@ if [[ -n "${DATA_ROOT:-}" ]] && ! mjepa_try_dir "${DATA_ROOT}"; then
   DATA_ROOT=""
 fi
 
-resolved_experiments=""
 if [[ -n "${EXPERIMENTS_ROOT:-}" ]]; then
-  if ! resolved_experiments="$(mjepa_resolve_experiments_root "${DATA_ROOT:-}" "${EXPERIMENTS_ROOT}")"; then
-    exit 1
+  if ! mjepa_try_dir "${EXPERIMENTS_ROOT}"; then
+    mjepa_log_warn "EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT} not writable; falling back"
+    EXPERIMENTS_ROOT=""
   fi
-  EXPERIMENTS_ROOT="$resolved_experiments"
-  if [[ -z "${DATA_ROOT:-}" ]]; then
-    DATA_ROOT="$(dirname "$EXPERIMENTS_ROOT")"
-    if [[ -z "$DATA_ROOT" || "$DATA_ROOT" == "." ]]; then
-      DATA_ROOT="$EXPERIMENTS_ROOT"
-    fi
-  fi
-else
-  if [[ -z "${DATA_ROOT:-}" ]]; then
-    if ! DATA_ROOT="$(mjepa_detect_data_root)"; then
-      exit 1
-    fi
-  fi
-  if ! resolved_experiments="$(mjepa_resolve_experiments_root "${DATA_ROOT}" "")"; then
-    exit 1
-  fi
-  EXPERIMENTS_ROOT="$resolved_experiments"
 fi
-unset resolved_experiments
+
+if [[ -z "${DATA_ROOT:-}" ]]; then
+  if ! DATA_ROOT="$(mjepa_detect_data_root)"; then
+    exit 1
+  fi
+fi
+
+if [[ -z "${EXPERIMENTS_ROOT:-}" ]]; then
+  EXPERIMENTS_ROOT="${DATA_ROOT%/}/experiments"
+fi
+
+if ! mjepa_try_dir "${EXPERIMENTS_ROOT}"; then
+  __ci_runner_tmp="${RUNNER_TEMP:-/tmp}"
+  __ci_fallback_experiments="${__ci_runner_tmp%/}/mjepa/experiments"
+  if mjepa_try_dir "${__ci_fallback_experiments}"; then
+    mjepa_log_warn "falling back EXPERIMENTS_ROOT=${__ci_fallback_experiments}"
+    EXPERIMENTS_ROOT="${__ci_fallback_experiments}"
+    DATA_ROOT="$(dirname "${EXPERIMENTS_ROOT}")"
+  else
+    mjepa_log_error "unable to ensure writable EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT}"
+    exit 1
+  fi
+  unset __ci_runner_tmp __ci_fallback_experiments
+fi
+
+if [[ -z "${DATA_ROOT:-}" ]]; then
+  DATA_ROOT="$(dirname "${EXPERIMENTS_ROOT}")"
+fi
+
+if [[ -z "${DATA_ROOT:-}" || "${DATA_ROOT}" == "." ]]; then
+  DATA_ROOT="${EXPERIMENTS_ROOT}"
+fi
+
+if [[ -n "${DATA_ROOT:-}" ]] && ! mjepa_try_dir "${DATA_ROOT}"; then
+  mjepa_log_warn "DATA_ROOT=${DATA_ROOT} derived from experiments root is not writable; using detected fallback"
+  if ! DATA_ROOT="$(mjepa_detect_data_root)"; then
+    exit 1
+  fi
+  EXPERIMENTS_ROOT="${DATA_ROOT%/}/experiments"
+  if ! mjepa_try_dir "${EXPERIMENTS_ROOT}"; then
+    mjepa_log_error "unable to ensure writable EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT}"
+    exit 1
+  fi
+fi
 
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
@@ -497,7 +493,7 @@ ensure_dir_var() {
     if mjepa_try_dir "$path"; then
       printf -v "$var_name" '%s' "$path"
       if (( idx > 0 )); then
-        mjepa_log_warn "falling back to $var_name=$path"
+        mjepa_log_warn "falling back ${var_name}=$path"
       fi
       return 0
     fi
@@ -580,13 +576,12 @@ export PRETRAIN_MANIFEST PRETRAIN_EXP_ID PRETRAIN_EXPERIMENT_ROOT PRETRAIN_ARTIF
 
 ci_print_env_diag() {
   local stage_bin_value="${1:-${STAGE_BIN:-<unset>}}"
-  echo "[ci] EXP_ID=${EXP_ID}" >&2
-  echo "[ci] EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT}" >&2
-  echo "[ci] DATA_ROOT=${DATA_ROOT}" >&2
-  echo "[ci] EXPERIMENT_DIR=${EXPERIMENT_DIR}" >&2
-  echo "[ci] PRETRAIN_DIR=${PRETRAIN_DIR}" >&2
-  echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR}" >&2
-  echo "[ci] PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR}" >&2
+  echo "[ci] EXP_ID=${EXP_ID:-<unset>}" >&2
+  echo "[ci] EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>}" >&2
+  echo "[ci] EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>}" >&2
+  echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR:-<unset>}" >&2
+  echo "[ci] PRETRAIN_DIR=${PRETRAIN_DIR:-<unset>}" >&2
+  echo "[ci] PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>}" >&2
   echo "[ci] STAGE_BIN=${stage_bin_value}" >&2
 
   if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
@@ -605,8 +600,6 @@ ci_print_env_diag() {
     echo "[ci] active pretrain state path=${PRETRAIN_STATE_FILE}" >&2
   fi
 }
-
-ci_print_env_diag
 
 # --- micromamba bootstrap ---
 ensure_micromamba() {

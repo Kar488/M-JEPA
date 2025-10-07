@@ -9,12 +9,16 @@ export MJEPACI_STAGE="tox21"
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
 
-echo "[ci] EXP_ID=${EXP_ID}" >&2
-echo "[ci] EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT}" >&2
-echo "[ci] DATA_ROOT=${DATA_ROOT:-<unset>}" >&2
-echo "[ci] EXPERIMENT_DIR=${EXPERIMENT_DIR}" >&2
-echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR}" >&2
-echo "[ci] PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR}" >&2
+if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+  STAGE_BIN="${MJEPACI_STAGE_SHIM}"
+elif [[ -z "${STAGE_BIN:-}" ]]; then
+  STAGE_BIN="run_stage"
+fi
+
+export STAGE_BIN
+ci_print_env_diag "$STAGE_BIN"
+
+export EXP_ID EXPERIMENTS_ROOT EXPERIMENT_DIR PRETRAIN_DIR ARTIFACTS_DIR PRETRAIN_ARTIFACTS_DIR
 
 export WANDB_NAME="tox21"
 export WANDB_JOB_TYPE="tox21"
@@ -102,7 +106,7 @@ export TOX21_ENCODER_SOURCE="$SOURCE"
 export TOX21_ENCODER_CHECKPOINT
 
 # ensure the parm matches train_jepa_ci.yml
-run_stage tox21
+"$STAGE_BIN" tox21
 
 stage_file="${TOX21_DIR}/stage-outputs/tox21_${SOURCE}.json"
 "${python_cmd[@]}" - <<'PY' "$stage_file" "$SOURCE" "$env_file"
