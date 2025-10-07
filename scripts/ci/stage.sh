@@ -25,6 +25,15 @@ was_graceful_stop() {
   [[ -f "$(grace_marker "$stage" "$log_dir")" ]]
 }
 
+clear_graceful_stop() {
+  local stage="${1:?stage}" log_dir="${2:-${LOG_DIR:-}}"
+  local marker
+  marker="$(grace_marker "$stage" "$log_dir")"
+  if [[ -f "$marker" ]]; then
+    rm -f "$marker"
+  fi
+}
+
 # requires: common.sh (ensure_micromamba, build_argv_from_yaml, expand_array_vars, best_config_args)
 # ---------- stage → dirs / subcommands / dependencies ----------
 stage_dir() {
@@ -759,6 +768,9 @@ run_stage() {
     local dir
     dir="$(stage_dir "$s")"
     mkdir -p "$dir" "$dir/stage-outputs"
+    clear_graceful_stop "$s"
+    clear_graceful_stop "$s" "${LOG_DIR:-}"
+    clear_graceful_stop "$s" "${dir}/logs"
     "$MJEPACI_STAGE_SHIM" "$s"
     mark_stage_done "$dir"
     return 0
@@ -779,18 +791,26 @@ run_stage() {
     case "$s" in
       phase2_sweep)
         stage_log_dir="${dir}/logs"
+        clear_graceful_stop "$s" "$stage_log_dir"
+        clear_graceful_stop "$s" "${LOG_DIR:-}"
         run_phase2_sweep_stage "$dir" "$s"
         ;;
       phase2_recheck)
         stage_log_dir="${dir}/logs"
+        clear_graceful_stop "$s" "$stage_log_dir"
+        clear_graceful_stop "$s" "${LOG_DIR:-}"
         run_phase2_recheck_stage "$dir" "$s"
         ;;
       phase2_export)
         stage_log_dir="${dir}/logs"
+        clear_graceful_stop "$s" "$stage_log_dir"
+        clear_graceful_stop "$s" "${LOG_DIR:-}"
         run_phase2_export_stage "$dir" "$s"
         ;;
       *)
         stage_log_dir="${LOG_DIR:-}"
+        clear_graceful_stop "$s" "$stage_log_dir"
+        clear_graceful_stop "$s" "${LOG_DIR:-}"
         build_stage_args "$s"
         stage_dataset_preflight STAGE_ARGS
         run_with_timeout "$s" STAGE_ARGS
