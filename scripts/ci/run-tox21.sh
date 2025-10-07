@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+trap 'echo "[ci] error at line $LINENO: $BASH_COMMAND" >&2' ERR
+
 export BESTCFG_NO_EPOCHS=1              # drop both epochs from best_config
 export MJEPACI_STAGE="tox21"
 
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
+
+echo "[ci] EXP_ID=${EXP_ID}" >&2
+echo "[ci] EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT}" >&2
+echo "[ci] DATA_ROOT=${DATA_ROOT:-<unset>}" >&2
+echo "[ci] EXPERIMENT_DIR=${EXPERIMENT_DIR}" >&2
+echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR}" >&2
+echo "[ci] PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR}" >&2
 
 export WANDB_NAME="tox21"
 export WANDB_JOB_TYPE="tox21"

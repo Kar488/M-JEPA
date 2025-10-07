@@ -15,32 +15,104 @@ set -euo pipefail
 : "${PRETRAIN_EXPERIMENT_ROOT:=}"
 : "${PRETRAIN_ARTIFACTS_DIR:=}"
 
-__resolve_data_root() {
-  local runner_tmp="${RUNNER_TEMP:-/tmp}"
-  local env_root="${MJEPA_DATA_ROOT:-}"
+mjepa_log_warn() {
+  echo "[ci] warn: $*" >&2
+}
 
+mjepa_log_error() {
+  echo "[ci] error: $*" >&2
+}
+
+mjepa_try_dir() {
+  local path="$1"
+  [[ -n "$path" ]] || return 1
+  if mkdir -p "$path" 2>/dev/null && [[ -w "$path" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+mjepa_detect_data_root() {
+  local requested_data="${DATA_ROOT-}"
+  if [[ -n "$requested_data" ]]; then
+    if mjepa_try_dir "$requested_data"; then
+      printf '%s\n' "$requested_data"
+      return 0
+    fi
+    mjepa_log_warn "DATA_ROOT=$requested_data not writable; ignoring"
+  fi
+
+  local env_root="${MJEPA_DATA_ROOT-}"
   if [[ -n "$env_root" ]]; then
-    if mkdir -p "$env_root" 2>/dev/null; then
+    if mjepa_try_dir "$env_root"; then
       printf '%s\n' "$env_root"
       return 0
     fi
-    echo "[ci] warn: unable to use MJEPA_DATA_ROOT=$env_root" >&2
+    mjepa_log_warn "MJEPA_DATA_ROOT=$env_root not writable; ignoring"
   fi
 
   local vast_root="/data/mjepa"
-  if mkdir -p "$vast_root" 2>/dev/null; then
+  if mjepa_try_dir "$vast_root"; then
     printf '%s\n' "$vast_root"
     return 0
   fi
 
-  local emergency="${runner_tmp%/}/mjepa"
-  echo "[ci] warn: using fallback DATA_ROOT=${emergency}" >&2
-  if mkdir -p "$emergency" 2>/dev/null; then
-    printf '%s\n' "$emergency"
+  local runner_tmp="${RUNNER_TEMP:-/tmp}"
+  local fallback="${runner_tmp%/}/mjepa"
+  if mjepa_try_dir "$fallback"; then
+    mjepa_log_warn "falling back DATA_ROOT=$fallback"
+    printf '%s\n' "$fallback"
     return 0
   fi
 
-  echo "[ci] error: unable to create DATA_ROOT at ${env_root:-'<unset>'}, /data/mjepa, or ${emergency}" >&2
+  mjepa_log_error "unable to detect writable DATA_ROOT (tried ${requested_data:-<unset>}, ${env_root:-<unset>}, /data/mjepa, $fallback)"
+  return 1
+}
+
+mjepa_resolve_experiments_root() {
+  local data_root="$1"
+  local requested="${2:-}"
+
+  if [[ -n "$requested" ]]; then
+    if mjepa_try_dir "$requested"; then
+      printf '%s\n' "$requested"
+      return 0
+    fi
+    mjepa_log_warn "EXPERIMENTS_ROOT=$requested not writable; falling back"
+  fi
+
+  local default_root=""
+  if [[ -n "$data_root" ]]; then
+    default_root="${data_root%/}/experiments"
+    if mjepa_try_dir "$default_root"; then
+      printf '%s\n' "$default_root"
+      return 0
+    fi
+  fi
+
+  local runner_tmp="${RUNNER_TEMP:-/tmp}"
+  local fallback="${runner_tmp%/}/mjepa/experiments"
+  if mjepa_try_dir "$fallback"; then
+    mjepa_log_warn "falling back EXPERIMENTS_ROOT=$fallback"
+    printf '%s\n' "$fallback"
+    return 0
+  fi
+
+  mjepa_log_error "unable to detect writable EXPERIMENTS_ROOT (tried ${requested:-<unset>}${default_root:+, $default_root}, $fallback)"
+  return 1
+}
+
+mjepa_ensure_dir() {
+  local var_name="$1"
+  local path="$2"
+  local label="${3:-$path}"
+
+  if mjepa_try_dir "$path"; then
+    printf -v "$var_name" '%s' "$path"
+    return 0
+  fi
+
+  mjepa_log_error "unable to ensure $var_name=$label"
   return 1
 }
 
@@ -52,45 +124,35 @@ if [[ -z "${APP_DIR:-}" ]]; then
   fi
 fi
 
+if [[ -n "${DATA_ROOT:-}" ]] && ! mjepa_try_dir "${DATA_ROOT}"; then
+  mjepa_log_warn "DATA_ROOT=${DATA_ROOT} not writable; ignoring"
+  DATA_ROOT=""
+fi
+
+resolved_experiments=""
 if [[ -n "${EXPERIMENTS_ROOT:-}" ]]; then
-  if ! mkdir -p "$EXPERIMENTS_ROOT" 2>/dev/null; then
-    local fallback_root="${RUNNER_TEMP:-/tmp}/mjepa/experiments"
-    echo "[ci] warn: falling back EXPERIMENTS_ROOT=$fallback_root" >&2
-    EXPERIMENTS_ROOT="$fallback_root"
-    mkdir -p "$EXPERIMENTS_ROOT" 2>/dev/null || {
-      echo "[ci] error: unable to create EXPERIMENTS_ROOT=$EXPERIMENTS_ROOT" >&2
+  if ! resolved_experiments="$(mjepa_resolve_experiments_root "${DATA_ROOT:-}" "${EXPERIMENTS_ROOT}")"; then
+    exit 1
+  fi
+  EXPERIMENTS_ROOT="$resolved_experiments"
+  if [[ -z "${DATA_ROOT:-}" ]]; then
+    DATA_ROOT="$(dirname "$EXPERIMENTS_ROOT")"
+    if [[ -z "$DATA_ROOT" || "$DATA_ROOT" == "." ]]; then
+      DATA_ROOT="$EXPERIMENTS_ROOT"
+    fi
+  fi
+else
+  if [[ -z "${DATA_ROOT:-}" ]]; then
+    if ! DATA_ROOT="$(mjepa_detect_data_root)"; then
       exit 1
-    }
+    fi
   fi
-fi
-
-if [[ -n "${DATA_ROOT:-}" ]]; then
-  if ! mkdir -p "$DATA_ROOT" 2>/dev/null; then
-    echo "[ci] warn: DATA_ROOT=$DATA_ROOT not writable; falling back to resolver" >&2
-    DATA_ROOT=""
+  if ! resolved_experiments="$(mjepa_resolve_experiments_root "${DATA_ROOT}" "")"; then
+    exit 1
   fi
+  EXPERIMENTS_ROOT="$resolved_experiments"
 fi
-
-if [[ -z "${DATA_ROOT:-}" ]]; then
-  if [[ -n "${EXPERIMENTS_ROOT:-}" ]]; then
-    DATA_ROOT="$(dirname "${EXPERIMENTS_ROOT}")"
-  else
-    DATA_ROOT="$(__resolve_data_root)"
-  fi
-fi
-
-if [[ -z "${EXPERIMENTS_ROOT:-}" ]]; then
-  EXPERIMENTS_ROOT="${DATA_ROOT%/}/experiments"
-  mkdir -p "$EXPERIMENTS_ROOT" 2>/dev/null || {
-    local fallback_root="${RUNNER_TEMP:-/tmp}/mjepa/experiments"
-    echo "[ci] warn: falling back EXPERIMENTS_ROOT=$fallback_root" >&2
-    EXPERIMENTS_ROOT="$fallback_root"
-    mkdir -p "$EXPERIMENTS_ROOT" 2>/dev/null || {
-      echo "[ci] error: unable to create EXPERIMENTS_ROOT=$EXPERIMENTS_ROOT" >&2
-      exit 1
-    }
-  }
-fi
+unset resolved_experiments
 
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
@@ -432,17 +494,17 @@ ensure_dir_var() {
   for idx in "${!attempts[@]}"; do
     local path="${attempts[$idx]}"
     [[ -z "$path" ]] && continue
-    if mkdir -p "$path" 2>/dev/null; then
+    if mjepa_try_dir "$path"; then
       printf -v "$var_name" '%s' "$path"
       if (( idx > 0 )); then
-        echo "[ci] warn: falling back to $var_name=$path" >&2
+        mjepa_log_warn "falling back to $var_name=$path"
       fi
       return 0
     fi
     tried+=("$path")
   done
 
-  echo "[ci] error: unable to create $var_name (attempted: ${tried[*]:-none})" >&2
+  mjepa_log_error "unable to create $var_name (attempted: ${tried[*]:-none})"
   return 1
 }
 
