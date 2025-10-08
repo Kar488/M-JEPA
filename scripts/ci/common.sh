@@ -425,20 +425,35 @@ split_gpu_ids() {
 
 # Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
 
+__ci_stage_role="initiator"
+case "${MJEPACI_STAGE}" in
+  finetune|bench|benchmark|tox21|report|phase2|phase2_recheck|phase2_export|grid_recheck|grid_export)
+    __ci_stage_role="dependent"
+    ;;
+esac
+
 if [[ "${MJEPACI_STAGE}" != "pretrain" ]]; then
   __load_pretrain_state || true
 fi
 
-if [[ -z "${EXP_ID:-}" ]]; then
+if [[ "$__ci_stage_role" == "initiator" && -z "${EXP_ID:-}" ]]; then
   EXP_ID="$RUN_ID"
+fi
+
+if [[ -z "${EXP_ID:-}" && -n "${PRETRAIN_STATE_ID:-}" ]]; then
+  EXP_ID="$PRETRAIN_STATE_ID"
 fi
 
 if [[ -z "${PRETRAIN_EXP_ID:-}" ]]; then
   if [[ -n "${PRETRAIN_STATE_ID:-}" ]]; then
     PRETRAIN_EXP_ID="$PRETRAIN_STATE_ID"
-  else
+  elif [[ -n "${EXP_ID:-}" ]]; then
     PRETRAIN_EXP_ID="$EXP_ID"
   fi
+fi
+
+if [[ "$__ci_stage_role" == "dependent" && -z "${EXP_ID:-}" && -n "${PRETRAIN_EXP_ID:-}" ]]; then
+  EXP_ID="$PRETRAIN_EXP_ID"
 fi
 
 if [[ -z "${GRID_EXP_ID:-}" ]]; then
@@ -446,22 +461,38 @@ if [[ -z "${GRID_EXP_ID:-}" ]]; then
     GRID_EXP_ID="$PRETRAIN_EXP_ID"
   elif [[ -n "${PRETRAIN_STATE_ID:-}" ]]; then
     GRID_EXP_ID="$PRETRAIN_STATE_ID"
-  else
+  elif [[ "$__ci_stage_role" == "initiator" && -n "${EXP_ID:-}" ]]; then
     GRID_EXP_ID="$EXP_ID"
   fi
 fi
 
 _needs_pretrain_state=0
 case "${MJEPACI_STAGE}" in
-  finetune|bench|benchmark|tox21|report)
+  finetune|bench|benchmark|tox21|report|phase2|phase2_recheck|phase2_export|grid_recheck|grid_export)
     _needs_pretrain_state=1
     ;;
 esac
 
-if (( _needs_pretrain_state )) && [[ -z "${EXP_ID:-}" ]]; then
-  hint_path="${EXPERIMENTS_ROOT}/<EXP_ID>/pretrain_state.json"
-  echo "[ci] error: pretrain experiment id missing. Expected EXP_ID env var or state at ${hint_path}" >&2
-  exit 1
+if (( _needs_pretrain_state )); then
+  lineage_hint_primary="${EXPERIMENTS_ROOT}/pretrain_state.json"
+  if [[ -n "${EXP_ID:-}" ]]; then
+    lineage_hint_secondary="${EXPERIMENTS_ROOT}/${EXP_ID}/pretrain_state.json"
+  else
+    lineage_hint_secondary="${EXPERIMENTS_ROOT}/<EXP_ID>/pretrain_state.json"
+  fi
+
+  if [[ -z "${PRETRAIN_EXP_ID:-}" ]]; then
+    mjepa_log_error "missing pretrain lineage for ${MJEPACI_STAGE:-unknown}. Provide PRETRAIN_EXP_ID=<id> or ensure pretrain_state.json exists."
+    mjepa_log_error "checked: ${lineage_hint_primary}, ${lineage_hint_secondary}"
+    exit 2
+  fi
+
+  expected_manifest="${EXPERIMENTS_ROOT}/${PRETRAIN_EXP_ID}/artifacts/encoder_manifest.json"
+  if [[ ! -f "$expected_manifest" ]]; then
+    mjepa_log_error "missing pretrain lineage for ${MJEPACI_STAGE:-unknown}. Provide PRETRAIN_EXP_ID=<id> or ensure pretrain_state.json exists."
+    mjepa_log_error "checked: ${lineage_hint_primary}, ${lineage_hint_secondary}"
+    exit 2
+  fi
 fi
 
 ensure_dir_var() {
@@ -651,6 +682,7 @@ export MJEPACI_COMMIT_SHA
 
 ci_print_env_diag() {
   local stage_bin_value="${1:-${STAGE_BIN:-<unset>}}"
+  echo "[ci] STAGE=${MJEPACI_STAGE:-<unset>} EXP_ID=${EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>} EXP_ROOT=${EXP_ROOT:-<unset>} ARTIFACTS_DIR=${ARTIFACTS_DIR:-<unset>} GRID_DIR=${GRID_DIR:-<unset>}" >&2
   echo "[ci] EXP_ID=${EXP_ID:-<unset>}" >&2
   echo "[ci] PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}" >&2
   echo "[ci] GRID_EXP_ID=${GRID_EXP_ID:-<unset>}" >&2

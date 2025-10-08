@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'echo "[ci] error at line $LINENO: $BASH_COMMAND" >&2' ERR
 export MJEPACI_STAGE="bench"
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
+
+ci_print_env_diag
 
 encoder_ckpt="$(resolve_encoder_checkpoint)"
 echo "[bench] using pretrain experiment id=${PRETRAIN_EXP_ID} checkpoint=${encoder_ckpt}" >&2
