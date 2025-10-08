@@ -75,6 +75,44 @@ emit("encoder_checkpoint", data.get("encoder_checkpoint"))
 PY
 )
 
+# Resolve relative paths emitted by the stage shim.
+normalize_stage_path() {
+  local raw="$1"
+  shift || true
+  local candidate
+  if [[ -z "$raw" ]]; then
+    return 1
+  fi
+  if [[ "$raw" == /* ]]; then
+    if [[ -e "$raw" ]]; then
+      printf '%s\n' "$raw"
+      return 0
+    fi
+    return 1
+  fi
+  for candidate in "$@"; do
+    [[ -z "$candidate" ]] && continue
+    candidate="${candidate%/}/$raw"
+    if [[ -e "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [[ -n "${recorded_manifest:-}" ]]; then
+  if normalized=$(normalize_stage_path "$recorded_manifest" "$PRETRAIN_ARTIFACTS_DIR" "$PRETRAIN_DIR" "$EXPERIMENT_DIR" "$PRETRAIN_EXPERIMENT_ROOT" "$EXPERIMENTS_ROOT"); then
+    recorded_manifest="$normalized"
+  fi
+fi
+
+if [[ -n "${recorded_encoder:-}" ]]; then
+  if normalized=$(normalize_stage_path "$recorded_encoder" "$PRETRAIN_DIR" "$PRETRAIN_ARTIFACTS_DIR" "$EXPERIMENT_DIR" "$PRETRAIN_EXPERIMENT_ROOT" "$EXPERIMENTS_ROOT"); then
+    recorded_encoder="$normalized"
+  fi
+fi
+
 manifest_path="$expected_manifest"
 encoder_ckpt="$expected_encoder"
 
@@ -94,6 +132,31 @@ fi
 if [[ -f "$encoder_ckpt" && "$encoder_ckpt" != "$expected_encoder" ]]; then
   mkdir -p "$(dirname "$expected_encoder")"
   ln -sf "$encoder_ckpt" "$expected_encoder"
+fi
+
+# If the stage skipped manifest creation, synthesise a minimal manifest so
+# downstream stages still find the encoder checkpoint.
+if [[ ! -f "$expected_manifest" && -f "$expected_encoder" ]]; then
+  "${python_cmd[@]}" - "$expected_manifest" "$expected_encoder" "$PRETRAIN_EXP_ID" <<'PY'
+import json
+import os
+import sys
+
+manifest_path, encoder_path, exp_id = sys.argv[1:4]
+manifest_dir = os.path.dirname(manifest_path)
+os.makedirs(manifest_dir, exist_ok=True)
+
+payload = {
+    "paths": {"encoder": os.path.abspath(encoder_path)},
+}
+
+if exp_id and exp_id.strip():
+    payload["pretrain_exp_id"] = exp_id
+
+with open(manifest_path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
 fi
 
 if [[ ! -f "$expected_manifest" ]]; then
