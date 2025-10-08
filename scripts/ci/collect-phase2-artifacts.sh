@@ -29,15 +29,23 @@ for step in "${steps[@]}"; do
   remote_dir="${remote_grid}/${step}"
 
   if ssh -i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no "$REMOTE" "test -d '$remote_dir'"; then
-    "${RSYNC[@]}" "$REMOTE:$remote_dir/logs/" "$local_dir/logs" 2>/dev/null || true
-    "${RSYNC[@]}" "$REMOTE:$remote_dir/stage-outputs/" "$local_dir/stage-outputs" 2>/dev/null || true
+    if ! "${RSYNC[@]}" "$REMOTE:$remote_dir/logs/" "$local_dir/logs" 2>/dev/null; then
+      echo "[ci][warn] missing or empty logs for $step at $remote_dir/logs" >&2
+    fi
+    if ! "${RSYNC[@]}" "$REMOTE:$remote_dir/stage-outputs/" "$local_dir/stage-outputs" 2>/dev/null; then
+      echo "[ci][warn] missing stage outputs for $step at $remote_dir/stage-outputs" >&2
+    fi
+  else
+    echo "[ci][warn] remote step directory not found: $remote_dir" >&2
   fi
 done
 
 mkdir -p "${DEST_ROOT}/grid"
 for name in best_grid_config.json recheck_summary.json; do
-  "${RSYNC[@]}" "$REMOTE:${remote_grid}/${name}" "${DEST_ROOT}/grid/" 2>/dev/null || true
- done
+  if ! "${RSYNC[@]}" "$REMOTE:${remote_grid}/${name}" "${DEST_ROOT}/grid/" 2>/dev/null; then
+    echo "[ci][warn] unable to copy ${name} from ${remote_grid}" >&2
+  fi
+done
 
 helper_output=""
 if helper_output=$(ssh -i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no "$REMOTE" \

@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
@@ -481,6 +482,31 @@ def run_once(
     log_path = os.path.join(log_dir, f"recheck_{method}_seed{seed}.log")
     forwarded_flags = list(forwarded)
 
+    seed_wall_secs: Optional[int] = None
+    seed_grace_secs: int = 120
+    raw_seed_wall = os.environ.get("PHASE2_SEED_WALL_SECS")
+    if raw_seed_wall:
+        try:
+            parsed = int(float(raw_seed_wall))
+            if parsed > 0:
+                seed_wall_secs = parsed
+        except ValueError:
+            print(
+                f"[recheck][warn] invalid PHASE2_SEED_WALL_SECS={raw_seed_wall!r}; ignoring",
+                flush=True,
+            )
+    raw_seed_grace = os.environ.get("PHASE2_SEED_GRACE_SECS") or os.environ.get("PHASE2_RECHECK_GRACE_SECS")
+    if raw_seed_grace:
+        try:
+            parsed_grace = int(float(raw_seed_grace))
+            if parsed_grace > 0:
+                seed_grace_secs = parsed_grace
+        except ValueError:
+            print(
+                f"[recheck][warn] invalid seed grace value={raw_seed_grace!r}; using {seed_grace_secs}",
+                flush=True,
+            )
+
     raw_retry_env = os.environ.get("RECHECK_RUN_RETRIES")
     try:
         retries = int(raw_retry_env) if raw_retry_env is not None else 1
@@ -541,8 +567,18 @@ def run_once(
             elif attempt > 1:
                 suffix = f" (previous exit={last_rc})" if last_rc is not None else ""
                 handle.write(f"[recheck] retry attempt {attempt}{suffix}\n")
+            launch_args = list(args)
+            if seed_wall_secs:
+                launch_args = [
+                    "timeout",
+                    "--signal=SIGTERM",
+                    "--kill-after",
+                    str(seed_grace_secs),
+                    str(seed_wall_secs),
+                    *launch_args,
+                ]
             process = subprocess.Popen(
-                args,
+                launch_args,
                 stdout=handle,
                 stderr=subprocess.STDOUT,
                 env=env,
@@ -623,12 +659,18 @@ def main() -> None:
     ap.add_argument("--out", default=None)
     ap.add_argument("--strict", action="store_true",
                     help="Fail if fewer than topk runs expose the metric after retries")
+    ap.add_argument("--resume", action="store_true",
+                    help="Skip seeds with existing local results and resume pending ones")
     args = ap.parse_args()
+
+    resume_env = os.environ.get("PHASE2_RECHECK_RESUME")
+    if resume_env is not None:
+        args.resume = str(resume_env).strip().lower() in {"1", "true", "yes", "on"}
 
     print("[recheck] args parsed:", flush=True)
     for field in (
         "sweep", "project", "group", "metric", "direction", "topk", "extra_seeds",
-        "program", "subcmd", "unlabeled_dir", "labeled_dir", "mm", "log_dir", "out", "strict",
+        "program", "subcmd", "unlabeled_dir", "labeled_dir", "mm", "log_dir", "out", "strict", "resume",
     ):
         print(f"  {field:<11}= {getattr(args, field)}", flush=True)
 
@@ -691,6 +733,44 @@ def main() -> None:
     print(f"  attempts   = {attempts}", flush=True)
     print(f"  delay      = {delay}", flush=True)
 
+    class _Heartbeat:
+        def __init__(self, path: Optional[str], interval: float) -> None:
+            self._path = pathlib.Path(path) if path else None
+            self._interval = max(1.0, float(interval))
+            self._stop = threading.Event()
+            self._thread: Optional[threading.Thread] = None
+
+        def _touch(self) -> None:
+            if self._path is None:
+                return
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                with open(self._path, "a", encoding="utf-8"):
+                    os.utime(self._path, None)
+            except Exception as exc:
+                print(f"[recheck][warn] heartbeat update failed: {exc}", flush=True)
+
+        def _run(self) -> None:
+            while not self._stop.wait(self._interval):
+                self._touch()
+
+        def start(self) -> None:
+            if self._path is None:
+                return
+            self._touch()
+            thread = threading.Thread(target=self._run, daemon=True)
+            thread.start()
+            self._thread = thread
+
+        def stop(self) -> None:
+            if self._path is None:
+                return
+            self._stop.set()
+            self._touch()
+            thread = self._thread
+            if thread and thread.is_alive():
+                thread.join(timeout=2.0)
+
     def _parse_entity_project(sweep: str) -> Tuple[Optional[str], Optional[str]]:
         """
         Try to infer (entity, project) from a sweep path or URL.
@@ -735,137 +815,179 @@ def main() -> None:
             json.dump(payload, f, indent=2)
         return payload
 
-    api = wandb.Api()
-    # Derive entity/project if env vars are missing (avoids empty fetches).
-    derived_entity, derived_project = _parse_entity_project(args.sweep)
-    entity = os.getenv("WANDB_ENTITY") or derived_entity
-    if not args.project:
-        args.project = derived_project
+    heartbeat_path = os.environ.get("PHASE2_RECHECK_HEARTBEAT")
+    heartbeat_interval = _env_float("PHASE2_RECHECK_HEARTBEAT_SECS", 120.0)
+    heartbeat = _Heartbeat(heartbeat_path, heartbeat_interval)
+    heartbeat.start()
+    sentinel_path = os.environ.get("PHASE2_RECHECK_SENTINEL")
+    success = False
+    try:
+        api = wandb.Api()
+        # Derive entity/project if env vars are missing (avoids empty fetches).
+        derived_entity, derived_project = _parse_entity_project(args.sweep)
+        entity = os.getenv("WANDB_ENTITY") or derived_entity
+        if not args.project:
+            args.project = derived_project
 
-    maximize = args.direction == "max"
-    top_entries, diagnostics = pick_topk(api, args.sweep, args.metric, maximize, args.topk, attempts, delay)
+        maximize = args.direction == "max"
+        top_entries, diagnostics = pick_topk(api, args.sweep, args.metric, maximize, args.topk, attempts, delay)
 
-    if not top_entries:
-        total_runs = diagnostics.get("total_runs", 0)
-        missing = diagnostics.get("missing", [])
-        method_counts = diagnostics.get("method_counts", Counter())
+        if not top_entries:
+            total_runs = diagnostics.get("total_runs", 0)
+            missing = diagnostics.get("missing", [])
+            method_counts = diagnostics.get("method_counts", Counter())
 
-        if total_runs:
-            print(
-                f"[recheck][fatal] unable to locate metric '{args.metric}' in sweep {args.sweep} "
-                f"after {diagnostics.get('attempts', attempts)} attempt(s); missing metrics from {len(missing)} run(s)",
-                flush=True,
-            )
-            if method_counts:
+            if total_runs:
                 print(
-                    "[recheck] sweep method counts: "
-                    + ", ".join(f"{m or 'unknown'}={c}" for m, c in sorted(method_counts.items())),
+                    f"[recheck][fatal] unable to locate metric '{args.metric}' in sweep {args.sweep} "
+                    f"after {diagnostics.get('attempts', attempts)} attempt(s); missing metrics from {len(missing)} run(s)",
                     flush=True,
                 )
-            if missing:
-                preview = ", ".join(missing[:5])
-                suffix = "" if len(missing) <= 5 else f" … (+{len(missing) - 5} more)"
-                print(f"[recheck] runs missing metric: {preview}{suffix}", flush=True)
+                if method_counts:
+                    print(
+                        "[recheck] sweep method counts: "
+                        + ", ".join(f"{m or 'unknown'}={c}" for m, c in sorted(method_counts.items())),
+                        flush=True,
+                    )
+                if missing:
+                    preview = ", ".join(missing[:5])
+                    suffix = "" if len(missing) <= 5 else f" … (+{len(missing) - 5} more)"
+                    print(f"[recheck] runs missing metric: {preview}{suffix}", flush=True)
+                if diagnostics.get("error"):
+                    print(f"[recheck] last API error: {diagnostics['error']}", flush=True)
+                sys.exit(2)
+
+            # Empty sweeps should not be treated as fatal: emit an empty summary so callers
+            # can decide how to proceed (and the CLI remains testable).
+            print(
+                f"[recheck][warn] sweep {args.sweep} returned zero runs after {diagnostics.get('attempts', attempts)} attempt(s); "
+                "writing empty summary",
+                flush=True,
+            )
             if diagnostics.get("error"):
                 print(f"[recheck] last API error: {diagnostics['error']}", flush=True)
+            _write_summary([], diagnostics)
+            success = True
+            return
+
+        if args.strict and len(top_entries) < max(1, args.topk):
+            print(
+                f"[recheck][fatal] strict mode requires {args.topk} runs but only {len(top_entries)} expose '{args.metric}'",
+                flush=True,
+            )
             sys.exit(2)
 
-        # Empty sweeps should not be treated as fatal: emit an empty summary so callers
-        # can decide how to proceed (and the CLI remains testable).
+        top_runs = [run for run, _ in top_entries]
         print(
-            f"[recheck][warn] sweep {args.sweep} returned zero runs after {diagnostics.get('attempts', attempts)} attempt(s); "
-            "writing empty summary",
+            "[recheck] picked top runs: " + ", ".join(getattr(run, "id", getattr(run, "name", "?")) for run in top_runs),
             flush=True,
         )
-        if diagnostics.get("error"):
-            print(f"[recheck] last API error: {diagnostics['error']}", flush=True)
-        _write_summary([], diagnostics)
-        return
-
-    if args.strict and len(top_entries) < max(1, args.topk):
-        print(
-            f"[recheck][fatal] strict mode requires {args.topk} runs but only {len(top_entries)} expose '{args.metric}'",
-            flush=True,
-        )
-        sys.exit(2)
-
-    top_runs = [run for run, _ in top_entries]
-    print(
-        "[recheck] picked top runs: " + ", ".join(getattr(run, "id", getattr(run, "name", "?")) for run in top_runs),
-        flush=True,
-    )
-    for run, value in top_entries:
-        print(
-            f"  metric[{args.metric}] → {getattr(run, 'id', getattr(run, 'name', '?'))}: {value}",
-            flush=True,
-        )
-
-    missing = diagnostics.get("missing", [])
-    if missing:
-        print(f"[recheck] ignored {len(missing)} runs without metric '{args.metric}'", flush=True)
-
-    method_counts = diagnostics.get("method_counts", Counter())
-    if method_counts:
-        print(
-            "[recheck] sweep method counts: "
-            + ", ".join(f"{method or 'unknown'}={count}" for method, count in sorted(method_counts.items())),
-            flush=True,
-        )
-
-    def _kv(cfg: Mapping[str, Any], keys: Sequence[str] = (
-        "training_method", "gnn_type", "hidden_dim", "num_layers", "contiguity",
-        "mask_ratio", "ema_decay", "temperature", "learning_rate",
-    )) -> Dict[str, Any]:
-        return {key: cfg.get(key) for key in keys if cfg.get(key) is not None}
-
-    for run in top_runs:
-        print(f"  - {run.id}: {_kv(_coerce_config(getattr(run, 'config', {})))}", flush=True)
-
-    top_configs: List[Dict[str, Any]] = []
-    for run in top_runs:
-        cfg: Dict[str, Any] = {}
-        raw_cfg = _coerce_config(getattr(run, "config", {}))
-        for key, value in raw_cfg.items():
-            if key.startswith("_"):
-                continue
-            cfg[key] = _unwrap_config_value(value)
-        cfg.pop("seed", None)
-        top_configs.append(cfg)
-
-    results: List[Dict[str, Any]] = []
-    offline_mode = (os.getenv("WANDB_MODE", "").lower() == "offline")
-    for index, cfg in enumerate(top_configs):
-        seeds = [1000 + index * 10 + s for s in range(args.extra_seeds)]
-        exp_id = _resolve_exp_id(args.group)
-        _print_config_banner(index, seeds, args.project, entity, offline_mode)
-        print(f"[recheck] launching seeds {seeds} for config index {index}", flush=True)
-        for seed in seeds:
-            rc = run_once(
-                args.mm,
-                args.program,
-                args.subcmd,
-                cfg,
-                seed,
-                args.unlabeled_dir,
-                args.labeled_dir,
-                args.log_dir,
-                args.project,
-                args.group,
-                index,
-                exp_id,
+        for run, value in top_entries:
+            print(
+                f"  metric[{args.metric}] → {getattr(run, 'id', getattr(run, 'name', '?'))}: {value}",
+                flush=True,
             )
-            print(f"[recheck][seed {seed}] finished with exit code {rc}", flush=True)
-            if rc != 0:
-                log_file = os.path.join(args.log_dir, f"recheck_{cfg.get('training_method', 'jepa')}_seed{seed}.log")
-                try:
-                    with open(log_file, "r", encoding="utf-8") as handle:
-                        tail = handle.readlines()[-20:]
-                    for line in tail:
-                        print(f"[recheck][seed {seed}][log] {line.rstrip()}", flush=True)
-                except Exception as exc:  # pragma: no cover - diagnostics
-                    print(f"[recheck][seed {seed}] unable to read log {log_file}: {exc}", flush=True)
-                raise RuntimeError(f"recheck run failed with exit code {rc} (seed {seed})")
-            time.sleep(1.0)
+
+        missing = diagnostics.get("missing", [])
+        if missing:
+            print(f"[recheck] ignored {len(missing)} runs without metric '{args.metric}'", flush=True)
+
+        method_counts = diagnostics.get("method_counts", Counter())
+        if method_counts:
+            print(
+                "[recheck] sweep method counts: "
+                + ", ".join(f"{method or 'unknown'}={count}" for method, count in sorted(method_counts.items())),
+                flush=True,
+            )
+
+        def _kv(cfg: Mapping[str, Any], keys: Sequence[str] = (
+            "training_method", "gnn_type", "hidden_dim", "num_layers", "contiguity",
+            "mask_ratio", "ema_decay", "temperature", "learning_rate",
+        )) -> Dict[str, Any]:
+            return {key: cfg.get(key) for key in keys if cfg.get(key) is not None}
+
+        for run in top_runs:
+            print(f"  - {run.id}: {_kv(_coerce_config(getattr(run, 'config', {})))}", flush=True)
+
+        top_configs: List[Dict[str, Any]] = []
+        for run in top_runs:
+            cfg: Dict[str, Any] = {}
+            raw_cfg = _coerce_config(getattr(run, "config", {}))
+            for key, value in raw_cfg.items():
+                if key.startswith("_"):
+                    continue
+                cfg[key] = _unwrap_config_value(value)
+            cfg.pop("seed", None)
+            top_configs.append(cfg)
+
+        results: List[Dict[str, Any]] = []
+        offline_mode = (os.getenv("WANDB_MODE", "").lower() == "offline")
+        exp_id = _resolve_exp_id(args.group)
+        total_completed = 0
+        total_pending = 0
+        plan_entries: List[Tuple[int, Dict[str, Any], List[int], List[int], List[int]]] = []
+        for index, cfg in enumerate(top_configs):
+            seeds = [1000 + index * 10 + s for s in range(args.extra_seeds)]
+            completed_seeds: List[int] = []
+            pending_seeds = list(seeds)
+            if args.resume:
+                pending_seeds = []
+                for seed in seeds:
+                    val, _ = _read_local_result(_local_result_path(exp_id, index, seed))
+                    if val is not None:
+                        completed_seeds.append(seed)
+                    else:
+                        pending_seeds.append(seed)
+            total_completed += len(completed_seeds)
+            total_pending += len(pending_seeds)
+            plan_entries.append((index, cfg, seeds, completed_seeds, pending_seeds))
+
+        print(
+            f"[ci] recheck resume plan: {{completed:{total_completed}, pending:{total_pending}}}",
+            flush=True,
+        )
+
+        for index, cfg, seeds, completed_seeds, pending_seeds in plan_entries:
+            _print_config_banner(index, seeds, args.project, entity, offline_mode)
+            if pending_seeds:
+                skip_note = f" (skipping {completed_seeds})" if completed_seeds else ""
+                print(
+                    f"[recheck] launching seeds {pending_seeds} for config index {index}{skip_note}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[recheck] all seeds completed for config index {index}; skipping launches",
+                    flush=True,
+                )
+
+            for seed in pending_seeds:
+                rc = run_once(
+                    args.mm,
+                    args.program,
+                    args.subcmd,
+                    cfg,
+                    seed,
+                    args.unlabeled_dir,
+                    args.labeled_dir,
+                    args.log_dir,
+                    args.project,
+                    args.group,
+                    index,
+                    exp_id,
+                )
+                print(f"[recheck][seed {seed}] finished with exit code {rc}", flush=True)
+                if rc != 0:
+                    log_file = os.path.join(args.log_dir, f"recheck_{cfg.get('training_method', 'jepa')}_seed{seed}.log")
+                    try:
+                        with open(log_file, "r", encoding="utf-8") as handle:
+                            tail = handle.readlines()[-20:]
+                        for line in tail:
+                            print(f"[recheck][seed {seed}][log] {line.rstrip()}", flush=True)
+                    except Exception as exc:  # pragma: no cover - diagnostics
+                        print(f"[recheck][seed {seed}] unable to read log {log_file}: {exc}", flush=True)
+                    raise RuntimeError(f"recheck run failed with exit code {rc} (seed {seed})")
+                time.sleep(1.0)
 
         attempts_env = os.getenv("RECHECK_COLLECT_ATTEMPTS")
         try:
@@ -917,59 +1039,71 @@ def main() -> None:
                 "config": cfg,
             })
 
-    successful = [entry for entry in results if entry.get("mean") is not None]
-    _write_summary(results, diagnostics)
+        successful = [entry for entry in results if entry.get("mean") is not None]
+        _write_summary(results, diagnostics)
 
-    if not successful:
-        print(
-            f"[recheck][fatal] no metrics collected for metric '{args.metric}' in sweep {args.sweep}; see {args.out}",
-            flush=True,
-        )
-        sys.exit(3)
+        if not successful:
+            print(
+                f"[recheck][fatal] no metrics collected for metric '{args.metric}' in sweep {args.sweep}; see {args.out}",
+                flush=True,
+            )
+            sys.exit(3)
 
-    if args.direction == "min":
-        winner = min(successful, key=lambda item: item["mean"])
-    else:
-        winner = max(successful, key=lambda item: item["mean"])
+        if args.direction == "min":
+            winner = min(successful, key=lambda item: item["mean"])
+        else:
+            winner = max(successful, key=lambda item: item["mean"])
 
-    winner_cfg = winner.get("config") if isinstance(winner, Mapping) else None
-    if not isinstance(winner_cfg, dict) or not winner_cfg:
-        print(
-            f"[recheck][fatal] best configuration for sweep {args.sweep} produced an empty config; inspect {args.out}",
-            flush=True,
-        )
-        sys.exit(3)
+        winner_cfg = winner.get("config") if isinstance(winner, Mapping) else None
+        if not isinstance(winner_cfg, dict) or not winner_cfg:
+            print(
+                f"[recheck][fatal] best configuration for sweep {args.sweep} produced an empty config; inspect {args.out}",
+                flush=True,
+            )
+            sys.exit(3)
 
-    winner_index = winner.get("index")
-    winner_run_id: Optional[str] = None
-    if isinstance(winner_index, int) and 0 <= winner_index < len(top_runs):
-        winner_run_id = getattr(top_runs[winner_index], "id", None) or getattr(top_runs[winner_index], "name", None)
+        winner_index = winner.get("index")
+        winner_run_id: Optional[str] = None
+        if isinstance(winner_index, int) and 0 <= winner_index < len(top_runs):
+            winner_run_id = getattr(top_runs[winner_index], "id", None) or getattr(top_runs[winner_index], "name", None)
 
-    out_dir = os.path.dirname(args.out)
-    best_path = os.path.join(out_dir, "best_grid_config.json")
-    backup_path = os.path.join(out_dir, "best_grid_config.phase1.json")
-    tmp_path = os.path.join(out_dir, ".best_grid_config.tmp")
+        out_dir = os.path.dirname(args.out)
+        best_path = os.path.join(out_dir, "best_grid_config.json")
+        backup_path = os.path.join(out_dir, "best_grid_config.phase1.json")
+        tmp_path = os.path.join(out_dir, ".best_grid_config.tmp")
 
-    try:
-        if os.path.isfile(best_path) and not os.path.isfile(backup_path):
-            import shutil
-            shutil.copy2(best_path, backup_path)
-            print(f"[recheck] backed up Phase-1 best → {backup_path}", flush=True)
-    except Exception as exc:  # pragma: no cover - defensive
-        print(f"[recheck][warn] backup skipped: {exc}", flush=True)
+        try:
+            if os.path.isfile(best_path) and not os.path.isfile(backup_path):
+                import shutil
+                shutil.copy2(best_path, backup_path)
+                print(f"[recheck] backed up Phase-1 best → {backup_path}", flush=True)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[recheck][warn] backup skipped: {exc}", flush=True)
 
-    payload = {
-        "config": winner_cfg,
-        "metric": args.metric,
-        "direction": args.direction,
-        "source": "phase2-recheck",
-        "run_id": winner_run_id,
-    }
+        payload = {
+            "config": winner_cfg,
+            "metric": args.metric,
+            "direction": args.direction,
+            "source": "phase2-recheck",
+            "run_id": winner_run_id,
+        }
 
-    with open(tmp_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
-    os.replace(tmp_path, best_path)
-    print(f"[recheck] wrote Phase-2 winner → {best_path}", flush=True)
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        os.replace(tmp_path, best_path)
+        print(f"[recheck] wrote Phase-2 winner → {best_path}", flush=True)
+        success = True
+    finally:
+        heartbeat.stop()
+        if success and sentinel_path:
+            try:
+                sentinel = pathlib.Path(sentinel_path)
+                sentinel.parent.mkdir(parents=True, exist_ok=True)
+                with open(sentinel, "a", encoding="utf-8"):
+                    os.utime(sentinel, None)
+                print(f"[recheck] wrote sentinel → {sentinel}", flush=True)
+            except Exception as exc:
+                print(f"[recheck][warn] unable to write sentinel {sentinel_path}: {exc}", flush=True)
 
 
 def _expected_group(config_idx: int) -> str:
