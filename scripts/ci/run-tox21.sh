@@ -161,4 +161,16 @@ with open(env_path, "w", encoding="utf-8") as fh:
         fh.write(f"{key}={data[key]}\n")
 PY
 
+if [[ "${SOURCE}" == "pretrain_frozen" && -f "$env_file" && -n "${PRETRAIN_EXP_ID:-}" ]]; then
+  if grep -Eq '^MET_BENCHMARK_BASELINE=true$' "$env_file"; then
+    freeze_marker="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/bench/encoder_frozen.ok"
+    mkdir -p "$(dirname "$freeze_marker")"
+    if touch "$freeze_marker"; then
+      echo "[ci] encoder lineage frozen at ${PRETRAIN_EXP_ID}" >&2
+    else
+      echo "[ci][warn] unable to write freeze marker at ${freeze_marker}" >&2
+    fi
+  fi
+fi
+
 unset BESTCFG_NO_EPOCHS                     # avoid leaking to other stages

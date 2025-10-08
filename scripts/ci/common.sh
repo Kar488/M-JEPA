@@ -9,6 +9,9 @@ set -euo pipefail
 : "${PRETRAIN_EXP_ID:=}"
 : "${PRETRAIN_STATE_ID:=}"
 : "${RUN_ID:=$(date +%s)}"
+: "${FORCE_UNFREEZE_GRID:=0}"
+: "${ALLOW_CODE_DRIFT_WHEN_FROZEN:=1}"
+: "${STRICT_FROZEN:=0}"
 
 # --- centralised environment variables ---
 : "${APP_DIR:=/srv/mjepa}"
@@ -461,21 +464,16 @@ split_gpu_ids() {
 
 __ci_stage_role="initiator"
 case "${MJEPACI_STAGE}" in
-  finetune|bench|benchmark|tox21|report|phase2|phase2_recheck|phase2_export|grid_recheck|grid_export)
+  pretrain|grid|grid_search|phase2_sweep)
+    __ci_stage_role="initiator"
+    ;;
+  *)
     __ci_stage_role="dependent"
     ;;
 esac
 
 if [[ "${MJEPACI_STAGE}" != "pretrain" ]]; then
   __load_pretrain_state || true
-fi
-
-if [[ "$__ci_stage_role" == "initiator" && -z "${EXP_ID:-}" ]]; then
-  EXP_ID="$RUN_ID"
-fi
-
-if [[ -z "${EXP_ID:-}" && -n "${PRETRAIN_STATE_ID:-}" ]]; then
-  EXP_ID="$PRETRAIN_STATE_ID"
 fi
 
 if [[ -z "${PRETRAIN_EXP_ID:-}" ]]; then
@@ -496,22 +494,66 @@ if [[ -z "${PRETRAIN_EXP_ID:-}" && -n "${EXP_ID:-}" ]]; then
   fi
 fi
 
+if [[ -z "${PRETRAIN_STATE_ID:-}" && -n "${PRETRAIN_EXP_ID:-}" ]]; then
+  PRETRAIN_STATE_ID="$PRETRAIN_EXP_ID"
+fi
+
+ORIGINAL_PRETRAIN_EXP_ID="${PRETRAIN_EXP_ID:-}"
+FREEZE_MARKER=""
+FROZEN=0
+if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
+  FREEZE_MARKER="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/bench/encoder_frozen.ok"
+  if [[ -f "$FREEZE_MARKER" ]]; then
+    FROZEN=1
+  fi
+fi
+
+if [[ "$__ci_stage_role" == "initiator" && -z "${EXP_ID:-}" ]]; then
+  EXP_ID="$RUN_ID"
+fi
+
 if [[ "${MJEPACI_STAGE}" == "pretrain" && -z "${PRETRAIN_EXP_ID:-}" && -n "${EXP_ID:-}" ]]; then
   PRETRAIN_EXP_ID="$EXP_ID"
 fi
 
-if [[ "$__ci_stage_role" == "dependent" && -z "${EXP_ID:-}" && -n "${PRETRAIN_EXP_ID:-}" ]]; then
-  EXP_ID="$PRETRAIN_EXP_ID"
+if (( FROZEN )) && [[ "${FORCE_UNFREEZE_GRID}" == "1" ]]; then
+  case "${MJEPACI_STAGE}" in
+    pretrain|grid|grid_search|phase2_sweep)
+      if [[ -z "${EXP_ID:-}" ]]; then
+        EXP_ID="$RUN_ID"
+      fi
+      if [[ "${MJEPACI_STAGE}" == "pretrain" ]]; then
+        PRETRAIN_EXP_ID="$EXP_ID"
+      fi
+      FROZEN=0
+      ;;
+  esac
+fi
+
+if [[ "$__ci_stage_role" == "dependent" ]]; then
+  if (( FROZEN )) && [[ -z "${EXP_ID:-}" ]]; then
+    EXP_ID="$RUN_ID"
+  elif [[ -z "${EXP_ID:-}" && -n "${PRETRAIN_STATE_ID:-}" ]]; then
+    EXP_ID="$PRETRAIN_STATE_ID"
+  elif [[ -z "${EXP_ID:-}" ]]; then
+    EXP_ID="$RUN_ID"
+  fi
 fi
 
 if [[ -z "${GRID_EXP_ID:-}" ]]; then
-  if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
+  if (( FROZEN )) && [[ "$__ci_stage_role" == "dependent" ]]; then
+    GRID_EXP_ID="${EXP_ID:-$RUN_ID}"
+  elif [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
     GRID_EXP_ID="$PRETRAIN_EXP_ID"
   elif [[ -n "${PRETRAIN_STATE_ID:-}" ]]; then
     GRID_EXP_ID="$PRETRAIN_STATE_ID"
-  elif [[ "$__ci_stage_role" == "initiator" && -n "${EXP_ID:-}" ]]; then
+  elif [[ -n "${EXP_ID:-}" ]]; then
     GRID_EXP_ID="$EXP_ID"
   fi
+fi
+
+if [[ -z "${PRETRAIN_EXP_ID:-}" && -n "${GRID_EXP_ID:-}" && "${MJEPACI_STAGE}" == "pretrain" ]]; then
+  PRETRAIN_EXP_ID="$GRID_EXP_ID"
 fi
 
 _needs_pretrain_state=0
@@ -600,6 +642,17 @@ ensure_dir_var() {
   for idx in "${!attempts[@]}"; do
     local path="${attempts[$idx]}"
     [[ -z "$path" ]] && continue
+    if (( FROZEN )) && [[ "$var_name" =~ ^(PRETRAIN_DIR|PRETRAIN_ARTIFACTS_DIR|ARTIFACTS_DIR)$ ]]; then
+      if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" && "$path" == ${PRETRAIN_EXPERIMENT_ROOT%/}* ]]; then
+        if [[ -d "$path" ]]; then
+          printf -v "$var_name" '%s' "$path"
+          if (( idx > 0 )); then
+            mjepa_log_warn "using existing read-only ${var_name}=$path"
+          fi
+          return 0
+        fi
+      fi
+    fi
     if mjepa_try_dir "$path"; then
       printf -v "$var_name" '%s' "$path"
       if (( idx > 0 )); then
@@ -635,9 +688,14 @@ fi
 EXP_ROOT="$GRID_EXPERIMENT_ROOT"
 
 if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
-  artifacts_default="${PRETRAIN_EXPERIMENT_ROOT}/artifacts"
-  : "${ARTIFACTS_DIR:=$artifacts_default}"
   PRETRAIN_ARTIFACTS_DIR="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/artifacts"
+  if (( FROZEN )) && [[ "$__ci_stage_role" == "dependent" ]]; then
+    artifacts_default="${EXPERIMENT_DIR}/artifacts"
+    : "${ARTIFACTS_DIR:=$artifacts_default}"
+  else
+    artifacts_default="${PRETRAIN_EXPERIMENT_ROOT}/artifacts"
+    : "${ARTIFACTS_DIR:=$artifacts_default}"
+  fi
 else
   artifacts_default="${EXPERIMENT_DIR}/artifacts"
   : "${ARTIFACTS_DIR:=$artifacts_default}"
@@ -679,6 +737,12 @@ GRID_DIR_DEFAULT="${GRID_EXPERIMENT_ROOT}/grid"
 : "${GRID_DIR:=${GRID_CACHE_DIR:-$GRID_DIR_DEFAULT}}"
 
 ensure_dir_var GRID_DIR "$GRID_DIR_DEFAULT" "${GRID_EXP_ID:+experiments/${GRID_EXP_ID}/}grid"
+
+if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
+  GRID_SOURCE_DIR="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/grid"
+else
+  GRID_SOURCE_DIR="$GRID_DIR"
+fi
 
 ensure_dir_var ARTIFACTS_DIR "${PRETRAIN_EXPERIMENT_ROOT}/artifacts" "experiments/${PRETRAIN_EXP_ID}/artifacts"
 ensure_dir_var PRETRAIN_ARTIFACTS_DIR "${ARTIFACTS_DIR}" "experiments/${PRETRAIN_EXP_ID}/artifacts"
@@ -737,16 +801,33 @@ ensure_dir_var TOX21_DIR "$GRID_TOX21_DEFAULT" "${GRID_EXP_ID:+experiments/${GRI
 ensure_dir_var REPORTS_DIR "$GRID_REPORTS_DEFAULT" "${GRID_EXP_ID:+experiments/${GRID_EXP_ID}/}report"
 ensure_dir_var LOG_DIR "${APP_DIR}/logs" "logs"
 
-mkdir -p "$CACHE_DIR" "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" \
+for dir_path in \
+  "$CACHE_DIR" "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" \
   "$TOX21_DIR" "$REPORTS_DIR" "$LOG_DIR" "$WANDB_DIR" "$ARTIFACTS_DIR" \
   "$PRETRAIN_ARTIFACTS_DIR" "$EXPERIMENT_DIR" "$PRETRAIN_EXPERIMENT_ROOT" \
-  "$GRID_EXPERIMENT_ROOT"
+  "$GRID_EXPERIMENT_ROOT"; do
+  [[ -z "$dir_path" ]] && continue
+  if (( FROZEN )) && [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]] && [[ "$dir_path" == ${PRETRAIN_EXPERIMENT_ROOT%/}* ]]; then
+    if [[ ! -d "$dir_path" ]]; then
+      mjepa_log_error "expected frozen directory missing: $dir_path"
+      exit 1
+    fi
+    continue
+  fi
+  mkdir -p "$dir_path"
+done
+
+if (( FROZEN )) && [[ -n "${PRETRAIN_ARTIFACTS_DIR:-}" ]] && [[ ! -d "$PRETRAIN_ARTIFACTS_DIR" ]]; then
+  mjepa_log_error "missing frozen artifacts directory: ${PRETRAIN_ARTIFACTS_DIR}"
+  exit 1
+fi
 export GRID_DIR PRETRAIN_DIR FINETUNE_DIR BENCH_DIR TOX21_DIR REPORTS_DIR LOG_DIR \
-  GRID_EXPERIMENT_ROOT PRETRAIN_EXPERIMENT_ROOT
+  GRID_EXPERIMENT_ROOT PRETRAIN_EXPERIMENT_ROOT GRID_SOURCE_DIR
 export EXPERIMENT_DIR ARTIFACTS_DIR EXP_ROOT EXPERIMENTS_ROOT
 export PRETRAIN_MANIFEST PRETRAIN_EXP_ID PRETRAIN_ARTIFACTS_DIR \
   PRETRAIN_STATE_FILE PRETRAIN_STATE_FILE_CANONICAL PRETRAIN_STATE_FILE_LEGACY \
-  PRETRAIN_ENCODER_PATH PRETRAIN_TOX21_ENV EXP_ID GRID_EXP_ID
+  PRETRAIN_ENCODER_PATH PRETRAIN_TOX21_ENV EXP_ID GRID_EXP_ID FREEZE_MARKER \
+  FROZEN ORIGINAL_PRETRAIN_EXP_ID
 
 if [[ -z "${MJEPACI_COMMIT_SHA:-}" ]]; then
   if git -C "${APP_DIR}" rev-parse HEAD >/dev/null 2>&1; then
@@ -759,7 +840,7 @@ export MJEPACI_COMMIT_SHA
 
 ci_print_env_diag() {
   local stage_bin_value="${1:-${STAGE_BIN:-<unset>}}"
-  echo "[ci] STAGE=${MJEPACI_STAGE:-<unset>} EXP_ID=${EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>} PRETRAIN_DIR=${PRETRAIN_DIR:-<unset>} PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>} STAGE_BIN=${stage_bin_value}" >&2
+  echo "[ci] STAGE=${MJEPACI_STAGE:-<unset>} EXP_ID=${EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} FROZEN=${FROZEN:-0} EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>} PRETRAIN_DIR=${PRETRAIN_DIR:-<unset>} PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>} GRID_DIR=${GRID_DIR:-<unset>} GRID_SOURCE_DIR=${GRID_SOURCE_DIR:-<unset>} ARTIFACTS_DIR=${ARTIFACTS_DIR:-<unset>} STAGE_BIN=${stage_bin_value}" >&2
 }
 
 # --- micromamba bootstrap ---
@@ -889,7 +970,7 @@ best_config_args() {
   # Usage: best_config_args <stage>
   # Reads best_grid_config.json and prints CLI args for the given stage
   local stage="$1"
-  local cfg="$GRID_DIR/best_grid_config.json"
+  local cfg="${GRID_SOURCE_DIR}/best_grid_config.json"
   if [[ ! -s "$cfg" ]]; then
     # fail fast for stages that require the winner
     case "$stage" in bench|pretrain|finetune|tox21)
