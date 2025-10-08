@@ -34,18 +34,201 @@ clear_graceful_stop() {
   fi
 }
 
+declare -a MJEPACI_FORCE_RERUN_STAGES=()
+if [[ -n "${FORCE_RERUN:-}" ]]; then
+  IFS=',' read -r -a __mjepa_force_tokens <<<"${FORCE_RERUN}"
+  for token in "${__mjepa_force_tokens[@]}"; do
+    token="${token//[\"\']/}"
+    token="${token//[[:space:]]/}"
+    token="${token,,}"
+    [[ -n "$token" ]] && MJEPACI_FORCE_RERUN_STAGES+=("$token")
+  done
+  unset __mjepa_force_tokens
+fi
+
+stage_is_forced() {
+  local stage="${1,,}"
+  for token in "${MJEPACI_FORCE_RERUN_STAGES[@]}"; do
+    case "$token" in
+      '' ) continue ;;
+      all|\*) return 0 ;;
+      *'\*')
+        local pattern="${token}"; pattern="${pattern//\*/.*}"
+        if [[ "$stage" =~ ^${pattern}$ ]]; then
+          return 0
+        fi
+        ;;
+      *)
+        if [[ "$stage" == "$token" ]]; then
+          return 0
+        fi
+        if [[ "$stage" == ${token}_* ]]; then
+          return 0
+        fi
+        ;;
+    esac
+  done
+  return 1
+}
+
+stage_state_file() {
+  local dir="${1:?stage_dir}"; echo "${dir%/}/stage_state.json"
+}
+
+stage_compute_hash() {
+  local stage="$1"; shift || true
+  local py
+  if py=$(python_bin 2>/dev/null); then
+    "$py" - "$stage" "$@" <<'PY'
+import hashlib
+import json
+import sys
+
+stage = sys.argv[1]
+items = sys.argv[2:]
+payload = {"stage": stage, "items": items}
+blob = json.dumps(payload, sort_keys=True).encode("utf-8")
+print(hashlib.sha256(blob).hexdigest())
+PY
+  else
+    local concat="$stage"
+    local item
+    for item in "$@"; do
+      concat+="|$item"
+    done
+    printf '%s' "$concat" | sha256sum | awk '{print $1}'
+  fi
+}
+
+stage_state_load() {
+  local file="${1:?state_file}" output=""
+  STAGE_STATE_STAGE=""
+  STAGE_STATE_COMMIT=""
+  STAGE_STATE_CONFIG_HASH=""
+  STAGE_STATE_DATA_HASH=""
+  STAGE_STATE_CREATED_AT=""
+  [[ -f "$file" ]] || return 1
+  local py
+  py=$(python_bin 2>/dev/null) || return 1
+  if ! output="$("$py" - "$file" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle) or {}
+except Exception:
+    sys.exit(1)
+
+for key in ("stage", "commit_sha", "config_hash", "data_hash", "created_at"):
+    value = data.get(key)
+    if value is None:
+        value = ""
+    if isinstance(value, (dict, list)):
+        continue
+    print(f"{key}={value}")
+PY
+  )"; then
+    return 1
+  fi
+  local line key value
+  while IFS='=' read -r key value; do
+    case "$key" in
+      stage) STAGE_STATE_STAGE="$value" ;;
+      commit_sha) STAGE_STATE_COMMIT="$value" ;;
+      config_hash) STAGE_STATE_CONFIG_HASH="$value" ;;
+      data_hash) STAGE_STATE_DATA_HASH="$value" ;;
+      created_at) STAGE_STATE_CREATED_AT="$value" ;;
+    esac
+  done <<<"$output"
+  [[ -n "$STAGE_STATE_STAGE" ]] || return 1
+  return 0
+}
+
+stage_state_write() {
+  local stage="${1:?stage}" dir="${2:?dir}" config_hash="${3:-}" data_hash="${4:-}"
+  local inputs_file="${5:-}" deps_file="${6:-}" outputs_file="${7:-}"
+  local state_path
+  state_path="$(stage_state_file "$dir")"
+  local py
+  py=$(python_bin 2>/dev/null) || py=python
+  "$py" - "$state_path" "$stage" "${MJEPACI_COMMIT_SHA:-unknown}" \
+    "$config_hash" "$data_hash" "${inputs_file:-}" "${deps_file:-}" \
+    "${outputs_file:-}" "${EXP_ID:-}" "${GRID_EXP_ID:-}" "${PRETRAIN_EXP_ID:-}" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+(
+    state_path,
+    stage,
+    commit,
+    config_hash,
+    data_hash,
+    inputs_path,
+    deps_path,
+    outputs_path,
+    exp_id,
+    grid_id,
+    pretrain_id,
+) = sys.argv[1:12]
+
+
+def read_lines(path: str) -> list[str]:
+    if not path or path == "-":
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return [line.rstrip("\n") for line in handle if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
+payload = {
+    "stage": stage,
+    "commit_sha": commit,
+    "config_hash": config_hash,
+    "data_hash": data_hash or None,
+    "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "inputs": {
+        "args": read_lines(inputs_path),
+        "dependencies": read_lines(deps_path),
+    },
+    "outputs": {
+        "paths": read_lines(outputs_path),
+        "stage_dir": os.path.abspath(os.path.dirname(state_path)),
+    },
+    "origin_ids": {
+        "exp_id": exp_id or None,
+        "grid_exp_id": grid_id or None,
+        "pretrain_exp_id": pretrain_id or None,
+    },
+}
+
+tmp_path = state_path + ".tmp"
+with open(tmp_path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+os.replace(tmp_path, state_path)
+PY
+}
+
 # requires: common.sh (ensure_micromamba, build_argv_from_yaml, expand_array_vars, best_config_args)
 # ---------- stage → dirs / subcommands / dependencies ----------
 stage_dir() {
-  case "$1" in
-    grid) echo "$GRID_DIR" ;;
+  local stage="$1"
+  case "$stage" in
     pretrain) echo "$PRETRAIN_DIR" ;;
     finetune) echo "$FINETUNE_DIR" ;;
+    grid) echo "$GRID_DIR" ;;
+    phase1) echo "${GRID_DIR}/phase1" ;;
+    phase2_sweep|phase2_recheck|phase2_export) echo "${GRID_DIR}/$stage" ;;
     bench|benchmark) echo "$BENCH_DIR" ;;
     tox21) echo "$TOX21_DIR" ;;
     report) echo "$REPORTS_DIR" ;;
-    phase2_sweep|phase2_recheck|phase2_export) echo "${GRID_DIR}/$1" ;;
-    *) echo "$EXP_ROOT/$1" ;;
+    *) echo "$EXP_ROOT/$stage" ;;
   esac
 }
 stage_subcmd() {
@@ -116,7 +299,7 @@ stage_needs() {
 # ---------- phase-2 helpers ----------
 phase2_step_diag() {
   local step="$1"
-  echo "[ci] EXP_ID=${EXP_ID:-<unset>} EXP_ROOT=${EXP_ROOT:-<unset>} GRID_DIR=${GRID_DIR:-<unset>} STEP=${step}" >&2
+  echo "[ci] STEP=${step} EXP_ID=${EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_DIR=${GRID_DIR:-<unset>} EXP_ROOT=${EXP_ROOT:-<unset>}" >&2
 }
 
 restore_env_var() {
@@ -136,7 +319,7 @@ run_phase2_sweep_stage() {
 
   local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
   if [[ ! -f "$sweep_id_file" ]]; then
-    echo "[$step][fatal] sweep id file not found: $sweep_id_file" >&2
+    echo "[$step][fatal] sweep id file not found: $sweep_id_file (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}). Set GRID_EXP_ID=<id> to reuse an existing sweep or rerun phase2_sweep." >&2
     return 2
   fi
 
@@ -300,6 +483,30 @@ import os
 os.replace(tmp, path)
 PY
 
+  local grid_state_path="${GRID_DIR}/grid_state.json"
+  python - <<'PY' "$grid_state_path" "$sweep_id" "${GRID_EXP_ID:-}" "${MJEPACI_COMMIT_SHA:-unknown}"
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path, sweep_id, grid_id, commit = sys.argv[1:5]
+
+payload = {
+    "base_id": grid_id or None,
+    "sweep_id": sweep_id,
+    "commit_sha": commit,
+    "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+
+tmp = path + ".tmp"
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+os.replace(tmp, path)
+PY
+
   restore_env_var LOG_DIR "$prev_log_dir"
   restore_env_var HARD_WALL_MINS "$prev_wall"
 
@@ -320,7 +527,7 @@ run_phase2_recheck_stage() {
 
   local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
   if [[ ! -f "$sweep_id_file" ]]; then
-    echo "[$step][fatal] sweep id file not found: $sweep_id_file" >&2
+    echo "[$step][fatal] sweep id file not found: $sweep_id_file (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}). Set GRID_EXP_ID=<id> to reuse an existing sweep or rerun phase2_sweep." >&2
     return 2
   fi
 
@@ -413,7 +620,7 @@ run_phase2_export_stage() {
   local summary_json="${GRID_DIR}/recheck_summary.json"
 
   if [[ ! -f "$best_json" ]]; then
-    echo "[$step][fatal] expected ${best_json} but it was not created" >&2
+    echo "[$step][fatal] expected ${best_json} but it was not created (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}). Rerun phase2_export or ensure GRID_EXP_ID points at the sweep lineage." >&2
     restore_env_var LOG_DIR "$prev_log_dir"
     return 3
   fi
@@ -763,79 +970,256 @@ run_with_timeout() {
 # ---------- one-call entry ----------
 run_stage() {
   local s="${1:?stage}"
-
+  local stage="${s,,}"
+  local dir
+  dir="$(stage_dir "$stage")"
+  local stamp
+  stamp="$(_stamp "$dir")"
+  local state_path
+  state_path="$(stage_state_file "$dir")"
+  local allow_stale="${ALLOW_STALE_RUN:-}"
+  local forced=0
+  if stage_is_forced "$stage"; then
+    forced=1
+  fi
+  local shim_mode=0
   if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then
-    local dir
-    dir="$(stage_dir "$s")"
-    mkdir -p "$dir" "$dir/stage-outputs"
-    clear_graceful_stop "$s"
-    clear_graceful_stop "$s" "${LOG_DIR:-}"
-    clear_graceful_stop "$s" "${dir}/logs"
-    "$MJEPACI_STAGE_SHIM" "$s"
+    shim_mode=1
+    forced=1
+  fi
+
+  local -a dependencies=()
+  mapfile -t dependencies < <(stage_needs "$stage")
+
+  local config_hash=""
+  local data_hash=""
+  local -a stage_args=()
+  local stage_args_ready=0
+
+  if (( shim_mode )); then
+    local shim_meta="${MJEPACI_STAGE_SHIM}"
+    if [[ -n "$MJEPACI_STAGE_SHIM" && -e "$MJEPACI_STAGE_SHIM" ]]; then
+      shim_meta+="|$(stat -c '%s:%Y' "$MJEPACI_STAGE_SHIM" 2>/dev/null || echo unknown)"
+    fi
+    config_hash="$(stage_compute_hash "$stage" "shim=${shim_meta}" "stage=${stage}")"
+  else
+    case "$stage" in
+      phase2_sweep)
+        local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
+        local sweep_id=""
+        if [[ -f "$sweep_id_file" ]]; then
+          sweep_id="$(<"$sweep_id_file")"
+        fi
+        config_hash="$(stage_compute_hash "$stage" \
+          "sweep_id=${sweep_id}" \
+          "wandb_count=${WANDB_COUNT:-}" \
+          "agent_count=${PHASE2_AGENT_COUNT:-}" \
+          "labeled=${PHASE2_LABELED_DIR:-}" \
+          "unlabeled=${PHASE2_UNLABELED_DIR:-}" \
+          "wall=${PHASE2_SWEEP_WALL_MINS:-}" \
+        )"
+        ;;
+      phase2_recheck)
+        local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
+        local sweep_id=""
+        if [[ -f "$sweep_id_file" ]]; then
+          sweep_id="$(<"$sweep_id_file")"
+        fi
+        config_hash="$(stage_compute_hash "$stage" \
+          "sweep_id=${sweep_id}" \
+          "metric=${PHASE2_METRIC:-val_rmse}" \
+          "direction=${PHASE2_DIRECTION:-min}" \
+          "topk=${TOPK_RECHECK:-5}" \
+          "extra=${EXTRA_SEEDS:-3}" \
+          "labeled=${PHASE2_LABELED_DIR:-}" \
+          "unlabeled=${PHASE2_UNLABELED_DIR:-}" \
+        )"
+        ;;
+      phase2_export)
+        local best_json="${GRID_DIR}/best_grid_config.json"
+        local summary_json="${GRID_DIR}/recheck_summary.json"
+        local best_sig="" summary_sig=""
+        [[ -f "$best_json" ]] && best_sig="$(sha256sum "$best_json" 2>/dev/null | awk '{print $1}')"
+        [[ -f "$summary_json" ]] && summary_sig="$(sha256sum "$summary_json" 2>/dev/null | awk '{print $1}')"
+        local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
+        local sweep_id=""
+        if [[ -f "$sweep_id_file" ]]; then
+          sweep_id="$(<"$sweep_id_file")"
+        fi
+        config_hash="$(stage_compute_hash "$stage" "sweep_id=${sweep_id}" "best=${best_sig}" "summary=${summary_sig}")"
+        ;;
+      *)
+        build_stage_args "$stage"
+        stage_dataset_preflight STAGE_ARGS
+        stage_args_ready=1
+        stage_args=("${STAGE_ARGS[@]}")
+        config_hash="$(stage_compute_hash "$stage" "${stage_args[@]}")"
+        ;;
+    esac
+  fi
+
+  echo "[ci][stage=${stage}] commit=${MJEPACI_COMMIT_SHA:-unknown} config_hash=${config_hash:-<unset>} allow_stale=${allow_stale:-0} forced=${forced} FORCE_RERUN=${FORCE_RERUN:-<unset>} shim=${shim_mode}" >&2
+
+  local skip=0
+  local rerun_reason=""
+  if (( forced )); then
+    rerun_reason="forced"
+  else
+    if [[ -f "$stamp" ]]; then
+      if ! stage_state_load "$state_path"; then
+        rerun_reason="missing stage_state.json"
+      else
+        if [[ -n "$STAGE_STATE_COMMIT" && "$STAGE_STATE_COMMIT" != "${MJEPACI_COMMIT_SHA:-unknown}" ]]; then
+          if [[ "$allow_stale" == "1" ]]; then
+            echo "[ci][stage=${stage}] commit mismatch (${STAGE_STATE_COMMIT} -> ${MJEPACI_COMMIT_SHA:-unknown}) but ALLOW_STALE_RUN=1; reusing cache" >&2
+          else
+            rerun_reason="commit changed (${STAGE_STATE_COMMIT} -> ${MJEPACI_COMMIT_SHA:-unknown})"
+          fi
+        fi
+        if [[ -z "$rerun_reason" && -n "$config_hash" && -n "$STAGE_STATE_CONFIG_HASH" && "$config_hash" != "$STAGE_STATE_CONFIG_HASH" ]]; then
+          rerun_reason="config hash changed"
+        fi
+        if [[ -z "$rerun_reason" && -n "$data_hash" && -n "$STAGE_STATE_DATA_HASH" && "$data_hash" != "$STAGE_STATE_DATA_HASH" ]]; then
+          rerun_reason="data hash changed"
+        fi
+        if [[ -z "$rerun_reason" ]]; then
+          if needs_stage "$dir" "${dependencies[@]}"; then
+            rerun_reason="inputs updated"
+          else
+            skip=1
+          fi
+        fi
+      fi
+    else
+      rerun_reason="missing stamp"
+    fi
+  fi
+
+  if (( skip )); then
+    echo "[${stage}] cache hit - skipping"
+    return 0
+  fi
+
+  if [[ -n "$rerun_reason" && -f "$stamp" ]]; then
+    echo "[${stage}] rerun triggered: ${rerun_reason}" >&2
+    rm -f "$stamp" "$state_path" 2>/dev/null || true
+  fi
+
+  mkdir -p "$dir" "$dir/stage-outputs"
+  local inputs_tmp deps_tmp outputs_tmp
+  inputs_tmp="$(mktemp)"
+  deps_tmp="$(mktemp)"
+  outputs_tmp="$(mktemp)"
+
+  if (( stage_args_ready )); then
+    printf '%s\n' "${stage_args[@]}" >"$inputs_tmp"
+    STAGE_ARGS=("${stage_args[@]}")
+  else
+    STAGE_ARGS=()
+    : >"$inputs_tmp"
+  fi
+  printf '%s\n' "${dependencies[@]}" >"$deps_tmp"
+  printf '%s\n' "${dir}/stage-outputs" >"$outputs_tmp"
+  printf '%s\n' "${dir}/logs" >>"$outputs_tmp"
+  case "$stage" in
+    pretrain)
+      printf '%s\n' "${PRETRAIN_DIR}/encoder.pt" >>"$outputs_tmp"
+      printf '%s\n' "${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json" >>"$outputs_tmp"
+      ;;
+    finetune)
+      printf '%s\n' "${FINETUNE_DIR}/seed_0/ft_best.pt" >>"$outputs_tmp"
+      ;;
+    grid)
+      printf '%s\n' "${GRID_DIR}/best_grid_config.json" >>"$outputs_tmp"
+      printf '%s\n' "${GRID_DIR}/paired_effect.json" >>"$outputs_tmp"
+      ;;
+    phase2_sweep)
+      printf '%s\n' "${GRID_DIR}/phase2_sweep_id.txt" >>"$outputs_tmp"
+      printf '%s\n' "${GRID_DIR}/grid_state.json" >>"$outputs_tmp"
+      ;;
+    phase2_recheck)
+      printf '%s\n' "${GRID_DIR}/recheck_summary.json" >>"$outputs_tmp"
+      ;;
+    phase2_export)
+      printf '%s\n' "${GRID_DIR}/best_grid_config.json" >>"$outputs_tmp"
+      ;;
+  esac
+
+  clear_graceful_stop "$stage"
+  clear_graceful_stop "$stage" "${LOG_DIR:-}"
+  clear_graceful_stop "$stage" "${dir}/logs"
+
+  if (( shim_mode )); then
+    echo "[${stage}] starting (shim)" >&2
+    if ! "$MJEPACI_STAGE_SHIM" "$stage"; then
+      rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
+      return $?
+    fi
+    stage_state_write "$stage" "$dir" "$config_hash" "$data_hash" "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
     mark_stage_done "$dir"
+    rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
     return 0
   fi
 
   ensure_micromamba
-  : "${WANDB_NAME:=$s}"; export WANDB_NAME
-  : "${WANDB_JOB_TYPE:=$s}"; export WANDB_JOB_TYPE
-  export WANDB_RUN_GROUP="$GITHUB_RUN_ID"
+  : "${WANDB_NAME:=$stage}"; export WANDB_NAME
+  : "${WANDB_JOB_TYPE:=$stage}"; export WANDB_JOB_TYPE
+  export WANDB_RUN_GROUP="${GITHUB_RUN_ID:-${WANDB_RUN_GROUP:-}}"
 
-  local dir; dir="$(stage_dir "$s")"
-  if needs_stage "$dir" $(stage_needs "$s"); then
-    echo "[$s] starting"
-    mkdir -p "$dir" "$dir/stage-outputs"
+  echo "[${stage}] starting"
 
-    local stage_log_dir="${LOG_DIR:-}"
-
-    case "$s" in
-      phase2_sweep)
-        stage_log_dir="${dir}/logs"
-        clear_graceful_stop "$s" "$stage_log_dir"
-        clear_graceful_stop "$s" "${LOG_DIR:-}"
-        run_phase2_sweep_stage "$dir" "$s"
-        ;;
-      phase2_recheck)
-        stage_log_dir="${dir}/logs"
-        clear_graceful_stop "$s" "$stage_log_dir"
-        clear_graceful_stop "$s" "${LOG_DIR:-}"
-        run_phase2_recheck_stage "$dir" "$s"
-        ;;
-      phase2_export)
-        stage_log_dir="${dir}/logs"
-        clear_graceful_stop "$s" "$stage_log_dir"
-        clear_graceful_stop "$s" "${LOG_DIR:-}"
-        run_phase2_export_stage "$dir" "$s"
-        ;;
-      *)
-        stage_log_dir="${LOG_DIR:-}"
-        clear_graceful_stop "$s" "$stage_log_dir"
-        clear_graceful_stop "$s" "${LOG_DIR:-}"
-        build_stage_args "$s"
-        stage_dataset_preflight STAGE_ARGS
-        run_with_timeout "$s" STAGE_ARGS
-        ;;
-    esac
-
-    local -a grace_dirs=()
-    if [[ -n "$stage_log_dir" ]]; then
-      grace_dirs+=("$stage_log_dir")
-    fi
-    if [[ -n "${LOG_DIR:-}" && "${LOG_DIR:-}" != "$stage_log_dir" ]]; then
-      grace_dirs+=("${LOG_DIR:-}")
-    fi
-
-    for candidate in "${grace_dirs[@]}"; do
-      if [[ -n "$candidate" ]] && was_graceful_stop "$s" "$candidate"; then
-        echo "[$s] stopped gracefully; leaving cache unstamped so it can resume."
-        return 0
+  local stage_log_dir="${LOG_DIR:-}"
+  case "$stage" in
+    phase2_sweep)
+      stage_log_dir="${dir}/logs"
+      clear_graceful_stop "$stage" "$stage_log_dir"
+      if ! run_phase2_sweep_stage "$dir" "$stage"; then
+        rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
+        return $?
       fi
-    done
+      ;;
+    phase2_recheck)
+      stage_log_dir="${dir}/logs"
+      clear_graceful_stop "$stage" "$stage_log_dir"
+      if ! run_phase2_recheck_stage "$dir" "$stage"; then
+        rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
+        return $?
+      fi
+      ;;
+    phase2_export)
+      stage_log_dir="${dir}/logs"
+      clear_graceful_stop "$stage" "$stage_log_dir"
+      if ! run_phase2_export_stage "$dir" "$stage"; then
+        rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
+        return $?
+      fi
+      ;;
+    *)
+      stage_log_dir="${LOG_DIR:-}"
+      clear_graceful_stop "$stage" "$stage_log_dir"
+      run_with_timeout "$stage" STAGE_ARGS
+      ;;
+  esac
 
-
-    mark_stage_done "$dir"
-    echo "[$s] completed"
-  else
-    echo "[$s] cache hit - skipping"
+  local -a grace_dirs=()
+  if [[ -n "$stage_log_dir" ]]; then
+    grace_dirs+=("$stage_log_dir")
   fi
+  if [[ -n "${LOG_DIR:-}" && "${LOG_DIR:-}" != "$stage_log_dir" ]]; then
+    grace_dirs+=("${LOG_DIR:-}")
+  fi
+
+  local candidate
+  for candidate in "${grace_dirs[@]}"; do
+    if [[ -n "$candidate" ]] && was_graceful_stop "$stage" "$candidate"; then
+      echo "[${stage}] stopped gracefully; leaving cache unstamped so it can resume." >&2
+      rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
+      return 0
+    fi
+  done
+
+  stage_state_write "$stage" "$dir" "$config_hash" "$data_hash" "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
+  mark_stage_done "$dir"
+  echo "[${stage}] completed"
+  rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
 }
