@@ -541,9 +541,7 @@ if [[ "$__ci_stage_role" == "dependent" ]]; then
 fi
 
 if [[ -z "${GRID_EXP_ID:-}" ]]; then
-  if (( FROZEN )) && [[ "$__ci_stage_role" == "dependent" ]]; then
-    GRID_EXP_ID="${EXP_ID:-$RUN_ID}"
-  elif [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
+  if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
     GRID_EXP_ID="$PRETRAIN_EXP_ID"
   elif [[ -n "${PRETRAIN_STATE_ID:-}" ]]; then
     GRID_EXP_ID="$PRETRAIN_STATE_ID"
@@ -591,8 +589,16 @@ if (( _needs_pretrain_state )); then
 
   expected_manifest="${PRETRAIN_ARTIFACTS_DIR%/}/encoder_manifest.json"
   if [[ ! -f "$expected_manifest" ]]; then
-    mjepa_log_error "missing pretrain lineage for ${MJEPACI_STAGE:-unknown}. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain to refresh pretrain_state.json."
-    mjepa_log_error "checked: ${lineage_hint_primary}, ${lineage_hint_secondary}"
+    case "${MJEPACI_STAGE:-}" in
+      bench|benchmark)
+        echo "[fatal] missing encoder artifacts for bench: ${expected_manifest}" >&2
+        echo "hint: set PRETRAIN_EXP_ID=<id> or rerun pretrain" >&2
+        ;;
+      *)
+        mjepa_log_error "missing pretrain lineage for ${MJEPACI_STAGE:-unknown}. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain to refresh pretrain_state.json."
+        mjepa_log_error "checked: ${lineage_hint_primary}, ${lineage_hint_secondary}"
+        ;;
+    esac
     exit 2
   fi
 fi
@@ -653,6 +659,18 @@ ensure_dir_var() {
         fi
       fi
     fi
+    if (( FROZEN )) && [[ "$var_name" =~ ^(GRID_DIR|FINETUNE_DIR|BENCH_DIR|TOX21_DIR|REPORTS_DIR)$ ]]; then
+      if [[ -n "${GRID_EXPERIMENT_ROOT:-}" && "$path" == ${GRID_EXPERIMENT_ROOT%/}* ]]; then
+        if [[ -d "$path" ]]; then
+          printf -v "$var_name" '%s' "$path"
+          if (( idx > 0 )); then
+            mjepa_log_warn "using existing read-only ${var_name}=$path"
+          fi
+          return 0
+        fi
+        continue
+      fi
+    fi
     if mjepa_try_dir "$path"; then
       printf -v "$var_name" '%s' "$path"
       if (( idx > 0 )); then
@@ -682,10 +700,10 @@ fi
 if [[ -n "${GRID_EXP_ID:-}" ]]; then
   GRID_EXPERIMENT_ROOT="${EXPERIMENTS_ROOT%/}/${GRID_EXP_ID}"
 else
-  GRID_EXPERIMENT_ROOT="${EXPERIMENTS_ROOT%/}"
+  GRID_EXPERIMENT_ROOT="${EXPERIMENT_DIR}"
 fi
 
-EXP_ROOT="$GRID_EXPERIMENT_ROOT"
+EXP_ROOT="$EXPERIMENT_DIR"
 
 if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
   PRETRAIN_ARTIFACTS_DIR="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/artifacts"
@@ -733,15 +751,17 @@ export CACHE_DIR
 export SWEEP_CACHE_DIR
 
 # Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
-GRID_DIR_DEFAULT="${GRID_EXPERIMENT_ROOT}/grid"
+GRID_DIR_DEFAULT="${EXPERIMENT_DIR}/grid"
 : "${GRID_DIR:=${GRID_CACHE_DIR:-$GRID_DIR_DEFAULT}}"
 
-ensure_dir_var GRID_DIR "$GRID_DIR_DEFAULT" "${GRID_EXP_ID:+experiments/${GRID_EXP_ID}/}grid"
+ensure_dir_var GRID_DIR "$GRID_DIR_DEFAULT" "${EXP_ID:+experiments/${EXP_ID}/}grid"
 
-if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
-  GRID_SOURCE_DIR="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/grid"
-else
+if [[ -n "${GRID_EXP_ID:-}" && "${GRID_EXP_ID}" != "${EXP_ID:-}" ]]; then
+  GRID_SOURCE_DIR="${EXPERIMENTS_ROOT%/}/${GRID_EXP_ID}/grid"
+elif [[ -n "${GRID_DIR:-}" ]]; then
   GRID_SOURCE_DIR="$GRID_DIR"
+else
+  GRID_SOURCE_DIR="${EXPERIMENT_DIR}/grid"
 fi
 
 ensure_dir_var ARTIFACTS_DIR "${PRETRAIN_EXPERIMENT_ROOT}/artifacts" "experiments/${PRETRAIN_EXP_ID}/artifacts"
@@ -783,10 +803,10 @@ if [[ -z "${PRETRAIN_TOX21_ENV:-}" ]]; then
   PRETRAIN_TOX21_ENV="${PRETRAIN_EXPERIMENT_ROOT}/tox21_gate.env"
 fi
 
-GRID_FINETUNE_DEFAULT="${GRID_EXPERIMENT_ROOT}/finetune"
-GRID_BENCH_DEFAULT="${GRID_EXPERIMENT_ROOT}/bench"
-GRID_TOX21_DEFAULT="${GRID_EXPERIMENT_ROOT}/tox21"
-GRID_REPORTS_DEFAULT="${GRID_EXPERIMENT_ROOT}/report"
+GRID_FINETUNE_DEFAULT="${EXPERIMENT_DIR}/finetune"
+GRID_BENCH_DEFAULT="${EXPERIMENT_DIR}/bench"
+GRID_TOX21_DEFAULT="${EXPERIMENT_DIR}/tox21"
+GRID_REPORTS_DEFAULT="${EXPERIMENT_DIR}/report"
 
 : "${FINETUNE_DIR:=${FINETUNE_CACHE_DIR:-$GRID_FINETUNE_DEFAULT}}"
 : "${BENCH_DIR:=${BENCH_CACHE_DIR:-$GRID_BENCH_DEFAULT}}"
@@ -795,10 +815,10 @@ GRID_REPORTS_DEFAULT="${GRID_EXPERIMENT_ROOT}/report"
 : "${TOX21_DIR:=${TOX21_CACHE_DIR:-$GRID_TOX21_DEFAULT}}"
 : "${REPORTS_DIR:=${REPORTS_CACHE_DIR:-$GRID_REPORTS_DEFAULT}}"
 
-ensure_dir_var FINETUNE_DIR "$GRID_FINETUNE_DEFAULT" "${GRID_EXP_ID:+experiments/${GRID_EXP_ID}/}finetune"
-ensure_dir_var BENCH_DIR "$GRID_BENCH_DEFAULT" "${GRID_EXP_ID:+experiments/${GRID_EXP_ID}/}bench"
-ensure_dir_var TOX21_DIR "$GRID_TOX21_DEFAULT" "${GRID_EXP_ID:+experiments/${GRID_EXP_ID}/}tox21"
-ensure_dir_var REPORTS_DIR "$GRID_REPORTS_DEFAULT" "${GRID_EXP_ID:+experiments/${GRID_EXP_ID}/}report"
+ensure_dir_var FINETUNE_DIR "$GRID_FINETUNE_DEFAULT" "${EXP_ID:+experiments/${EXP_ID}/}finetune"
+ensure_dir_var BENCH_DIR "$GRID_BENCH_DEFAULT" "${EXP_ID:+experiments/${EXP_ID}/}bench"
+ensure_dir_var TOX21_DIR "$GRID_TOX21_DEFAULT" "${EXP_ID:+experiments/${EXP_ID}/}tox21"
+ensure_dir_var REPORTS_DIR "$GRID_REPORTS_DEFAULT" "${EXP_ID:+experiments/${EXP_ID}/}report"
 ensure_dir_var LOG_DIR "${APP_DIR}/logs" "logs"
 
 for dir_path in \
@@ -808,6 +828,13 @@ for dir_path in \
   "$GRID_EXPERIMENT_ROOT"; do
   [[ -z "$dir_path" ]] && continue
   if (( FROZEN )) && [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]] && [[ "$dir_path" == ${PRETRAIN_EXPERIMENT_ROOT%/}* ]]; then
+    if [[ ! -d "$dir_path" ]]; then
+      mjepa_log_error "expected frozen directory missing: $dir_path"
+      exit 1
+    fi
+    continue
+  fi
+  if (( FROZEN )) && [[ -n "${GRID_EXPERIMENT_ROOT:-}" ]] && [[ "$dir_path" == ${GRID_EXPERIMENT_ROOT%/}* ]]; then
     if [[ ! -d "$dir_path" ]]; then
       mjepa_log_error "expected frozen directory missing: $dir_path"
       exit 1
@@ -840,7 +867,15 @@ export MJEPACI_COMMIT_SHA
 
 ci_print_env_diag() {
   local stage_bin_value="${1:-${STAGE_BIN:-<unset>}}"
-  echo "[ci] STAGE=${MJEPACI_STAGE:-<unset>} EXP_ID=${EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} FROZEN=${FROZEN:-0} EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>} PRETRAIN_DIR=${PRETRAIN_DIR:-<unset>} PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>} GRID_DIR=${GRID_DIR:-<unset>} GRID_SOURCE_DIR=${GRID_SOURCE_DIR:-<unset>} ARTIFACTS_DIR=${ARTIFACTS_DIR:-<unset>} STAGE_BIN=${stage_bin_value}" >&2
+  local stage_name="${MJEPACI_STAGE:-<unset>}"
+  local out_dir="<unset>"
+  if [[ "$stage_name" != "<unset>" ]] && declare -F stage_dir >/dev/null 2>&1; then
+    out_dir="$(stage_dir "$stage_name")"
+  fi
+  local grid_read="${GRID_SOURCE_DIR:-${GRID_DIR:-<unset>}}"
+  echo "[ci] STAGE=${stage_name} EXP_ID=${EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} FROZEN=${FROZEN:-0} STAGE_BIN=${stage_bin_value}" >&2
+  echo "     READ: ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>} GRID_DIR=${grid_read}" >&2
+  echo "     WRITE: OUT_DIR=${out_dir} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>}" >&2
 }
 
 # --- micromamba bootstrap ---
@@ -970,14 +1005,77 @@ best_config_args() {
   # Usage: best_config_args <stage>
   # Reads best_grid_config.json and prints CLI args for the given stage
   local stage="$1"
-  local cfg="${GRID_SOURCE_DIR}/best_grid_config.json"
-  if [[ ! -s "$cfg" ]]; then
-    # fail fast for stages that require the winner
-    case "$stage" in bench|pretrain|finetune|tox21)
-      echo "[fatal] $stage needs winner but missing: $cfg" >&2; return 2;;
-    esac
-    return 0
+  local -a grid_roots=()
+  if [[ -n "${GRID_SOURCE_DIR:-}" ]]; then
+    grid_roots+=("${GRID_SOURCE_DIR%/}")
   fi
+  if [[ -n "${GRID_DIR:-}" ]]; then
+    local grid_dir_base="${GRID_DIR%/}"
+    local already=0
+    local existing_root
+    for existing_root in "${grid_roots[@]}"; do
+      if [[ "$existing_root" == "$grid_dir_base" ]]; then
+        already=1
+        break
+      fi
+    done
+    if (( ! already )); then
+      grid_roots+=("$grid_dir_base")
+    fi
+  fi
+  if [[ ${#grid_roots[@]} -eq 0 ]]; then
+    grid_roots+=("${EXPERIMENT_DIR%/}/grid")
+  fi
+
+  local grid_display="${grid_roots[0]}"
+  [[ -n "$grid_display" ]] || grid_display='<unset>'
+  local best_hint phase2_hint
+  if [[ "$grid_display" == '<unset>' ]]; then
+    best_hint='<unset>'
+    phase2_hint='<unset>'
+  else
+    best_hint="${grid_display}/best_grid_config.json"
+    phase2_hint="${grid_display}/phase2_export/best_grid_config.json"
+  fi
+
+  local -a winner_candidates=()
+  if [[ -n "${BENCH_WINNER_JSON:-}" ]]; then
+    winner_candidates+=("${BENCH_WINNER_JSON}")
+  fi
+  local grid_root
+  for grid_root in "${grid_roots[@]}"; do
+    [[ -n "$grid_root" ]] || continue
+    winner_candidates+=("${grid_root}/best_grid_config.json")
+    winner_candidates+=("${grid_root}/phase2_export/best_grid_config.json")
+  done
+
+  local cfg="" candidate=""
+  for candidate in "${winner_candidates[@]}"; do
+    [[ -z "$candidate" ]] && continue
+    if [[ -r "$candidate" ]]; then
+      cfg="$candidate"
+      break
+    fi
+  done
+
+  if [[ -z "$cfg" ]]; then
+    case "$stage" in
+      bench|benchmark)
+        echo "[fatal] bench winner not found." >&2
+        echo "checked: ${BENCH_WINNER_JSON:-<unset>}, ${best_hint}, ${phase2_hint}" >&2
+        echo "hint: set GRID_EXP_ID=${GRID_EXP_ID:-<unset>} or run/export Phase-2" >&2
+        return 2
+        ;;
+      pretrain|finetune|tox21)
+        echo "[fatal] $stage needs winner but missing: ${best_hint}" >&2
+        return 2
+        ;;
+      *)
+        return 0
+        ;;
+    esac
+  fi
+
   local py; py=$(python_bin) || { echo "python not found" >&2; return 127; }
   "$py" - "$cfg" "$stage" <<'PY'
 import os, json, sys
