@@ -6,6 +6,94 @@ trap 'echo "[ci] error at line $LINENO: $BASH_COMMAND" >&2' ERR
 export BESTCFG_NO_EPOCHS=1              # drop both epochs from best_config
 export MJEPACI_STAGE="pretrain"
 
+if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then
+  if [[ -z "${EXP_ID:-}" || -z "${EXPERIMENTS_ROOT:-}" ]]; then
+    echo "[ci] error: MJEPACI_STAGE_SHIM requires EXP_ID and EXPERIMENTS_ROOT" >&2
+    exit 1
+  fi
+
+  EXPERIMENT_DIR="${EXPERIMENTS_ROOT%/}/${EXP_ID}"
+  PRETRAIN_DIR="${PRETRAIN_DIR:-$EXPERIMENT_DIR}"
+  ARTIFACTS_DIR="${ARTIFACTS_DIR:-${EXPERIMENT_DIR}/artifacts}"
+  PRETRAIN_ARTIFACTS_DIR="${PRETRAIN_ARTIFACTS_DIR:-$ARTIFACTS_DIR}"
+
+  export EXP_ID EXPERIMENTS_ROOT EXPERIMENT_DIR PRETRAIN_DIR ARTIFACTS_DIR PRETRAIN_ARTIFACTS_DIR
+
+  STAGE_OUTPUTS_DIR="${PRETRAIN_DIR}/stage-outputs"
+  export STAGE_OUTPUTS_DIR
+  mkdir -p "${PRETRAIN_DIR}" "$STAGE_OUTPUTS_DIR" "${PRETRAIN_ARTIFACTS_DIR}"
+
+  echo "[ci] (test) EXP_ID=${EXP_ID} EXPERIMENT_DIR=${EXPERIMENT_DIR} PRETRAIN_DIR=${PRETRAIN_DIR} PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR} STAGE_BIN=${MJEPACI_STAGE_SHIM}" >&2
+
+  "${MJEPACI_STAGE_SHIM}" pretrain
+
+  expected_encoder="${PRETRAIN_DIR}/encoder.pt"
+  expected_stage_outputs="${STAGE_OUTPUTS_DIR}/pretrain.json"
+  expected_manifest="${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json"
+
+  for required in "$expected_encoder" "$expected_stage_outputs" "$expected_manifest"; do
+    if [[ ! -f "$required" ]]; then
+      echo "[ci] error: expected ${required} not found" >&2
+      exit 1
+    fi
+  done
+
+  state_path="${EXPERIMENT_DIR}/pretrain_state.json"
+  state_legacy="${EXPERIMENTS_ROOT%/}/pretrain_state.json"
+  pretrain_id="${EXP_ID}"
+  pretrain_root="${EXPERIMENT_DIR}"
+  py_bin="python"
+  if ! command -v "$py_bin" >/dev/null 2>&1; then
+    py_bin="python3"
+  fi
+
+  if command -v "$py_bin" >/dev/null 2>&1; then
+    "$py_bin" - "$state_path" "$state_legacy" "$pretrain_id" "$pretrain_root" \
+      "$PRETRAIN_ARTIFACTS_DIR" "$expected_manifest" "$expected_encoder" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+state_path, legacy_path, exp_id, exp_root, artifacts_dir, manifest_path, encoder_path = sys.argv[1:8]
+
+tox21_env = os.path.abspath(os.path.join(exp_root, "tox21_gate.env"))
+
+payload = {
+    "id": exp_id,
+    "pretrain_exp_id": exp_id,
+    "experiment_root": os.path.abspath(exp_root),
+    "artifacts_dir": os.path.abspath(artifacts_dir),
+    "encoder_manifest": os.path.abspath(manifest_path),
+    "encoder_checkpoint": os.path.abspath(encoder_path),
+    "tox21_env": tox21_env,
+    "state_updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+
+tmp_path = state_path + ".tmp"
+os.makedirs(os.path.dirname(state_path), exist_ok=True)
+with open(tmp_path, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+os.replace(tmp_path, state_path)
+
+legacy_path = legacy_path.strip()
+if legacy_path:
+    legacy_dir = os.path.dirname(legacy_path)
+    os.makedirs(legacy_dir, exist_ok=True)
+    tmp_legacy = legacy_path + ".tmp"
+    with open(tmp_legacy, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    os.replace(tmp_legacy, legacy_path)
+PY
+  else
+    echo "[ci] warn: unable to write pretrain_state.json because no python interpreter was found" >&2
+  fi
+
+  exit 0
+fi
+
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
 

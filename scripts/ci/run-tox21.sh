@@ -40,7 +40,7 @@ echo "[tox21] state path=${PRETRAIN_STATE_FILE} (canonical=${PRETRAIN_STATE_FILE
 echo "[tox21] expected tox21 env seed=${PRETRAIN_TOX21_ENV}" >&2
 
 if [[ ! -f "$MANIFEST_PATH" ]]; then
-  echo "[tox21] required manifest missing: $MANIFEST_PATH" >&2
+  echo "[ci] error: expected ${MANIFEST_PATH} but it was not found. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain." >&2
   exit 1
 fi
 
@@ -69,7 +69,7 @@ fi
 ensure_dir() {
   local path="$1"
   if [[ ! -e "$path" ]]; then
-    echo "[tox21] required file missing: $path" >&2
+    echo "[ci] error: required file missing: $path" >&2
     exit 1
   fi
 }

@@ -11,7 +11,7 @@ encoder_ckpt="$(resolve_encoder_checkpoint)"
 echo "[bench] using pretrain experiment id=${PRETRAIN_EXP_ID} checkpoint=${encoder_ckpt}" >&2
 
 if [[ -z "$encoder_ckpt" ]]; then
-  echo "[bench] unable to resolve encoder checkpoint path. PRETRAIN_ENCODER_PATH=${PRETRAIN_ENCODER_PATH:-<unset>}" >&2
+  echo "[ci] error: missing pretrain checkpoint for bench (PRETRAIN_ENCODER_PATH=${PRETRAIN_ENCODER_PATH:-<unset>}). Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain." >&2
   exit 1
 fi
 
@@ -20,7 +20,7 @@ if [[ -n "${PRETRAIN_ENCODER_PATH:-}" && "$encoder_ckpt" != "${PRETRAIN_ENCODER_
 fi
 
 if [[ ! -f "$encoder_ckpt" ]]; then
-  echo "[bench] required encoder checkpoint missing: $encoder_ckpt" >&2
+  echo "[ci] error: expected ${encoder_ckpt} but it was not found. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain." >&2
   exit 1
 fi
 

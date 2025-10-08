@@ -301,6 +301,40 @@ PY
   return 0
 }
 
+__read_pretrain_lineage_id() {
+  local state_path="${1:-}"
+  [[ -n "$state_path" && -f "$state_path" ]] || return 1
+
+  local py
+  py=$(python_bin 2>/dev/null) || return 1
+
+  local value
+  if ! value="$("$py" - "$state_path" <<'PY' 2>/dev/null
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle) or {}
+
+candidate = data.get("pretrain_exp_id") or data.get("id")
+if isinstance(candidate, str):
+    candidate = candidate.strip()
+if candidate:
+    print(candidate)
+PY
+)"; then
+    return 1
+  fi
+
+  if [[ -n "$value" ]]; then
+    printf '%s\n' "$value"
+    return 0
+  fi
+
+  return 1
+}
+
 __load_pretrain_state() {
   local -a candidates=()
 
@@ -445,11 +479,25 @@ if [[ -z "${EXP_ID:-}" && -n "${PRETRAIN_STATE_ID:-}" ]]; then
 fi
 
 if [[ -z "${PRETRAIN_EXP_ID:-}" ]]; then
-  if [[ -n "${PRETRAIN_STATE_ID:-}" ]]; then
-    PRETRAIN_EXP_ID="$PRETRAIN_STATE_ID"
-  elif [[ -n "${EXP_ID:-}" ]]; then
-    PRETRAIN_EXP_ID="$EXP_ID"
+  if id="$(__read_pretrain_lineage_id "${EXPERIMENTS_ROOT}/pretrain_state.json" 2>/dev/null)"; then
+    PRETRAIN_EXP_ID="$id"
+    if [[ -z "${PRETRAIN_STATE_ID:-}" ]]; then
+      PRETRAIN_STATE_ID="$id"
+    fi
   fi
+fi
+
+if [[ -z "${PRETRAIN_EXP_ID:-}" && -n "${EXP_ID:-}" ]]; then
+  if id="$(__read_pretrain_lineage_id "${EXPERIMENTS_ROOT%/}/${EXP_ID}/pretrain_state.json" 2>/dev/null)"; then
+    PRETRAIN_EXP_ID="$id"
+    if [[ -z "${PRETRAIN_STATE_ID:-}" ]]; then
+      PRETRAIN_STATE_ID="$id"
+    fi
+  fi
+fi
+
+if [[ "${MJEPACI_STAGE}" == "pretrain" && -z "${PRETRAIN_EXP_ID:-}" && -n "${EXP_ID:-}" ]]; then
+  PRETRAIN_EXP_ID="$EXP_ID"
 fi
 
 if [[ "$__ci_stage_role" == "dependent" && -z "${EXP_ID:-}" && -n "${PRETRAIN_EXP_ID:-}" ]]; then
@@ -481,15 +529,23 @@ if (( _needs_pretrain_state )); then
     lineage_hint_secondary="${EXPERIMENTS_ROOT}/<EXP_ID>/pretrain_state.json"
   fi
 
+  if [[ -z "${PRETRAIN_EXP_ID:-}" && -n "${EXP_ID:-}" ]]; then
+    fallback_manifest="${EXPERIMENTS_ROOT%/}/${EXP_ID}/artifacts/encoder_manifest.json"
+    if [[ -f "$fallback_manifest" ]]; then
+      PRETRAIN_EXP_ID="$EXP_ID"
+      PRETRAIN_ARTIFACTS_DIR="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/artifacts"
+    fi
+  fi
+
   if [[ -z "${PRETRAIN_EXP_ID:-}" ]]; then
-    mjepa_log_error "missing pretrain lineage for ${MJEPACI_STAGE:-unknown}. Provide PRETRAIN_EXP_ID=<id> or ensure pretrain_state.json exists."
+    mjepa_log_error "missing pretrain lineage for ${MJEPACI_STAGE:-unknown}. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain to refresh pretrain_state.json."
     mjepa_log_error "checked: ${lineage_hint_primary}, ${lineage_hint_secondary}"
     exit 2
   fi
 
-  expected_manifest="${EXPERIMENTS_ROOT}/${PRETRAIN_EXP_ID}/artifacts/encoder_manifest.json"
+  expected_manifest="${PRETRAIN_ARTIFACTS_DIR%/}/encoder_manifest.json"
   if [[ ! -f "$expected_manifest" ]]; then
-    mjepa_log_error "missing pretrain lineage for ${MJEPACI_STAGE:-unknown}. Provide PRETRAIN_EXP_ID=<id> or ensure pretrain_state.json exists."
+    mjepa_log_error "missing pretrain lineage for ${MJEPACI_STAGE:-unknown}. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain to refresh pretrain_state.json."
     mjepa_log_error "checked: ${lineage_hint_primary}, ${lineage_hint_secondary}"
     exit 2
   fi
@@ -554,18 +610,35 @@ ensure_dir_var() {
   return 1
 }
 
-if [[ -z "${EXP_ID:-}" ]]; then
-  EXP_ID="$RUN_ID"
+if [[ -n "${EXP_ID:-}" ]]; then
+  EXPERIMENT_DIR="${EXPERIMENTS_ROOT%/}/${EXP_ID}"
+else
+  EXPERIMENT_DIR="${EXPERIMENTS_ROOT%/}"
 fi
 
-EXPERIMENT_DIR="${EXPERIMENTS_ROOT%/}/${EXP_ID}"
-PRETRAIN_EXPERIMENT_ROOT="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}"
-GRID_EXPERIMENT_ROOT="${EXPERIMENTS_ROOT%/}/${GRID_EXP_ID}"
+if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
+  PRETRAIN_EXPERIMENT_ROOT="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}"
+else
+  PRETRAIN_EXPERIMENT_ROOT=""
+fi
+
+if [[ -n "${GRID_EXP_ID:-}" ]]; then
+  GRID_EXPERIMENT_ROOT="${EXPERIMENTS_ROOT%/}/${GRID_EXP_ID}"
+else
+  GRID_EXPERIMENT_ROOT="${EXPERIMENTS_ROOT%/}"
+fi
+
 EXP_ROOT="$GRID_EXPERIMENT_ROOT"
 
-: "${ARTIFACTS_DIR:=${PRETRAIN_EXPERIMENT_ROOT}/artifacts}"
-
-: "${PRETRAIN_ARTIFACTS_DIR:=${ARTIFACTS_DIR}}"
+if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+  artifacts_default="${PRETRAIN_EXPERIMENT_ROOT}/artifacts"
+  : "${ARTIFACTS_DIR:=$artifacts_default}"
+  PRETRAIN_ARTIFACTS_DIR="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/artifacts"
+else
+  artifacts_default="${EXPERIMENT_DIR}/artifacts"
+  : "${ARTIFACTS_DIR:=$artifacts_default}"
+  : "${PRETRAIN_ARTIFACTS_DIR:=${ARTIFACTS_DIR}}"
+fi
 
 if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
   if [[ -z "${WANDB_DIR:-}" ]]; then
@@ -682,19 +755,7 @@ export MJEPACI_COMMIT_SHA
 
 ci_print_env_diag() {
   local stage_bin_value="${1:-${STAGE_BIN:-<unset>}}"
-  echo "[ci] STAGE=${MJEPACI_STAGE:-<unset>} EXP_ID=${EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>} EXP_ROOT=${EXP_ROOT:-<unset>} ARTIFACTS_DIR=${ARTIFACTS_DIR:-<unset>} GRID_DIR=${GRID_DIR:-<unset>}" >&2
-  echo "[ci] EXP_ID=${EXP_ID:-<unset>}" >&2
-  echo "[ci] PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}" >&2
-  echo "[ci] GRID_EXP_ID=${GRID_EXP_ID:-<unset>}" >&2
-  echo "[ci] EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>}" >&2
-  echo "[ci] EXP_ROOT=${EXP_ROOT:-<unset>}" >&2
-  echo "[ci] EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>}" >&2
-  echo "[ci] GRID_DIR=${GRID_DIR:-<unset>}" >&2
-  echo "[ci] PRETRAIN_DIR=${PRETRAIN_DIR:-<unset>}" >&2
-  echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR:-<unset>}" >&2
-  echo "[ci] PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>}" >&2
-  echo "[ci] TOX21_DIR=${TOX21_DIR:-<unset>}" >&2
-  echo "[ci] STAGE_BIN=${stage_bin_value}" >&2
+  echo "[ci] STAGE=${MJEPACI_STAGE:-<unset>} EXP_ID=${EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>} PRETRAIN_DIR=${PRETRAIN_DIR:-<unset>} PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>} STAGE_BIN=${stage_bin_value}" >&2
 }
 
 # --- micromamba bootstrap ---
