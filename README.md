@@ -1,8 +1,29 @@
 # M-JEPA
 
+> **Summary**
+> - Frozen encoder lineages are immutable.
+> - Dependent runs must set `PRETRAIN_EXP_ID` to reuse them.
+> - To rebuild, remove or override the freeze marker explicitly.
+
 Joint Embedding Predictive Architectures (JEPA) for molecular graphs. The
 project includes data download scripts, self-supervised pretraining, and
 utilities for downstream evaluation on MoleculeNet benchmarks.
+
+## 🔒 Frozen Encoder Lineages
+
+CI discovers encoders that carry the `bench/encoder_frozen.ok` marker and
+reuses them for downstream stages. When a freeze marker is present, automation
+launches new runs under a fresh `EXP_ID` while binding `PRETRAIN_EXP_ID` (and, if
+needed, `GRID_EXP_ID`) to the frozen lineage.
+
+```bash
+# Run tox21 grading on a frozen encoder
+export PRETRAIN_EXP_ID=1759825317
+bash scripts/ci/run-tox21.sh
+# Output -> /data/mjepa/experiments/$RUN_ID/tox21/
+```
+
+See `docs/frozen_lineage_policy.md` for override flags and lineage semantics.
 
 ## Local development
 

@@ -12,6 +12,9 @@ Here you can explore the modules that make up the project.
    :maxdepth: 2
    :caption: Overview
 
+   pipeline_overview
+   frozen_lineage_policy
+   architecture
    kid_friendly_overview
    dataset_caching
 

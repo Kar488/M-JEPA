@@ -1,10 +1,16 @@
 M‑JEPA Agents Handbook
 =======================
 
+> **Summary**
+> - Frozen encoder lineages are immutable.
+> - Dependent runs must set ``PRETRAIN_EXP_ID`` to reuse them.
+> - To rebuild, remove or override the freeze marker explicitly.
+
 Welcome! This guide gives automation agents and contributors a concise but
 complete map of the repository. Use it alongside ``docs/kid_friendly_overview.rst``
-when you need a narrative tour; the sections below highlight the latest logic,
-how components interact, and where to plug in when extending the pipelines.
+and ``docs/frozen_lineage_policy.md`` when you need a narrative tour; the sections
+below highlight the latest logic, how components interact, and where to plug in
+when extending the pipelines.
 
 Project Snapshot
 ----------------
@@ -95,6 +101,69 @@ Model & Training Stack
   Light-weight probes (logistic regression, random forests, etc.) that consume
   stored graph embeddings without re-running the encoder.
 
+Automation & Orchestration
+--------------------------
+
+The CI/CD pipeline pairs GitHub workflows with Vast jobs to orchestrate every
+stage. CI launches ``scripts/ci/run-pretrain.sh`` to seed new lineages, then
+delegates to ``run-grid-or-phase1.sh`` and ``run-grid-phase2.sh`` sweeps. Vast
+workers pick up sweep agents, emit structured logs under ``logs/phase*`` and
+stream metrics to Weights & Biases. ``scripts/ci/run-tox21.sh`` grades frozen
+encoders and stamps ``bench/encoder_frozen.ok`` when the lineage is immutable.
+See ``docs/pipeline_overview.md`` for the complete flow.
+
+Stage Agents & Responsibilities
+-------------------------------
+
+Each automation agent follows a strict lineage policy. All stage names align
+with ``docs/frozen_lineage_policy.md`` and ``docs/pipeline_overview.md``.
+
+| Agent | Role | Reads From | Writes To | Notes |
+| --- | --- | --- | --- | --- |
+| ``pretrain-agent`` | Launches initial pretrain stage and produces encoder artifacts. | — | ``$EXPERIMENTS_ROOT/$EXP_ID/artifacts`` | Creates new lineage. Skipped if frozen. |
+| ``phase1-agent`` | Runs Phase-1 sweep on encoder. | ``$EXPERIMENTS_ROOT/$PRETRAIN_EXP_ID/artifacts`` | ``$EXPERIMENTS_ROOT/$GRID_EXP_ID/grid/phase1`` | No-op when frozen. |
+| ``phase2-agent`` | Runs Phase-2 sweep/recheck/export. | ``$GRID_DIR`` (phase1 results) | ``$EXPERIMENTS_ROOT/$EXP_ID/grid/phase2_*`` | Reads frozen grid, writes current logs. |
+| ``finetune-agent`` | Finetunes on labeled data using frozen encoder. | ``$PRETRAIN_EXP_ID/artifacts`` | ``$EXP_ID/finetune`` | Always runs under new ``EXP_ID``. |
+| ``tox21-agent`` | Grades encoder on Tox21 tasks. | ``$PRETRAIN_EXP_ID/artifacts`` | ``$EXP_ID/tox21`` | On success, writes freeze marker. |
+| ``report-agent`` | Generates evaluation reports. | All above outputs | ``$EXP_ID/report`` | Read-only if lineage frozen. |
+
+Frozen vs. New Lineage Behaviour
+--------------------------------
+
+The lineage flow is ``pretrain → phase1/phase2 → tox21 → benchmark/report``.
+When ``tox21-agent`` stamps ``bench/encoder_frozen.ok``, subsequent runs must
+declare ``PRETRAIN_EXP_ID`` and operate in read-only mode against the frozen
+artifacts. Only initiator stages (``pretrain-agent`` and new grid sweeps) produce
+new ``EXP_ID`` roots unless explicit overrides are set. Downstream stages write to
+fresh ``EXP_ID`` directories, preserving prior results. For override semantics see
+``docs/frozen_lineage_policy.md``.
+
+Lifecycle Example
+-----------------
+
+1. ``pretrain-agent`` creates ``$EXPERIMENTS_ROOT/1759825317`` and writes
+   ``artifacts/``.
+2. ``phase1-agent`` and ``phase2-agent`` reuse that encoder, producing
+   ``grid/phase1`` and ``grid/phase2_export`` under ``$GRID_EXP_ID``.
+3. ``tox21-agent`` grades the encoder, emits ``bench/encoder_frozen.ok`` and
+   freezes the lineage.
+4. Weeks later, ``finetune-agent`` runs with ``PRETRAIN_EXP_ID=1759825317``.
+   CI assigns ``EXP_ID=18327125156`` for fresh ``finetune/`` and ``report/``
+   outputs without mutating the frozen tree.
+
+Override Flags
+--------------
+
+Automation honours the explicit lineage overrides described in
+``docs/frozen_lineage_policy.md``. Agents may set:
+
+- ``FORCE_UNFREEZE_GRID=1`` to rebuild a lineage and re-materialise sweeps.
+- ``ALLOW_CODE_DRIFT_WHEN_FROZEN=1`` to bypass commit-hash checks on dependents.
+- ``STRICT_FROZEN=1`` to enforce commit parity before reading a frozen lineage.
+- ``FORCE_RERUN=stage1,stage2`` (comma-separated) to re-run selected stages even
+  if cached artifacts exist.
+- ``PRETRAIN_EXP_ID`` / ``GRID_EXP_ID`` to bind a run to a specific lineage.
+
 Automation & Sweeps
 -------------------
 
@@ -113,7 +182,7 @@ Automation & Sweeps
   ``contiguity``), and writes ``paired_effect.json``.
 
 ``scripts/ci/phase1_decision.py``
-  New resolver that interprets ``paired_effect.json`` safely. Returns the winner
+  Resolver that interprets ``paired_effect.json`` safely. Returns the winner
   (``jepa``, ``contrastive`` or ``tie``), whether a tie-breaker fired, and the
   inferred task type. Automation uses this to decide phase‑2 policies.
 
@@ -122,10 +191,9 @@ Automation & Sweeps
 
 ``scripts/ci/run-grid-phase2.sh``
   Launches a Bayesian optimisation sweep for the winning method using the
-  exported top‑K as seeds. Writes derived specs to ``grid/``.
+  exported top‑K as seeds. Writes derived specs to ``grid``.
 
-``scripts/ci/run-pretrain.sh`` / ``run-finetune.sh`` / ``run-bench.sh`` /
-``run-tox21.sh``
+``scripts/ci/run-pretrain.sh`` / ``run-finetune.sh`` / ``run-tox21.sh``
   Stage-specific wrappers used in CI. They share environment setup and failure
   handling via ``scripts/ci/common.sh`` and ``scripts/ci/stage.sh``.
 
