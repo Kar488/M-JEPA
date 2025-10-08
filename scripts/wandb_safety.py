@@ -3,6 +3,12 @@ from __future__ import annotations
 from typing import Optional, Dict, Any, TYPE_CHECKING
 import os, json, time, pathlib
 
+try:
+    from utils.wandb_filters import silence_pydantic_field_warnings
+except Exception:  # pragma: no cover - helper available in packaged installs
+    def silence_pydantic_field_warnings() -> None:  # type: ignore
+        return
+
 if TYPE_CHECKING:
     from wandb.sdk.wandb_run import Run  # for the Optional["Run"] annotation
 
@@ -13,6 +19,7 @@ def _dbg(*a):
 
 def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
     """Ensure there is an active wandb run for sweep-run. Returns a run or None."""
+    silence_pydantic_field_warnings()
     import wandb
     # already initialised by agent?
     run = getattr(wandb, "run", None)
@@ -66,6 +73,7 @@ METRIC_CANDIDATES = ("val_rmse", "rmse_mean", "rmse", "probe_rmse_mean", "metric
 
 def wb_summary_update(payload: Dict[str, Any]) -> None:
     """Safe summary update: only writes if a run exists; never throws."""
+    silence_pydantic_field_warnings()
     import wandb
     run = getattr(wandb, "run", None)
     if run is None:
@@ -155,6 +163,7 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
 
 def wb_finish_safely(timeout: float = 30.0) -> None:
     try:
+        silence_pydantic_field_warnings()
         import wandb
     except Exception:
         return

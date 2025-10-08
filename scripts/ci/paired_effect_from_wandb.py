@@ -6,7 +6,18 @@ from itertools import islice
 import math
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-import numpy as np, wandb, os, argparse, json, sys, time
+from utils.wandb_filters import silence_pydantic_field_warnings
+
+silence_pydantic_field_warnings()
+
+import argparse
+import json
+import os
+import sys
+import time
+
+import numpy as np
+import wandb
 
 
 def _coerce_config(config: Any) -> Dict[str, Any]:

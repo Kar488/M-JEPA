@@ -11,6 +11,12 @@ import logging
 from typing import Any, Dict, Optional, Sequence
 import os
 
+try:
+    from .wandb_filters import silence_pydantic_field_warnings
+except Exception:  # pragma: no cover - fallback for minimal wheels
+    def silence_pydantic_field_warnings() -> None:  # type: ignore
+        return
+
 
 class DummyWandb:
     """A toy logger that does nothing.
@@ -91,6 +97,7 @@ def maybe_init_wandb(
     if not enable:
         return DummyWandb()
     try:
+        silence_pydantic_field_warnings()
         import wandb
 
         # ---- env-driven config (lets CI control id/name/resume etc.) ----

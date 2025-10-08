@@ -7,6 +7,12 @@ import pickle
 import time
 from typing import Optional, Dict, Any
 
+try:
+    from utils.wandb_filters import silence_pydantic_field_warnings
+except Exception:  # pragma: no cover - helper only available in repo context
+    def silence_pydantic_field_warnings() -> None:  # type: ignore
+        return
+
 
 def _env_int(name: str) -> Optional[int]:
     raw = os.getenv(name)
@@ -73,6 +79,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             ) from e
     # --- 0) Initialize W&B run FIRST (no config!), then read sampled config ---
     try:
+        silence_pydantic_field_warnings()
         import wandb
     except Exception:
         wandb = None
@@ -123,6 +130,23 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                 except Exception:
                     pass
 
+    def _apply_bool(src_keys, dest_attr):
+        for k in src_keys:
+            if k not in sweep_cfg:
+                continue
+            raw = sweep_cfg[k]
+            if isinstance(raw, dict):
+                if "value" in raw:
+                    raw = raw["value"]
+                elif len(raw) == 1:
+                    # tolerate single-key dicts like {"min": 0}
+                    raw = next(iter(raw.values()))
+            try:
+                setattr(args, dest_attr, _as_bool(raw))
+                return
+            except Exception:
+                continue
+
     # core model + training knobs commonly swept
     _apply_any(
         ["gnn_type", "model.gnn_type", "model/gnn_type", "backbone", "model.backbone"],
@@ -143,6 +167,20 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         ["finetune_bs", "finetune_batch_size", "train.finetune_bs"],
         "finetune_batch_size",
         int,
+    )
+
+    _apply_bool(
+        [
+            "cache_datasets",
+            "cache-datasets",
+            "cache_datasets.value",
+            "cache-datasets.value",
+            "parameters.cache_datasets",
+            "parameters.cache-datasets",
+            "parameters.cache_datasets.value",
+            "parameters.cache-datasets.value",
+        ],
+        "cache_datasets",
     )
 
     _apply_any(["hidden_dim", "model.hidden_dim", "width"], "hidden_dim", int)
@@ -515,6 +553,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     _wb_get_or_init(args)  # re-open if an inner path finished it
     try:
+        silence_pydantic_field_warnings()
         import wandb as _wandb_mod  # type: ignore
     except Exception:
         _wandb_mod = None

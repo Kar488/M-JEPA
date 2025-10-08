@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 import pytest
-import yaml
+
+yaml = pytest.importorskip("yaml")
 
 # Provide a lightweight stub so modules can import wandb during test collection.
 sys.modules.setdefault("wandb", types.SimpleNamespace(Api=lambda: None))
@@ -1137,6 +1138,78 @@ def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     data = yaml.safe_load(out_yaml.read_text())
     assert data["parameters"]["training_method"]["value"] == "contrastive"
     assert "aug_rotate" in data["parameters"]
+
+
+def test_export_best_forces_cache_flags(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DIR", str(tmp_path))
+    monkeypatch.setenv("GRID_DIR", str(tmp_path))
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setenv("WANDB_PROJECT", "proj")
+    monkeypatch.delenv("SWEEP_CACHE_DIR", raising=False)
+
+    runs = [
+        FakeRun(
+            "best",
+            {
+                "training_method": "jepa",
+                "gnn_type": "gine",
+                "hidden_dim": 256,
+                "num_layers": 3,
+                "cache-datasets": 0,
+            },
+            {"val_rmse": 0.4},
+        ),
+        FakeRun(
+            "runner_up",
+            {
+                "training_method": "jepa",
+                "gnn_type": "gine",
+                "hidden_dim": 256,
+                "num_layers": 3,
+                "cache-datasets": 1,
+            },
+            {"val_rmse": 0.5},
+        ),
+    ]
+
+    class FakeApi:
+        def sweep(self, sweep_id):
+            return FakeSweep(runs)
+
+    monkeypatch.setattr(eb, "wandb", types.SimpleNamespace(Api=lambda: FakeApi()))
+    monkeypatch.setattr(eb, "maybe_init_wandb", lambda *a, **k: None)
+
+    out_json = tmp_path / "best.json"
+    out_yaml = tmp_path / "phase2.yaml"
+
+    monkeypatch.setenv("METHOD_WINNER", "jepa")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eb",
+            "--sweep-id",
+            "ent/proj/sw1",
+            "--task",
+            "regression",
+            "--out",
+            str(out_json),
+            "--phase2-yaml",
+            str(out_yaml),
+            "--emit-bounds",
+        ],
+    )
+
+    eb.main()
+
+    data = yaml.safe_load(out_yaml.read_text())
+    cache_datasets = data["parameters"]["cache-datasets"]
+    assert cache_datasets["value"] == 1
+    assert "values" not in cache_datasets
+
+    cache_dir = data["parameters"]["cache-dir"]
+    assert cache_dir["value"] == "cache/graphs"
+    assert "values" not in cache_dir
 
     # missing runs
     class EmptyApi:
