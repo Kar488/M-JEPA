@@ -1043,8 +1043,10 @@ run_stage() {
   dir="$(stage_dir "$stage")"
   OUT_DIR="$dir"
   export OUT_DIR
+  local grid_read="${GRID_SOURCE_DIR:-${GRID_DIR:-<unset>}}"
   echo "[ci] STAGE=${stage} EXP_ID=${EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} FROZEN=${FROZEN:-0}" >&2
-  echo "     EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>} ARTIFACTS_DIR=${ARTIFACTS_DIR:-<unset>} GRID_DIR=${GRID_DIR:-<unset>} GRID_SOURCE_DIR=${GRID_SOURCE_DIR:-<unset>} OUT_DIR=${OUT_DIR:-<unset>}" >&2
+  echo "     READ: ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>} GRID_DIR=${grid_read}" >&2
+  echo "     WRITE: OUT_DIR=${OUT_DIR:-<unset>} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>}" >&2
 
   if (( FROZEN )) && [[ "${FORCE_UNFREEZE_GRID}" != "1" ]]; then
     case "$stage" in
