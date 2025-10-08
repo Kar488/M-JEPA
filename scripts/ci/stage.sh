@@ -611,6 +611,12 @@ run_phase2_export_stage() {
 
   phase2_step_diag "$step"
 
+  local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
+  if [[ ! -f "$sweep_id_file" ]]; then
+    echo "[$step][fatal] sweep id file not found: $sweep_id_file (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}). Set GRID_EXP_ID=<id> to reuse an existing sweep or rerun phase2_sweep." >&2
+    return 3
+  fi
+
   local prev_log_dir="${LOG_DIR:-}"
   local step_log_dir="${dir}/logs"
   mkdir -p "$step_log_dir"
