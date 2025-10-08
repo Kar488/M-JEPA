@@ -524,6 +524,9 @@ run_phase2_recheck_stage() {
   : "${PHASE2_DIRECTION:=min}"
   : "${PHASE2_UNLABELED_DIR:=$APP_DIR/data/ZINC-canonicalized}"
   : "${PHASE2_LABELED_DIR:=$APP_DIR/data/katielinkmoleculenet_benchmark/train}"
+  : "${PHASE2_RECHECK_WALL_MINS:=120}"
+  : "${PHASE2_SEED_WALL_MINS:=}"
+  : "${PHASE2_RECHECK_GRACE_SECS:=120}"
 
   local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
   if [[ ! -f "$sweep_id_file" ]]; then
@@ -540,9 +543,59 @@ run_phase2_recheck_stage() {
   mkdir -p "$step_log_dir"
   export LOG_DIR="$step_log_dir"
 
-  local wall_mins="${PHASE2_RECHECK_WALL_MINS:-180}"
+  local recheck_dir
+  recheck_dir="$(stage_dir phase2_recheck)"
+  mkdir -p "$recheck_dir"
+  local sentinel="${recheck_dir}/recheck_done.ok"
+  local heartbeat_path="${recheck_dir}/heartbeat"
+
+  if [[ -f "$sentinel" ]]; then
+    echo "[$step] sentinel present; skipping" >&2
+    restore_env_var LOG_DIR "$prev_log_dir"
+    return 0
+  fi
+
+  rm -f "$sentinel"
+
+  local wall_mins_raw="${PHASE2_RECHECK_WALL_MINS:-120}"
+  local wall_mins="$wall_mins_raw"
+  if ! [[ "$wall_mins" =~ ^[0-9]+$ ]] || [[ "$wall_mins" -le 0 ]]; then
+    echo "[$step][warn] invalid PHASE2_RECHECK_WALL_MINS=${wall_mins_raw}; defaulting to 120" >&2
+    wall_mins=120
+  fi
   local soft=$(( wall_mins * 60 ))
-  local grace="${KILL_AFTER_SECS:-120}"
+
+  local grace_raw="${PHASE2_RECHECK_GRACE_SECS:-120}"
+  local grace="$grace_raw"
+  if ! [[ "$grace" =~ ^[0-9]+$ ]] || [[ "$grace" -le 0 ]]; then
+    echo "[$step][warn] invalid PHASE2_RECHECK_GRACE_SECS=${grace_raw}; defaulting to 120" >&2
+    grace=120
+  fi
+  export PHASE2_RECHECK_GRACE_SECS="$grace"
+
+  local seed_wall_raw="${PHASE2_SEED_WALL_MINS:-}"
+  local seed_wall_secs=""
+  local seed_wall_display="off"
+  if [[ -n "$seed_wall_raw" ]]; then
+    if [[ "$seed_wall_raw" =~ ^[0-9]+$ ]] && [[ "$seed_wall_raw" -gt 0 ]]; then
+      seed_wall_secs=$(( seed_wall_raw * 60 ))
+      seed_wall_display="$seed_wall_raw"
+    else
+      echo "[$step][warn] invalid PHASE2_SEED_WALL_MINS=${seed_wall_raw}; disabling per-seed timeout" >&2
+    fi
+  fi
+
+  echo "[ci] EXP_ID=${EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} GRID_DIR=${GRID_DIR:-<unset>} STEP=${step} WALL=${wall_mins} SEED_WALL=${seed_wall_display}" >&2
+
+  if [[ -n "$seed_wall_secs" ]]; then
+    export PHASE2_SEED_WALL_SECS="$seed_wall_secs"
+  else
+    unset PHASE2_SEED_WALL_SECS || true
+  fi
+  export PHASE2_RECHECK_HEARTBEAT="$heartbeat_path"
+  export PHASE2_RECHECK_SENTINEL="$sentinel"
+  export PHASE2_RECHECK_RESUME=1
+
   local log_path="${step_log_dir}/recheck_topk.log"
 
   echo "[$step] wall budget=${wall_mins}m (${soft}s), grace=${grace}s"
@@ -560,6 +613,7 @@ run_phase2_recheck_stage() {
       --unlabeled-dir "${PHASE2_UNLABELED_DIR}" \
       --labeled-dir   "${PHASE2_LABELED_DIR}" \
       --out "${GRID_DIR}/recheck_summary.json" \
+      --resume \
     2>&1 | tee "$log_path"
 
   local rc=${PIPESTATUS[0]}
@@ -573,6 +627,12 @@ run_phase2_recheck_stage() {
   else
     restore_env_var LOG_DIR "$prev_log_dir"
     return "$rc"
+  fi
+
+  if [[ ! -f "$sentinel" ]]; then
+    echo "[$step][fatal] sentinel missing after successful recheck execution: $sentinel" >&2
+    restore_env_var LOG_DIR "$prev_log_dir"
+    return 4
   fi
 
   local metadata="${dir}/stage-outputs/${step}.json"
@@ -603,6 +663,8 @@ os.replace(tmp, path)
 PY
 
   restore_env_var LOG_DIR "$prev_log_dir"
+  unset PHASE2_SEED_WALL_SECS || true
+  unset PHASE2_RECHECK_HEARTBEAT PHASE2_RECHECK_SENTINEL PHASE2_RECHECK_RESUME || true
   return 0
 }
 
@@ -1088,6 +1150,13 @@ run_stage() {
         if [[ -z "$rerun_reason" && -n "$data_hash" && -n "$STAGE_STATE_DATA_HASH" && "$data_hash" != "$STAGE_STATE_DATA_HASH" ]]; then
           rerun_reason="data hash changed"
         fi
+        if [[ -z "$rerun_reason" && "$stage" == "phase2_recheck" ]]; then
+          local sentinel_path
+          sentinel_path="$(stage_dir phase2_recheck)/recheck_done.ok"
+          if [[ ! -f "$sentinel_path" ]]; then
+            rerun_reason="missing sentinel"
+          fi
+        fi
         if [[ -z "$rerun_reason" ]]; then
           if needs_stage "$dir" "${dependencies[@]}"; then
             rerun_reason="inputs updated"
@@ -1145,6 +1214,7 @@ run_stage() {
       ;;
     phase2_recheck)
       printf '%s\n' "${GRID_DIR}/recheck_summary.json" >>"$outputs_tmp"
+      printf '%s\n' "${dir}/recheck_done.ok" >>"$outputs_tmp"
       ;;
     phase2_export)
       printf '%s\n' "${GRID_DIR}/best_grid_config.json" >>"$outputs_tmp"
