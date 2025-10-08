@@ -5,6 +5,9 @@ set -euo pipefail
 : "${MJEPACI_STAGE:=}"
 : "${PRETRAIN_STATE_FILE:=}"
 : "${EXP_ID:=}"
+: "${GRID_EXP_ID:=}"
+: "${PRETRAIN_EXP_ID:=}"
+: "${PRETRAIN_STATE_ID:=}"
 : "${RUN_ID:=$(date +%s)}"
 
 # --- centralised environment variables ---
@@ -270,7 +273,7 @@ PY
     case "$key" in
       id)
         if [[ -n "$value" ]]; then
-          [[ -n "${EXP_ID:-}" ]] || EXP_ID="$value"
+          PRETRAIN_STATE_ID="$value"
           [[ -n "${PRETRAIN_EXP_ID:-}" ]] || PRETRAIN_EXP_ID="$value"
         fi
         ;;
@@ -426,16 +429,26 @@ if [[ "${MJEPACI_STAGE}" != "pretrain" ]]; then
   __load_pretrain_state || true
 fi
 
-if [[ -z "${EXP_ID:-}" && -n "${PRETRAIN_EXP_ID:-}" ]]; then
-  EXP_ID="$PRETRAIN_EXP_ID"
-fi
-
-if [[ "${MJEPACI_STAGE}" == "pretrain" && -z "${EXP_ID:-}" ]]; then
+if [[ -z "${EXP_ID:-}" ]]; then
   EXP_ID="$RUN_ID"
 fi
 
-if [[ -z "${PRETRAIN_EXP_ID:-}" && -n "${EXP_ID:-}" ]]; then
-  PRETRAIN_EXP_ID="$EXP_ID"
+if [[ -z "${PRETRAIN_EXP_ID:-}" ]]; then
+  if [[ -n "${PRETRAIN_STATE_ID:-}" ]]; then
+    PRETRAIN_EXP_ID="$PRETRAIN_STATE_ID"
+  else
+    PRETRAIN_EXP_ID="$EXP_ID"
+  fi
+fi
+
+if [[ -z "${GRID_EXP_ID:-}" ]]; then
+  if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
+    GRID_EXP_ID="$PRETRAIN_EXP_ID"
+  elif [[ -n "${PRETRAIN_STATE_ID:-}" ]]; then
+    GRID_EXP_ID="$PRETRAIN_STATE_ID"
+  else
+    GRID_EXP_ID="$EXP_ID"
+  fi
 fi
 
 _needs_pretrain_state=0
@@ -476,9 +489,18 @@ ensure_dir_var() {
   add_candidate "$fallback" "fallback"
 
   local suffix="${var_name,,}"
+  local emergency_id="${EXP_ID:-}"
+  case "$var_name" in
+    GRID_DIR|FINETUNE_DIR|BENCH_DIR|TOX21_DIR|REPORTS_DIR)
+      emergency_id="${GRID_EXP_ID:-${emergency_id}}"
+      ;;
+    ARTIFACTS_DIR|PRETRAIN_ARTIFACTS_DIR|PRETRAIN_DIR)
+      emergency_id="${PRETRAIN_EXP_ID:-${emergency_id}}"
+      ;;
+  esac
   local emergency="${runner_tmp_base%/}/fallback/${suffix}"
-  if [[ -n "${EXP_ID:-}" ]]; then
-    emergency="${emergency}/${EXP_ID}"
+  if [[ -n "$emergency_id" ]]; then
+    emergency="${emergency}/${emergency_id}"
   fi
   add_candidate "$emergency" "emergency"
 
@@ -506,15 +528,12 @@ if [[ -z "${EXP_ID:-}" ]]; then
 fi
 
 EXPERIMENT_DIR="${EXPERIMENTS_ROOT%/}/${EXP_ID}"
-EXP_ROOT="$EXPERIMENT_DIR"
+PRETRAIN_EXPERIMENT_ROOT="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}"
+GRID_EXPERIMENT_ROOT="${EXPERIMENTS_ROOT%/}/${GRID_EXP_ID}"
+EXP_ROOT="$GRID_EXPERIMENT_ROOT"
 
-: "${ARTIFACTS_DIR:=${EXPERIMENT_DIR}/artifacts}"
+: "${ARTIFACTS_DIR:=${PRETRAIN_EXPERIMENT_ROOT}/artifacts}"
 
-if [[ -z "${PRETRAIN_EXP_ID:-}" ]]; then
-  PRETRAIN_EXP_ID="$EXP_ID"
-fi
-
-: "${PRETRAIN_EXPERIMENT_ROOT:=${EXPERIMENT_DIR}}"
 : "${PRETRAIN_ARTIFACTS_DIR:=${ARTIFACTS_DIR}}"
 
 if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
@@ -548,15 +567,16 @@ export CACHE_DIR
 export SWEEP_CACHE_DIR
 
 # Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
-: "${GRID_DIR:=${GRID_CACHE_DIR:-$EXP_ROOT/grid}}"
+GRID_DIR_DEFAULT="${GRID_EXPERIMENT_ROOT}/grid"
+: "${GRID_DIR:=${GRID_CACHE_DIR:-$GRID_DIR_DEFAULT}}"
 
-ensure_dir_var GRID_DIR "$EXP_ROOT/grid" "${EXP_ID:+experiments/${EXP_ID}/}grid"
+ensure_dir_var GRID_DIR "$GRID_DIR_DEFAULT" "${GRID_EXP_ID:+experiments/${GRID_EXP_ID}/}grid"
 
-ensure_dir_var ARTIFACTS_DIR "${EXPERIMENT_DIR}/artifacts" "experiments/${EXP_ID}/artifacts"
+ensure_dir_var ARTIFACTS_DIR "${PRETRAIN_EXPERIMENT_ROOT}/artifacts" "experiments/${PRETRAIN_EXP_ID}/artifacts"
 ensure_dir_var PRETRAIN_ARTIFACTS_DIR "${ARTIFACTS_DIR}" "experiments/${PRETRAIN_EXP_ID}/artifacts"
 
-if [[ -n "${EXP_ID:-}" ]]; then
-  PRETRAIN_STATE_FILE_CANONICAL="${EXPERIMENTS_ROOT}/${EXP_ID}/pretrain_state.json"
+if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
+  PRETRAIN_STATE_FILE_CANONICAL="${EXPERIMENTS_ROOT}/${PRETRAIN_EXP_ID}/pretrain_state.json"
 else
   PRETRAIN_STATE_FILE_CANONICAL=""
 fi
@@ -573,11 +593,11 @@ if [[ -z "${PRETRAIN_DIR:-}" ]]; then
   if [[ -n "${PRETRAIN_CACHE_DIR:-}" ]]; then
     PRETRAIN_DIR="$PRETRAIN_CACHE_DIR"
   else
-    PRETRAIN_DIR="$EXPERIMENT_DIR"
+    PRETRAIN_DIR="${PRETRAIN_EXPERIMENT_ROOT}/pretrain"
   fi
 fi
 
-ensure_dir_var PRETRAIN_DIR "$EXPERIMENT_DIR" "experiments/${EXP_ID}"
+ensure_dir_var PRETRAIN_DIR "${PRETRAIN_EXPERIMENT_ROOT}/pretrain" "experiments/${PRETRAIN_EXP_ID}/pretrain"
 
 if [[ -z "${PRETRAIN_MANIFEST:-}" ]]; then
   PRETRAIN_MANIFEST="${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json"
@@ -591,34 +611,53 @@ if [[ -z "${PRETRAIN_TOX21_ENV:-}" ]]; then
   PRETRAIN_TOX21_ENV="${PRETRAIN_EXPERIMENT_ROOT}/tox21_gate.env"
 fi
 
-: "${FINETUNE_DIR:=${FINETUNE_CACHE_DIR:-$EXP_ROOT/finetune}}"
-: "${BENCH_DIR:=${BENCH_CACHE_DIR:-$EXP_ROOT/bench}}"
+GRID_FINETUNE_DEFAULT="${GRID_EXPERIMENT_ROOT}/finetune"
+GRID_BENCH_DEFAULT="${GRID_EXPERIMENT_ROOT}/bench"
+GRID_TOX21_DEFAULT="${GRID_EXPERIMENT_ROOT}/tox21"
+GRID_REPORTS_DEFAULT="${GRID_EXPERIMENT_ROOT}/report"
+
+: "${FINETUNE_DIR:=${FINETUNE_CACHE_DIR:-$GRID_FINETUNE_DEFAULT}}"
+: "${BENCH_DIR:=${BENCH_CACHE_DIR:-$GRID_BENCH_DEFAULT}}"
 # Keep tox21 outputs under a dedicated subdirectory so stage stamps don't
 # collide with pretrain's cache stamp when both default to EXPERIMENT_DIR.
-: "${TOX21_DIR:=${TOX21_CACHE_DIR:-$EXP_ROOT/tox21}}"
-: "${REPORTS_DIR:=${REPORTS_CACHE_DIR:-$EXP_ROOT/report}}"
+: "${TOX21_DIR:=${TOX21_CACHE_DIR:-$GRID_TOX21_DEFAULT}}"
+: "${REPORTS_DIR:=${REPORTS_CACHE_DIR:-$GRID_REPORTS_DEFAULT}}"
 
-ensure_dir_var FINETUNE_DIR "$EXP_ROOT/finetune" "${EXP_ID:+experiments/${EXP_ID}/}finetune"
-ensure_dir_var BENCH_DIR "$EXP_ROOT/bench" "${EXP_ID:+experiments/${EXP_ID}/}bench"
-ensure_dir_var TOX21_DIR "$EXP_ROOT/tox21" "${EXP_ID:+experiments/${EXP_ID}/}tox21"
-ensure_dir_var REPORTS_DIR "$EXP_ROOT/report" "${EXP_ID:+experiments/${EXP_ID}/}report"
+ensure_dir_var FINETUNE_DIR "$GRID_FINETUNE_DEFAULT" "${GRID_EXP_ID:+experiments/${GRID_EXP_ID}/}finetune"
+ensure_dir_var BENCH_DIR "$GRID_BENCH_DEFAULT" "${GRID_EXP_ID:+experiments/${GRID_EXP_ID}/}bench"
+ensure_dir_var TOX21_DIR "$GRID_TOX21_DEFAULT" "${GRID_EXP_ID:+experiments/${GRID_EXP_ID}/}tox21"
+ensure_dir_var REPORTS_DIR "$GRID_REPORTS_DEFAULT" "${GRID_EXP_ID:+experiments/${GRID_EXP_ID}/}report"
 ensure_dir_var LOG_DIR "${APP_DIR}/logs" "logs"
 
 mkdir -p "$CACHE_DIR" "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" \
   "$TOX21_DIR" "$REPORTS_DIR" "$LOG_DIR" "$WANDB_DIR" "$ARTIFACTS_DIR" \
-  "$PRETRAIN_ARTIFACTS_DIR"
-export GRID_DIR PRETRAIN_DIR FINETUNE_DIR BENCH_DIR TOX21_DIR REPORTS_DIR LOG_DIR
+  "$PRETRAIN_ARTIFACTS_DIR" "$EXPERIMENT_DIR" "$PRETRAIN_EXPERIMENT_ROOT" \
+  "$GRID_EXPERIMENT_ROOT"
+export GRID_DIR PRETRAIN_DIR FINETUNE_DIR BENCH_DIR TOX21_DIR REPORTS_DIR LOG_DIR \
+  GRID_EXPERIMENT_ROOT PRETRAIN_EXPERIMENT_ROOT
 export EXPERIMENT_DIR ARTIFACTS_DIR EXP_ROOT EXPERIMENTS_ROOT
-export PRETRAIN_MANIFEST PRETRAIN_EXP_ID PRETRAIN_EXPERIMENT_ROOT PRETRAIN_ARTIFACTS_DIR \
+export PRETRAIN_MANIFEST PRETRAIN_EXP_ID PRETRAIN_ARTIFACTS_DIR \
   PRETRAIN_STATE_FILE PRETRAIN_STATE_FILE_CANONICAL PRETRAIN_STATE_FILE_LEGACY \
-  PRETRAIN_ENCODER_PATH PRETRAIN_TOX21_ENV EXP_ID
+  PRETRAIN_ENCODER_PATH PRETRAIN_TOX21_ENV EXP_ID GRID_EXP_ID
+
+if [[ -z "${MJEPACI_COMMIT_SHA:-}" ]]; then
+  if git -C "${APP_DIR}" rev-parse HEAD >/dev/null 2>&1; then
+    MJEPACI_COMMIT_SHA="$(git -C "${APP_DIR}" rev-parse HEAD 2>/dev/null)"
+  else
+    MJEPACI_COMMIT_SHA="unknown"
+  fi
+fi
+export MJEPACI_COMMIT_SHA
 
 ci_print_env_diag() {
   local stage_bin_value="${1:-${STAGE_BIN:-<unset>}}"
   echo "[ci] EXP_ID=${EXP_ID:-<unset>}" >&2
+  echo "[ci] PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}" >&2
+  echo "[ci] GRID_EXP_ID=${GRID_EXP_ID:-<unset>}" >&2
   echo "[ci] EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>}" >&2
   echo "[ci] EXP_ROOT=${EXP_ROOT:-<unset>}" >&2
   echo "[ci] EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>}" >&2
+  echo "[ci] GRID_DIR=${GRID_DIR:-<unset>}" >&2
   echo "[ci] PRETRAIN_DIR=${PRETRAIN_DIR:-<unset>}" >&2
   echo "[ci] ARTIFACTS_DIR=${ARTIFACTS_DIR:-<unset>}" >&2
   echo "[ci] PRETRAIN_ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>}" >&2

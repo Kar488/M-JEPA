@@ -91,12 +91,14 @@ if [[ -n "$exp_id" ]]; then
   {
     echo "EXP_ID=$exp_id"
     echo "PRETRAIN_EXP_ID=$exp_id"
+    echo "GRID_EXP_ID=$exp_id"
   } >>"$GITHUB_ENV"
 fi
 
 if [[ -n "$experiment_root" ]]; then
   {
     echo "PRETRAIN_EXPERIMENT_ROOT=$experiment_root"
+    echo "GRID_EXPERIMENT_ROOT=$experiment_root"
     echo "EXP_ROOT=$experiment_root"
   } >>"$GITHUB_ENV"
 fi
