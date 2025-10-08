@@ -18,6 +18,10 @@ from collections.abc import Iterable, Mapping
 from itertools import islice
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from utils.wandb_filters import silence_pydantic_field_warnings
+
+silence_pydantic_field_warnings()
+
 import numpy as np
 import wandb
 from urllib.parse import urlparse

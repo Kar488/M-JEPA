@@ -17,6 +17,9 @@ from collections.abc import Mapping
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from utils.logging import maybe_init_wandb
+from utils.wandb_filters import silence_pydantic_field_warnings
+
+silence_pydantic_field_warnings()
 
 import numpy as np
 import wandb
@@ -761,6 +764,9 @@ def main():
         params["labeled_dir"]      = {"value": "${env:PHASE2_LABELED_DIR}"}
         params["unlabeled_dir"]    = {"value": "${env:PHASE2_UNLABELED_DIR}"}
 
+        def _force_param_value(key: str, value: Any) -> None:
+            params[key] = {"value": _normalize_config_value(value)}
+
         # Normalise caching/performance knobs if the sweep logs were sparse.
         def _ensure_param(key: str, default=None):
             if key in params:
@@ -776,11 +782,16 @@ def main():
 
         env_cache_root = os.environ.get("SWEEP_CACHE_DIR")
         if env_cache_root:
-            params["cache-dir"] = {"value": "${env:SWEEP_CACHE_DIR}"}
+            _force_param_value("cache-dir", "${env:SWEEP_CACHE_DIR}")
         else:
-            _ensure_param("cache-dir", default=_config_lookup(best.config, "cache-dir") or _config_lookup(best.config, "cache_dir"))
+            cache_default = (
+                _config_lookup(best.config, "cache-dir")
+                or _config_lookup(best.config, "cache_dir")
+                or "cache/graphs"
+            )
+            _force_param_value("cache-dir", cache_default)
 
-        _ensure_param("cache-datasets", default=1)
+        _force_param_value("cache-datasets", 1)
         _ensure_param("num-workers", default=4)
         _ensure_param("prefetch-factor", default=2)
         _ensure_param("persistent-workers", default=0)

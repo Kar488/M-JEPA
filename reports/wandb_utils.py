@@ -19,6 +19,12 @@ from typing import (
 
 import pandas as pd
 
+try:
+    from utils.wandb_filters import silence_pydantic_field_warnings
+except Exception:  # pragma: no cover - optional helper when utils unavailable
+    def silence_pydantic_field_warnings() -> None:  # type: ignore
+        return
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +54,7 @@ def get_wandb_api():
             "WANDB_API_KEY is required to access the W&B API in non-interactive environments"
         )
     try:
+        silence_pydantic_field_warnings()
         import wandb  # type: ignore
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise RuntimeError("wandb is required for report generation") from exc

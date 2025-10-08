@@ -20,6 +20,12 @@ from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional, Set
 
 import yaml
 
+try:
+    from utils.wandb_filters import silence_pydantic_field_warnings
+except Exception:  # pragma: no cover - optional dependency in offline use
+    def silence_pydantic_field_warnings() -> None:  # type: ignore
+        return
+
 SCHEMA_FILENAME = "schema.json"
 
 
@@ -143,6 +149,7 @@ def _collect_remote_schema(
         return {}
 
     try:
+        silence_pydantic_field_warnings()
         import wandb  # type: ignore
     except ImportError:  # pragma: no cover - optional dependency
         return {}

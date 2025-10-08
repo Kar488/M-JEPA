@@ -13,6 +13,12 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 
+try:
+    from utils.wandb_filters import silence_pydantic_field_warnings
+except Exception:  # pragma: no cover - helper optional in minimal installs
+    def silence_pydantic_field_warnings() -> None:  # type: ignore
+        return
+
 from . import log_effective_gnn
 
 
@@ -537,6 +543,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
             # Log to W&B only if a run exists (avoid preinit errors)
             try:
+                silence_pydantic_field_warnings()
                 import wandb as _wandb
 
                 if (wb is not None) and (getattr(wb, "run", None) is not None):
