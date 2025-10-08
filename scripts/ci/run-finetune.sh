@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+trap 'echo "[ci] error at line $LINENO: $BASH_COMMAND" >&2' ERR
+
 export BESTCFG_NO_EPOCHS=1              # drop both epochs from best_config
 export MJEPACI_STAGE="finetune"
 
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
+
+ci_print_env_diag
 
 export WANDB_NAME="finetune"
 export WANDB_JOB_TYPE="finetune"
