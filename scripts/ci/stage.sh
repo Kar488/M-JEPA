@@ -249,18 +249,18 @@ stage_needs() {
   
   case "$s" in
     grid)   printf '%s\n' "${base[@]}" ;;
-    pretrain) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" ;;
+    pretrain) printf '%s\n' "${base[@]}" "${GRID_SOURCE_DIR}/best_grid_config.json" ;;
     finetune)
       local encoder_dep
       encoder_dep="$(resolve_encoder_checkpoint)"
-      printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" "$encoder_dep"
+      printf '%s\n' "${base[@]}" "${GRID_SOURCE_DIR}/best_grid_config.json" "$encoder_dep"
       ;;
-    bench|benchmark) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" "$FINETUNE_DIR/seed_0/ft_best.pt" ;;
-    tox21) printf '%s\n' "${base[@]}" "$GRID_DIR/best_grid_config.json" "$APP_DIR/scripts/ci/data/tox21/data.csv" ;;
+    bench|benchmark) printf '%s\n' "${base[@]}" "${GRID_SOURCE_DIR}/best_grid_config.json" "$FINETUNE_DIR/seed_0/ft_best.pt" ;;
+    tox21) printf '%s\n' "${base[@]}" "${GRID_SOURCE_DIR}/best_grid_config.json" "$APP_DIR/scripts/ci/data/tox21/data.csv" ;;
     phase2_sweep)
       printf '%s\n' \
         "${base[@]}" \
-        "$GRID_DIR/phase2_sweep_id.txt"
+        "${GRID_SOURCE_DIR}/phase2_sweep_id.txt"
       ;;
     phase2_recheck)
       local sweep_stamp
@@ -268,7 +268,7 @@ stage_needs() {
       printf '%s\n' \
         "${base[@]}" \
         "$APP_DIR/scripts/ci/recheck_topk_from_wandb.py" \
-        "$GRID_DIR/phase2_sweep_id.txt" \
+        "${GRID_SOURCE_DIR}/phase2_sweep_id.txt" \
         "${sweep_stamp}/.stamp"
       ;;
     phase2_export)
@@ -276,7 +276,7 @@ stage_needs() {
       recheck_stamp="$(stage_dir phase2_recheck)"
       printf '%s\n' \
         "${base[@]}" \
-        "$GRID_DIR/best_grid_config.json" \
+        "${GRID_SOURCE_DIR}/best_grid_config.json" \
         "$GRID_DIR/recheck_summary.json" \
         "${recheck_stamp}/.stamp"
       ;;
@@ -299,7 +299,7 @@ stage_needs() {
 # ---------- phase-2 helpers ----------
 phase2_step_diag() {
   local step="$1"
-  echo "[ci] STEP=${step} EXP_ID=${EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_DIR=${GRID_DIR:-<unset>} EXP_ROOT=${EXP_ROOT:-<unset>}" >&2
+  echo "[ci] STEP=${step} EXP_ID=${EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_DIR=${GRID_DIR:-<unset>} GRID_SOURCE_DIR=${GRID_SOURCE_DIR:-<unset>} EXP_ROOT=${EXP_ROOT:-<unset>}" >&2
 }
 
 restore_env_var() {
@@ -317,7 +317,7 @@ run_phase2_sweep_stage() {
 
   phase2_step_diag "$step"
 
-  local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
+  local sweep_id_file="${GRID_SOURCE_DIR}/phase2_sweep_id.txt"
   if [[ ! -f "$sweep_id_file" ]]; then
     echo "[$step][fatal] sweep id file not found: $sweep_id_file (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}). Set GRID_EXP_ID=<id> to reuse an existing sweep or rerun phase2_sweep." >&2
     return 2
@@ -528,7 +528,7 @@ run_phase2_recheck_stage() {
   : "${PHASE2_SEED_WALL_MINS:=}"
   : "${PHASE2_RECHECK_GRACE_SECS:=120}"
 
-  local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
+  local sweep_id_file="${GRID_SOURCE_DIR}/phase2_sweep_id.txt"
   if [[ ! -f "$sweep_id_file" ]]; then
     echo "[$step][fatal] sweep id file not found: $sweep_id_file (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}). Set GRID_EXP_ID=<id> to reuse an existing sweep or rerun phase2_sweep." >&2
     return 2
@@ -673,7 +673,7 @@ run_phase2_export_stage() {
 
   phase2_step_diag "$step"
 
-  local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
+  local sweep_id_file="${GRID_SOURCE_DIR}/phase2_sweep_id.txt"
   if [[ ! -f "$sweep_id_file" ]]; then
     echo "[$step][fatal] sweep id file not found: $sweep_id_file (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}). Set GRID_EXP_ID=<id> to reuse an existing sweep or rerun phase2_sweep." >&2
     return 3
@@ -684,7 +684,7 @@ run_phase2_export_stage() {
   mkdir -p "$step_log_dir"
   export LOG_DIR="$step_log_dir"
 
-  local best_json="${GRID_DIR}/best_grid_config.json"
+  local best_json="${GRID_SOURCE_DIR}/best_grid_config.json"
   local summary_json="${GRID_DIR}/recheck_summary.json"
 
   if [[ ! -f "$best_json" ]]; then
@@ -1041,6 +1041,26 @@ run_stage() {
   local stage="${s,,}"
   local dir
   dir="$(stage_dir "$stage")"
+  OUT_DIR="$dir"
+  export OUT_DIR
+  echo "[ci] STAGE=${stage} EXP_ID=${EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} FROZEN=${FROZEN:-0}" >&2
+  echo "     EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>} ARTIFACTS_DIR=${ARTIFACTS_DIR:-<unset>} GRID_DIR=${GRID_DIR:-<unset>} GRID_SOURCE_DIR=${GRID_SOURCE_DIR:-<unset>} OUT_DIR=${OUT_DIR:-<unset>}" >&2
+
+  if (( FROZEN )) && [[ "${FORCE_UNFREEZE_GRID}" != "1" ]]; then
+    case "$stage" in
+      pretrain|grid|grid_search|phase1|phase2_sweep)
+        echo "[ci] skip: frozen lineage (stage=${stage})" >&2
+        return 0
+        ;;
+    esac
+  fi
+
+  local ignore_drift=0
+  if (( FROZEN )) && [[ "${STRICT_FROZEN}" != "1" ]]; then
+    if [[ "${ALLOW_CODE_DRIFT_WHEN_FROZEN}" != "0" ]]; then
+      ignore_drift=1
+    fi
+  fi
   local stamp
   stamp="$(_stamp "$dir")"
   local state_path
@@ -1088,7 +1108,7 @@ run_stage() {
         )"
         ;;
       phase2_recheck)
-        local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
+        local sweep_id_file="${GRID_SOURCE_DIR}/phase2_sweep_id.txt"
         local sweep_id=""
         if [[ -f "$sweep_id_file" ]]; then
           sweep_id="$(<"$sweep_id_file")"
@@ -1104,12 +1124,12 @@ run_stage() {
         )"
         ;;
       phase2_export)
-        local best_json="${GRID_DIR}/best_grid_config.json"
+        local best_json="${GRID_SOURCE_DIR}/best_grid_config.json"
         local summary_json="${GRID_DIR}/recheck_summary.json"
         local best_sig="" summary_sig=""
         [[ -f "$best_json" ]] && best_sig="$(sha256sum "$best_json" 2>/dev/null | awk '{print $1}')"
         [[ -f "$summary_json" ]] && summary_sig="$(sha256sum "$summary_json" 2>/dev/null | awk '{print $1}')"
-        local sweep_id_file="${GRID_DIR}/phase2_sweep_id.txt"
+        local sweep_id_file="${GRID_SOURCE_DIR}/phase2_sweep_id.txt"
         local sweep_id=""
         if [[ -f "$sweep_id_file" ]]; then
           sweep_id="$(<"$sweep_id_file")"
@@ -1138,17 +1158,27 @@ run_stage() {
         rerun_reason="missing stage_state.json"
       else
         if [[ -n "$STAGE_STATE_COMMIT" && "$STAGE_STATE_COMMIT" != "${MJEPACI_COMMIT_SHA:-unknown}" ]]; then
-          if [[ "$allow_stale" == "1" ]]; then
+          if (( ignore_drift )); then
+            :
+          elif [[ "$allow_stale" == "1" ]]; then
             echo "[ci][stage=${stage}] commit mismatch (${STAGE_STATE_COMMIT} -> ${MJEPACI_COMMIT_SHA:-unknown}) but ALLOW_STALE_RUN=1; reusing cache" >&2
           else
             rerun_reason="commit changed (${STAGE_STATE_COMMIT} -> ${MJEPACI_COMMIT_SHA:-unknown})"
           fi
         fi
         if [[ -z "$rerun_reason" && -n "$config_hash" && -n "$STAGE_STATE_CONFIG_HASH" && "$config_hash" != "$STAGE_STATE_CONFIG_HASH" ]]; then
-          rerun_reason="config hash changed"
+          if (( ignore_drift )); then
+            :
+          else
+            rerun_reason="config hash changed"
+          fi
         fi
         if [[ -z "$rerun_reason" && -n "$data_hash" && -n "$STAGE_STATE_DATA_HASH" && "$data_hash" != "$STAGE_STATE_DATA_HASH" ]]; then
-          rerun_reason="data hash changed"
+          if (( ignore_drift )); then
+            :
+          else
+            rerun_reason="data hash changed"
+          fi
         fi
         if [[ -z "$rerun_reason" && "$stage" == "phase2_recheck" ]]; then
           local sentinel_path

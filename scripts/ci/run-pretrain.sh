@@ -111,6 +111,14 @@ export EXP_ID EXPERIMENTS_ROOT EXPERIMENT_DIR PRETRAIN_DIR ARTIFACTS_DIR PRETRAI
 export WANDB_NAME="pretrain"
 export WANDB_JOB_TYPE="pretrain"
 
+if (( FROZEN )); then
+  echo "[pretrain] encoder lineage ${PRETRAIN_EXP_ID:-<unset>} is frozen; skipping pretrain." >&2
+  if [[ ! -f "${PRETRAIN_DIR}/encoder.pt" ]]; then
+    echo "[pretrain][warn] expected encoder checkpoint missing: ${PRETRAIN_DIR}/encoder.pt" >&2
+  fi
+  exit 0
+fi
+
 mkdir -p "$PRETRAIN_ARTIFACTS_DIR"
 
 export STAGE_OUTPUTS_DIR="${PRETRAIN_DIR}/stage-outputs"
