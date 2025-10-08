@@ -543,6 +543,10 @@ if (( _needs_pretrain_state )); then
     exit 2
   fi
 
+  if [[ -z "${PRETRAIN_ARTIFACTS_DIR:-}" ]]; then
+    PRETRAIN_ARTIFACTS_DIR="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/artifacts"
+  fi
+
   expected_manifest="${PRETRAIN_ARTIFACTS_DIR%/}/encoder_manifest.json"
   if [[ ! -f "$expected_manifest" ]]; then
     mjepa_log_error "missing pretrain lineage for ${MJEPACI_STAGE:-unknown}. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain to refresh pretrain_state.json."
