@@ -92,6 +92,21 @@ def test_expected_name_group_mapping():
     assert rc._expected_run_name(3, 1001) == "recheck_cfg3_seed1001"
 
 
+def test_gpu_parallel_helpers(monkeypatch):
+    assert rc._split_gpu_ids(["0", "1", "2"], 2) == ["0,1", "2"]
+    assert rc._split_gpu_ids([], 2) == ["", ""]
+
+    monkeypatch.setenv("PHASE2_RECHECK_AGENT_COUNT", "3")
+    assert rc._resolve_agent_count(["0", "1"]) == 2
+    monkeypatch.delenv("PHASE2_RECHECK_AGENT_COUNT", raising=False)
+
+    monkeypatch.setenv("PHASE2_AGENT_COUNT", "4")
+    assert rc._resolve_agent_count(["0", "1", "2"]) == 3
+    monkeypatch.delenv("PHASE2_AGENT_COUNT", raising=False)
+
+    assert rc._resolve_agent_count([]) == 1
+
+
 def test_run_once_writes_log(tmp_path, monkeypatch):
     log_dir = tmp_path / "logs"
     started = {}
@@ -129,6 +144,7 @@ def test_run_once_writes_log(tmp_path, monkeypatch):
         group="grp",
         config_idx=2,
         exp_id="exp123",
+        device_mask="1",
     )
 
     log_file = log_dir / "recheck_jepa_seed7.log"
@@ -138,6 +154,7 @@ def test_run_once_writes_log(tmp_path, monkeypatch):
     assert started["args"][0] == "micromamba"
     assert started["env"]["WANDB_NAME"] == "recheck_cfg2_seed7"
     assert started["env"]["WANDB_RUN_GROUP"] == "recheck_cfg2"
+    assert started["env"]["CUDA_VISIBLE_DEVICES"] == "1"
 
 
 def test_run_once_retries_transient(tmp_path, monkeypatch, capsys):

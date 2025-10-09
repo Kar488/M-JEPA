@@ -2,7 +2,7 @@ import json
 import sys
 import types
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -1408,8 +1408,16 @@ def test_recheck_topk_summary_and_empty(monkeypatch, tmp_path):
             ]
 
     monkeypatch.setattr(rc, "wandb", types.SimpleNamespace(Api=lambda: FakeApi()))
-    monkeypatch.setattr(rc, "run_once", lambda *a, **k: 0)
-    monkeypatch.setattr(rc, "time", types.SimpleNamespace(sleep=lambda x: None))
+    device_masks: List[Optional[str]] = []
+
+    def fake_run_once(*_a, device_mask=None, **_k):
+        device_masks.append(device_mask)
+        return 0
+
+    monkeypatch.setattr(rc, "run_once", fake_run_once)
+    monkeypatch.setattr(rc, "time", types.SimpleNamespace(sleep=lambda *_a, **_k: None))
+    monkeypatch.setenv("PHASE2_RECHECK_AGENT_COUNT", "2")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
 
     out = tmp_path / "summary.json"
     monkeypatch.setattr(sys, "argv", [
@@ -1422,6 +1430,7 @@ def test_recheck_topk_summary_and_empty(monkeypatch, tmp_path):
     data = json.loads(out.read_text())
     assert data["results"][0]["n"] == 2
     assert pytest.approx(data["results"][0]["mean"], rel=1e-6) == 0.4
+    assert sorted(mask for mask in device_masks if mask is not None) == ["0", "1"]
 
     # empty sweep
     class EmptyApi:
@@ -1433,7 +1442,7 @@ def test_recheck_topk_summary_and_empty(monkeypatch, tmp_path):
 
     calls = {"run_once": 0}
 
-    def fake_run_once(*a, **k):
+    def fake_run_once(*a, device_mask=None, **k):
         calls["run_once"] += 1
         return 0
 

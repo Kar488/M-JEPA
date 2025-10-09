@@ -8,6 +8,7 @@ import json
 import math
 import os
 import pathlib
+import queue
 import re
 import subprocess
 import sys
@@ -30,6 +31,80 @@ from urllib.parse import urlparse
 # ---------------------------------------------------------------------------
 # General helpers
 # ---------------------------------------------------------------------------
+
+
+def _env_positive_int(name: str) -> Optional[int]:
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        print(f"[recheck][warn] invalid int for {name}={raw!r}; ignoring", flush=True)
+        return None
+    if value <= 0:
+        print(f"[recheck][warn] non-positive {name}={raw!r}; ignoring", flush=True)
+        return None
+    return value
+
+
+def _discover_visible_gpu_ids() -> List[str]:
+    visible = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
+    if visible and visible != "-1":
+        return [token for token in visible.split(",") if token]
+
+    try:
+        import torch  # type: ignore
+
+        count = int(torch.cuda.device_count())  # type: ignore[attr-defined]
+    except Exception:
+        count = 0
+
+    return [str(i) for i in range(count)]
+
+
+def _split_gpu_ids(ids: Sequence[str], agent_count: int) -> List[str]:
+    if agent_count <= 0:
+        return []
+    total = len(ids)
+    if total == 0:
+        return [""] * agent_count
+    base = total // agent_count
+    remainder = total % agent_count
+    result: List[str] = []
+    index = 0
+    for _ in range(agent_count):
+        take = base
+        if remainder > 0:
+            take += 1
+            remainder -= 1
+        if take <= 0:
+            result.append("")
+            continue
+        chunk = ids[index : index + take]
+        result.append(",".join(chunk))
+        index += take
+    return result
+
+
+def _resolve_agent_count(visible_gpu_ids: Sequence[str]) -> int:
+    gpu_ids = list(visible_gpu_ids)
+
+    explicit = _env_positive_int("PHASE2_RECHECK_AGENT_COUNT")
+    if explicit is None:
+        explicit = _env_positive_int("PHASE2_AGENT_COUNT")
+
+    if explicit is not None:
+        count = explicit
+    elif gpu_ids:
+        count = len(gpu_ids)
+    else:
+        count = 1
+
+    if gpu_ids:
+        count = min(count, len(gpu_ids))
+
+    return max(1, count)
 
 def _safe_getattr(obj: Any, name: str, default: Any = None) -> Any:
     """Like ``getattr`` but tolerates wrappers that raise ``KeyError``."""
@@ -388,6 +463,7 @@ def run_once(
     group: Optional[str],
     config_idx: int,
     exp_id: Optional[str],
+    device_mask: Optional[str] = None,
 ) -> int:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -405,6 +481,12 @@ def run_once(
     if group:
         env.setdefault("RECHECK_PARENT_GROUP", group)
     env.setdefault("WANDB_JOB_TYPE", "recheck")
+    if device_mask is not None:
+        mask = str(device_mask).strip()
+        if mask:
+            env["CUDA_VISIBLE_DEVICES"] = mask
+        else:
+            env.pop("CUDA_VISIBLE_DEVICES", None)
 
     args = [
         mm, "run", "-n", "mjepa", "env", "PYTHONUNBUFFERED=1",
@@ -626,6 +708,17 @@ def run_once(
         return rc
 
     return last_rc if last_rc is not None else 1
+
+
+def _print_log_tail(method: str, seed: int, log_dir: str) -> None:
+    log_file = os.path.join(log_dir, f"recheck_{method}_seed{seed}.log")
+    try:
+        with open(log_file, "r", encoding="utf-8") as handle:
+            tail = handle.readlines()[-20:]
+        for line in tail:
+            print(f"[recheck][seed {seed}][log] {line.rstrip()}", flush=True)
+    except Exception as exc:  # pragma: no cover - diagnostics
+        print(f"[recheck][seed {seed}] unable to read log {log_file}: {exc}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -947,6 +1040,30 @@ def main() -> None:
             flush=True,
         )
 
+        visible_gpu_ids = _discover_visible_gpu_ids()
+        agent_workers = _resolve_agent_count(visible_gpu_ids)
+        gpu_masks = _split_gpu_ids(visible_gpu_ids, agent_workers) if visible_gpu_ids else []
+        if not visible_gpu_ids and agent_workers > 1:
+            print(
+                f"[recheck][warn] requested {agent_workers} workers but no GPUs detected; running sequentially",
+                flush=True,
+            )
+            agent_workers = 1
+            gpu_masks = []
+
+        if agent_workers > 1:
+            if gpu_masks:
+                print(
+                    f"[recheck] enabling parallel recheck across {agent_workers} worker(s); "
+                    f"GPU splits={gpu_masks}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[recheck] enabling parallel recheck across {agent_workers} worker(s)",
+                    flush=True,
+                )
+
         for index, cfg, seeds, completed_seeds, pending_seeds in plan_entries:
             _print_config_banner(index, seeds, args.project, entity, offline_mode)
             if pending_seeds:
@@ -961,33 +1078,107 @@ def main() -> None:
                     flush=True,
                 )
 
+            if not pending_seeds:
+                continue
+
+            method = str(cfg.get("training_method", "jepa")).lower()
+            worker_masks: List[Optional[str]] = []
+            if gpu_masks:
+                worker_masks = [mask or None for mask in gpu_masks]
+            worker_count = len(worker_masks)
+            if worker_count == 0:
+                worker_count = 1
+
+            if len(pending_seeds) == 1 or worker_count == 1:
+                mask = worker_masks[0] if worker_masks else None
+                for seed in pending_seeds:
+                    rc = run_once(
+                        args.mm,
+                        args.program,
+                        args.subcmd,
+                        cfg,
+                        seed,
+                        args.unlabeled_dir,
+                        args.labeled_dir,
+                        args.log_dir,
+                        args.project,
+                        args.group,
+                        index,
+                        exp_id,
+                        device_mask=mask,
+                    )
+                    print(f"[recheck][seed {seed}] finished with exit code {rc}", flush=True)
+                    if rc != 0:
+                        _print_log_tail(method, seed, args.log_dir)
+                        raise RuntimeError(f"recheck run failed with exit code {rc} (seed {seed})")
+                    time.sleep(1.0)
+                continue
+
+            worker_count = min(worker_count, len(pending_seeds))
+            worker_masks = worker_masks[:worker_count]
+
+            job_queue: "queue.Queue[Optional[int]]" = queue.Queue()
             for seed in pending_seeds:
-                rc = run_once(
-                    args.mm,
-                    args.program,
-                    args.subcmd,
-                    cfg,
-                    seed,
-                    args.unlabeled_dir,
-                    args.labeled_dir,
-                    args.log_dir,
-                    args.project,
-                    args.group,
-                    index,
-                    exp_id,
-                )
-                print(f"[recheck][seed {seed}] finished with exit code {rc}", flush=True)
-                if rc != 0:
-                    log_file = os.path.join(args.log_dir, f"recheck_{cfg.get('training_method', 'jepa')}_seed{seed}.log")
+                job_queue.put(seed)
+            for _ in range(worker_count):
+                job_queue.put(None)
+
+            error_event = threading.Event()
+            error_lock = threading.Lock()
+            errors: List[BaseException] = []
+
+            def _worker(worker_idx: int, mask: Optional[str]) -> None:
+                while True:
+                    seed_item = job_queue.get()
+                    if seed_item is None:
+                        job_queue.task_done()
+                        break
                     try:
-                        with open(log_file, "r", encoding="utf-8") as handle:
-                            tail = handle.readlines()[-20:]
-                        for line in tail:
-                            print(f"[recheck][seed {seed}][log] {line.rstrip()}", flush=True)
-                    except Exception as exc:  # pragma: no cover - diagnostics
-                        print(f"[recheck][seed {seed}] unable to read log {log_file}: {exc}", flush=True)
-                    raise RuntimeError(f"recheck run failed with exit code {rc} (seed {seed})")
-                time.sleep(1.0)
+                        if error_event.is_set():
+                            continue
+                        rc = run_once(
+                            args.mm,
+                            args.program,
+                            args.subcmd,
+                            cfg,
+                            seed_item,
+                            args.unlabeled_dir,
+                            args.labeled_dir,
+                            args.log_dir,
+                            args.project,
+                            args.group,
+                            index,
+                            exp_id,
+                            device_mask=mask,
+                        )
+                        print(f"[recheck][seed {seed_item}] finished with exit code {rc}", flush=True)
+                        if rc != 0:
+                            _print_log_tail(method, seed_item, args.log_dir)
+                            raise RuntimeError(
+                                f"recheck run failed with exit code {rc} (seed {seed_item})"
+                            )
+                        time.sleep(1.0)
+                    except Exception as exc:  # pragma: no cover - worker diagnostics
+                        with error_lock:
+                            if not errors:
+                                errors.append(exc)
+                        error_event.set()
+                    finally:
+                        job_queue.task_done()
+
+            threads: List[threading.Thread] = []
+            for idx_worker, mask in enumerate(worker_masks):
+                thread = threading.Thread(target=_worker, args=(idx_worker, mask), daemon=True)
+                thread.start()
+                threads.append(thread)
+
+            job_queue.join()
+
+            for thread in threads:
+                thread.join()
+
+            if errors:
+                raise errors[0]
 
         attempts_env = os.getenv("RECHECK_COLLECT_ATTEMPTS")
         try:
