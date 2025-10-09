@@ -73,6 +73,46 @@ esac
     assert all("18296078427" not in p for p in all_paths)
 
 
+def test_phase1_allocates_new_grid_and_exp_id(tmp_path):
+    experiments_root = tmp_path / "experiments"
+    shim_path = tmp_path / "phase1_shim.sh"
+    shim_path.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+stage="$1"
+case "$stage" in
+  grid_search)
+    mkdir -p "$OUT_DIR/stage-outputs"
+    printf '%s' "${EXP_ID:-}" > "$OUT_DIR/stage-outputs/exp_id.txt"
+    printf '%s' "${GRID_EXP_ID:-}" > "$OUT_DIR/stage-outputs/grid_exp_id.txt"
+    ;;
+esac
+"""
+    )
+    shim_path.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "EXPERIMENTS_ROOT": str(experiments_root),
+            "RUN_ID": "424242",
+            "MJEPACI_STAGE_SHIM": str(shim_path),
+            "GRID_MODE": "custom",
+            "WANDB_API_KEY": "",
+            "PRETRAIN_EXP_ID": "13579",
+        }
+    )
+
+    _run(["bash", "scripts/ci/run-grid-or-phase1.sh"], env)
+
+    stage_dir = experiments_root / "424242" / "grid_search" / "stage-outputs"
+    exp_value = (stage_dir / "exp_id.txt").read_text(encoding="utf-8")
+    grid_value = (stage_dir / "grid_exp_id.txt").read_text(encoding="utf-8")
+
+    assert exp_value == "424242"
+    assert grid_value == "424242"
+
+
 def test_artifact_collection_script_contains_mkdir_and_warnings():
     script = (REPO_ROOT / "scripts" / "ci" / "collect-pretrain-artifacts.sh").read_text(encoding="utf-8")
     assert "mkdir -p '${PRETRAIN_EXPERIMENT_ROOT}/artifacts'" in script

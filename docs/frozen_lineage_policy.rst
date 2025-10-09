@@ -13,7 +13,9 @@ Definition
 A *frozen encoder lineage* is any pretraining experiment whose encoder artifacts
 are locked for reuse by downstream stages. Once the Tox21 grading stage succeeds
 and writes the freeze marker, all future runs must treat the lineage as
-read-only. New experiments reference the frozen encoder via ``PRETRAIN_EXP_ID``
+read-only. Before the freeze, Phase‑1 sweeps mint their own ``EXP_ID`` and keep
+``GRID_EXP_ID`` aligned to that value so sweep outputs land under a dedicated
+directory. New experiments reference the frozen encoder via ``PRETRAIN_EXP_ID``
 (and, when applicable, ``GRID_EXP_ID``) while emitting their own ``EXP_ID``
 folders for writable outputs.
 
@@ -40,8 +42,8 @@ Behaviour Matrix
      - Writable during pretrain/phase sweeps
      - Read-only; reused via ``PRETRAIN_EXP_ID``
    * - Grid directories
-     - Writable under ``$GRID_EXP_ID``
-     - Read-only snapshots, reused in future runs
+     - Phase‑1 writes under ``$EXP_ID/grid`` (``GRID_EXP_ID=$EXP_ID``)
+     - Read-only snapshots under the frozen lineage
    * - New runs
      - Extend existing ``EXP_ID`` tree
      - Always allocate a fresh ``EXP_ID``
@@ -88,8 +90,9 @@ Lifecycle
 
 #. ``pretrain-agent`` produces encoder checkpoints under a new ``EXP_ID`` and
    ``GRID_EXP_ID``.
-#. ``phase1-agent`` and ``phase2-agent`` populate ``grid/phase1`` and
-   ``grid/phase2_*`` for the lineage.
+#. ``phase1-agent`` runs a coarse sweep using its own ``EXP_ID`` while setting
+   ``GRID_EXP_ID=$EXP_ID``. ``phase2-agent`` stages ``grid/phase2_*`` outputs in
+   new experiment folders but reads the frozen ``GRID_EXP_ID`` when available.
 #. ``tox21-agent`` completes Tox21 grading (benchmark stage) and writes
    ``bench/encoder_frozen.ok``.
 #. Subsequent ``finetune-agent`` or ``report-agent`` runs set ``PRETRAIN_EXP_ID``
