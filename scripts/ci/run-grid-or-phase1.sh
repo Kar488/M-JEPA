@@ -299,4 +299,14 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 else
   echo "[grid] running custom grid-search"
   run_stage grid_search
+
+  # When running against a shim the stage may emit bookkeeping files, but in
+  # real custom runs we still want to persist the identifiers that were
+  # allocated for the invocation.  Record them explicitly so test doubles and
+  # downstream tooling can inspect which experiment slot was provisioned.
+  grid_stage_dir="$(stage_dir grid_search)"
+  grid_stage_outputs="${grid_stage_dir}/stage-outputs"
+  mkdir -p "${grid_stage_outputs}"
+  printf '%s' "${EXP_ID:-}" > "${grid_stage_outputs}/exp_id.txt"
+  printf '%s' "${GRID_EXP_ID:-}" > "${grid_stage_outputs}/grid_exp_id.txt"
 fi
