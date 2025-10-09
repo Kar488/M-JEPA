@@ -335,18 +335,27 @@ else
   if [[ -z "${grid_stage_dir}" ]]; then
     grid_stage_dir="$(stage_dir grid_search)"
   fi
+  exp_bookkeeping="${EXP_ID:-${RUN_ID:-}}"
+  canonical_stage_dir="${EXPERIMENTS_ROOT%/}/${exp_bookkeeping}/grid_search"
+
   if [[ -z "${grid_stage_dir}" || ! -d "${grid_stage_dir}" ]]; then
     # Ensure we still create the expected hierarchy under the experiments root
-    # so downstream tests can discover the allocated slot.
-    grid_stage_dir="${EXPERIMENTS_ROOT%/}/${EXP_ID:-${RUN_ID:-}}/grid_search"
+    # so downstream tests can discover the allocated slot.  Always create the
+    # canonical path in case the shim used a different OUT_DIR.
+    grid_stage_dir="${canonical_stage_dir}"
   fi
 
   grid_stage_outputs="${grid_stage_dir}/stage-outputs"
   mkdir -p "${grid_stage_outputs}"
 
-  exp_bookkeeping="${EXP_ID:-${RUN_ID:-}}"
   grid_exp_bookkeeping="${GRID_EXP_ID:-${exp_bookkeeping}}"
 
   printf '%s' "${exp_bookkeeping}" > "${grid_stage_outputs}/exp_id.txt"
   printf '%s' "${grid_exp_bookkeeping}" > "${grid_stage_outputs}/grid_exp_id.txt"
+
+  if [[ "${grid_stage_dir}" != "${canonical_stage_dir}" ]]; then
+    mkdir -p "${canonical_stage_dir}/stage-outputs"
+    cp "${grid_stage_outputs}/exp_id.txt" "${canonical_stage_dir}/stage-outputs/exp_id.txt"
+    cp "${grid_stage_outputs}/grid_exp_id.txt" "${canonical_stage_dir}/stage-outputs/grid_exp_id.txt"
+  fi
 fi
