@@ -1,6 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Ensure a deterministic experiment slot is allocated before the shared CI
+# helpers derive directory paths.  ``common.sh`` normally assigns ``EXP_ID``
+# from ``RUN_ID`` when Phase-1 acts as an initiator, but custom runs may call
+# this script with neither variable exported.  In that situation the shim sees
+# ``EXP_ID``/``GRID_EXP_ID`` as empty strings and ends up writing bookkeeping
+# files outside of the per-run directory.  Normalise the identifiers here so
+# all downstream helpers (including stage shims) observe the same values.
+if [[ -z "${RUN_ID:-}" ]]; then
+  RUN_ID="$(date +%s)"
+  export RUN_ID
+fi
+
+if [[ -z "${EXP_ID:-}" ]]; then
+  EXP_ID="$RUN_ID"
+  export EXP_ID
+fi
+
+if [[ -z "${GRID_EXP_ID:-}" ]]; then
+  GRID_EXP_ID="${EXP_ID}"
+  export GRID_EXP_ID
+fi
+
 export MJEPACI_STAGE="phase1"
 
 source "$(dirname "$0")/common.sh"
