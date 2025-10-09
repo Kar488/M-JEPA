@@ -16,8 +16,60 @@ import os
 import sys
 import time
 
+from urllib.parse import urlparse
+
 import numpy as np
+import requests
 import wandb
+
+
+def _ensure_wandb_env() -> None:
+    if not os.environ.get("WANDB_API_KEY"):
+        print("WANDB_API_KEY is not set; cannot authenticate with Weights & Biases.")
+        raise SystemExit(1)
+
+    base_url = os.environ.get("WANDB_BASE_URL")
+    if base_url:
+        parsed = urlparse(base_url)
+        if not parsed.scheme or not parsed.netloc:
+            print(
+                "WANDB_BASE_URL is set but invalid. Expected a full URL such as "
+                "https://api.wandb.ai; please correct or unset it."
+            )
+            raise SystemExit(1)
+
+
+def _init_wandb_api(*, max_attempts: int = 3, timeout: int = 60) -> wandb.Api:
+    _ensure_wandb_env()
+
+    os.environ.setdefault("WANDB_HTTP_TIMEOUT", str(timeout))
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return wandb.Api()
+        except (
+            requests.exceptions.ReadTimeout,
+            requests.exceptions.ConnectionError,
+            wandb.errors.CommError,
+            wandb.errors.AuthenticationError,
+        ) as err:
+            last_error = err
+            if attempt < max_attempts:
+                sleep_for = min(30.0, 2.0 * attempt)
+                print(
+                    f"[paired_effect] W&B client init failed ({type(err).__name__}); "
+                    f"retrying in {sleep_for:.1f}s..."
+                )
+                time.sleep(sleep_for)
+            else:
+                break
+
+    message = "Failed to initialize the W&B client after multiple attempts."
+    if last_error:
+        message += f" Last error: {last_error}"
+    print(message)
+    raise SystemExit(1)
 
 
 def _coerce_config(config: Any) -> Dict[str, Any]:
@@ -592,7 +644,9 @@ def main():
         help="Absolute tolerance for treating the primary metric difference as a tie.")
     args = ap.parse_args()
 
-    api = wandb.Api()
+    api_init_attempts = max(1, int(os.getenv("PE_API_INIT_ATTEMPTS", "3")))
+    api_timeout = int(os.getenv("PE_API_INIT_TIMEOUT", "60"))
+    api = _init_wandb_api(max_attempts=api_init_attempts, timeout=api_timeout)
     filters = {"group": args.group} if args.group else None
     entity = os.getenv("WANDB_ENTITY")
     project_path = f"{entity}/{args.project}" if entity else args.project
