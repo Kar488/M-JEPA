@@ -23,7 +23,7 @@ bash scripts/ci/run-tox21.sh
 # Output -> /data/mjepa/experiments/$RUN_ID/tox21/
 ```
 
-See `docs/frozen_lineage_policy.md` for override flags and lineage semantics.
+See `docs/frozen_lineage_policy.rst` for override flags and lineage semantics.
 
 ## Local development
 

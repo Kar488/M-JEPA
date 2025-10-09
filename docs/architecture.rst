@@ -40,5 +40,5 @@ CI, Vast & Resume Logic
 - Resume logic reads freeze markers and timestamps to skip completed stages while
   allowing ``FORCE_RERUN`` overrides when manual intervention is needed.
 
-Cross-reference ``docs/pipeline_overview.md`` for directory structures and
-``docs/frozen_lineage_policy.md`` for flag semantics.
+Cross-reference :doc:`pipeline_overview` for directory structures and
+:doc:`frozen_lineage_policy` for flag semantics.
