@@ -6,49 +6,23 @@ on:
     branches: [ master, main ]
   workflow_dispatch:
     inputs:
-      force_refresh:
-        description: "Ignore cached outputs"
+      task_flags:
+        description: >-
+          Comma separated flags controlling optional tasks.
+          Supported values: force_refresh, run_unit_tests, run_vast_jobs,
+          force_unfreeze_grid. Example: "run_unit_tests,run_vast_jobs".
+          Omit a flag to skip its task.
         required: false
-        default: "true"
-      run_unit_tests:
-        description: "Run unit tests"
+        default: "force_refresh,run_unit_tests,run_vast_jobs"
+      cache_overrides:
+        description: >-
+          JSON object mapping cache keys (sweep, grid, pretrain, finetune,
+          bench, tox21, reports) to custom directories. Example:
+          '{"grid": "/data/custom/grid", "sweep": "/tmp/sweeps"}'.
         required: false
-        default: "true"
-      run_vast_jobs:
-        description: "Run Vast deployment and training jobs"
-        required: false
-        default: "true"
-      force_unfreeze_grid:
-        description: "Rebuild frozen pretrain/grid lineages"
-        required: false
-        default: false
-        type: boolean
+        default: "{}"
       force_rerun:
         description: "Comma-separated stage names to force rerun"
-        required: false
-        default: ""
-      sweep_cache_dir:
-        description: "Override sweep dataset cache directory"
-        required: false
-        default: ""
-      grid_cache_dir:
-        description: "Override grid cache directory"
-        required: false
-        default: ""
-      pretrain_cache_dir:
-        description: "Override pretrain cache directory"
-        required: false
-        default: ""
-      finetune_cache_dir:
-        description: "Override finetune cache directory"
-        required: false
-        default: ""
-      bench_cache_dir:
-        description: "Override benchmark cache directory"
-        required: false
-        default: ""
-      tox21_cache_dir:
-        description: "Override tox21 cache directory"
         required: false
         default: ""
       hyperparam_mode:
@@ -68,7 +42,9 @@ env:
   APP_DIR: /srv/mjepa
   VENV_DIR: /srv/mjepa/.venv
   PIP_CACHE_DIR: /data/mjepa/.pip-cache
-  FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}
+  RUN_UNIT_TESTS: ${{ (github.event_name != 'workflow_dispatch' || contains(github.event.inputs.task_flags, 'run_unit_tests')) && 'true' || 'false' }}
+  RUN_VAST_JOBS: ${{ (github.event_name != 'workflow_dispatch' || contains(github.event.inputs.task_flags, 'run_vast_jobs')) && 'true' || 'false' }}
+  FORCE_REFRESH: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags, 'force_refresh') && 'true' || 'false' }}
   WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
   WANDB_ENTITY: karthik-iyer-la-trobe-university
   WANDB_PROJECT: m-jepa
@@ -82,9 +58,9 @@ env:
   WANDB_COUNT: 10
   HARD_WALL_MINS: 120
   KILL_AFTER_SECS: 120
-  GRID_MODE: wandb
+  GRID_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb' }}
   CACHE_DIR: /data/mjepa/cache/graphs_50k
-  SWEEP_CACHE_DIR: ${{ github.event.inputs.sweep_cache_dir || '/data/mjepa/cache/graphs_50k' }}
+  SWEEP_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).sweep || '/data/mjepa/cache/graphs_50k' }}
   EXPERIMENTS_ROOT: /data/mjepa/experiments
   RUN_ID: ${{ github.run_id }}
   EXP_ID: ${{ github.run_id }}
@@ -98,18 +74,18 @@ env:
   # FINETUNE_CACHE_DIR: ${{ github.event.inputs.finetune_cache_dir || '' }}
   # BENCH_CACHE_DIR: ${{ github.event.inputs.bench_cache_dir || '' }}
   # TOX21_CACHE_DIR: ${{ github.event.inputs.tox21_cache_dir || '' }}
-  GRID_CACHE_DIR: /data/mjepa/cache/grid
-  PRETRAIN_CACHE_DIR: /data/mjepa/cache/pretrain
-  FINETUNE_CACHE_DIR: /data/mjepa/cache/finetune
-  BENCH_CACHE_DIR: /data/mjepa/cache/bench
-  TOX21_CACHE_DIR: /data/mjepa/cache/tox21
-  REPORTS_CACHE_DIR: /data/mjepa/cache/reports
-  FORCE_UNFREEZE_GRID: ${{ github.event.inputs.force_unfreeze_grid == 'true' && '1' || '0' }}
-  FORCE_RERUN: ${{ github.event.inputs.force_rerun || '' }}
+  GRID_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).grid || '/data/mjepa/cache/grid' }}
+  PRETRAIN_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).pretrain || '/data/mjepa/cache/pretrain' }}
+  FINETUNE_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).finetune || '/data/mjepa/cache/finetune' }}
+  BENCH_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).bench || '/data/mjepa/cache/bench' }}
+  TOX21_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).tox21 || '/data/mjepa/cache/tox21' }}
+  REPORTS_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).reports || '/data/mjepa/cache/reports' }}
+  FORCE_UNFREEZE_GRID: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags, 'force_unfreeze_grid') && '1' || '0' }}
+  FORCE_RERUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rerun || '' }}
 
 jobs:
   tests_quick:
-    if: ${{ github.event.inputs.run_unit_tests != 'false' }}
+    if: ${{ env.RUN_UNIT_TESTS == 'true' }}
     name: Quick tests (no gpu, no slow)
     runs-on: ubuntu-latest
     env:
@@ -150,7 +126,7 @@ jobs:
         run: micromamba run -n mjepa python -m pytest -m "not gpu and not slow" -q
 
   vast_smoke:
-    if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
+    if: ${{ env.RUN_VAST_JOBS == 'true' }}
     name: Smoke on Vast (GPU present?)
     runs-on: ubuntu-latest
     steps:
@@ -174,7 +150,7 @@ jobs:
             PY
 
   vast_deploy_and_prepare_environment:
-    if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
+    if: ${{ env.RUN_VAST_JOBS == 'true' }}
     name: Deploy + Prepare environment
     runs-on: ubuntu-latest
     needs: vast_smoke
@@ -269,7 +245,7 @@ jobs:
             bash scripts/ci/prepare_env.sh
 
   vast_learn_hyperparameters:
-    if: ${{ github.event.inputs.run_vast_jobs != 'false' }}
+    if: ${{ env.RUN_VAST_JOBS == 'true' }}
     name: Learn hyperparameters (Custom or WandB)
     runs-on: ubuntu-latest
     #timeout-minutes: 740
@@ -310,7 +286,7 @@ jobs:
           PHASE1_SEEDS: 1,2,3,4,5
 # Option X: keep a single Vast job running sweep → recheck → export sequentially.
   vast_sweep_phase2:
-    if: ${{ (inputs.hyperparam_mode || 'wandb') == 'wandb' }}
+    if: ${{ env.RUN_VAST_JOBS == 'true' && env.GRID_MODE == 'wandb' }}
     name: Phase 2 (sweep → recheck → export)
     runs-on: ubuntu-latest
     #timeout-minutes: 1860
@@ -413,13 +389,13 @@ jobs:
     needs: [vast_learn_hyperparameters, vast_sweep_phase2]
     if: >
       ${{
-          (inputs.hyperparam_mode == 'wandb' &&
-          inputs.run_vast_jobs != 'false' &&
-          needs.vast_sweep_phase2.result == 'success')
-        ||
-          (inputs.hyperparam_mode == 'custom' &&
-          inputs.run_vast_jobs != 'false' &&
-          needs.vast_learn_hyperparameters.result == 'success')
+          env.RUN_VAST_JOBS == 'true' && (
+            (env.GRID_MODE == 'wandb' &&
+             needs.vast_sweep_phase2.result == 'success')
+          ||
+            (env.GRID_MODE == 'custom' &&
+             needs.vast_learn_hyperparameters.result == 'success')
+          )
       }}
     outputs:
       exp_id: ${{ steps.pretrain_state.outputs.exp_id }}
@@ -489,7 +465,7 @@ jobs:
     needs: vast_pretrain
     if:
       ${{
-          inputs.run_vast_jobs != 'false' &&
+          env.RUN_VAST_JOBS == 'true' &&
           needs.vast_pretrain.result == 'success' }}
     outputs:
       tox21_gate: ${{ steps.tox21_gate.outputs.value }}
@@ -568,7 +544,7 @@ jobs:
     needs: [vast_pretrain, vast_tox21_baseline]
     if:
       ${{
-          inputs.run_vast_jobs != 'false' &&
+          env.RUN_VAST_JOBS == 'true' &&
           needs.vast_pretrain.result == 'success' &&
           needs.vast_tox21_baseline.result == 'success' &&
           needs.vast_tox21_baseline.outputs.tox21_gate == 'false' }}
@@ -613,7 +589,7 @@ jobs:
     if:
       ${{
           always() &&
-          inputs.run_vast_jobs != 'false' }}
+          env.RUN_VAST_JOBS == 'true' }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -658,7 +634,7 @@ jobs:
     needs: [vast_pretrain, vast_finetune]
     if:
       ${{
-          inputs.run_vast_jobs != 'false' &&
+          env.RUN_VAST_JOBS == 'true' &&
           needs.vast_finetune.result == 'success' }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -703,7 +679,7 @@ jobs:
     if:
       ${{
           always() &&
-          inputs.run_vast_jobs != 'false' }}
+          env.RUN_VAST_JOBS == 'true' }}
     steps:
       - name: Publish Vast report
         if: ${{ needs.vast_benchmark.result == 'success' && needs.vast_tox21.result == 'success' }}
