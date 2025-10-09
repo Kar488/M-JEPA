@@ -8,7 +8,7 @@ M‑JEPA Agents Handbook
 
 Welcome! This guide gives automation agents and contributors a concise but
 complete map of the repository. Use it alongside ``docs/kid_friendly_overview.rst``
-and ``docs/frozen_lineage_policy.md`` when you need a narrative tour; the sections
+and ``docs/frozen_lineage_policy.rst`` when you need a narrative tour; the sections
 below highlight the latest logic, how components interact, and where to plug in
 when extending the pipelines.
 
@@ -110,13 +110,13 @@ delegates to ``run-grid-or-phase1.sh`` and ``run-grid-phase2.sh`` sweeps. Vast
 workers pick up sweep agents, emit structured logs under ``logs/phase*`` and
 stream metrics to Weights & Biases. ``scripts/ci/run-tox21.sh`` grades frozen
 encoders and stamps ``bench/encoder_frozen.ok`` when the lineage is immutable.
-See ``docs/pipeline_overview.md`` for the complete flow.
+See ``docs/pipeline_overview.rst`` for the complete flow.
 
 Stage Agents & Responsibilities
 -------------------------------
 
 Each automation agent follows a strict lineage policy. All stage names align
-with ``docs/frozen_lineage_policy.md`` and ``docs/pipeline_overview.md``.
+with ``docs/frozen_lineage_policy.rst`` and ``docs/pipeline_overview.rst``.
 
 | Agent | Role | Reads From | Writes To | Notes |
 | --- | --- | --- | --- | --- |
@@ -136,7 +136,7 @@ declare ``PRETRAIN_EXP_ID`` and operate in read-only mode against the frozen
 artifacts. Only initiator stages (``pretrain-agent`` and new grid sweeps) produce
 new ``EXP_ID`` roots unless explicit overrides are set. Downstream stages write to
 fresh ``EXP_ID`` directories, preserving prior results. For override semantics see
-``docs/frozen_lineage_policy.md``.
+``docs/frozen_lineage_policy.rst``.
 
 Lifecycle Example
 -----------------
@@ -155,7 +155,7 @@ Override Flags
 --------------
 
 Automation honours the explicit lineage overrides described in
-``docs/frozen_lineage_policy.md``. Agents may set:
+``docs/frozen_lineage_policy.rst``. Agents may set:
 
 - ``FORCE_UNFREEZE_GRID=1`` to rebuild a lineage and re-materialise sweeps.
 - ``ALLOW_CODE_DRIFT_WHEN_FROZEN=1`` to bypass commit-hash checks on dependents.
