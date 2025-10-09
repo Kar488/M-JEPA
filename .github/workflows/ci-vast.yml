@@ -104,7 +104,7 @@ env:
   BENCH_CACHE_DIR: /data/mjepa/cache/bench
   TOX21_CACHE_DIR: /data/mjepa/cache/tox21
   REPORTS_CACHE_DIR: /data/mjepa/cache/reports
-  FORCE_UNFREEZE_GRID: ${{ github.event.inputs.force_unfreeze_grid && '1' || '0' }}
+  FORCE_UNFREEZE_GRID: ${{ github.event.inputs.force_unfreeze_grid == 'true' && '1' || '0' }}
   FORCE_RERUN: ${{ github.event.inputs.force_rerun || '' }}
 
 jobs:
