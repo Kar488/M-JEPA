@@ -42,9 +42,17 @@ env:
   APP_DIR: /srv/mjepa
   VENV_DIR: /srv/mjepa/.venv
   PIP_CACHE_DIR: /data/mjepa/.pip-cache
-  RUN_UNIT_TESTS: ${{ (github.event_name != 'workflow_dispatch' || contains(github.event.inputs.task_flags, 'run_unit_tests')) && 'true' || 'false' }}
-  RUN_VAST_JOBS: ${{ (github.event_name != 'workflow_dispatch' || contains(github.event.inputs.task_flags, 'run_vast_jobs')) && 'true' || 'false' }}
-  FORCE_REFRESH: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags, 'force_refresh') && 'true' || 'false' }}
+  RUN_UNIT_TESTS: ${{ if(
+    github.event_name != 'workflow_dispatch' || contains(github.event.inputs.task_flags || '', 'run_unit_tests'),
+    'true',
+    'false'
+  ) }}
+  RUN_VAST_JOBS: ${{ if(
+    github.event_name != 'workflow_dispatch' || contains(github.event.inputs.task_flags || '', 'run_vast_jobs'),
+    'true',
+    'false'
+  ) }}
+  FORCE_REFRESH: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags || '', 'force_refresh') && 'true' || 'false' }}
   WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
   WANDB_ENTITY: karthik-iyer-la-trobe-university
   WANDB_PROJECT: m-jepa
@@ -80,7 +88,7 @@ env:
   BENCH_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).bench || '/data/mjepa/cache/bench' }}
   TOX21_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).tox21 || '/data/mjepa/cache/tox21' }}
   REPORTS_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).reports || '/data/mjepa/cache/reports' }}
-  FORCE_UNFREEZE_GRID: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags, 'force_unfreeze_grid') && '1' || '0' }}
+  FORCE_UNFREEZE_GRID: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags || '', 'force_unfreeze_grid') && '1' || '0' }}
   FORCE_RERUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rerun || '' }}
 
 jobs:
