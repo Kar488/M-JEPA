@@ -94,7 +94,8 @@ env:
 
 jobs:
   tests_quick:
-    if: ${{ vars.RUN_UNIT_TESTS == 'true' }}
+    if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_unit_tests') }}
+
     name: Quick tests (no gpu, no slow)
     runs-on: ubuntu-latest
     env:
@@ -135,7 +136,7 @@ jobs:
         run: micromamba run -n mjepa python -m pytest -m "not gpu and not slow" -q
 
   vast_smoke:
-    if: ${{ vars.RUN_VAST_JOBS == 'true' }}
+    if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
     name: Smoke on Vast (GPU present?)
     runs-on: ubuntu-latest
     steps:
@@ -159,7 +160,7 @@ jobs:
             PY
 
   vast_deploy_and_prepare_environment:
-    if: ${{ vars.RUN_VAST_JOBS == 'true' }}
+    if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
     name: Deploy + Prepare environment
     runs-on: ubuntu-latest
     needs: vast_smoke
@@ -254,7 +255,7 @@ jobs:
             bash scripts/ci/prepare_env.sh
 
   vast_learn_hyperparameters:
-    if: ${{ vars.RUN_VAST_JOBS == 'true' }}
+    if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
     name: Learn hyperparameters (Custom or WandB)
     runs-on: ubuntu-latest
     #timeout-minutes: 740
@@ -295,7 +296,7 @@ jobs:
           PHASE1_SEEDS: 1,2,3,4,5
 # Option X: keep a single Vast job running sweep → recheck → export sequentially.
   vast_sweep_phase2:
-    if: ${{ vars.RUN_VAST_JOBS == 'true' && vars.GRID_MODE_VAR == 'wandb' }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb') }}
     name: Phase 2 (sweep → recheck → export)
     runs-on: ubuntu-latest
     #timeout-minutes: 1860
@@ -398,11 +399,11 @@ jobs:
     needs: [vast_learn_hyperparameters, vast_sweep_phase2]
     if: >
       ${{
-          vars.RUN_VAST_JOBS == 'true' && (
-            (vars.GRID_MODE_VAR == 'wandb' &&
+          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && (
+            ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb' &&
              needs.vast_sweep_phase2.result == 'success')
           ||
-            (vars.GRID_MODE_VAR == 'custom' &&
+            ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'custom' &&
              needs.vast_learn_hyperparameters.result == 'success')
           )
       }}
@@ -474,7 +475,7 @@ jobs:
     needs: vast_pretrain
     if:
       ${{
-          vars.RUN_VAST_JOBS == 'true' &&
+          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) &&
           needs.vast_pretrain.result == 'success' }}
     outputs:
       tox21_gate: ${{ steps.tox21_gate.outputs.value }}
@@ -553,7 +554,7 @@ jobs:
     needs: [vast_pretrain, vast_tox21_baseline]
     if:
       ${{
-          vars.RUN_VAST_JOBS == 'true' &&
+          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) &&
           needs.vast_pretrain.result == 'success' &&
           needs.vast_tox21_baseline.result == 'success' &&
           needs.vast_tox21_baseline.outputs.tox21_gate == 'false' }}
@@ -598,7 +599,7 @@ jobs:
     if:
       ${{
           always() &&
-          vars.RUN_VAST_JOBS == 'true' }}
+          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -643,7 +644,7 @@ jobs:
     needs: [vast_pretrain, vast_finetune]
     if:
       ${{
-          vars.RUN_VAST_JOBS == 'true' &&
+          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) &&
           needs.vast_finetune.result == 'success' }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -688,7 +689,7 @@ jobs:
     if:
       ${{
           always() &&
-          vars.RUN_VAST_JOBS == 'true' }}
+          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
     steps:
       - name: Publish Vast report
         if: ${{ needs.vast_benchmark.result == 'success' && needs.vast_tox21.result == 'success' }}
