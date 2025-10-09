@@ -151,9 +151,14 @@ stage_state_write() {
   local inputs_file="${5:-}" deps_file="${6:-}" outputs_file="${7:-}"
   local state_path
   state_path="$(stage_state_file "$dir")"
-  local py
-  py=$(python_bin 2>/dev/null) || py=python
-  "$py" - "$state_path" "$stage" "${MJEPACI_COMMIT_SHA:-unknown}" \
+  local -a py_cmd=()
+  if py=$(python_bin 2>/dev/null); then
+    py_cmd=("$py")
+  else
+    ensure_micromamba
+    py_cmd=("$MMBIN" run -n mjepa python)
+  fi
+  "${py_cmd[@]}" - "$state_path" "$stage" "${MJEPACI_COMMIT_SHA:-unknown}" \
     "$config_hash" "$data_hash" "${inputs_file:-}" "${deps_file:-}" \
     "${outputs_file:-}" "${EXP_ID:-}" "${GRID_EXP_ID:-}" "${PRETRAIN_EXP_ID:-}" <<'PY'
 import json
@@ -213,6 +218,17 @@ with open(tmp_path, "w", encoding="utf-8") as handle:
     handle.write("\n")
 os.replace(tmp_path, state_path)
 PY
+}
+
+python_inline() {
+  local -a cmd=()
+  if py=$(python_bin 2>/dev/null); then
+    cmd=("$py")
+  else
+    ensure_micromamba
+    cmd=("$MMBIN" run -n mjepa python)
+  fi
+  "${cmd[@]}" - "$@"
 }
 
 # requires: common.sh (ensure_micromamba, build_argv_from_yaml, expand_array_vars, best_config_args)
@@ -300,6 +316,23 @@ stage_needs() {
 phase2_step_diag() {
   local step="$1"
   echo "[ci] STEP=${step} EXP_ID=${EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_DIR=${GRID_DIR:-<unset>} GRID_SOURCE_DIR=${GRID_SOURCE_DIR:-<unset>} EXP_ROOT=${EXP_ROOT:-<unset>}" >&2
+}
+
+phase2_promote_local_grid() {
+  local step_label="${1:-phase2_recheck}"
+  local best_path="${GRID_DIR:-}/best_grid_config.json"
+  [[ -n "${GRID_DIR:-}" && -f "$best_path" ]] || return 0
+
+  local normalized_source="${GRID_SOURCE_DIR:-}"
+  if [[ "${normalized_source%/}" != "${GRID_DIR%/}" ]]; then
+    GRID_SOURCE_DIR="$GRID_DIR"
+    export GRID_SOURCE_DIR
+    if [[ -n "${EXP_ID:-}" ]]; then
+      GRID_EXP_ID="${EXP_ID}"
+      export GRID_EXP_ID
+    fi
+    echo "[${step_label}] promoting GRID_SOURCE_DIR=${GRID_SOURCE_DIR} GRID_EXP_ID=${GRID_EXP_ID:-<unset>}" >&2
+  fi
 }
 
 restore_env_var() {
@@ -461,7 +494,7 @@ run_phase2_sweep_stage() {
   fi
 
   local metadata="${dir}/stage-outputs/${step}.json"
-  python - <<'PY' "$metadata" "$sweep_id" "$phase2_total_count" "$agent_workers"
+  python_inline "$metadata" "$sweep_id" "$phase2_total_count" "$agent_workers" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
@@ -484,7 +517,7 @@ os.replace(tmp, path)
 PY
 
   local grid_state_path="${GRID_DIR}/grid_state.json"
-  python - <<'PY' "$grid_state_path" "$sweep_id" "${GRID_EXP_ID:-}" "${MJEPACI_COMMIT_SHA:-unknown}"
+  python_inline "$grid_state_path" "$sweep_id" "${GRID_EXP_ID:-}" "${MJEPACI_COMMIT_SHA:-unknown}" <<'PY'
 import json
 import os
 import sys
@@ -551,6 +584,7 @@ run_phase2_recheck_stage() {
 
   if [[ -f "$sentinel" ]]; then
     echo "[$step] sentinel present; skipping" >&2
+    phase2_promote_local_grid "$step"
     restore_env_var LOG_DIR "$prev_log_dir"
     return 0
   fi
@@ -652,7 +686,7 @@ run_phase2_recheck_stage() {
   fi
 
   local metadata="${dir}/stage-outputs/${step}.json"
-  python - <<'PY' "$metadata" "$sweep_id" "${GRID_DIR}/recheck_summary.json" "${GRID_DIR}/best_grid_config.json" "${PHASE2_METRIC}" "${PHASE2_DIRECTION}" "${TOPK_RECHECK}" "${EXTRA_SEEDS}"
+  python_inline "$metadata" "$sweep_id" "${GRID_DIR}/recheck_summary.json" "${GRID_DIR}/best_grid_config.json" "${PHASE2_METRIC}" "${PHASE2_DIRECTION}" "${TOPK_RECHECK}" "${EXTRA_SEEDS}" <<'PY'
 import json
 import os
 import sys
@@ -681,6 +715,7 @@ PY
   restore_env_var LOG_DIR "$prev_log_dir"
   unset PHASE2_SEED_WALL_SECS || true
   unset PHASE2_RECHECK_HEARTBEAT PHASE2_RECHECK_SENTINEL PHASE2_RECHECK_RESUME || true
+  phase2_promote_local_grid "$step"
   return 0
 }
 
@@ -688,6 +723,8 @@ run_phase2_export_stage() {
   local dir="$1" step="$2"
 
   phase2_step_diag "$step"
+
+  phase2_promote_local_grid "$step"
 
   local sweep_id_file="${GRID_SOURCE_DIR}/phase2_sweep_id.txt"
   if [[ ! -f "$sweep_id_file" ]]; then
@@ -701,6 +738,10 @@ run_phase2_export_stage() {
   export LOG_DIR="$step_log_dir"
 
   local best_json="${GRID_SOURCE_DIR}/best_grid_config.json"
+  if [[ ! -f "$best_json" && -f "${GRID_DIR}/best_grid_config.json" ]]; then
+    best_json="${GRID_DIR}/best_grid_config.json"
+    phase2_promote_local_grid "$step"
+  fi
   local summary_json="${GRID_DIR}/recheck_summary.json"
 
   if [[ ! -f "$best_json" ]]; then
@@ -709,7 +750,7 @@ run_phase2_export_stage() {
     return 3
   fi
 
-  python - <<'PY' "$best_json"
+  python_inline "$best_json" <<'PY'
 import json
 import sys
 
@@ -739,7 +780,7 @@ PY
   done < <(cd "$GRID_DIR" && find . -maxdepth 1 -type f \( -name 'phase2_winner*' -o -name 'winner_*' -o -name 'phase2_cli*' \) -printf '%P\n' 2>/dev/null || true)
 
   local metadata="${dir}/stage-outputs/${step}.json"
-  python - <<'PY' "$metadata" "$best_json" "$summary_json" "$helper_dir"
+  python_inline "$metadata" "$best_json" "$summary_json" "$helper_dir" <<'PY'
 import json
 import os
 import sys
