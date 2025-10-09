@@ -320,6 +320,38 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
 else
   echo "[grid] running custom grid-search"
+
+  # In custom mode we always provision a fresh experiment/grid slot that is
+  # anchored to the current RUN_ID.  Callers may still export PRETRAIN_EXP_ID so
+  # dependent stages can reuse the frozen encoder lineage, but Phase-1 should
+  # never inherit the previous grid identifiers in this scenario.  Normalise all
+  # identifiers to the fresh run slot before invoking any helpers so directory
+  # resolution stays consistent across both the stage shim and the default Vast
+  # execution path.
+  fresh_id="${RUN_ID:-}"
+  if [[ -z "$fresh_id" ]]; then
+    fresh_id="$(date +%s)"
+    RUN_ID="$fresh_id"
+    export RUN_ID
+  fi
+
+  if [[ "${EXP_ID:-}" != "$fresh_id" ]]; then
+    EXP_ID="$fresh_id"
+    export EXP_ID
+  fi
+  if [[ "${GRID_EXP_ID:-}" != "$fresh_id" ]]; then
+    GRID_EXP_ID="$fresh_id"
+    export GRID_EXP_ID
+  fi
+
+  if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then
+    # When a shim is available we want to force the execution through it rather
+    # than attempting to launch remote agents.  ``run_stage`` already promotes
+    # the shim, but recording an explicit log line here makes the behaviour
+    # obvious when debugging CI output.
+    echo "[grid] invoking stage shim for grid_search (OUT_DIR will be canonical)"
+  fi
+
   run_stage grid_search
 
   # When running against a shim the stage may emit bookkeeping files, but in
