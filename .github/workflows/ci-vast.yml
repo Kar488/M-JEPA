@@ -322,10 +322,25 @@ jobs:
           script: |
             # inject ssh options directly into the shell session
             bash -lc 'set -euxo pipefail
-              ssh -o StrictHostKeyChecking=no \
+              whoami
+              pwd
+              echo "$HOME"
+              ssh -V || true
+              ps -ef | grep -E "[s]shd|sshd:" || true
+              ss -tlnp | grep -E ":22|sshd" || true
+              ls -la ~/.ssh || true
+              for f in ~/.ssh/*.pub; do
+                if [ -f "$f" ]; then
+                  echo "PUBKEY:$f:$(cat "$f" | wc -c)"
+                fi
+              done
+              true
+              probe_cmd="ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=20 -o TCPKeepAlive=yes localhost true"
+              echo "probe_cmd=$probe_cmd"
+              ssh -vvv -o StrictHostKeyChecking=no \
                   -o ServerAliveInterval=30 \
                   -o ServerAliveCountMax=20 \
-                  -o TCPKeepAlive=yes localhost true
+                  -o TCPKeepAlive=yes localhost true || echo "ssh-exit=$?"
               bash "$APP_DIR/scripts/ci/run-grid-phase2.sh"
             '
         env:
@@ -341,6 +356,10 @@ jobs:
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
 
+      - name: Checkout repository for artifact collection
+        if: always()
+        uses: actions/checkout@v4
+
       - name: Collect Phase-2 artifacts
         if: always()
         env:
@@ -351,7 +370,11 @@ jobs:
           EXP_ID: ${{ env.EXP_ID }}
           EXPERIMENTS_ROOT: ${{ env.EXPERIMENTS_ROOT }}
           RUNNER_TEMP: ${{ runner.temp }}
-        run: bash "$GITHUB_WORKSPACE/scripts/ci/collect-phase2-artifacts.sh" "$RUNNER_TEMP/phase2"
+        run: |
+          echo "WORKSPACE=$GITHUB_WORKSPACE" && ls -la "$GITHUB_WORKSPACE" || true
+          ls -la "$GITHUB_WORKSPACE/scripts/ci" || true
+          test -f "$GITHUB_WORKSPACE/scripts/ci/collect-phase2-artifacts.sh" && echo "collector=present" || echo "collector=missing"
+          bash "$GITHUB_WORKSPACE/scripts/ci/collect-phase2-artifacts.sh" "$RUNNER_TEMP/phase2"
 
       - name: Upload Phase-2 sweep logs
         if: always()
