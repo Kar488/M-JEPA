@@ -1072,76 +1072,23 @@ def main() -> None:
                     f"[recheck] launching seeds {pending_seeds} for config index {index}{skip_note}",
                     flush=True,
                 )
-            else:
-                print(
-                    f"[recheck] all seeds completed for config index {index}; skipping launches",
-                    flush=True,
-                )
+                method = str(cfg.get("training_method", "jepa")).lower()
+                worker_masks: List[Optional[str]] = []
+                if gpu_masks:
+                    worker_masks = [mask or None for mask in gpu_masks]
+                worker_count = len(worker_masks)
+                if worker_count == 0:
+                    worker_count = 1
 
-            if not pending_seeds:
-                continue
-
-            method = str(cfg.get("training_method", "jepa")).lower()
-            worker_masks: List[Optional[str]] = []
-            if gpu_masks:
-                worker_masks = [mask or None for mask in gpu_masks]
-            worker_count = len(worker_masks)
-            if worker_count == 0:
-                worker_count = 1
-
-            if len(pending_seeds) == 1 or worker_count == 1:
-                mask = worker_masks[0] if worker_masks else None
-                for seed in pending_seeds:
-                    rc = run_once(
-                        args.mm,
-                        args.program,
-                        args.subcmd,
-                        cfg,
-                        seed,
-                        args.unlabeled_dir,
-                        args.labeled_dir,
-                        args.log_dir,
-                        args.project,
-                        args.group,
-                        index,
-                        exp_id,
-                        device_mask=mask,
-                    )
-                    print(f"[recheck][seed {seed}] finished with exit code {rc}", flush=True)
-                    if rc != 0:
-                        _print_log_tail(method, seed, args.log_dir)
-                        raise RuntimeError(f"recheck run failed with exit code {rc} (seed {seed})")
-                    time.sleep(1.0)
-                continue
-
-            worker_count = min(worker_count, len(pending_seeds))
-            worker_masks = worker_masks[:worker_count]
-
-            job_queue: "queue.Queue[Optional[int]]" = queue.Queue()
-            for seed in pending_seeds:
-                job_queue.put(seed)
-            for _ in range(worker_count):
-                job_queue.put(None)
-
-            error_event = threading.Event()
-            error_lock = threading.Lock()
-            errors: List[BaseException] = []
-
-            def _worker(worker_idx: int, mask: Optional[str]) -> None:
-                while True:
-                    seed_item = job_queue.get()
-                    if seed_item is None:
-                        job_queue.task_done()
-                        break
-                    try:
-                        if error_event.is_set():
-                            continue
+                if len(pending_seeds) == 1 or worker_count == 1:
+                    mask = worker_masks[0] if worker_masks else None
+                    for seed in pending_seeds:
                         rc = run_once(
                             args.mm,
                             args.program,
                             args.subcmd,
                             cfg,
-                            seed_item,
+                            seed,
                             args.unlabeled_dir,
                             args.labeled_dir,
                             args.log_dir,
@@ -1151,84 +1098,132 @@ def main() -> None:
                             exp_id,
                             device_mask=mask,
                         )
-                        print(f"[recheck][seed {seed_item}] finished with exit code {rc}", flush=True)
+                        print(f"[recheck][seed {seed}] finished with exit code {rc}", flush=True)
                         if rc != 0:
-                            _print_log_tail(method, seed_item, args.log_dir)
-                            raise RuntimeError(
-                                f"recheck run failed with exit code {rc} (seed {seed_item})"
-                            )
+                            _print_log_tail(method, seed, args.log_dir)
+                            raise RuntimeError(f"recheck run failed with exit code {rc} (seed {seed})")
                         time.sleep(1.0)
-                    except Exception as exc:  # pragma: no cover - worker diagnostics
-                        with error_lock:
-                            if not errors:
-                                errors.append(exc)
-                        error_event.set()
-                    finally:
-                        job_queue.task_done()
+                else:
+                    worker_count = min(worker_count, len(pending_seeds))
+                    worker_masks = worker_masks[:worker_count]
 
-            threads: List[threading.Thread] = []
-            for idx_worker, mask in enumerate(worker_masks):
-                thread = threading.Thread(target=_worker, args=(idx_worker, mask), daemon=True)
-                thread.start()
-                threads.append(thread)
+                    job_queue: "queue.Queue[Optional[int]]" = queue.Queue()
+                    for seed in pending_seeds:
+                        job_queue.put(seed)
+                    for _ in range(worker_count):
+                        job_queue.put(None)
 
-            job_queue.join()
+                    error_event = threading.Event()
+                    error_lock = threading.Lock()
+                    errors: List[BaseException] = []
 
-            for thread in threads:
-                thread.join()
+                    def _worker(worker_idx: int, mask: Optional[str]) -> None:
+                        while True:
+                            seed_item = job_queue.get()
+                            if seed_item is None:
+                                job_queue.task_done()
+                                break
+                            try:
+                                if error_event.is_set():
+                                    continue
+                                rc = run_once(
+                                    args.mm,
+                                    args.program,
+                                    args.subcmd,
+                                    cfg,
+                                    seed_item,
+                                    args.unlabeled_dir,
+                                    args.labeled_dir,
+                                    args.log_dir,
+                                    args.project,
+                                    args.group,
+                                    index,
+                                    exp_id,
+                                    device_mask=mask,
+                                )
+                                print(f"[recheck][seed {seed_item}] finished with exit code {rc}", flush=True)
+                                if rc != 0:
+                                    _print_log_tail(method, seed_item, args.log_dir)
+                                    raise RuntimeError(
+                                        f"recheck run failed with exit code {rc} (seed {seed_item})"
+                                    )
+                                time.sleep(1.0)
+                            except Exception as exc:  # pragma: no cover - worker diagnostics
+                                with error_lock:
+                                    if not errors:
+                                        errors.append(exc)
+                                error_event.set()
+                            finally:
+                                job_queue.task_done()
 
-            if errors:
-                raise errors[0]
+                    threads: List[threading.Thread] = []
+                    for idx_worker, mask in enumerate(worker_masks):
+                        thread = threading.Thread(target=_worker, args=(idx_worker, mask), daemon=True)
+                        thread.start()
+                        threads.append(thread)
 
-        attempts_env = os.getenv("RECHECK_COLLECT_ATTEMPTS")
-        try:
-            collect_attempts = int(attempts_env) if attempts_env else 5
-        except Exception:
-            collect_attempts = 5
-        collect_attempts = max(1, collect_attempts)
-        delay_env = os.getenv("RECHECK_COLLECT_DELAY")
-        try:
-            collect_delay = float(delay_env) if delay_env else 15.0
-        except Exception:
-            collect_delay = 15.0
-        collect_delay = max(0.0, collect_delay)
-        project_path = f"{entity}/{args.project}" if entity and args.project else None
-        seed_to_val = _collect_seed_metrics(
-            api,
-            project_path,
-            cfg,
-            seeds,
-            args.metric,
-            index,
-            exp_id,
-            collect_attempts,
-            collect_delay,
-        )
+                    job_queue.join()
 
-        missing_seeds = [s for s in seeds if s not in seed_to_val]
-        for missing_seed in missing_seeds:
-            _warn_missing_metric(args.metric, missing_seed)
+                    for thread in threads:
+                        thread.join()
 
-        values = [seed_to_val[s] for s in seeds if s in seed_to_val]
-        if values:
-            mean_value = float(np.mean(values))
-            low, high = ci95(values)
-            results.append({
-                "index": index,
-                "mean": mean_value,
-                "ci95": [low, high],
-                "n": len(values),
-                "config": cfg,
-            })
-        else:
+                    if errors:
+                        raise errors[0]
+            else:
+                print(
+                    f"[recheck] all seeds completed for config index {index}; skipping launches",
+                    flush=True,
+                )
 
-            results.append({
-                "index": index,
-                "mean": None,
-                "ci95": [None, None],
-                "n": 0,
-                "config": cfg,
-            })
+            attempts_env = os.getenv("RECHECK_COLLECT_ATTEMPTS")
+            try:
+                collect_attempts = int(attempts_env) if attempts_env else 5
+            except Exception:
+                collect_attempts = 5
+            collect_attempts = max(1, collect_attempts)
+            delay_env = os.getenv("RECHECK_COLLECT_DELAY")
+            try:
+                collect_delay = float(delay_env) if delay_env else 15.0
+            except Exception:
+                collect_delay = 15.0
+            collect_delay = max(0.0, collect_delay)
+            project_path = f"{entity}/{args.project}" if entity and args.project else None
+            seed_to_val = _collect_seed_metrics(
+                api,
+                project_path,
+                cfg,
+                seeds,
+                args.metric,
+                index,
+                exp_id,
+                collect_attempts,
+                collect_delay,
+            )
+
+            missing_seeds = [s for s in seeds if s not in seed_to_val]
+            for missing_seed in missing_seeds:
+                _warn_missing_metric(args.metric, missing_seed)
+
+            values = [seed_to_val[s] for s in seeds if s in seed_to_val]
+            if values:
+                mean_value = float(np.mean(values))
+                low, high = ci95(values)
+                results.append({
+                    "index": index,
+                    "mean": mean_value,
+                    "ci95": [low, high],
+                    "n": len(values),
+                    "config": cfg,
+                })
+            else:
+
+                results.append({
+                    "index": index,
+                    "mean": None,
+                    "ci95": [None, None],
+                    "n": 0,
+                    "config": cfg,
+                })
 
         successful = [entry for entry in results if entry.get("mean") is not None]
         _write_summary(results, diagnostics)
