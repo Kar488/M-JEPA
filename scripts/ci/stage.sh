@@ -592,6 +592,22 @@ run_phase2_recheck_stage() {
   else
     unset PHASE2_SEED_WALL_SECS || true
   fi
+
+  mapfile -t __RECHECK_VISIBLE_GPUS < <(visible_gpu_ids)
+  local recheck_gpu_count="${#__RECHECK_VISIBLE_GPUS[@]}"
+  if [[ -z "${PHASE2_RECHECK_AGENT_COUNT:-}" ]]; then
+    if [[ -n "${PHASE2_AGENT_COUNT:-}" ]]; then
+      if [[ "$PHASE2_AGENT_COUNT" =~ ^[0-9]+$ ]] && (( PHASE2_AGENT_COUNT > 0 )); then
+        export PHASE2_RECHECK_AGENT_COUNT="$PHASE2_AGENT_COUNT"
+      else
+        echo "[$step][warn] ignoring non-numeric PHASE2_AGENT_COUNT='${PHASE2_AGENT_COUNT}' for recheck" >&2
+      fi
+    elif (( recheck_gpu_count > 1 )); then
+      export PHASE2_RECHECK_AGENT_COUNT="$recheck_gpu_count"
+    fi
+  fi
+  unset __RECHECK_VISIBLE_GPUS || true
+
   export PHASE2_RECHECK_HEARTBEAT="$heartbeat_path"
   export PHASE2_RECHECK_SENTINEL="$sentinel"
   export PHASE2_RECHECK_RESUME=1
