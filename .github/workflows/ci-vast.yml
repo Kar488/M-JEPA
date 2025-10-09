@@ -38,6 +38,15 @@ concurrency:
   group: vast-${{ github.ref }}
   cancel-in-progress: true
 
+vars:
+  # Use vars.* for job-level conditions; env.* is unavailable in job "if" blocks.
+  RUN_UNIT_TESTS: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_unit_tests') }}
+  RUN_VAST_JOBS: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
+  FORCE_REFRESH: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags || '', 'force_refresh') && 'true' || 'false' }}
+  GRID_MODE_VAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb' }}
+  FORCE_UNFREEZE_GRID: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags || '', 'force_unfreeze_grid') && '1' || '0' }}
+  FORCE_RERUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rerun || '' }}
+
 env:
   APP_DIR: /srv/mjepa
   VENV_DIR: /srv/mjepa/.venv
@@ -86,6 +95,7 @@ env:
 jobs:
   tests_quick:
     if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_unit_tests') }}
+
     name: Quick tests (no gpu, no slow)
     runs-on: ubuntu-latest
     env:
