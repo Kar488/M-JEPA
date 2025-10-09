@@ -304,9 +304,27 @@ else
   # real custom runs we still want to persist the identifiers that were
   # allocated for the invocation.  Record them explicitly so test doubles and
   # downstream tooling can inspect which experiment slot was provisioned.
-  grid_stage_dir="$(stage_dir grid_search)"
+  # Prefer the stage directory used by the shim (OUT_DIR) and fall back to the
+  # canonical location derived from the run id if the environment variables are
+  # unset.  This keeps custom runs predictable even when EXP_ID/GRID_EXP_ID
+  # haven't been exported by the caller yet (the shim is still able to populate
+  # them before we persist the bookkeeping files).
+  grid_stage_dir="${OUT_DIR:-}"
+  if [[ -z "${grid_stage_dir}" ]]; then
+    grid_stage_dir="$(stage_dir grid_search)"
+  fi
+  if [[ -z "${grid_stage_dir}" || ! -d "${grid_stage_dir}" ]]; then
+    # Ensure we still create the expected hierarchy under the experiments root
+    # so downstream tests can discover the allocated slot.
+    grid_stage_dir="${EXPERIMENTS_ROOT%/}/${EXP_ID:-${RUN_ID:-}}/grid_search"
+  fi
+
   grid_stage_outputs="${grid_stage_dir}/stage-outputs"
   mkdir -p "${grid_stage_outputs}"
-  printf '%s' "${EXP_ID:-}" > "${grid_stage_outputs}/exp_id.txt"
-  printf '%s' "${GRID_EXP_ID:-}" > "${grid_stage_outputs}/grid_exp_id.txt"
+
+  exp_bookkeeping="${EXP_ID:-${RUN_ID:-}}"
+  grid_exp_bookkeeping="${GRID_EXP_ID:-${exp_bookkeeping}}"
+
+  printf '%s' "${exp_bookkeeping}" > "${grid_stage_outputs}/exp_id.txt"
+  printf '%s' "${grid_exp_bookkeeping}" > "${grid_stage_outputs}/grid_exp_id.txt"
 fi
