@@ -12,7 +12,7 @@ Notes:
 - This script does NOT create a sweep; Step #3 will create/use WANDB_SWEEP_ID2.
 """
 
-import argparse, json, math, os
+import argparse, json, math, os, time
 from collections.abc import Mapping
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -22,8 +22,10 @@ from utils.wandb_filters import silence_pydantic_field_warnings
 silence_pydantic_field_warnings()
 
 import numpy as np
+import requests
 import wandb
 import yaml
+from urllib.parse import urlparse
 
 
 # ---------- env helpers ----------
@@ -33,6 +35,55 @@ def need_env(name: str) -> str:
     if not v:
         raise RuntimeError(f"Missing required env: {name}")
     return v
+
+
+def _ensure_wandb_env() -> None:
+    if not os.environ.get("WANDB_API_KEY"):
+        print("WANDB_API_KEY is not set; cannot authenticate with Weights & Biases.")
+        raise SystemExit(1)
+
+    base_url = os.environ.get("WANDB_BASE_URL")
+    if base_url:
+        parsed = urlparse(base_url)
+        if not parsed.scheme or not parsed.netloc:
+            print(
+                "WANDB_BASE_URL is set but invalid. Expected a full URL such as "
+                "https://api.wandb.ai; please correct or unset it."
+            )
+            raise SystemExit(1)
+
+
+def _init_wandb_api(max_attempts: int = 3, timeout: int = 60) -> wandb.Api:
+    _ensure_wandb_env()
+
+    os.environ.setdefault("WANDB_HTTP_TIMEOUT", str(timeout))
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return wandb.Api()
+        except (
+            requests.exceptions.ReadTimeout,
+            requests.exceptions.ConnectionError,
+            wandb.errors.CommError,
+            wandb.errors.AuthenticationError,
+        ) as err:
+            last_error = err
+            if attempt < max_attempts:
+                sleep_for = min(30.0, 2.0 * attempt)
+                print(
+                    f"[export_best] W&B client init failed ({type(err).__name__}); "
+                    f"retrying in {sleep_for:.1f}s..."
+                )
+                time.sleep(sleep_for)
+            else:
+                break
+
+    message = "Failed to initialize the W&B client after multiple attempts. "
+    if last_error:
+        message += f"Last error: {last_error}"
+    print(message.strip())
+    raise SystemExit(1)
 
 
 # ---------- metric helpers ----------
@@ -656,7 +707,7 @@ def main():
     args = ap.parse_args()
 
     sweep_id = args.sweep_id or f"{ENTITY}/{PROJECT}/{need_env('WANDB_SWEEP_ID1')}"
-    api = wandb.Api()
+    api = _init_wandb_api()
     sweep = api.sweep(sweep_id)
     runs  = list(sweep.runs)
     if not runs:
