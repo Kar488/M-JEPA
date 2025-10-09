@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export MJEPACI_STAGE="phase1"
+
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
 source "$(dirname "$0")/wandb_utils.sh"

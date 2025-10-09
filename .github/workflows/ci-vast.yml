@@ -18,6 +18,15 @@ on:
         description: "Run Vast deployment and training jobs"
         required: false
         default: "true"
+      force_unfreeze_grid:
+        description: "Rebuild frozen pretrain/grid lineages"
+        required: false
+        default: false
+        type: boolean
+      force_rerun:
+        description: "Comma-separated stage names to force rerun"
+        required: false
+        default: ""
       sweep_cache_dir:
         description: "Override sweep dataset cache directory"
         required: false
@@ -95,6 +104,8 @@ env:
   BENCH_CACHE_DIR: /data/mjepa/cache/bench
   TOX21_CACHE_DIR: /data/mjepa/cache/tox21
   REPORTS_CACHE_DIR: /data/mjepa/cache/reports
+  FORCE_UNFREEZE_GRID: ${{ github.event.inputs.force_unfreeze_grid && '1' || '0' }}
+  FORCE_RERUN: ${{ github.event.inputs.force_rerun || '' }}
 
 jobs:
   tests_quick:

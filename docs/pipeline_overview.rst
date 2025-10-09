@@ -22,9 +22,11 @@ Lineage Hierarchy
    │   ├── tox21/
    │   └── report/
 
-Only initiator stages (``pretrain-agent`` and the grid sweeps it launches) mint
-new encoder lineages. Downstream jobs bind to existing ``PRETRAIN_EXP_ID`` values
-and emit fresh ``EXP_ID`` directories so prior artifacts remain untouched.
+Only initiator stages (``pretrain-agent`` and the Phase‑1 grid sweep it
+launches) mint new encoder lineages. Phase‑1 now assigns a fresh ``EXP_ID`` and
+sets ``GRID_EXP_ID`` to that value so its outputs live under a dedicated
+directory. Downstream jobs bind to existing ``PRETRAIN_EXP_ID`` values and emit
+fresh ``EXP_ID`` directories so prior artifacts remain untouched.
 
 Identifier Hierarchy
 --------------------
@@ -33,9 +35,12 @@ Identifier Hierarchy
 - ``GRID_EXP_ID`` – companion ID used by grid sweeps (phase 1 and phase 2).
 - ``EXP_ID`` – unique run directory for the current workflow invocation.
 
-When the lineage is frozen, ``GRID_EXP_ID`` usually equals ``PRETRAIN_EXP_ID``.
-Automation may override this (e.g. for cross-lineage sweeps) via
-``FORCE_UNFREEZE_GRID=1`` or explicit ``GRID_EXP_ID`` bindings.
+Before the encoder is frozen, ``GRID_EXP_ID`` tracks the active Phase‑1 sweep
+(``GRID_EXP_ID=$EXP_ID``). Once the Tox21 gate stamps
+``bench/encoder_frozen.ok``, automation keeps ``PRETRAIN_EXP_ID`` fixed to the
+frozen lineage and reuses its ``GRID_EXP_ID`` in read-only mode. Override this
+behaviour (for example, to rebuild a sweep) by setting ``FORCE_UNFREEZE_GRID=1``
+or by passing explicit ``GRID_EXP_ID`` bindings.
 
 Stage Orchestration
 -------------------
@@ -43,7 +48,7 @@ Stage Orchestration
 #. **Pretrain.** ``pretrain-agent`` writes encoder checkpoints and seeds the
    lineage.
 #. **Phase 1 sweep.** ``phase1-agent`` runs the coarse sweep, writing into
-   ``$EXPERIMENTS_ROOT/$GRID_EXP_ID/grid/phase1``.
+   ``$EXPERIMENTS_ROOT/$EXP_ID/grid/phase1`` while the sweep is active.
 #. **Phase 2 sweep.** ``phase2-agent`` rechecks and exports winning configs,
    writing ``grid/phase2_*`` artifacts.
 #. **Tox21 grading (benchmark stage).** ``tox21-agent`` evaluates the encoder on
@@ -54,7 +59,8 @@ Stage Orchestration
 The CI/CD pipeline automatically resumes from the latest completed stage, using
 GitHub workflows to schedule jobs and Vast.ai workers to execute sweeps and
 benchmarks. Freeze markers prevent accidental overwrites; set
-``FORCE_UNFREEZE_GRID=1`` or remove the marker only when intentionally rebuilding
-an encoder lineage.
+``FORCE_UNFREEZE_GRID=1`` or remove the marker only when intentionally
+rebuilding an encoder lineage. ``FORCE_RERUN=stage1,stage2`` remains available
+to selectively invalidate cached stages when experimenting.
 
 For policy details and override semantics, read :doc:`frozen_lineage_policy`.

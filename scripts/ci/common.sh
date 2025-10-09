@@ -464,7 +464,7 @@ split_gpu_ids() {
 
 __ci_stage_role="initiator"
 case "${MJEPACI_STAGE}" in
-  pretrain|grid|grid_search|phase2_sweep)
+  pretrain|grid|grid_search|phase1|phase2_sweep)
     __ci_stage_role="initiator"
     ;;
   *)
@@ -538,6 +538,16 @@ if [[ "$__ci_stage_role" == "dependent" ]]; then
   elif [[ -z "${EXP_ID:-}" ]]; then
     EXP_ID="$RUN_ID"
   fi
+fi
+
+if [[ -z "${GRID_EXP_ID:-}" ]]; then
+  case "${MJEPACI_STAGE}" in
+    pretrain|phase1)
+      if [[ -n "${EXP_ID:-}" ]]; then
+        GRID_EXP_ID="$EXP_ID"
+      fi
+      ;;
+  esac
 fi
 
 if [[ -z "${GRID_EXP_ID:-}" ]]; then

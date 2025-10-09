@@ -12,9 +12,11 @@ utilities for downstream evaluation on MoleculeNet benchmarks.
 ## 🔒 Frozen Encoder Lineages
 
 CI discovers encoders that carry the `bench/encoder_frozen.ok` marker and
-reuses them for downstream stages. When a freeze marker is present, automation
-launches new runs under a fresh `EXP_ID` while binding `PRETRAIN_EXP_ID` (and, if
-needed, `GRID_EXP_ID`) to the frozen lineage.
+reuses them for downstream stages. Phase‑1 sweeps now allocate their own
+`EXP_ID` and set `GRID_EXP_ID` to that value so fresh grid logs land under a
+dedicated directory. When a freeze marker is present, automation launches new
+runs under a fresh `EXP_ID` while binding `PRETRAIN_EXP_ID` (and, when reading
+existing sweeps, `GRID_EXP_ID`) to the frozen lineage.
 
 ```bash
 # Run tox21 grading on a frozen encoder
@@ -23,7 +25,9 @@ bash scripts/ci/run-tox21.sh
 # Output -> /data/mjepa/experiments/$RUN_ID/tox21/
 ```
 
-See `docs/frozen_lineage_policy.rst` for override flags and lineage semantics.
+See `docs/frozen_lineage_policy.rst` for override flags and lineage semantics,
+including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
+`FORCE_RERUN=stage1,stage2` to selectively invalidate caches.
 
 ## Local development
 

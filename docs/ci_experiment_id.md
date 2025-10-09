@@ -13,7 +13,9 @@ experiment identifiers and artifact hand-offs.
   `$EXPERIMENTS_ROOT/pretrain_state.json` for backward compatibility.
 * Every stage sources `scripts/ci/common.sh`, which resolves `EXP_ID` from (in
   order): a per-experiment state file, the `EXP_ID` environment variable, or,
-  for pretrain, the generated fallback.
+  for pretrain, the generated fallback. Phase‑1 sweeps now force
+  `GRID_EXP_ID=$EXP_ID` so the sweep emits outputs under its own lineage before
+  the encoder is frozen.
 
 ## Directory layout
 
