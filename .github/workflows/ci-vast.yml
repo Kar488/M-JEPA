@@ -42,16 +42,8 @@ env:
   APP_DIR: /srv/mjepa
   VENV_DIR: /srv/mjepa/.venv
   PIP_CACHE_DIR: /data/mjepa/.pip-cache
-  RUN_UNIT_TESTS: ${{ if(
-    github.event_name != 'workflow_dispatch' || contains(github.event.inputs.task_flags || '', 'run_unit_tests'),
-    'true',
-    'false'
-  ) }}
-  RUN_VAST_JOBS: ${{ if(
-    github.event_name != 'workflow_dispatch' || contains(github.event.inputs.task_flags || '', 'run_vast_jobs'),
-    'true',
-    'false'
-  ) }}
+  RUN_UNIT_TESTS: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_unit_tests') }}
+  RUN_VAST_JOBS: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
   FORCE_REFRESH: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags || '', 'force_refresh') && 'true' || 'false' }}
   WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
   WANDB_ENTITY: karthik-iyer-la-trobe-university
