@@ -512,6 +512,16 @@ phase2_sync_grid_artifacts() {
       echo "[${step_label}] synced $(basename "$src") -> ${dst}" >&2
     fi
   done
+
+  local sentinel_src="${source_dir}/phase2_recheck/recheck_done.ok"
+  local sentinel_dst="$(stage_dir phase2_recheck)/recheck_done.ok"
+  if [[ -f "$sentinel_src" && "$sentinel_src" != "$sentinel_dst" ]]; then
+    mkdir -p "$(dirname "$sentinel_dst")" || return 0
+    if ! cmp -s "$sentinel_src" "$sentinel_dst" 2>/dev/null; then
+      cp -f "$sentinel_src" "$sentinel_dst"
+      echo "[${step_label}] synced $(basename "$sentinel_src") -> ${sentinel_dst}" >&2
+    fi
+  fi
 }
 
 restore_env_var() {

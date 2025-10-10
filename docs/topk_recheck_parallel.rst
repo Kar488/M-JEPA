@@ -112,3 +112,6 @@ Operational Updates
 * A successful run clears the incomplete marker and rewrites
   ``recheck_done.ok`` to keep downstream stages (export, pretrain) aligned with
   the latest winner.
+* CI syncs ``recheck_done.ok`` alongside the sweep metadata when reusing a
+  remote grid lineage, so pretraining stages recognise previously validated
+  Phase-2 results without manual copying.
