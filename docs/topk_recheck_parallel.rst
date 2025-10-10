@@ -98,3 +98,17 @@ Next Steps
 * Add regression coverage that exercises two synthetic seeds in parallel using a
   fake GPU mask to confirm log separation, environment propagation and summary
   aggregation.
+
+Operational Updates
+-------------------
+
+* ``recheck_topk_from_wandb.py`` now falls back to ``nvidia-smi`` when
+  ``torch`` is unavailable, so GitHub runners without a populated
+  ``CUDA_VISIBLE_DEVICES`` mask still expose their GPU indices to the scheduler.
+* Each configuration write refreshes ``grid/best_grid_config.json`` and the
+  consolidated summary. If the process terminates early, it stamps
+  ``grid/phase2_recheck/recheck_incomplete.ok`` so the next invocation resumes
+  pending seeds instead of restarting from scratch.
+* A successful run clears the incomplete marker and rewrites
+  ``recheck_done.ok`` to keep downstream stages (export, pretrain) aligned with
+  the latest winner.
