@@ -2,6 +2,38 @@
 #set -x   # bash prints each command before executing
 set -euo pipefail
 
+ci_setup_vast_ssh_key() {
+  local key="${SSH_KEY:-}"
+  [[ -n "$key" ]] || return 0
+
+  local home_dir="${HOME:-/root}"
+  local ssh_dir="${home_dir%/}/.ssh"
+  local key_path="${ssh_dir}/vast_key"
+
+  mkdir -p "$ssh_dir"
+  # Ensure the key has a trailing newline so ssh-add can parse it correctly.
+  if [[ "$key" != *$'\n' ]]; then
+    printf '%s\n' "$key" >"$key_path"
+  else
+    printf '%s' "$key" >"$key_path"
+  fi
+  chmod 600 "$key_path" 2>/dev/null || true
+
+  if command -v ssh-agent >/dev/null 2>&1; then
+    if [[ -z "${SSH_AUTH_SOCK:-}" || ! -S "${SSH_AUTH_SOCK}" ]]; then
+      eval "$(ssh-agent -s)" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  if command -v ssh-add >/dev/null 2>&1; then
+    if ! ssh-add -l 2>/dev/null | grep -q "$key_path"; then
+      ssh-add "$key_path" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  export VAST_SSH_KEY_PATH="$key_path"
+}
+
 grace_marker() {
   local stage="${1:?stage}" log_dir="${2:-${LOG_DIR:-}}"
   if [[ -z "$log_dir" ]]; then
@@ -580,6 +612,7 @@ run_phase2_recheck_stage() {
   recheck_dir="$(stage_dir phase2_recheck)"
   mkdir -p "$recheck_dir"
   local sentinel="${recheck_dir}/recheck_done.ok"
+  local incomplete="${recheck_dir}/recheck_incomplete.ok"
   local heartbeat_path="${recheck_dir}/heartbeat"
 
   if [[ -f "$sentinel" ]]; then
@@ -590,6 +623,7 @@ run_phase2_recheck_stage() {
   fi
 
   rm -f "$sentinel"
+  rm -f "$incomplete"
 
   local wall_mins_raw="${PHASE2_RECHECK_WALL_MINS:-120}"
   local wall_mins="$wall_mins_raw"
@@ -645,6 +679,7 @@ run_phase2_recheck_stage() {
   export PHASE2_RECHECK_HEARTBEAT="$heartbeat_path"
   export PHASE2_RECHECK_SENTINEL="$sentinel"
   export PHASE2_RECHECK_RESUME=1
+  export PHASE2_RECHECK_INCOMPLETE="$incomplete"
 
   local log_path="${step_log_dir}/recheck_topk.log"
 
@@ -685,6 +720,8 @@ run_phase2_recheck_stage() {
     return 4
   fi
 
+  rm -f "$incomplete" 2>/dev/null || true
+
   local metadata="${dir}/stage-outputs/${step}.json"
   python_inline "$metadata" "$sweep_id" "${GRID_DIR}/recheck_summary.json" "${GRID_DIR}/best_grid_config.json" "${PHASE2_METRIC}" "${PHASE2_DIRECTION}" "${TOPK_RECHECK}" "${EXTRA_SEEDS}" <<'PY'
 import json
@@ -714,7 +751,7 @@ PY
 
   restore_env_var LOG_DIR "$prev_log_dir"
   unset PHASE2_SEED_WALL_SECS || true
-  unset PHASE2_RECHECK_HEARTBEAT PHASE2_RECHECK_SENTINEL PHASE2_RECHECK_RESUME || true
+  unset PHASE2_RECHECK_HEARTBEAT PHASE2_RECHECK_SENTINEL PHASE2_RECHECK_RESUME PHASE2_RECHECK_INCOMPLETE || true
   phase2_promote_local_grid "$step"
   return 0
 }
@@ -737,6 +774,21 @@ run_phase2_export_stage() {
   mkdir -p "$step_log_dir"
   export LOG_DIR="$step_log_dir"
 
+  local recheck_dir
+  recheck_dir="$(stage_dir phase2_recheck)"
+  local sentinel="${recheck_dir}/recheck_done.ok"
+  local incomplete="${recheck_dir}/recheck_incomplete.ok"
+  if [[ -f "$incomplete" ]]; then
+    echo "[$step][fatal] recheck incomplete marker present: $incomplete. Rerun phase2_recheck before exporting." >&2
+    restore_env_var LOG_DIR "$prev_log_dir"
+    return 4
+  fi
+  if [[ ! -f "$sentinel" ]]; then
+    echo "[$step][fatal] recheck sentinel missing: $sentinel. Complete phase2_recheck before export." >&2
+    restore_env_var LOG_DIR "$prev_log_dir"
+    return 4
+  fi
+
   local best_json="${GRID_SOURCE_DIR}/best_grid_config.json"
   if [[ ! -f "$best_json" && -f "${GRID_DIR}/best_grid_config.json" ]]; then
     best_json="${GRID_DIR}/best_grid_config.json"
@@ -748,6 +800,17 @@ run_phase2_export_stage() {
     echo "[$step][fatal] expected ${best_json} but it was not created (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}). Rerun phase2_export or ensure GRID_EXP_ID points at the sweep lineage." >&2
     restore_env_var LOG_DIR "$prev_log_dir"
     return 3
+  fi
+
+  local canonical_best="${GRID_DIR}/best_grid_config.json"
+  if [[ "$best_json" != "$canonical_best" ]]; then
+    mkdir -p "${GRID_DIR}"
+    cp -f "$best_json" "$canonical_best"
+    best_json="$canonical_best"
+  fi
+  if [[ -f "$summary_json" && "$summary_json" != "${GRID_DIR}/recheck_summary.json" ]]; then
+    cp -f "$summary_json" "${GRID_DIR}/recheck_summary.json"
+    summary_json="${GRID_DIR}/recheck_summary.json"
   fi
 
   python_inline "$best_json" <<'PY'
@@ -1133,6 +1196,24 @@ run_stage() {
   if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then
     shim_mode=1
     forced=1
+  fi
+
+  if [[ "$stage" == "pretrain" && $forced -eq 0 ]]; then
+    local sentinel_path="$(stage_dir phase2_recheck)/recheck_done.ok"
+    local winner_hint=""
+    if [[ -n "${GRID_SOURCE_DIR:-}" && -f "${GRID_SOURCE_DIR}/best_grid_config.json" ]]; then
+      winner_hint="${GRID_SOURCE_DIR}/best_grid_config.json"
+    elif [[ -n "${GRID_DIR:-}" && -f "${GRID_DIR}/best_grid_config.json" ]]; then
+      winner_hint="${GRID_DIR}/best_grid_config.json"
+    fi
+    if [[ -z "$winner_hint" ]]; then
+      echo "[pretrain] winner not ready; skipping until grid/best_grid_config.json exists" >&2
+      return 0
+    fi
+    if [[ ! -f "$sentinel_path" ]]; then
+      echo "[pretrain] waiting for Phase-2 recheck sentinel at $sentinel_path; skipping" >&2
+      return 0
+    fi
   fi
 
   local -a dependencies=()

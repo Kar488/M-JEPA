@@ -10,6 +10,8 @@ import os
 import pathlib
 import queue
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -60,7 +62,24 @@ def _discover_visible_gpu_ids() -> List[str]:
     except Exception:
         count = 0
 
-    return [str(i) for i in range(count)]
+    if count > 0:
+        return [str(i) for i in range(count)]
+
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        ids = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+        if ids:
+            return ids
+    except Exception:
+        pass
+
+    return []
 
 
 def _split_gpu_ids(ids: Sequence[str], agent_count: int) -> List[str]:
@@ -801,6 +820,92 @@ def main() -> None:
     args.out = _safe_out(args.out)
     args.log_dir = _safe_dir(args.log_dir)
 
+    out_dir = os.path.dirname(args.out)
+    best_path = os.path.join(out_dir, "best_grid_config.json")
+    backup_path = os.path.join(out_dir, "best_grid_config.phase1.json")
+    tmp_path = os.path.join(out_dir, ".best_grid_config.tmp")
+    incomplete_flag = os.environ.get("PHASE2_RECHECK_INCOMPLETE")
+    incomplete_path = pathlib.Path(incomplete_flag) if incomplete_flag else None
+    backup_taken = False
+    index_to_run_id: Dict[int, Optional[str]] = {}
+    last_best_index: Optional[int] = None
+    results: List[Dict[str, Any]] = []
+    produced_partial = False
+
+    def _mark_incomplete() -> None:
+        if incomplete_path is None:
+            return
+        try:
+            incomplete_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(incomplete_path, "a", encoding="utf-8"):
+                os.utime(incomplete_path, None)
+            print(f"[recheck] wrote incomplete marker → {incomplete_path}", flush=True)
+        except Exception as exc:
+            print(f"[recheck][warn] unable to write incomplete marker {incomplete_path}: {exc}", flush=True)
+
+    def _clear_incomplete() -> None:
+        if incomplete_path is None:
+            return
+        try:
+            incomplete_path.unlink(missing_ok=True)
+        except Exception as exc:
+            print(f"[recheck][warn] unable to clear incomplete marker {incomplete_path}: {exc}", flush=True)
+
+    def _ensure_backup() -> None:
+        nonlocal backup_taken
+        if backup_taken:
+            return
+        try:
+            if os.path.isfile(best_path) and not os.path.isfile(backup_path):
+                shutil.copy2(best_path, backup_path)
+                print(f"[recheck] backed up Phase-1 best → {backup_path}", flush=True)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[recheck][warn] backup skipped: {exc}", flush=True)
+        backup_taken = True
+
+    def _write_best_from_entry(entry: Mapping[str, Any]) -> None:
+        nonlocal last_best_index, produced_partial
+        config = entry.get("config") if isinstance(entry, Mapping) else None
+        if not isinstance(config, dict) or not config:
+            return
+        _ensure_backup()
+        payload = {
+            "config": config,
+            "metric": args.metric,
+            "direction": args.direction,
+            "source": "phase2-recheck",
+        }
+        run_id: Optional[str] = None
+        winner_index = entry.get("index") if isinstance(entry, Mapping) else None
+        if isinstance(winner_index, int):
+            run_id = index_to_run_id.get(winner_index)
+        if run_id:
+            payload["run_id"] = run_id
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        os.replace(tmp_path, best_path)
+        if isinstance(winner_index, int) and winner_index != last_best_index:
+            if run_id:
+                print(
+                    f"[recheck] provisional Phase-2 winner {run_id} (cfg{winner_index}) → {best_path}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[recheck] provisional Phase-2 winner cfg{winner_index} → {best_path}",
+                    flush=True,
+                )
+            last_best_index = winner_index
+        produced_partial = True
+
+    def _current_winner(entries: Sequence[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+        candidates = [entry for entry in entries if isinstance(entry, Mapping) and entry.get("mean") is not None]
+        if not candidates:
+            return None
+        if args.direction == "min":
+            return min(candidates, key=lambda item: item["mean"])
+        return max(candidates, key=lambda item: item["mean"])
+
     def _env_int(name: str, default: int) -> int:
         raw = os.environ.get(name)
         if raw is None:
@@ -913,6 +1018,21 @@ def main() -> None:
     heartbeat = _Heartbeat(heartbeat_path, heartbeat_interval)
     heartbeat.start()
     sentinel_path = os.environ.get("PHASE2_RECHECK_SENTINEL")
+
+    interrupted = {"flag": False}
+
+    def _handle_signal(signum: int, _: Optional[object]) -> None:
+        if not interrupted["flag"]:
+            interrupted["flag"] = True
+            print(f"[recheck] received signal {signum}; flushing partial state", flush=True)
+        raise KeyboardInterrupt
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _handle_signal)
+        except Exception:  # pragma: no cover - signal registration best effort
+            pass
+
     success = False
     try:
         api = wandb.Api()
@@ -971,6 +1091,11 @@ def main() -> None:
             sys.exit(2)
 
         top_runs = [run for run, _ in top_entries]
+        index_to_run_id.clear()
+        for idx, run in enumerate(top_runs):
+            run_identifier = _safe_getattr(run, "id") or _safe_getattr(run, "name")
+            if run_identifier:
+                index_to_run_id[idx] = str(run_identifier)
         print(
             "[recheck] picked top runs: " + ", ".join(getattr(run, "id", getattr(run, "name", "?")) for run in top_runs),
             flush=True,
@@ -1013,7 +1138,7 @@ def main() -> None:
             cfg.pop("seed", None)
             top_configs.append(cfg)
 
-        results: List[Dict[str, Any]] = []
+        results.clear()
         offline_mode = (os.getenv("WANDB_MODE", "").lower() == "offline")
         exp_id = _resolve_exp_id(args.group)
         total_completed = 0
@@ -1208,25 +1333,31 @@ def main() -> None:
             if values:
                 mean_value = float(np.mean(values))
                 low, high = ci95(values)
-                results.append({
+                entry = {
                     "index": index,
                     "mean": mean_value,
                     "ci95": [low, high],
                     "n": len(values),
                     "config": cfg,
-                })
+                }
             else:
-
-                results.append({
+                entry = {
                     "index": index,
                     "mean": None,
                     "ci95": [None, None],
                     "n": 0,
                     "config": cfg,
-                })
+                }
+
+            results.append(entry)
+            produced_partial = True
+            diagnostics["completed_configs"] = len(results)
+            _write_summary(results, diagnostics)
+            winner_entry = _current_winner(results)
+            if winner_entry is not None:
+                _write_best_from_entry(winner_entry)
 
         successful = [entry for entry in results if entry.get("mean") is not None]
-        _write_summary(results, diagnostics)
 
         if not successful:
             print(
@@ -1248,37 +1379,27 @@ def main() -> None:
             )
             sys.exit(3)
 
-        winner_index = winner.get("index")
-        winner_run_id: Optional[str] = None
-        if isinstance(winner_index, int) and 0 <= winner_index < len(top_runs):
-            winner_run_id = getattr(top_runs[winner_index], "id", None) or getattr(top_runs[winner_index], "name", None)
-
-        out_dir = os.path.dirname(args.out)
-        best_path = os.path.join(out_dir, "best_grid_config.json")
-        backup_path = os.path.join(out_dir, "best_grid_config.phase1.json")
-        tmp_path = os.path.join(out_dir, ".best_grid_config.tmp")
-
-        try:
-            if os.path.isfile(best_path) and not os.path.isfile(backup_path):
-                import shutil
-                shutil.copy2(best_path, backup_path)
-                print(f"[recheck] backed up Phase-1 best → {backup_path}", flush=True)
-        except Exception as exc:  # pragma: no cover - defensive
-            print(f"[recheck][warn] backup skipped: {exc}", flush=True)
-
-        payload = {
-            "config": winner_cfg,
-            "metric": args.metric,
-            "direction": args.direction,
-            "source": "phase2-recheck",
-            "run_id": winner_run_id,
-        }
-
-        with open(tmp_path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
-        os.replace(tmp_path, best_path)
-        print(f"[recheck] wrote Phase-2 winner → {best_path}", flush=True)
+        _write_best_from_entry(winner)
+        winner_index = winner.get("index") if isinstance(winner, Mapping) else None
+        winner_mean = winner.get("mean") if isinstance(winner, Mapping) else None
+        run_id_final = index_to_run_id.get(winner_index) if isinstance(winner_index, int) else None
+        if isinstance(winner_index, int):
+            if run_id_final:
+                print(
+                    f"[recheck] final Phase-2 winner {run_id_final} (cfg{winner_index}) metric={winner_mean} → {best_path}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[recheck] final Phase-2 winner cfg{winner_index} metric={winner_mean} → {best_path}",
+                    flush=True,
+                )
+        else:
+            print(f"[recheck] final Phase-2 winner saved → {best_path}", flush=True)
         success = True
+    except KeyboardInterrupt:
+        print("[recheck] interrupted by signal; aborting", flush=True)
+        raise
     finally:
         heartbeat.stop()
         if success and sentinel_path:
@@ -1290,6 +1411,15 @@ def main() -> None:
                 print(f"[recheck] wrote sentinel → {sentinel}", flush=True)
             except Exception as exc:
                 print(f"[recheck][warn] unable to write sentinel {sentinel_path}: {exc}", flush=True)
+            _clear_incomplete()
+        elif not success and sentinel_path:
+            if produced_partial or results:
+                _mark_incomplete()
+            print("[recheck][warn] recheck did not complete successfully; sentinel not written", flush=True)
+        elif not success and (produced_partial or results):
+            _mark_incomplete()
+
+
 
 
 def _expected_group(config_idx: int) -> str:
