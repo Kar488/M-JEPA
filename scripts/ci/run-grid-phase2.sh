@@ -199,6 +199,17 @@ if (( ! FROZEN )) || [[ "${FORCE_UNFREEZE_GRID:-}" == "1" ]]; then
     if [[ -n "$ci_phase2_candidate_grid_id" && "$ci_phase2_candidate_grid_id" != "$common_grid_exp_id" ]]; then
       echo "[phase2] reusing existing grid lineage ${ci_phase2_candidate_grid_id}" >&2
     fi
+    candidate_parent_dir="$(dirname "$ci_phase2_candidate_grid_dir")"
+    candidate_pretrain_state="${candidate_parent_dir}/pretrain_state.json"
+    if [[ -f "$candidate_pretrain_state" ]]; then
+      candidate_pretrain_id="$ci_phase2_candidate_grid_id"
+      if [[ -z "$candidate_pretrain_id" ]]; then
+        candidate_pretrain_id="$(basename "$candidate_parent_dir")"
+      fi
+      if [[ -n "$candidate_pretrain_id" ]]; then
+        new_pretrain_exp_id="$candidate_pretrain_id"
+      fi
+    fi
   elif [[ -n "${EXP_ID:-}" ]]; then
     if [[ -n "${CI_PHASE2_INCOMING_GRID_EXP_ID:-}" ]] && [[ "${CI_PHASE2_INCOMING_GRID_EXP_ID}" != "${EXP_ID}" ]]; then
       echo "[phase2] ignoring stale GRID_EXP_ID=${CI_PHASE2_INCOMING_GRID_EXP_ID} in favour of EXP_ID=${EXP_ID}" >&2
