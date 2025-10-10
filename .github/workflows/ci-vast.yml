@@ -265,7 +265,7 @@ jobs:
           command_timeout: 940m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,
-            GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,
+            GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
             GRID_MODE,WANDB_COUNT,EXPORT_OUT_PATH,EXPORT_PHASE2_PATH,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR,
             PE_MIN_PRETRAIN_EPOCHS,PE_MIN_FINETUNE_EPOCHS,PE_MIN_PRETRAIN_BATCHES,PHASE1_BACKBONES,PHASE1_SEEDS
           script: |
@@ -286,6 +286,10 @@ jobs:
           # W&B sweeps pair runs via PHASE1_BACKBONES/PHASE1_SEEDS; PHASE1_SWEEP_SEED is deprecated.
           PHASE1_BACKBONES: gine,dmpnn,schnet3d
           PHASE1_SEEDS: 1,2,3,4,5
+          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_USER: ${{ secrets.VAST_USER }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
 # Option X: keep a single Vast job running sweep → recheck → export sequentially.
   vast_sweep_phase2:
     if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb') }}
@@ -315,7 +319,7 @@ jobs:
           command_timeout: 940m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,
-            GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,RUN_ID,EXP_ID,
+            GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,RUN_ID,EXP_ID,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
             PHASE2_SWEEP_WALL_MINS,PHASE2_RECHECK_WALL_MINS,PHASE2_EXPORT_WALL_MINS,
             GRID_MODE,WANDB_COUNT, TOPK_RECHECK,EXTRA_SEEDS,PHASE2_METRIC,PHASE2_DIRECTION,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR,
             PHASE2_AGENT_COUNT
@@ -333,7 +337,13 @@ jobs:
           PHASE2_DIRECTION: min
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
+          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_USER: ${{ secrets.VAST_USER }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
 
+      # Run on the GitHub runner so helper scripts referenced below are available
+      # locally; this does not affect the remote Vast execution.
       - name: Checkout repository for artifact collection
         if: always()
         uses: actions/checkout@v4
@@ -422,7 +432,7 @@ jobs:
           command_timeout: 199m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,CKPT_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
-            GRID_MODE,WANDB_COUNT,
+            GRID_MODE,WANDB_COUNT,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
             BESTCFG_NO_EPOCHS,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,EXPERIMENTS_ROOT
           script: |
@@ -433,6 +443,10 @@ jobs:
           PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "8"
           BESTCFG_NO_EPOCHS: "1"
+          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_USER: ${{ secrets.VAST_USER }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
 
       - name: Fetch pretrain state snapshot
         id: pretrain_state
@@ -496,7 +510,7 @@ jobs:
           command_timeout: 100m
           envs: APP_DIR,GRID_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
-            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
+            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
             BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
           script: |
             bash "$APP_DIR/scripts/ci/run-tox21.sh"
@@ -507,6 +521,10 @@ jobs:
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1"
           TOX21_ENCODER_SOURCE: pretrain_frozen
+          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_USER: ${{ secrets.VAST_USER }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
 
       - name: Collect tox21 baseline outputs
         if: always()

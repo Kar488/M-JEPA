@@ -1313,6 +1313,7 @@ run_stage() {
   local stage="${s,,}"
   local dir
   dir="$(stage_dir "$stage")"
+  local rc=0
   OUT_DIR="$dir"
   export OUT_DIR
   if declare -F ci_setup_vast_ssh_key >/dev/null 2>&1; then
@@ -1619,24 +1620,27 @@ run_stage() {
       stage_log_dir="${dir}/logs"
       clear_graceful_stop "$stage" "$stage_log_dir"
       if ! run_phase2_sweep_stage "$dir" "$stage"; then
+        rc=$?
         rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
-        return $?
+        return $rc
       fi
       ;;
     phase2_recheck)
       stage_log_dir="${dir}/logs"
       clear_graceful_stop "$stage" "$stage_log_dir"
       if ! run_phase2_recheck_stage "$dir" "$stage"; then
+        rc=$?
         rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
-        return $?
+        return $rc
       fi
       ;;
     phase2_export)
       stage_log_dir="${dir}/logs"
       clear_graceful_stop "$stage" "$stage_log_dir"
       if ! run_phase2_export_stage "$dir" "$stage"; then
+        rc=$?
         rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
-        return $?
+        return $rc
       fi
       ;;
     *)
