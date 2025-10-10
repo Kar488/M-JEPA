@@ -34,6 +34,111 @@ ci_setup_vast_ssh_key() {
   export VAST_SSH_KEY_PATH="$key_path"
 }
 
+ci_phase2_refresh_lineage_bindings() {
+  local new_pretrain="${1:-}"
+  local new_grid="${2:-}"
+  local old_pretrain="${3:-}"
+  local old_grid="${4:-}"
+
+  local root="${EXPERIMENTS_ROOT%/}"
+  local old_pretrain_root=""
+  local old_grid_root=""
+
+  if [[ -n "$old_pretrain" ]]; then
+    old_pretrain_root="${root}/${old_pretrain}"
+  fi
+  if [[ -n "$old_grid" ]]; then
+    old_grid_root="${root}/${old_grid}/grid"
+  fi
+
+  if [[ -n "$new_pretrain" ]]; then
+    local new_pretrain_root="${root}/${new_pretrain}"
+    PRETRAIN_EXP_ID="$new_pretrain"
+    export PRETRAIN_EXP_ID
+    PRETRAIN_STATE_ID="$new_pretrain"
+    export PRETRAIN_STATE_ID
+
+    PRETRAIN_EXPERIMENT_ROOT="$new_pretrain_root"
+    export PRETRAIN_EXPERIMENT_ROOT
+
+    local default_state="${new_pretrain_root}/pretrain_state.json"
+    PRETRAIN_STATE_FILE_CANONICAL="$default_state"
+    export PRETRAIN_STATE_FILE_CANONICAL
+    local current_state_file="${PRETRAIN_STATE_FILE:-}"
+    if [[ -z "$current_state_file" || ( -n "$old_pretrain_root" && "${current_state_file%/}" == "${old_pretrain_root}/pretrain_state.json" ) ]]; then
+      PRETRAIN_STATE_FILE="$default_state"
+      export PRETRAIN_STATE_FILE
+    fi
+
+    local default_artifacts="${new_pretrain_root}/artifacts"
+    local current_artifacts="${ARTIFACTS_DIR:-}"
+    if [[ -z "$current_artifacts" || ( -n "$old_pretrain_root" && "${current_artifacts%/}" == "${old_pretrain_root}/artifacts" ) ]]; then
+      ARTIFACTS_DIR="$default_artifacts"
+      export ARTIFACTS_DIR
+    fi
+    local current_pretrain_artifacts="${PRETRAIN_ARTIFACTS_DIR:-}"
+    if [[ -z "$current_pretrain_artifacts" || ( -n "$old_pretrain_root" && "${current_pretrain_artifacts%/}" == "${old_pretrain_root}/artifacts" ) ]]; then
+      PRETRAIN_ARTIFACTS_DIR="$default_artifacts"
+      export PRETRAIN_ARTIFACTS_DIR
+    fi
+
+    local default_pretrain_dir="${new_pretrain_root}/pretrain"
+    local current_pretrain_dir="${PRETRAIN_DIR:-}"
+    if [[ -z "$current_pretrain_dir" || ( -n "$old_pretrain_root" && "${current_pretrain_dir%/}" == "${old_pretrain_root}/pretrain" ) ]]; then
+      PRETRAIN_DIR="$default_pretrain_dir"
+      export PRETRAIN_DIR
+    fi
+
+    local default_manifest="${default_artifacts}/encoder_manifest.json"
+    local current_manifest="${PRETRAIN_MANIFEST:-}"
+    if [[ -z "$current_manifest" || ( -n "$old_pretrain_root" && "$current_manifest" == "${old_pretrain_root}/artifacts/encoder_manifest.json" ) ]]; then
+      PRETRAIN_MANIFEST="$default_manifest"
+      export PRETRAIN_MANIFEST
+    fi
+
+    local default_encoder="${default_pretrain_dir}/encoder.pt"
+    local current_encoder="${PRETRAIN_ENCODER_PATH:-}"
+    if [[ -z "$current_encoder" || ( -n "$old_pretrain_root" && "$current_encoder" == "${old_pretrain_root}/pretrain/encoder.pt" ) ]]; then
+      PRETRAIN_ENCODER_PATH="$default_encoder"
+      export PRETRAIN_ENCODER_PATH
+    fi
+
+    local default_tox="${new_pretrain_root}/tox21_gate.env"
+    local current_tox21="${PRETRAIN_TOX21_ENV:-}"
+    if [[ -z "$current_tox21" || ( -n "$old_pretrain_root" && "$current_tox21" == "${old_pretrain_root}/tox21_gate.env" ) ]]; then
+      PRETRAIN_TOX21_ENV="$default_tox"
+      export PRETRAIN_TOX21_ENV
+    fi
+
+    FREEZE_MARKER="${new_pretrain_root}/bench/encoder_frozen.ok"
+    export FREEZE_MARKER
+    if [[ -f "$FREEZE_MARKER" ]]; then
+      FROZEN=1
+    else
+      FROZEN=0
+    fi
+    export FROZEN
+
+    ORIGINAL_PRETRAIN_EXP_ID="$PRETRAIN_EXP_ID"
+    export ORIGINAL_PRETRAIN_EXP_ID
+  fi
+
+  if [[ -n "$new_grid" ]]; then
+    local new_grid_root="${root}/${new_grid}"
+    GRID_EXP_ID="$new_grid"
+    export GRID_EXP_ID
+    GRID_EXPERIMENT_ROOT="$new_grid_root"
+    export GRID_EXPERIMENT_ROOT
+
+    local candidate_source="${new_grid_root}/grid"
+    local current_grid_source="${GRID_SOURCE_DIR:-}"
+    if [[ -z "$current_grid_source" || ( -n "$old_grid_root" && "${current_grid_source%/}" == "${old_grid_root%/}" ) ]]; then
+      GRID_SOURCE_DIR="$candidate_source"
+      export GRID_SOURCE_DIR
+    fi
+  fi
+}
+
 grace_marker() {
   local stage="${1:?stage}" log_dir="${2:-${LOG_DIR:-}}"
   if [[ -z "$log_dir" ]]; then
