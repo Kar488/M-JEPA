@@ -320,29 +320,7 @@ jobs:
             GRID_MODE,WANDB_COUNT, TOPK_RECHECK,EXTRA_SEEDS,PHASE2_METRIC,PHASE2_DIRECTION,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR,
             PHASE2_AGENT_COUNT
           script: |
-            # inject ssh options directly into the shell session
-            bash -lc 'set -euxo pipefail
-              whoami
-              pwd
-              echo "$HOME"
-              ssh -V || true
-              ps -ef | grep -E "[s]shd|sshd:" || true
-              ss -tlnp | grep -E ":22|sshd" || true
-              ls -la ~/.ssh || true
-              for f in ~/.ssh/*.pub; do
-                if [ -f "$f" ]; then
-                  echo "PUBKEY:$f:$(cat "$f" | wc -c)"
-                fi
-              done
-              true
-              probe_cmd="ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=20 -o TCPKeepAlive=yes localhost true"
-              echo "probe_cmd=$probe_cmd"
-              ssh -vvv -o StrictHostKeyChecking=no \
-                  -o ServerAliveInterval=30 \
-                  -o ServerAliveCountMax=20 \
-                  -o TCPKeepAlive=yes localhost true || echo "ssh-exit=$?"
-              bash "$APP_DIR/scripts/ci/run-grid-phase2.sh"
-            '
+            bash "$APP_DIR/scripts/ci/run-grid-phase2.sh"
         env:
           # agent knobs (already have these)
           HARD_WALL_MINS: ${{ env.PHASE2_SWEEP_WALL_MINS }}
