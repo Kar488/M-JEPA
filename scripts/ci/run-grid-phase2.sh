@@ -31,33 +31,39 @@ fi
 common_grid_exp_id="${GRID_EXP_ID:-}"
 common_pretrain_exp_id="${PRETRAIN_EXP_ID:-}"
 
-ci_phase2_should_bind_ids=0
-if [[ -n "${EXP_ID:-}" ]]; then
-  if (( ! FROZEN )) || [[ "${FORCE_UNFREEZE_GRID:-}" == "1" ]]; then
-    ci_phase2_should_bind_ids=1
-  fi
-fi
-
 new_grid_exp_id=""
 new_pretrain_exp_id=""
 
-if (( ci_phase2_should_bind_ids )); then
-  if [[ "${GRID_EXP_ID:-}" != "${EXP_ID:-}" ]]; then
-    if (( ! CI_PHASE2_INCOMING_GRID_EXP_ID_SET )) || [[ -z "${CI_PHASE2_INCOMING_GRID_EXP_ID}" ]] || \
-       [[ -z "${ORIGINAL_PRETRAIN_EXP_ID:-}" ]] || \
-       [[ "${GRID_EXP_ID:-}" == "${ORIGINAL_PRETRAIN_EXP_ID:-}" ]] || \
-       ([[ -n "${PRETRAIN_STATE_ID:-}" ]] && [[ "${GRID_EXP_ID:-}" == "${PRETRAIN_STATE_ID:-}" ]]); then
-      new_grid_exp_id="${EXP_ID}"
+ci_phase2_force_reuse="${FORCE_REUSE_PHASE2_IDS:-0}"
+# Honour explicit overrides (FORCE_REUSE_PHASE2_IDS) so operators can bind to an
+# existing lineage even if the freeze gate has not fired yet.
+ci_phase2_force_reuse="${ci_phase2_force_reuse,,}"
+case "$ci_phase2_force_reuse" in
+  1|true|yes|on) ci_phase2_force_reuse=1 ;;
+  *) ci_phase2_force_reuse=0 ;;
+esac
+
+ci_phase2_rebind_ids=0
+if [[ -n "${EXP_ID:-}" ]]; then
+  if (( ! FROZEN )) || [[ "${FORCE_UNFREEZE_GRID:-}" == "1" ]]; then
+    if (( ! ci_phase2_force_reuse )); then
+      ci_phase2_rebind_ids=1
     fi
   fi
+fi
 
-  if [[ "${PRETRAIN_EXP_ID:-}" != "${EXP_ID:-}" ]]; then
-    if (( ! CI_PHASE2_INCOMING_PRETRAIN_EXP_ID_SET )) || [[ -z "${CI_PHASE2_INCOMING_PRETRAIN_EXP_ID}" ]] || \
-       [[ -z "${ORIGINAL_PRETRAIN_EXP_ID:-}" ]] || \
-       [[ "${PRETRAIN_EXP_ID:-}" == "${ORIGINAL_PRETRAIN_EXP_ID:-}" ]] || \
-       ([[ -n "${PRETRAIN_STATE_ID:-}" ]] && [[ "${PRETRAIN_EXP_ID:-}" == "${PRETRAIN_STATE_ID:-}" ]]); then
-      new_pretrain_exp_id="${EXP_ID}"
-    fi
+if (( ci_phase2_rebind_ids )); then
+  if [[ -n "${CI_PHASE2_INCOMING_GRID_EXP_ID:-}" ]] && [[ "${CI_PHASE2_INCOMING_GRID_EXP_ID}" != "${EXP_ID}" ]]; then
+    echo "[phase2] ignoring stale GRID_EXP_ID=${CI_PHASE2_INCOMING_GRID_EXP_ID} in favour of EXP_ID=${EXP_ID}" >&2
+  fi
+  if [[ -n "${CI_PHASE2_INCOMING_PRETRAIN_EXP_ID:-}" ]] && [[ "${CI_PHASE2_INCOMING_PRETRAIN_EXP_ID}" != "${EXP_ID}" ]]; then
+    echo "[phase2] ignoring stale PRETRAIN_EXP_ID=${CI_PHASE2_INCOMING_PRETRAIN_EXP_ID} in favour of EXP_ID=${EXP_ID}" >&2
+  fi
+  if [[ "${GRID_EXP_ID:-}" != "${EXP_ID}" ]]; then
+    new_grid_exp_id="${EXP_ID}"
+  fi
+  if [[ "${PRETRAIN_EXP_ID:-}" != "${EXP_ID}" ]]; then
+    new_pretrain_exp_id="${EXP_ID}"
   fi
 fi
 
@@ -72,7 +78,8 @@ if [[ -n "$new_pretrain_exp_id" ]]; then
 fi
 
 if [[ -n "$new_grid_exp_id" ]] || [[ -n "$new_pretrain_exp_id" ]]; then
-  echo "[phase2] binding EXP_ID=${EXP_ID:-<unset>} -> GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} (previous grid=${common_grid_exp_id:-<unset>} pretrain=${common_pretrain_exp_id:-<unset>})" >&2
+  echo "[phase2] binding EXP_ID=${EXP_ID:-<unset>} -> GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}" >&2
+  echo "        (previous grid=${common_grid_exp_id:-<unset>} pretrain=${common_pretrain_exp_id:-<unset>})" >&2
   ci_phase2_refresh_lineage_bindings \
     "$new_pretrain_exp_id" \
     "$new_grid_exp_id" \

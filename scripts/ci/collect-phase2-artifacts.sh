@@ -14,8 +14,24 @@ mkdir -p "$DEST_ROOT" ~/.ssh
 
 KEY_PATH=~/.ssh/vast_key
 trap 'rm -f "$KEY_PATH"' EXIT
-printf '%s' "$SSH_KEY" >"$KEY_PATH"
+if [[ "$SSH_KEY" != *$'\n' ]]; then
+  printf '%s\n' "$SSH_KEY" >"$KEY_PATH"
+else
+  printf '%s' "$SSH_KEY" >"$KEY_PATH"
+fi
 chmod 600 "$KEY_PATH"
+
+if command -v ssh-agent >/dev/null 2>&1; then
+  if [[ -z "${SSH_AUTH_SOCK:-}" || ! -S "${SSH_AUTH_SOCK}" ]]; then
+    eval "$(ssh-agent -s)" >/dev/null 2>&1 || true
+  fi
+fi
+
+if command -v ssh-add >/dev/null 2>&1; then
+  if ! ssh-add -L 2>/dev/null | grep -F "$KEY_PATH" >/dev/null 2>&1; then
+    SSH_ASKPASS="${SSH_ASKPASS:-/bin/true}" DISPLAY="${DISPLAY:-}" ssh-add "$KEY_PATH" >/dev/null 2>&1 || true
+  fi
+fi
 
 REMOTE="${VAST_USER}@${VAST_HOST}"
 SSH_OPTS=(-i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
