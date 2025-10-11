@@ -37,8 +37,9 @@ REMOTE="${VAST_USER}@${VAST_HOST}"
 SSH_OPTS=(-i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
 RSYNC=(rsync -avz --chmod=ugo=rwX -e "ssh ${SSH_OPTS[*]}")
 
-remote_lineage_grid="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/grid"
-remote_current_id="${GRID_EXP_ID:-${EXP_ID}}"
+remote_lineage_id="${GRID_EXP_ID:-${PRETRAIN_EXP_ID}}"
+remote_lineage_grid="${EXPERIMENTS_ROOT%/}/${remote_lineage_id}/grid"
+remote_current_id="${EXP_ID}"
 remote_current_grid="${EXPERIMENTS_ROOT%/}/${remote_current_id}/grid"
 
 collect_tree() {
