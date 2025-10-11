@@ -1208,9 +1208,20 @@ def main() -> None:
                 if worker_count == 0:
                     worker_count = 1
 
-                if len(pending_seeds) == 1 or worker_count == 1:
-                    mask = worker_masks[0] if worker_masks else (default_gpu_mask or None)
-                    for seed in pending_seeds:
+                if worker_count == 1 or len(pending_seeds) <= worker_count:
+                    masks: List[Optional[str]]
+                    if worker_masks:
+                        masks = worker_masks
+                    elif default_gpu_mask:
+                        masks = [default_gpu_mask]
+                    else:
+                        masks = [None]
+
+                    for idx_seed, seed in enumerate(pending_seeds):
+                        mask = masks[idx_seed % len(masks)]
+                        effective_mask = mask
+                        if not effective_mask and default_gpu_mask:
+                            effective_mask = default_gpu_mask
                         rc = run_once(
                             args.mm,
                             args.program,
@@ -1224,7 +1235,7 @@ def main() -> None:
                             args.group,
                             index,
                             exp_id,
-                            device_mask=mask,
+                            device_mask=effective_mask,
                         )
                         print(f"[recheck][seed {seed}] finished with exit code {rc}", flush=True)
                         if rc != 0:
