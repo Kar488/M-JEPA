@@ -97,3 +97,41 @@ if out_path:
 
 print(f"Resolved grid_exp_id={grid_id}, pretrain_exp_id={pretrain_id}")
 PY
+
+mapfile -t _resolved_ids < <(
+  python_inline "${json_payload}" <<'PY'
+import json
+import os
+import sys
+
+payload = {}
+try:
+    payload = json.loads(sys.argv[1])
+except Exception:
+    payload = {}
+
+default_id = os.environ.get("DEFAULT_ID", "")
+run_id = os.environ.get("RUN_ID", "")
+
+grid_id = (payload.get("grid_exp_id") or default_id or run_id or "").strip()
+pretrain_id = (payload.get("pretrain_exp_id") or grid_id or default_id or run_id or "").strip()
+
+print(grid_id)
+print(pretrain_id)
+PY
+)
+
+grid_exp_id="${_resolved_ids[0]:-}"
+pretrain_exp_id="${_resolved_ids[1]:-${grid_exp_id}}"
+
+src_grid="${EXPERIMENTS_ROOT%/}/${grid_exp_id}/grid"
+dst_grid="${EXPERIMENTS_ROOT%/}/${pretrain_exp_id}/grid"
+
+if [[ -f "${src_grid}/phase2_sweep_id.txt" ]] && [[ ! -f "${dst_grid}/phase2_sweep_id.txt" ]]; then
+  mkdir -p "$dst_grid"
+  for f in phase2_sweep_id.txt best_grid_config.json recheck_summary.json grid_state.json; do
+    if [[ -f "${src_grid}/$f" ]]; then
+      cp -f "${src_grid}/$f" "${dst_grid}/$f"
+    fi
+  done
+fi
