@@ -47,7 +47,7 @@ parameters:
   num-workers:          {value: 8} #4*GPUs - keep data loading saturated
   persistent-workers:   {value: 1} # 0 false, keep workers alive between epochs
   prefetch-factor:      {value: 2} #each worker can prefetch 2 batches
-  pin-memory:           {value: 0} # 0 false, enables faster transfer to GPU
+  pin-memory:           {value: 1} # 0 false, enables faster transfer to GPU
   bf16:                 {value: 1} #1 true, enables mixed precision training
 
   # Temperature applies only to contrastive runs, so it remains absent here.
