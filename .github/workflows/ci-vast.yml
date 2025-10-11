@@ -81,6 +81,9 @@ env:
   TOX21_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).tox21 || '/data/mjepa/cache/tox21' }}
   REPORTS_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).reports || '/data/mjepa/cache/reports' }}
   FORCE_UNFREEZE_GRID: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags || '', 'force_unfreeze_grid') && '1' || '0' }}
+  CI_FORCE_UNFREEZE_GRID: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags || '', 'force_unfreeze_grid') && '1' || '0' }}
+  CI_PHASE1_FORCE_REUSE_GRID: '0'
+  CI_PHASE2_FORCE_REUSE_PHASE2_IDS: '0'
   FORCE_RERUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rerun || '' }}
   GRID_MODE_VAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb' }}
 
@@ -252,6 +255,9 @@ jobs:
     runs-on: ubuntu-latest
     #timeout-minutes: 740
     needs: [tests_quick,vast_deploy_and_prepare_environment]
+    outputs:
+      grid_exp_id: ${{ steps.phase1_ids.outputs.grid_exp_id }}
+      pretrain_exp_id: ${{ steps.phase1_ids.outputs.pretrain_exp_id }}
     steps:
       - name: Run grid search
         uses: appleboy/ssh-action@v1
@@ -290,7 +296,26 @@ jobs:
           VAST_HOST: ${{ secrets.VAST_HOST }}
           VAST_USER: ${{ secrets.VAST_USER }}
           VAST_PORT: ${{ secrets.VAST_PORT }}
-# Option X: keep a single Vast job running sweep → recheck → export sequentially.
+      - name: Checkout helper scripts
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/ci
+          sparse-checkout-cone-mode: false
+      # Capture lineage ids after Phase-1 so subsequent jobs reuse the correct slots.
+      - name: Resolve Phase-1 lineage identifiers
+        id: phase1_ids
+        env:
+          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+          VAST_USER: ${{ secrets.VAST_USER }}
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
+          APP_DIR: ${{ env.APP_DIR }}
+          EXPERIMENTS_ROOT: ${{ env.EXPERIMENTS_ROOT }}
+          RUN_ID: ${{ github.run_id }}
+        run: bash scripts/ci/publish_phase1_lineage.sh
+  # Option X: keep a single Vast job running sweep → recheck → export sequentially.
   vast_sweep_phase2:
     if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb') }}
     name: Phase 2 (sweep → recheck → export)
@@ -302,7 +327,9 @@ jobs:
       cancel-in-progress: true
     env:
       RUN_ID: ${{ github.run_id }}
-      EXP_ID: ${{ github.run_id }}
+      EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
+      GRID_EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
+      PRETRAIN_EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.pretrain_exp_id || needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
       PHASE2_SWEEP_WALL_MINS: 920
       PHASE2_RECHECK_WALL_MINS: 180
       PHASE2_EXPORT_WALL_MINS: 30
@@ -319,10 +346,10 @@ jobs:
           command_timeout: 940m
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,
-            GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,RUN_ID,EXP_ID,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
+            GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,RUN_ID,EXP_ID,GRID_EXP_ID,PRETRAIN_EXP_ID,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
             PHASE2_SWEEP_WALL_MINS,PHASE2_RECHECK_WALL_MINS,PHASE2_EXPORT_WALL_MINS,
             GRID_MODE,WANDB_COUNT, TOPK_RECHECK,EXTRA_SEEDS,PHASE2_METRIC,PHASE2_DIRECTION,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR,
-            PHASE2_AGENT_COUNT
+            PHASE2_AGENT_COUNT,CI_FORCE_UNFREEZE_GRID,CI_PHASE2_FORCE_REUSE_PHASE2_IDS
           script: |
             bash "$APP_DIR/scripts/ci/run-grid-phase2.sh"
         env:
@@ -410,6 +437,10 @@ jobs:
              needs.vast_learn_hyperparameters.result == 'success')
           )
       }}
+    env:
+      EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
+      GRID_EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
+      PRETRAIN_EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.pretrain_exp_id || needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
     outputs:
       exp_id: ${{ steps.pretrain_state.outputs.exp_id }}
       pretrain_root: ${{ steps.pretrain_state.outputs.experiment_root }}
@@ -434,7 +465,7 @@ jobs:
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             GRID_MODE,WANDB_COUNT,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,EXPERIMENTS_ROOT
+            BESTCFG_NO_EPOCHS,EXP_ID,GRID_EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,EXPERIMENTS_ROOT
           script: |
             bash "$APP_DIR/scripts/ci/run-pretrain.sh"
         env:

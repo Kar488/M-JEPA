@@ -112,13 +112,9 @@ ci_phase2_refresh_lineage_bindings() {
 
     FREEZE_MARKER="${new_pretrain_root}/bench/encoder_frozen.ok"
     export FREEZE_MARKER
-    if [[ -f "$FREEZE_MARKER" ]]; then
-      FROZEN=1
-    else
-      FROZEN=0
+    if declare -F ci_refresh_freeze_state >/dev/null 2>&1; then
+      ci_refresh_freeze_state "$FREEZE_MARKER"
     fi
-    export FROZEN
-
     ORIGINAL_PRETRAIN_EXP_ID="$PRETRAIN_EXP_ID"
     export ORIGINAL_PRETRAIN_EXP_ID
   fi
@@ -1316,6 +1312,9 @@ run_stage() {
   local rc=0
   OUT_DIR="$dir"
   export OUT_DIR
+  if declare -F ci_refresh_freeze_state >/dev/null 2>&1; then
+    ci_refresh_freeze_state "${FREEZE_MARKER:-}"
+  fi
   if declare -F ci_setup_vast_ssh_key >/dev/null 2>&1; then
     ci_setup_vast_ssh_key || true
   fi
@@ -1324,9 +1323,9 @@ run_stage() {
   echo "     READ: ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>} GRID_DIR=${grid_read}" >&2
   echo "     WRITE: OUT_DIR=${OUT_DIR:-<unset>} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>}" >&2
 
-  if (( FROZEN )) && [[ "${FORCE_UNFREEZE_GRID}" != "1" ]]; then
+  if (( FROZEN )) && [[ "${CI_FORCE_UNFREEZE_GRID}" != "1" ]]; then
     case "$stage" in
-      pretrain|grid|grid_search|phase1|phase2_sweep)
+      pretrain|grid|grid_search|phase1|phase2_sweep|phase2_recheck|phase2_export|finetune)
         echo "[ci] skip: frozen lineage (stage=${stage})" >&2
         return 0
         ;;

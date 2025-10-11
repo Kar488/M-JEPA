@@ -102,6 +102,42 @@ ci_phase2_select_existing_grid() {
   [[ -n "$best_dir" ]]
 }
 
+ci_phase2_locate_phase1_spec() {
+  local out_id_var="$1" out_dir_var="$2"
+  local root="${EXPERIMENTS_ROOT%/}"
+  local best_id="" best_dir=""
+
+  if [[ -n "${EXP_ID:-}" && -n "$root" ]]; then
+    local candidate_spec="${root}/${EXP_ID}/grid/grid_sweep_phase2.yaml"
+    if [[ -f "$candidate_spec" ]]; then
+      printf -v "$out_id_var" '%s' "${EXP_ID}"
+      printf -v "$out_dir_var" '%s' "${candidate_spec%/*}"
+      return 0
+    fi
+  fi
+
+  if [[ -d "$root" ]]; then
+    local best_line
+    best_line=$(find "$root" -maxdepth 3 -path '*/grid/grid_sweep_phase2.yaml' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1)
+    if [[ -n "$best_line" ]]; then
+      local spec_path
+      spec_path="${best_line#* }"
+      best_dir="$(dirname "$spec_path")"
+      best_id="$(basename "$(dirname "$best_dir")")"
+    fi
+  fi
+
+  if [[ -z "$best_dir" && -n "$root" && -n "${EXP_ID:-}" ]]; then
+    best_id="${EXP_ID}"
+    best_dir="${root}/${EXP_ID}/grid"
+  fi
+
+  printf -v "$out_id_var" '%s' "$best_id"
+  printf -v "$out_dir_var" '%s' "$best_dir"
+
+  [[ -n "$best_dir" ]]
+}
+
 ci_phase2_ensure_sweep_id() {
   local grid_root="${1%/}"
   local prior_source="${2%/}"
@@ -171,14 +207,8 @@ new_pretrain_exp_id=""
 ci_phase2_candidate_grid_id=""
 ci_phase2_candidate_grid_dir=""
 
-ci_phase2_force_reuse="${FORCE_REUSE_PHASE2_IDS:-0}"
-# Honour explicit overrides (FORCE_REUSE_PHASE2_IDS) so operators can bind to an
-# existing lineage even if the freeze gate has not fired yet.
-ci_phase2_force_reuse="${ci_phase2_force_reuse,,}"
-case "$ci_phase2_force_reuse" in
-  1|true|yes|on) ci_phase2_force_reuse=1 ;;
-  *) ci_phase2_force_reuse=0 ;;
-esac
+ci_phase2_force_reuse="$(normalize_bool "${FORCE_REUSE_PHASE2_IDS:-0}" 0)"
+ci_phase2_force_reuse="$(normalize_bool "${CI_PHASE2_FORCE_REUSE_PHASE2_IDS:-${ci_phase2_force_reuse}}" "$ci_phase2_force_reuse")"
 
 ci_phase2_select_existing_grid \
   "$common_grid_exp_id" \
@@ -187,28 +217,41 @@ ci_phase2_select_existing_grid \
   ci_phase2_candidate_grid_id \
   ci_phase2_candidate_grid_dir || true
 
-if (( ! FROZEN )) || [[ "${FORCE_UNFREEZE_GRID:-}" == "1" ]]; then
-  if (( ci_phase2_force_reuse )); then
-    :
-  elif [[ -n "$ci_phase2_candidate_grid_dir" ]]; then
-    if [[ -n "$ci_phase2_candidate_grid_id" && "${GRID_EXP_ID:-}" != "$ci_phase2_candidate_grid_id" ]]; then
-      new_grid_exp_id="$ci_phase2_candidate_grid_id"
+freeze_active=0
+if (( FROZEN )) && [[ "${CI_FORCE_UNFREEZE_GRID}" != "1" ]]; then
+  freeze_active=1
+fi
+
+if (( freeze_active || ci_phase2_force_reuse )) && [[ -n "$ci_phase2_candidate_grid_dir" ]]; then
+  new_grid_exp_id="$ci_phase2_candidate_grid_id"
+  if [[ -z "$new_grid_exp_id" ]]; then
+    new_grid_exp_id="$(basename "$(dirname "$ci_phase2_candidate_grid_dir")")"
+  fi
+  GRID_SOURCE_DIR="$ci_phase2_candidate_grid_dir"
+  export GRID_SOURCE_DIR
+  GRID_DIR="$ci_phase2_candidate_grid_dir"
+  export GRID_DIR
+  if [[ -n "$new_grid_exp_id" ]]; then
+    candidate_parent="$(dirname "$ci_phase2_candidate_grid_dir")"
+    if [[ -f "${candidate_parent}/pretrain_state.json" ]]; then
+      new_pretrain_exp_id="$new_grid_exp_id"
     fi
-    GRID_SOURCE_DIR="$ci_phase2_candidate_grid_dir"
-    export GRID_SOURCE_DIR
-    if [[ -n "$ci_phase2_candidate_grid_id" && "$ci_phase2_candidate_grid_id" != "$common_grid_exp_id" ]]; then
-      echo "[phase2] reusing existing grid lineage ${ci_phase2_candidate_grid_id}" >&2
-    fi
-    candidate_parent_dir="$(dirname "$ci_phase2_candidate_grid_dir")"
-    candidate_pretrain_state="${candidate_parent_dir}/pretrain_state.json"
-    if [[ -f "$candidate_pretrain_state" ]]; then
-      candidate_pretrain_id="$ci_phase2_candidate_grid_id"
-      if [[ -z "$candidate_pretrain_id" ]]; then
-        candidate_pretrain_id="$(basename "$candidate_parent_dir")"
-      fi
-      if [[ -n "$candidate_pretrain_id" ]]; then
-        new_pretrain_exp_id="$candidate_pretrain_id"
-      fi
+  fi
+  if [[ -n "$new_grid_exp_id" && "$new_grid_exp_id" != "$common_grid_exp_id" ]]; then
+    echo "[phase2] reusing existing grid lineage ${new_grid_exp_id}" >&2
+  fi
+elif (( freeze_active || ci_phase2_force_reuse )); then
+  echo "[phase2][warn] requested reuse of existing grid but no prior lineage with phase2 sweep outputs was found" >&2
+fi
+
+if [[ -z "$new_grid_exp_id" ]]; then
+  phase1_grid_id=""
+  phase1_grid_dir=""
+  if ci_phase2_locate_phase1_spec phase1_grid_id phase1_grid_dir; then
+    new_grid_exp_id="$phase1_grid_id"
+    if [[ -n "$phase1_grid_dir" ]]; then
+      GRID_SOURCE_DIR="$phase1_grid_dir"
+      export GRID_SOURCE_DIR
     fi
   elif [[ -n "${EXP_ID:-}" ]]; then
     if [[ -n "${CI_PHASE2_INCOMING_GRID_EXP_ID:-}" ]] && [[ "${CI_PHASE2_INCOMING_GRID_EXP_ID}" != "${EXP_ID}" ]]; then
@@ -217,20 +260,9 @@ if (( ! FROZEN )) || [[ "${FORCE_UNFREEZE_GRID:-}" == "1" ]]; then
     if [[ -n "${CI_PHASE2_INCOMING_PRETRAIN_EXP_ID:-}" ]] && [[ "${CI_PHASE2_INCOMING_PRETRAIN_EXP_ID}" != "${EXP_ID}" ]]; then
       echo "[phase2] ignoring stale PRETRAIN_EXP_ID=${CI_PHASE2_INCOMING_PRETRAIN_EXP_ID} in favour of EXP_ID=${EXP_ID}" >&2
     fi
-    if [[ "${GRID_EXP_ID:-}" != "${EXP_ID}" ]]; then
-      new_grid_exp_id="${EXP_ID}"
-    fi
-    local exp_pretrain_state=""
+    new_grid_exp_id="${EXP_ID}"
     if [[ -n "${EXPERIMENTS_ROOT:-}" ]]; then
-      exp_pretrain_state="${EXPERIMENTS_ROOT%/}/${EXP_ID}/pretrain_state.json"
-    fi
-    if [[ -f "$exp_pretrain_state" ]]; then
-      if [[ "${PRETRAIN_EXP_ID:-}" != "${EXP_ID}" ]]; then
-        new_pretrain_exp_id="${EXP_ID}"
-      fi
-    fi
-    if [[ -n "${GRID_DIR:-}" ]]; then
-      GRID_SOURCE_DIR="${GRID_DIR}"
+      GRID_SOURCE_DIR="${EXPERIMENTS_ROOT%/}/${EXP_ID}/grid"
       export GRID_SOURCE_DIR
     fi
   fi
@@ -244,6 +276,12 @@ fi
 if [[ -n "$new_pretrain_exp_id" ]]; then
   PRETRAIN_EXP_ID="$new_pretrain_exp_id"
   export PRETRAIN_EXP_ID
+elif [[ -n "$new_grid_exp_id" && -n "${EXPERIMENTS_ROOT:-}" ]]; then
+  candidate_pretrain_state="${EXPERIMENTS_ROOT%/}/${new_grid_exp_id}/pretrain_state.json"
+  if [[ -f "$candidate_pretrain_state" ]]; then
+    PRETRAIN_EXP_ID="$new_grid_exp_id"
+    export PRETRAIN_EXP_ID
+  fi
 fi
 
 if [[ -n "$new_grid_exp_id" ]] || [[ -n "$new_pretrain_exp_id" ]]; then
@@ -257,6 +295,17 @@ if [[ -n "$new_grid_exp_id" ]] || [[ -n "$new_pretrain_exp_id" ]]; then
 elif [[ -z "${GRID_SOURCE_DIR:-}" && -n "${GRID_EXP_ID:-}" ]]; then
   GRID_SOURCE_DIR="${EXPERIMENTS_ROOT%/}/${GRID_EXP_ID}/grid"
   export GRID_SOURCE_DIR
+fi
+
+if (( !(freeze_active || ci_phase2_force_reuse) )) && [[ -n "${GRID_EXP_ID:-}" && -n "${EXPERIMENTS_ROOT:-}" ]]; then
+  target_grid_dir="${EXPERIMENTS_ROOT%/}/${GRID_EXP_ID}/grid"
+  if [[ -z "${GRID_DIR:-}" ]]; then
+    GRID_DIR="$target_grid_dir"
+    export GRID_DIR
+  elif [[ -n "$common_grid_exp_id" && "${GRID_DIR%/}" == "${EXPERIMENTS_ROOT%/}/${common_grid_exp_id}/grid" ]]; then
+    GRID_DIR="$target_grid_dir"
+    export GRID_DIR
+  fi
 fi
 
 if [[ -z "${GRID_SOURCE_DIR:-}" && -n "$ci_phase2_candidate_grid_dir" ]]; then
