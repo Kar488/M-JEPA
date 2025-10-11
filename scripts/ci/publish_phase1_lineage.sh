@@ -37,18 +37,35 @@ chmod 600 "$tmp_key"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/common.sh"
 
-ensure_micromamba >/dev/null 2>&1 || ensure_micromamba
-python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
+resolve_ci_python python_cmd
 
-remote_cmd=(
-  "cd" "${APP_DIR}"
-  "&&"
-  "${python_cmd[@]}" "scripts/ci/resolve_lineage_ids.py"
-  "--root" "${EXPERIMENTS_ROOT}"
-  "--default-id" "${DEFAULT_ID}"
+printf -v app_dir_q '%q' "$APP_DIR"
+printf -v experiments_root_q '%q' "$EXPERIMENTS_ROOT"
+printf -v default_id_q '%q' "$DEFAULT_ID"
+
+remote_script=$(cat <<EOF
+set -euo pipefail
+cd ${app_dir_q}
+if command -v python >/dev/null 2>&1; then
+  env PYTHONUNBUFFERED=1 python -u scripts/ci/resolve_lineage_ids.py --root ${experiments_root_q} --default-id ${default_id_q}
+elif command -v python3 >/dev/null 2>&1; then
+  env PYTHONUNBUFFERED=1 python3 -u scripts/ci/resolve_lineage_ids.py --root ${experiments_root_q} --default-id ${default_id_q}
+elif command -v micromamba >/dev/null 2>&1; then
+  micromamba run -n mjepa env PYTHONUNBUFFERED=1 python -u scripts/ci/resolve_lineage_ids.py --root ${experiments_root_q} --default-id ${default_id_q}
+else
+  echo "publish_phase1_lineage: python runtime not found" >&2
+  exit 127
+fi
+EOF
 )
 
-json_payload="$(ssh -i "$tmp_key" "${ssh_opts[@]}" "${VAST_USER}@${VAST_HOST}" "${remote_cmd[*]}" || echo '{}')"
+if ! json_payload="$(
+  ssh -i "$tmp_key" "${ssh_opts[@]}" "${VAST_USER}@${VAST_HOST}" 'bash -s' <<EOS
+${remote_script}
+EOS
+)"; then
+  json_payload='{}'
+fi
 
 echo "phase1-lineage: ${json_payload}"
 
