@@ -85,14 +85,23 @@ if not grid_id:
 env_path = os.environ.get("CI_ENV_FILE") or os.environ.get("GITHUB_ENV")
 if env_path:
     with open(env_path, "a", encoding="utf-8") as handle:
-        handle.write(f"GRID_EXP_ID={grid_id}\n")
-        handle.write(f"EXP_ID={grid_id}\n")
+        # Only export GRID_EXP_ID if it came from the payload (i.e. a prior Phase‑1 sweep).
+        # If grid_id was derived from DEFAULT_ID/RUN_ID, leave GRID_EXP_ID unset
+        # so that subsequent Phase‑2 steps can override it with the new sweep ID.
+        if from_payload:
+            handle.write(f"GRID_EXP_ID={grid_id}\n")
+            handle.write(f"EXP_ID={grid_id}\n")
+        else:
+            # use EXP_ID for the current run only; GRID_EXP_ID remains unset
+            handle.write(f"EXP_ID={grid_id}\n")
         handle.write(f"PRETRAIN_EXP_ID={pretrain_id}\n")
 
 out_path = os.environ.get("CI_OUTPUT_FILE") or os.environ.get("GITHUB_OUTPUT")
 if out_path:
     with open(out_path, "a", encoding="utf-8") as handle:
-        handle.write(f"grid_exp_id={grid_id}\n")
+        # mirror the same logic for GitHub outputs: include grid_exp_id only if from payload
+        if from_payload:
+            handle.write(f"grid_exp_id={grid_id}\n")
         handle.write(f"pretrain_exp_id={pretrain_id}\n")
 
 print(f"Resolved grid_exp_id={grid_id}, pretrain_exp_id={pretrain_id}")
