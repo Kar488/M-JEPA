@@ -48,7 +48,7 @@ cd ${app_dir_q}
 export APP_DIR="$(pwd)"
 source scripts/ci/common.sh
 resolve_ci_python
-"${PYTHON_CMD[@]}" scripts/ci/resolve_lineage_ids.py --root ${experiments_root_q} --default-id ${default_id_q}
+"\${PYTHON_CMD[@]}" scripts/ci/resolve_lineage_ids.py --root ${experiments_root_q} --default-id ${default_id_q}
 EOF
 )
 
