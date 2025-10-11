@@ -26,8 +26,8 @@ ci_setup_vast_ssh_key() {
   fi
 
   if command -v ssh-add >/dev/null 2>&1; then
-    if ! ssh-add -l 2>/dev/null | grep -q "$key_path"; then
-      ssh-add "$key_path" >/dev/null 2>&1 || true
+    if ! ssh-add -L 2>/dev/null | grep -F "$key_path" >/dev/null 2>&1; then
+      SSH_ASKPASS="${SSH_ASKPASS:-/bin/true}" DISPLAY="${DISPLAY:-}" ssh-add "$key_path" >/dev/null 2>&1 || true
     fi
   fi
 
@@ -112,13 +112,9 @@ ci_phase2_refresh_lineage_bindings() {
 
     FREEZE_MARKER="${new_pretrain_root}/bench/encoder_frozen.ok"
     export FREEZE_MARKER
-    if [[ -f "$FREEZE_MARKER" ]]; then
-      FROZEN=1
-    else
-      FROZEN=0
+    if declare -F ci_refresh_freeze_state >/dev/null 2>&1; then
+      ci_refresh_freeze_state "$FREEZE_MARKER"
     fi
-    export FROZEN
-
     ORIGINAL_PRETRAIN_EXP_ID="$PRETRAIN_EXP_ID"
     export ORIGINAL_PRETRAIN_EXP_ID
   fi
@@ -472,6 +468,58 @@ phase2_promote_local_grid() {
   fi
 }
 
+phase2_sync_grid_artifacts() {
+  local step_label="${1:-phase2}"
+  local source="${GRID_SOURCE_DIR:-}"
+  local dest="${GRID_DIR:-}"
+  if [[ -z "$dest" ]]; then
+    return 0
+  fi
+
+  local dest_dir="${dest%/}"
+  mkdir -p "$dest_dir" || return 0
+
+  if [[ -z "$source" ]]; then
+    return 0
+  fi
+
+  local source_dir="${source%/}"
+  local -a pairs=(
+    "${source_dir}/phase2_sweep_id.txt" "${dest_dir}/phase2_sweep_id.txt"
+    "${source_dir}/best_grid_config.json" "${dest_dir}/best_grid_config.json"
+    "${source_dir}/recheck_summary.json" "${dest_dir}/recheck_summary.json"
+  )
+
+  local idx=0
+  while (( idx < ${#pairs[@]} )); do
+    local src="${pairs[$idx]}"
+    local dst="${pairs[$((idx+1))]}"
+    ((idx+=2))
+
+    if [[ "$src" == "$dst" ]]; then
+      continue
+    fi
+    if [[ ! -f "$src" ]]; then
+      continue
+    fi
+    mkdir -p "$(dirname "$dst")" || continue
+    if ! cmp -s "$src" "$dst" 2>/dev/null; then
+      cp -f "$src" "$dst"
+      echo "[${step_label}] synced $(basename "$src") -> ${dst}" >&2
+    fi
+  done
+
+  local sentinel_src="${source_dir}/phase2_recheck/recheck_done.ok"
+  local sentinel_dst="$(stage_dir phase2_recheck)/recheck_done.ok"
+  if [[ -f "$sentinel_src" && "$sentinel_src" != "$sentinel_dst" ]]; then
+    mkdir -p "$(dirname "$sentinel_dst")" || return 0
+    if ! cmp -s "$sentinel_src" "$sentinel_dst" 2>/dev/null; then
+      cp -f "$sentinel_src" "$sentinel_dst"
+      echo "[${step_label}] synced $(basename "$sentinel_src") -> ${sentinel_dst}" >&2
+    fi
+  fi
+}
+
 restore_env_var() {
   local name="$1" previous="$2"
   if [[ -n "$previous" ]]; then
@@ -723,6 +771,7 @@ run_phase2_recheck_stage() {
   if [[ -f "$sentinel" ]]; then
     echo "[$step] sentinel present; skipping" >&2
     phase2_promote_local_grid "$step"
+    phase2_sync_grid_artifacts "$step"
     restore_env_var LOG_DIR "$prev_log_dir"
     return 0
   fi
@@ -827,6 +876,8 @@ run_phase2_recheck_stage() {
 
   rm -f "$incomplete" 2>/dev/null || true
 
+  phase2_sync_grid_artifacts "$step"
+
   local metadata="${dir}/stage-outputs/${step}.json"
   python_inline "$metadata" "$sweep_id" "${GRID_DIR}/recheck_summary.json" "${GRID_DIR}/best_grid_config.json" "${PHASE2_METRIC}" "${PHASE2_DIRECTION}" "${TOPK_RECHECK}" "${EXTRA_SEEDS}" <<'PY'
 import json
@@ -867,6 +918,7 @@ run_phase2_export_stage() {
   phase2_step_diag "$step"
 
   phase2_promote_local_grid "$step"
+  phase2_sync_grid_artifacts "$step"
 
   local sweep_id_file="${GRID_SOURCE_DIR}/phase2_sweep_id.txt"
   if [[ ! -f "$sweep_id_file" ]]; then
@@ -894,28 +946,19 @@ run_phase2_export_stage() {
     return 4
   fi
 
-  local best_json="${GRID_SOURCE_DIR}/best_grid_config.json"
-  if [[ ! -f "$best_json" && -f "${GRID_DIR}/best_grid_config.json" ]]; then
-    best_json="${GRID_DIR}/best_grid_config.json"
-    phase2_promote_local_grid "$step"
-  fi
+  local best_json="${GRID_DIR}/best_grid_config.json"
   local summary_json="${GRID_DIR}/recheck_summary.json"
 
   if [[ ! -f "$best_json" ]]; then
-    echo "[$step][fatal] expected ${best_json} but it was not created (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>}). Rerun phase2_export or ensure GRID_EXP_ID points at the sweep lineage." >&2
+    echo "[$step][fatal] expected best_grid_config.json at $best_json but it is missing (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>})." >&2
     restore_env_var LOG_DIR "$prev_log_dir"
     return 3
   fi
 
-  local canonical_best="${GRID_DIR}/best_grid_config.json"
-  if [[ "$best_json" != "$canonical_best" ]]; then
-    mkdir -p "${GRID_DIR}"
-    cp -f "$best_json" "$canonical_best"
-    best_json="$canonical_best"
-  fi
-  if [[ -f "$summary_json" && "$summary_json" != "${GRID_DIR}/recheck_summary.json" ]]; then
-    cp -f "$summary_json" "${GRID_DIR}/recheck_summary.json"
-    summary_json="${GRID_DIR}/recheck_summary.json"
+  if [[ ! -f "$summary_json" ]]; then
+    echo "[$step][fatal] expected recheck_summary.json at $summary_json but it is missing (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>})." >&2
+    restore_env_var LOG_DIR "$prev_log_dir"
+    return 3
   fi
 
   python_inline "$best_json" <<'PY'
@@ -1266,16 +1309,23 @@ run_stage() {
   local stage="${s,,}"
   local dir
   dir="$(stage_dir "$stage")"
+  local rc=0
   OUT_DIR="$dir"
   export OUT_DIR
+  if declare -F ci_refresh_freeze_state >/dev/null 2>&1; then
+    ci_refresh_freeze_state "${FREEZE_MARKER:-}"
+  fi
+  if declare -F ci_setup_vast_ssh_key >/dev/null 2>&1; then
+    ci_setup_vast_ssh_key || true
+  fi
   local grid_read="${GRID_SOURCE_DIR:-${GRID_DIR:-<unset>}}"
   echo "[ci] STAGE=${stage} EXP_ID=${EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} FROZEN=${FROZEN:-0}" >&2
   echo "     READ: ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>} GRID_DIR=${grid_read}" >&2
   echo "     WRITE: OUT_DIR=${OUT_DIR:-<unset>} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>}" >&2
 
-  if (( FROZEN )) && [[ "${FORCE_UNFREEZE_GRID}" != "1" ]]; then
+  if (( FROZEN )) && [[ "${CI_FORCE_UNFREEZE_GRID}" != "1" ]]; then
     case "$stage" in
-      pretrain|grid|grid_search|phase1|phase2_sweep)
+      pretrain|grid|grid_search|phase1|phase2_sweep|phase2_recheck|phase2_export|finetune)
         echo "[ci] skip: frozen lineage (stage=${stage})" >&2
         return 0
         ;;
@@ -1304,20 +1354,32 @@ run_stage() {
   fi
 
   if [[ "$stage" == "pretrain" && $forced -eq 0 ]]; then
+    phase2_sync_grid_artifacts "$stage"
+    local grid_root="${GRID_DIR:-}"
+    local sweep_file="${grid_root%/}/phase2_sweep_id.txt"
+    local best_json="${grid_root%/}/best_grid_config.json"
+    local summary_json="${grid_root%/}/recheck_summary.json"
     local sentinel_path="$(stage_dir phase2_recheck)/recheck_done.ok"
-    local winner_hint=""
-    if [[ -n "${GRID_SOURCE_DIR:-}" && -f "${GRID_SOURCE_DIR}/best_grid_config.json" ]]; then
-      winner_hint="${GRID_SOURCE_DIR}/best_grid_config.json"
-    elif [[ -n "${GRID_DIR:-}" && -f "${GRID_DIR}/best_grid_config.json" ]]; then
-      winner_hint="${GRID_DIR}/best_grid_config.json"
+
+    if [[ -z "$grid_root" ]]; then
+      echo "[pretrain][fatal] GRID_DIR is unset; run phase2_sweep/recheck before pretraining." >&2
+      return 3
     fi
-    if [[ -z "$winner_hint" ]]; then
-      echo "[pretrain] winner not ready; skipping until grid/best_grid_config.json exists" >&2
-      return 0
+    if [[ ! -f "$sweep_file" ]]; then
+      echo "[pretrain][fatal] expected phase2 sweep output at $sweep_file" >&2
+      return 3
+    fi
+    if [[ ! -f "$best_json" ]]; then
+      echo "[pretrain][fatal] expected best_grid_config.json at $best_json" >&2
+      return 3
+    fi
+    if [[ ! -f "$summary_json" ]]; then
+      echo "[pretrain][fatal] expected recheck_summary.json at $summary_json" >&2
+      return 3
     fi
     if [[ ! -f "$sentinel_path" ]]; then
-      echo "[pretrain] waiting for Phase-2 recheck sentinel at $sentinel_path; skipping" >&2
-      return 0
+      echo "[pretrain][fatal] missing Phase-2 recheck sentinel at $sentinel_path" >&2
+      return 3
     fi
   fi
 
@@ -1506,6 +1568,38 @@ run_stage() {
       rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
       return $?
     fi
+    case "$stage" in
+      phase2_sweep)
+        if [[ -n "${GRID_DIR:-}" ]]; then
+          local sweep_stub="${GRID_DIR}/phase2_sweep_id.txt"
+          if [[ ! -f "$sweep_stub" ]]; then
+            mkdir -p "${GRID_DIR}"
+            printf 'shim-phase2-sweep\n' >"$sweep_stub"
+          fi
+        fi
+        ;;
+      phase2_recheck)
+        local shim_sentinel="${dir}/recheck_done.ok"
+        mkdir -p "$(dirname "$shim_sentinel")"
+        : >"$shim_sentinel"
+        phase2_sync_grid_artifacts "$stage"
+        if [[ -n "${GRID_DIR:-}" ]]; then
+          mkdir -p "${GRID_DIR}"
+          local shim_best="${GRID_DIR}/best_grid_config.json"
+          local shim_summary="${GRID_DIR}/recheck_summary.json"
+          [[ -f "$shim_best" ]] || printf '{}\n' >"$shim_best"
+          [[ -f "$shim_summary" ]] || printf '{}\n' >"$shim_summary"
+        fi
+        ;;
+      phase2_export)
+        phase2_sync_grid_artifacts "$stage"
+        if [[ -n "${GRID_DIR:-}" ]]; then
+          mkdir -p "${GRID_DIR}"
+          local shim_best="${GRID_DIR}/best_grid_config.json"
+          [[ -f "$shim_best" ]] || printf '{}\n' >"$shim_best"
+        fi
+        ;;
+    esac
     stage_state_write "$stage" "$dir" "$config_hash" "$data_hash" "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
     mark_stage_done "$dir"
     rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
@@ -1525,24 +1619,27 @@ run_stage() {
       stage_log_dir="${dir}/logs"
       clear_graceful_stop "$stage" "$stage_log_dir"
       if ! run_phase2_sweep_stage "$dir" "$stage"; then
+        rc=$?
         rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
-        return $?
+        return $rc
       fi
       ;;
     phase2_recheck)
       stage_log_dir="${dir}/logs"
       clear_graceful_stop "$stage" "$stage_log_dir"
       if ! run_phase2_recheck_stage "$dir" "$stage"; then
+        rc=$?
         rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
-        return $?
+        return $rc
       fi
       ;;
     phase2_export)
       stage_log_dir="${dir}/logs"
       clear_graceful_stop "$stage" "$stage_log_dir"
       if ! run_phase2_export_stage "$dir" "$stage"; then
+        rc=$?
         rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
-        return $?
+        return $rc
       fi
       ;;
     *)

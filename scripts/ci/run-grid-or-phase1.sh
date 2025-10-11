@@ -1,27 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ensure a deterministic experiment slot is allocated before the shared CI
-# helpers derive directory paths.  ``common.sh`` normally assigns ``EXP_ID``
-# from ``RUN_ID`` when Phase-1 acts as an initiator, but custom runs may call
-# this script with neither variable exported.  In that situation the shim sees
-# ``EXP_ID``/``GRID_EXP_ID`` as empty strings and ends up writing bookkeeping
-# files outside of the per-run directory.  Normalise the identifiers here so
-# all downstream helpers (including stage shims) observe the same values.
+# ``common.sh`` derives canonical directories from ``RUN_ID``/``EXP_ID``/
+# ``GRID_EXP_ID`` at import time.  When grid mode is ``custom`` we always want
+# a fresh slot instead of inheriting identifiers from the caller, so normalise
+# the values before sourcing any helpers.  The early sanitised mode is reused
+# later when deciding which code path to execute.
+GRID_MODE_EARLY_RAW="${GRID_MODE-}"
+GRID_MODE_EARLY_CLEAN=""
+if [[ -n "${GRID_MODE_EARLY_RAW}" ]]; then
+  GRID_MODE_EARLY_CLEAN="${GRID_MODE_EARLY_RAW//[[:space:]]/}"
+  GRID_MODE_EARLY_CLEAN="${GRID_MODE_EARLY_CLEAN//\"/}"
+  GRID_MODE_EARLY_CLEAN="${GRID_MODE_EARLY_CLEAN//\'/}"
+fi
+
 if [[ -z "${RUN_ID:-}" ]]; then
   RUN_ID="$(date +%s)"
-  export RUN_ID
 fi
 
 if [[ -z "${EXP_ID:-}" ]]; then
   EXP_ID="$RUN_ID"
-  export EXP_ID
 fi
 
 if [[ -z "${GRID_EXP_ID:-}" ]]; then
   GRID_EXP_ID="${EXP_ID}"
-  export GRID_EXP_ID
 fi
+
+if [[ "${GRID_MODE_EARLY_CLEAN}" == "custom" ]]; then
+  if [[ "${EXP_ID}" != "${RUN_ID}" ]]; then
+    EXP_ID="$RUN_ID"
+  fi
+  if [[ "${GRID_EXP_ID}" != "${RUN_ID}" ]]; then
+    GRID_EXP_ID="$RUN_ID"
+  fi
+fi
+
+export RUN_ID EXP_ID GRID_EXP_ID
 
 export MJEPACI_STAGE="phase1"
 
@@ -270,6 +284,33 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   BEST_ID="$JEPA_ID"; [[ "$WINNER" == "contrastive" ]] && BEST_ID="$CONTRAST_ID"
   BEST_SWEEP="${WANDB_ENTITY}/${WANDB_PROJECT}/${BEST_ID}"
 
+  phase1_force_reuse="$(normalize_bool "${CI_PHASE1_FORCE_REUSE_GRID:-0}" 0)"
+  if [[ -n "${EXP_ID:-}" && "${GRID_EXP_ID:-}" != "${EXP_ID}" ]]; then
+    local reuse_old=0
+    if (( FROZEN )) && [[ "${CI_FORCE_UNFREEZE_GRID}" != "1" ]]; then
+      reuse_old=1
+    elif (( phase1_force_reuse )); then
+      reuse_old=1
+    fi
+    if (( reuse_old )); then
+      echo "[phase1] reusing existing grid lineage ${GRID_EXP_ID} (EXP_ID=${EXP_ID})" >&2
+    else
+      local old_grid_id="${GRID_EXP_ID:-}"
+      GRID_EXP_ID="$EXP_ID"
+      export GRID_EXP_ID
+      if declare -F ci_phase2_refresh_lineage_bindings >/dev/null 2>&1; then
+        ci_phase2_refresh_lineage_bindings "" "$GRID_EXP_ID" "" "$old_grid_id"
+      fi
+      if [[ -n "${EXPERIMENTS_ROOT:-}" ]]; then
+        local new_grid_root="${EXPERIMENTS_ROOT%/}/${GRID_EXP_ID}/grid"
+        GRID_DIR="$new_grid_root"
+        export GRID_DIR
+        GRID_SOURCE_DIR="$new_grid_root"
+        export GRID_SOURCE_DIR
+      fi
+    fi
+  fi
+
   OUT_PATH="${GRID_DIR:-$APP_DIR/grid}/best.json"
   
   TMP_BEST="$(mktemp)"
@@ -332,16 +373,9 @@ else
   if [[ -z "$fresh_id" ]]; then
     fresh_id="$(date +%s)"
     RUN_ID="$fresh_id"
-    export RUN_ID
-  fi
-
-  if [[ "${EXP_ID:-}" != "$fresh_id" ]]; then
     EXP_ID="$fresh_id"
-    export EXP_ID
-  fi
-  if [[ "${GRID_EXP_ID:-}" != "$fresh_id" ]]; then
     GRID_EXP_ID="$fresh_id"
-    export GRID_EXP_ID
+    export RUN_ID EXP_ID GRID_EXP_ID
   fi
 
   if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then

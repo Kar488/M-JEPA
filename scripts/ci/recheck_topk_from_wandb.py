@@ -1167,7 +1167,10 @@ def main() -> None:
 
         visible_gpu_ids = _discover_visible_gpu_ids()
         agent_workers = _resolve_agent_count(visible_gpu_ids)
+        default_gpu_mask = ",".join(visible_gpu_ids) if visible_gpu_ids else ""
         gpu_masks = _split_gpu_ids(visible_gpu_ids, agent_workers) if visible_gpu_ids else []
+        if gpu_masks:
+            gpu_masks = [mask for mask in gpu_masks if mask.strip()]
         if not visible_gpu_ids and agent_workers > 1:
             print(
                 f"[recheck][warn] requested {agent_workers} workers but no GPUs detected; running sequentially",
@@ -1206,7 +1209,7 @@ def main() -> None:
                     worker_count = 1
 
                 if len(pending_seeds) == 1 or worker_count == 1:
-                    mask = worker_masks[0] if worker_masks else None
+                    mask = worker_masks[0] if worker_masks else (default_gpu_mask or None)
                     for seed in pending_seeds:
                         rc = run_once(
                             args.mm,
@@ -1251,6 +1254,7 @@ def main() -> None:
                             try:
                                 if error_event.is_set():
                                     continue
+                                effective_mask = mask if mask is not None else (default_gpu_mask or None)
                                 rc = run_once(
                                     args.mm,
                                     args.program,
@@ -1264,7 +1268,7 @@ def main() -> None:
                                     args.group,
                                     index,
                                     exp_id,
-                                    device_mask=mask,
+                                    device_mask=effective_mask,
                                 )
                                 print(f"[recheck][seed {seed_item}] finished with exit code {rc}", flush=True)
                                 if rc != 0:
@@ -1398,6 +1402,7 @@ def main() -> None:
             print(f"[recheck] final Phase-2 winner saved → {best_path}", flush=True)
         success = True
     except KeyboardInterrupt:
+        produced_partial = True
         print("[recheck] interrupted by signal; aborting", flush=True)
         raise
     finally:
