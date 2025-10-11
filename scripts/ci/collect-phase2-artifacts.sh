@@ -38,7 +38,8 @@ SSH_OPTS=(-i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no -o ServerAl
 RSYNC=(rsync -avz --chmod=ugo=rwX -e "ssh ${SSH_OPTS[*]}")
 
 remote_lineage_grid="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/grid"
-remote_current_grid="${EXPERIMENTS_ROOT%/}/${EXP_ID}/grid"
+remote_current_id="${GRID_EXP_ID:-${EXP_ID}}"
+remote_current_grid="${EXPERIMENTS_ROOT%/}/${remote_current_id}/grid"
 
 collect_tree() {
   local remote_grid="$1"
