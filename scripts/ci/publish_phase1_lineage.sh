@@ -36,23 +36,33 @@ chmod 600 "$tmp_key"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/common.sh"
+source "${script_dir}/stage.sh"
 
-ensure_micromamba >/dev/null 2>&1 || ensure_micromamba
-python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
+printf -v app_dir_q '%q' "$APP_DIR"
+printf -v experiments_root_q '%q' "$EXPERIMENTS_ROOT"
+printf -v default_id_q '%q' "$DEFAULT_ID"
 
-remote_cmd=(
-  "cd" "${APP_DIR}"
-  "&&"
-  "${python_cmd[@]}" "scripts/ci/resolve_lineage_ids.py"
-  "--root" "${EXPERIMENTS_ROOT}"
-  "--default-id" "${DEFAULT_ID}"
+remote_script=$(cat <<EOF
+set -euo pipefail
+cd ${app_dir_q}
+export APP_DIR="$(pwd)"
+source scripts/ci/common.sh
+resolve_ci_python
+"${PYTHON_CMD[@]}" scripts/ci/resolve_lineage_ids.py --root ${experiments_root_q} --default-id ${default_id_q}
+EOF
 )
 
-json_payload="$(ssh -i "$tmp_key" "${ssh_opts[@]}" "${VAST_USER}@${VAST_HOST}" "${remote_cmd[*]}" || echo '{}')"
+if ! json_payload="$(
+  ssh -i "$tmp_key" "${ssh_opts[@]}" "${VAST_USER}@${VAST_HOST}" 'bash -s' <<EOS
+${remote_script}
+EOS
+)"; then
+  json_payload='{}'
+fi
 
 echo "phase1-lineage: ${json_payload}"
 
-"${python_cmd[@]}" - <<'PY' "${json_payload}"
+python_inline "${json_payload}" <<'PY'
 import json
 import os
 import sys
