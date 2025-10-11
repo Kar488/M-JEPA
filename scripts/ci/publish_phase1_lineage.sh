@@ -34,10 +34,16 @@ trap 'rm -f "$tmp_key"' EXIT
 printf '%s\n' "$SSH_KEY" >"$tmp_key"
 chmod 600 "$tmp_key"
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/common.sh"
+
+ensure_micromamba >/dev/null 2>&1 || ensure_micromamba
+python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
+
 remote_cmd=(
   "cd" "${APP_DIR}"
   "&&"
-  "python" "-u" "scripts/ci/resolve_lineage_ids.py"
+  "${python_cmd[@]}" "scripts/ci/resolve_lineage_ids.py"
   "--root" "${EXPERIMENTS_ROOT}"
   "--default-id" "${DEFAULT_ID}"
 )
@@ -46,7 +52,7 @@ json_payload="$(ssh -i "$tmp_key" "${ssh_opts[@]}" "${VAST_USER}@${VAST_HOST}" "
 
 echo "phase1-lineage: ${json_payload}"
 
-python - <<'PY' "${json_payload}"
+"${python_cmd[@]}" - <<'PY' "${json_payload}"
 import json
 import os
 import sys
