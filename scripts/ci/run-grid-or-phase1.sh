@@ -270,6 +270,33 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   BEST_ID="$JEPA_ID"; [[ "$WINNER" == "contrastive" ]] && BEST_ID="$CONTRAST_ID"
   BEST_SWEEP="${WANDB_ENTITY}/${WANDB_PROJECT}/${BEST_ID}"
 
+  phase1_force_reuse="$(normalize_bool "${CI_PHASE1_FORCE_REUSE_GRID:-0}" 0)"
+  if [[ -n "${EXP_ID:-}" && "${GRID_EXP_ID:-}" != "${EXP_ID}" ]]; then
+    local reuse_old=0
+    if (( FROZEN )) && [[ "${CI_FORCE_UNFREEZE_GRID}" != "1" ]]; then
+      reuse_old=1
+    elif (( phase1_force_reuse )); then
+      reuse_old=1
+    fi
+    if (( reuse_old )); then
+      echo "[phase1] reusing existing grid lineage ${GRID_EXP_ID} (EXP_ID=${EXP_ID})" >&2
+    else
+      local old_grid_id="${GRID_EXP_ID:-}"
+      GRID_EXP_ID="$EXP_ID"
+      export GRID_EXP_ID
+      if declare -F ci_phase2_refresh_lineage_bindings >/dev/null 2>&1; then
+        ci_phase2_refresh_lineage_bindings "" "$GRID_EXP_ID" "" "$old_grid_id"
+      fi
+      if [[ -n "${EXPERIMENTS_ROOT:-}" ]]; then
+        local new_grid_root="${EXPERIMENTS_ROOT%/}/${GRID_EXP_ID}/grid"
+        GRID_DIR="$new_grid_root"
+        export GRID_DIR
+        GRID_SOURCE_DIR="$new_grid_root"
+        export GRID_SOURCE_DIR
+      fi
+    fi
+  fi
+
   OUT_PATH="${GRID_DIR:-$APP_DIR/grid}/best.json"
   
   TMP_BEST="$(mktemp)"

@@ -2,6 +2,20 @@
 # Common helpers for Vast GPU CI stages
 set -euo pipefail
 
+normalize_bool() {
+  local value="${1:-}" default="${2:-0}" result
+  if [[ -z "$value" ]]; then
+    printf '%s' "$default"
+    return 0
+  fi
+  case "${value,,}" in
+    1|true|yes|on) result=1 ;;
+    0|false|no|off) result=0 ;;
+    *) result="$default" ;;
+  esac
+  printf '%s' "$result"
+}
+
 : "${MJEPACI_STAGE:=}"
 : "${PRETRAIN_STATE_FILE:=}"
 : "${EXP_ID:=}"
@@ -9,9 +23,55 @@ set -euo pipefail
 : "${PRETRAIN_EXP_ID:=}"
 : "${PRETRAIN_STATE_ID:=}"
 : "${RUN_ID:=$(date +%s)}"
-: "${FORCE_UNFREEZE_GRID:=0}"
+FORCE_UNFREEZE_GRID="$(normalize_bool "${FORCE_UNFREEZE_GRID:-}" 0)"
+CI_FORCE_UNFREEZE_GRID="$(normalize_bool "${CI_FORCE_UNFREEZE_GRID:-}" "${FORCE_UNFREEZE_GRID}")"
+FORCE_UNFREEZE_GRID="$CI_FORCE_UNFREEZE_GRID"
 : "${ALLOW_CODE_DRIFT_WHEN_FROZEN:=1}"
-: "${STRICT_FROZEN:=0}"
+STRICT_FROZEN="$(normalize_bool "${STRICT_FROZEN:-}" 0)"
+export FORCE_UNFREEZE_GRID CI_FORCE_UNFREEZE_GRID STRICT_FROZEN
+
+ci_refresh_freeze_state() {
+  local marker_hint="${1:-}" freeze_id=""
+  if [[ -z "$marker_hint" ]]; then
+    if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
+      marker_hint="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/bench/encoder_frozen.ok"
+    elif [[ -n "${PRETRAIN_STATE_ID:-}" ]]; then
+      marker_hint="${EXPERIMENTS_ROOT%/}/${PRETRAIN_STATE_ID}/bench/encoder_frozen.ok"
+    fi
+  fi
+
+  FREEZE_MARKER="$marker_hint"
+  if [[ -n "$marker_hint" && -f "$marker_hint" ]]; then
+    FROZEN=1
+  else
+    FROZEN=0
+  fi
+
+  if (( FROZEN )) && [[ "${CI_FORCE_UNFREEZE_GRID}" == "1" ]]; then
+    FROZEN=0
+  fi
+
+  if (( FROZEN )); then
+    freeze_id="${PRETRAIN_EXP_ID:-${PRETRAIN_STATE_ID:-}}"
+    if [[ -n "$freeze_id" ]]; then
+      if [[ -z "${ORIGINAL_PRETRAIN_EXP_ID:-}" ]]; then
+        ORIGINAL_PRETRAIN_EXP_ID="$freeze_id"
+      fi
+      if [[ "${GRID_EXP_ID:-}" != "$freeze_id" ]]; then
+        GRID_EXP_ID="$freeze_id"
+      fi
+      local freeze_grid="${EXPERIMENTS_ROOT%/}/${freeze_id}/grid"
+      if [[ -d "$freeze_grid" ]]; then
+        GRID_SOURCE_DIR="$freeze_grid"
+        if [[ -z "${GRID_DIR:-}" || "${GRID_DIR%/}" == "${EXPERIMENTS_ROOT%/}/${EXP_ID:-}/grid" ]]; then
+          GRID_DIR="$freeze_grid"
+        fi
+      fi
+    fi
+  fi
+
+  export FREEZE_MARKER FROZEN GRID_EXP_ID GRID_SOURCE_DIR GRID_DIR ORIGINAL_PRETRAIN_EXP_ID
+}
 
 # --- centralised environment variables ---
 : "${APP_DIR:=/srv/mjepa}"
@@ -498,15 +558,10 @@ if [[ -z "${PRETRAIN_STATE_ID:-}" && -n "${PRETRAIN_EXP_ID:-}" ]]; then
   PRETRAIN_STATE_ID="$PRETRAIN_EXP_ID"
 fi
 
-ORIGINAL_PRETRAIN_EXP_ID="${PRETRAIN_EXP_ID:-}"
-FREEZE_MARKER=""
-FROZEN=0
-if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
-  FREEZE_MARKER="${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}/bench/encoder_frozen.ok"
-  if [[ -f "$FREEZE_MARKER" ]]; then
-    FROZEN=1
-  fi
+if [[ -z "${ORIGINAL_PRETRAIN_EXP_ID:-}" ]]; then
+  ORIGINAL_PRETRAIN_EXP_ID="${PRETRAIN_EXP_ID:-}"
 fi
+ci_refresh_freeze_state "${FREEZE_MARKER:-}"
 
 if [[ "$__ci_stage_role" == "initiator" && -z "${EXP_ID:-}" ]]; then
   EXP_ID="$RUN_ID"
@@ -516,13 +571,13 @@ if [[ "${MJEPACI_STAGE}" == "pretrain" && -z "${PRETRAIN_EXP_ID:-}" && -n "${EXP
   PRETRAIN_EXP_ID="$EXP_ID"
 fi
 
-if (( FROZEN )) && [[ "${FORCE_UNFREEZE_GRID}" == "1" ]]; then
+if [[ "${CI_FORCE_UNFREEZE_GRID}" == "1" ]]; then
   case "${MJEPACI_STAGE}" in
     pretrain|grid|grid_search|phase2_sweep)
       if [[ -z "${EXP_ID:-}" ]]; then
         EXP_ID="$RUN_ID"
       fi
-      if [[ "${MJEPACI_STAGE}" == "pretrain" ]]; then
+      if [[ "${MJEPACI_STAGE}" == "pretrain" && -z "${PRETRAIN_EXP_ID:-}" ]]; then
         PRETRAIN_EXP_ID="$EXP_ID"
       fi
       FROZEN=0
