@@ -78,6 +78,10 @@ run_id = os.environ.get("RUN_ID", "")
 
 grid_id = (payload.get("grid_exp_id") or default_id or run_id or "").strip()
 pretrain_id = (payload.get("pretrain_exp_id") or grid_id or default_id or run_id or "").strip()
+from_payload = bool(payload.get("grid_exp_id"))
+# print IDs on separate lines for Bash to consume
+print(grid_id)
+print(pretrain_id)
 
 if not grid_id:
     sys.exit("Failed to resolve grid_exp_id from payload or defaults")
