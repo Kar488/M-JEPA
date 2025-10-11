@@ -36,8 +36,7 @@ chmod 600 "$tmp_key"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/common.sh"
-
-resolve_ci_python python_cmd
+source "${script_dir}/stage.sh"
 
 printf -v app_dir_q '%q' "$APP_DIR"
 printf -v experiments_root_q '%q' "$EXPERIMENTS_ROOT"
@@ -46,16 +45,10 @@ printf -v default_id_q '%q' "$DEFAULT_ID"
 remote_script=$(cat <<EOF
 set -euo pipefail
 cd ${app_dir_q}
-if command -v python >/dev/null 2>&1; then
-  env PYTHONUNBUFFERED=1 python -u scripts/ci/resolve_lineage_ids.py --root ${experiments_root_q} --default-id ${default_id_q}
-elif command -v python3 >/dev/null 2>&1; then
-  env PYTHONUNBUFFERED=1 python3 -u scripts/ci/resolve_lineage_ids.py --root ${experiments_root_q} --default-id ${default_id_q}
-elif command -v micromamba >/dev/null 2>&1; then
-  micromamba run -n mjepa env PYTHONUNBUFFERED=1 python -u scripts/ci/resolve_lineage_ids.py --root ${experiments_root_q} --default-id ${default_id_q}
-else
-  echo "publish_phase1_lineage: python runtime not found" >&2
-  exit 127
-fi
+export APP_DIR="$(pwd)"
+source scripts/ci/common.sh
+resolve_ci_python
+"${PYTHON_CMD[@]}" scripts/ci/resolve_lineage_ids.py --root ${experiments_root_q} --default-id ${default_id_q}
 EOF
 )
 
@@ -69,7 +62,7 @@ fi
 
 echo "phase1-lineage: ${json_payload}"
 
-"${python_cmd[@]}" - <<'PY' "${json_payload}"
+python_inline "${json_payload}" <<'PY'
 import json
 import os
 import sys
