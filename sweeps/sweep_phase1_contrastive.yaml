@@ -42,14 +42,14 @@ parameters:
   max_pretrain_batches:  {values: [400, 800]}
   max_finetune_batches:  {value: 200}
   
-  devices:              {value: 1}
-  num-workers:          {value: 4}
-  persistent-workers:   {value: 0} # 0 false
-  prefetch-factor:      {value: 2}
-  pin-memory:           {value: 0} # 0 false
-  bf16:                 {value: 1} #1 true
+  devices:              {value: 2} #full multi-GPU parallelism (DDP)
+  num-workers:          {value: 8} #4*GPUs - keep data loading saturated
+  persistent-workers:   {value: 1} # 0 false, keep workers alive between epochs
+  prefetch-factor:      {value: 2} #each worker can prefetch 2 batches
+  pin-memory:           {value: 0} # 0 false, enables faster transfer to GPU
+  bf16:                 {value: 1} #1 true, enables mixed precision training
 
-  seed:                 {values: [1, 2, 3, 4, 5]}
+  seed:                 {values: [1, 2, 3]}
 
   task_type:            {value: regression}
   label_col:            {value: "measured log solubility in mols per litre"}
