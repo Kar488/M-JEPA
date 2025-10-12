@@ -37,6 +37,113 @@ REMOTE="${VAST_USER}@${VAST_HOST}"
 SSH_OPTS=(-i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
 RSYNC=(rsync -avz --chmod=ugo=rwX -e "ssh ${SSH_OPTS[*]}")
 
+discover_remote_phase2_lineage() {
+  local target_dir="${GRID_DIR:-}" target_id="${GRID_EXP_ID:-}" need_lookup=0
+  if [[ -z "$target_dir" ]]; then
+    need_lookup=1
+  else
+    if ! ssh "${SSH_OPTS[@]}" "$REMOTE" "test -f '${target_dir%/}/phase2_sweep_id.txt'" >/dev/null 2>&1; then
+      need_lookup=1
+    fi
+  fi
+  if [[ -z "$target_id" || "$target_id" == "${EXP_ID}" ]]; then
+    need_lookup=1
+  fi
+  (( need_lookup )) || return 0
+
+  local app_dir="${APP_DIR:-/srv/mjepa}"
+  local default_id="${target_id:-${PRETRAIN_EXP_ID:-${EXP_ID}}}"
+  local payload=""
+
+  if ! payload="$(ssh "${SSH_OPTS[@]}" "$REMOTE" bash -s -- "$app_dir" "$EXPERIMENTS_ROOT" "$default_id" <<'EOS' 2>/dev/null
+set -euo pipefail
+app_dir="${1:-/srv/mjepa}"
+exp_root="${2:-/data/mjepa/experiments}"
+default_id="${3:-}"
+if [[ ! -d "$app_dir" ]]; then
+  exit 0
+fi
+cd "$app_dir"
+if command -v python3 >/dev/null 2>&1; then
+  py=python3
+elif command -v python >/dev/null 2>&1; then
+  py=python
+else
+  exit 0
+fi
+"$py" scripts/ci/resolve_lineage_ids.py --root "$exp_root" --default-id "$default_id"
+EOS
+)"; then
+    payload=""
+  fi
+
+  if [[ -z "$payload" ]]; then
+    return 0
+  fi
+
+  local py_local=""
+  if command -v python3 >/dev/null 2>&1; then
+    py_local=python3
+  elif command -v python >/dev/null 2>&1; then
+    py_local=python
+  fi
+
+  if [[ -z "$py_local" ]]; then
+    return 0
+  fi
+
+  local -a resolved=()
+  if ! mapfile -t resolved < <("$py_local" - "$payload" <<'PY'
+import json
+import sys
+
+try:
+    payload = json.loads(sys.argv[1])
+except Exception:
+    payload = {}
+
+def emit(key):
+    value = payload.get(key)
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+print(emit("grid_exp_id"))
+print(emit("grid_dir"))
+PY
+  ); then
+    return 0
+  fi
+
+  local remote_grid_id="${resolved[0]:-}" remote_grid_dir="${resolved[1]:-}"
+
+  if [[ -n "$remote_grid_dir" ]]; then
+    GRID_DIR="$remote_grid_dir"
+    export GRID_DIR
+    if [[ -z "${GRID_SOURCE_DIR:-}" ]]; then
+      GRID_SOURCE_DIR="$remote_grid_dir"
+      export GRID_SOURCE_DIR
+    fi
+  fi
+  if [[ -n "$remote_grid_id" ]]; then
+    GRID_EXP_ID="$remote_grid_id"
+    export GRID_EXP_ID
+  fi
+
+  if [[ -n "$remote_grid_dir" || -n "$remote_grid_id" ]]; then
+    echo "[ci] discovered remote Phase-2 lineage GRID_EXP_ID=${GRID_EXP_ID:-<unset>} GRID_DIR=${GRID_DIR:-<unset>}" >&2
+  fi
+
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    {
+      [[ -n "$GRID_EXP_ID" ]] && echo "GRID_EXP_ID=$GRID_EXP_ID"
+      [[ -n "$GRID_DIR" ]] && echo "GRID_DIR=$GRID_DIR"
+    } >>"$GITHUB_ENV"
+  fi
+}
+
+discover_remote_phase2_lineage
+
 if [[ -n "${GRID_DIR:-}" ]]; then
   # GRID_DIR points directly at the grid used by phase2_export (e.g. /data/mjepa/experiments/1760284429/grid).
   remote_lineage_grid="${GRID_DIR%/}"
