@@ -111,6 +111,91 @@ export EXP_ID EXPERIMENTS_ROOT EXPERIMENT_DIR PRETRAIN_DIR ARTIFACTS_DIR PRETRAI
 export WANDB_NAME="pretrain"
 export WANDB_JOB_TYPE="pretrain"
 
+# Phase-2 sweeps may have been executed under a different experiment ID.
+# When this script runs in a fresh CI shell the GRID_* variables might be
+# empty (or still pointing at the current EXP_ID).  Backfill them from the
+# latest lineage metadata so the pretrain stage can locate the sweep
+# outputs created during run-grid-phase2.
+ci_pretrain_backfill_phase2_bindings() {
+  local grid_hint="${GRID_DIR:-}" sweep_file=""
+  if [[ -n "$grid_hint" ]]; then
+    sweep_file="${grid_hint%/}/phase2_sweep_id.txt"
+  fi
+
+  if [[ -n "$grid_hint" && -f "$sweep_file" ]]; then
+    return 0
+  fi
+
+  local root="${EXPERIMENTS_ROOT%/}"
+  local default_id="${GRID_EXP_ID:-${PRETRAIN_EXP_ID:-${EXP_ID:-}}}"
+
+  resolve_ci_python python_cmd
+  local payload=""
+  if ! payload="$("${python_cmd[@]}" scripts/ci/resolve_lineage_ids.py --root "$root" --default-id "$default_id" 2>/dev/null)"; then
+    return 0
+  fi
+
+  local _resolved=()
+  if ! mapfile -t _resolved < <(python_inline "$payload" <<'PY'
+import json
+import sys
+
+try:
+    payload = json.loads(sys.argv[1])
+except Exception:
+    payload = {}
+
+def emit(key):
+    value = payload.get(key)
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+print(emit("grid_exp_id"))
+print(emit("grid_dir"))
+print(emit("pretrain_exp_id"))
+PY
+  ); then
+    return 0
+  fi
+
+  local new_grid_id="${_resolved[0]:-}" new_grid_dir="${_resolved[1]:-}" new_pretrain_id="${_resolved[2]:-}"
+  unset _resolved || true
+
+  if [[ -z "$new_grid_dir" ]]; then
+    return 0
+  fi
+
+  local prev_grid_id="${GRID_EXP_ID:-}"
+  local prev_pretrain_id="${PRETRAIN_EXP_ID:-}"
+
+  GRID_DIR="$new_grid_dir"
+  export GRID_DIR
+
+  if [[ -n "$new_grid_id" ]]; then
+    GRID_EXP_ID="$new_grid_id"
+    export GRID_EXP_ID
+  fi
+
+  if [[ -n "$new_pretrain_id" ]]; then
+    PRETRAIN_EXP_ID="$new_pretrain_id"
+    export PRETRAIN_EXP_ID
+  fi
+
+  if [[ -z "${GRID_SOURCE_DIR:-}" ]]; then
+    GRID_SOURCE_DIR="$GRID_DIR"
+    export GRID_SOURCE_DIR
+  fi
+
+  if declare -F ci_phase2_refresh_lineage_bindings >/dev/null 2>&1; then
+    ci_phase2_refresh_lineage_bindings "${PRETRAIN_EXP_ID:-}" "${GRID_EXP_ID:-}" "$prev_pretrain_id" "$prev_grid_id"
+  fi
+
+  echo "[pretrain] discovered Phase-2 lineage GRID_EXP_ID=${GRID_EXP_ID:-<unset>} GRID_DIR=${GRID_DIR:-<unset>}" >&2
+}
+
+ci_pretrain_backfill_phase2_bindings || true
+
 if (( FROZEN )); then
   echo "[pretrain] encoder lineage ${PRETRAIN_EXP_ID:-<unset>} is frozen; skipping pretrain." >&2
   if [[ ! -f "${PRETRAIN_DIR}/encoder.pt" ]]; then
