@@ -341,6 +341,7 @@ if [[ -n "${GRID_EXP_ID:-}" && -n "${PRETRAIN_EXP_ID:-}" && -n "${GITHUB_ENV:-}"
     echo "GRID_EXP_ID=${GRID_EXP_ID}"
     echo "EXP_ID=${GRID_EXP_ID}"
     echo "PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID}"
+    echo "GRID_DIR=${GRID_DIR}" 
   } >> "$GITHUB_ENV"
 fi
 
