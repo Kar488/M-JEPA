@@ -42,6 +42,25 @@ remote_lineage_grid="${EXPERIMENTS_ROOT%/}/${remote_lineage_id}/grid"
 remote_current_id="${EXP_ID}"
 remote_current_grid="${EXPERIMENTS_ROOT%/}/${remote_current_id}/grid"
 
+
+# Ensure Phase‑2 sweep metadata is available under the current experiment.
+# If the sweep ID and JSON files exist in the lineage grid but are missing in the
+# current grid, copy them over on the Vast host.  This prevents the pretrain
+# stage from failing due to a missing phase2_sweep_id.txt.
+ssh "${SSH_OPTS[@]}" "$REMOTE" bash -s -- "${remote_lineage_grid}" "${remote_current_grid}" <<'EOS'
+set -euo pipefail
+src_grid="$1"
+dst_grid="$2"
+if [[ -f "${src_grid}/phase2_sweep_id.txt" ]] && [[ ! -f "${dst_grid}/phase2_sweep_id.txt" ]]; then
+  mkdir -p "${dst_grid}"
+  for f in phase2_sweep_id.txt best_grid_config.json recheck_summary.json grid_state.json; do
+    if [[ -f "${src_grid}/${f}" ]]; then
+      cp -f "${src_grid}/${f}" "${dst_grid}/${f}"
+    fi
+  done
+fi
+EOS
+
 collect_tree() {
   local remote_grid="$1"
   local dest_root="$2"
