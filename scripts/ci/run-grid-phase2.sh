@@ -329,6 +329,15 @@ if [[ -n "${GRID_SOURCE_DIR:-}" ]]; then
   if ! ci_phase2_ensure_sweep_id "$grid_root" "$source_hint"; then
     exit $?
   fi
+  # At this point GRID_EXP_ID and PRETRAIN_EXP_ID have been set (either from
+  # reusing an existing sweep or by creating a new one).  Persist them into
+  # the GitHub Actions environment so that subsequent steps (collect artifacts,
+  # pretrain, finetune) use the correct grid and pretrain experiment IDs.
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    echo "GRID_EXP_ID=${GRID_EXP_ID}"      >> "$GITHUB_ENV"
+    echo "EXP_ID=${GRID_EXP_ID}"           >> "$GITHUB_ENV"
+    echo "PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID}" >> "$GITHUB_ENV"
+  fi
   unset grid_root source_hint || true
 fi
 
