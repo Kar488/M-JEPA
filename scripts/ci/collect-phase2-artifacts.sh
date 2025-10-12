@@ -172,6 +172,17 @@ if [[ -f "${src_grid}/phase2_sweep_id.txt" ]] && [[ ! -f "${dst_grid}/phase2_swe
     fi
   done
 fi
+
+if [[ "${src_grid%/}" != "${dst_grid%/}" ]]; then
+  for step in phase2_sweep phase2_recheck phase2_export; do
+    src_step="${src_grid}/${step}"
+    dst_step="${dst_grid}/${step}"
+    if [[ -d "$src_step" ]]; then
+      mkdir -p "$dst_step"
+      cp -a "${src_step}/." "$dst_step/" 2>/dev/null || true
+    fi
+  done
+fi
 EOS
 
 collect_tree() {
