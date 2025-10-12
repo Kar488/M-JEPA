@@ -37,8 +37,14 @@ REMOTE="${VAST_USER}@${VAST_HOST}"
 SSH_OPTS=(-i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
 RSYNC=(rsync -avz --chmod=ugo=rwX -e "ssh ${SSH_OPTS[*]}")
 
-remote_lineage_id="${GRID_EXP_ID:-${PRETRAIN_EXP_ID}}"
-remote_lineage_grid="${EXPERIMENTS_ROOT%/}/${remote_lineage_id}/grid"
+if [[ -n "${GRID_DIR:-}" ]]; then
+  # GRID_DIR points directly at the grid used by phase2_export (e.g. /data/mjepa/experiments/1760284429/grid).
+  remote_lineage_grid="${GRID_DIR%/}"
+else
+  # Fall back to constructing it from GRID_EXP_ID or PRETRAIN_EXP_ID.
+  remote_lineage_id="${GRID_EXP_ID:-${PRETRAIN_EXP_ID}}"
+  remote_lineage_grid="${EXPERIMENTS_ROOT%/}/${remote_lineage_id}/grid"
+fi
 remote_current_id="${EXP_ID}"
 remote_current_grid="${EXPERIMENTS_ROOT%/}/${remote_current_id}/grid"
 
