@@ -1069,9 +1069,17 @@ build_stage_args() {
     OUT=("${COMBINED[@]}")
   else
     local -a ALLOWED
+    local -a help_cmd=()
+    if py=$(python_bin 2>/dev/null); then
+      help_cmd=("$py")
+    else
+      ensure_micromamba
+      help_cmd=("$MMBIN" run -n mjepa python)
+    fi
+
     mapfile -t ALLOWED < <(
       PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-        "$MMBIN" run -n mjepa python "$APP_DIR/scripts/train_jepa.py" "$subcmd" --help |
+        "${help_cmd[@]}" "$APP_DIR/scripts/train_jepa.py" "$subcmd" --help |
           sed -n 's/.*\(--[a-z0-9-]\+\).*/\1/p' | sort -u
     )
 
