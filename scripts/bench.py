@@ -13,7 +13,7 @@ except ModuleNotFoundError:  # pragma: no cover - fallback parser
 
 
 DEFAULT_RULES: Dict[str, Tuple[str, float]] = {
-    "tox21": ("roc_auc", 0.65),
+    "tox21": ("roc_auc", 0.86),
     "esol": ("rmse", 0.60),
 }
 
