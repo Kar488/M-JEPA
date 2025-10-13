@@ -42,13 +42,11 @@ if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then
   state_legacy="${EXPERIMENTS_ROOT%/}/pretrain_state.json"
   pretrain_id="${EXP_ID}"
   pretrain_root="${EXPERIMENT_DIR}"
-  py_bin="python"
-  if ! command -v "$py_bin" >/dev/null 2>&1; then
-    py_bin="python3"
-  fi
+  python_cmd=()
+  resolve_ci_python python_cmd
 
-  if command -v "$py_bin" >/dev/null 2>&1; then
-    "$py_bin" - "$state_path" "$state_legacy" "$pretrain_id" "$pretrain_root" \
+  if [[ ${#python_cmd[@]} -gt 0 ]]; then
+    "${python_cmd[@]}" - "$state_path" "$state_legacy" "$pretrain_id" "$pretrain_root" \
       "$PRETRAIN_ARTIFACTS_DIR" "$expected_manifest" "$expected_encoder" <<'PY'
 import json
 import os
@@ -88,7 +86,7 @@ if legacy_path:
     os.replace(tmp_legacy, legacy_path)
 PY
   else
-    echo "[ci] warn: unable to write pretrain_state.json because no python interpreter was found" >&2
+    echo "[ci] warn: unable to write pretrain_state.json because no python interpreter was resolved" >&2
   fi
 
   exit 0
