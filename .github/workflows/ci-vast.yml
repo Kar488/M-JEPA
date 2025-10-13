@@ -397,7 +397,9 @@ jobs:
         with:
           name: vast-phase2-sweep
           if-no-files-found: warn
-          path: ${{ runner.temp }}/phase2/phase2_sweep
+          path: |
+            ${{ runner.temp }}/phase2/current/phase2_sweep
+            ${{ runner.temp }}/phase2/phase2_sweep
 
       - name: Upload Phase-2 recheck logs
         if: always()
@@ -405,7 +407,9 @@ jobs:
         with:
           name: vast-phase2-recheck
           if-no-files-found: warn
-          path: ${{ runner.temp }}/phase2/phase2_recheck
+          path: |
+            ${{ runner.temp }}/phase2/current/phase2_recheck
+            ${{ runner.temp }}/phase2/phase2_recheck
 
       - name: Upload Phase-2 export logs
         if: always()
@@ -413,7 +417,9 @@ jobs:
         with:
           name: vast-phase2-export
           if-no-files-found: warn
-          path: ${{ runner.temp }}/phase2/phase2_export
+          path: |
+            ${{ runner.temp }}/phase2/current/phase2_export
+            ${{ runner.temp }}/phase2/phase2_export
 
       - name: Upload Phase-2 grid outputs
         if: always()
@@ -421,7 +427,9 @@ jobs:
         with:
           name: vast-phase2-grid
           if-no-files-found: warn
-          path: ${{ runner.temp }}/phase2/grid
+          path: |
+            ${{ runner.temp }}/phase2/current/grid
+            ${{ runner.temp }}/phase2/grid
 
   vast_pretrain:
     name: Pretain Model
