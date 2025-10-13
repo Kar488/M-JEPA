@@ -37,14 +37,18 @@ if [[ ! -s "$STATE_DEST" ]]; then
 fi
 
 parse_output=$(python3 - "$STATE_DEST" <<'PY'
-import json, os, sys
+import os
+import json
+import sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as fh:
     data = json.load(fh) or {}
 
 def emit(key, value):
-    if isinstance(value, str) and value.strip():
-        print(f"{key}={os.path.abspath(value)}")
+    if isinstance(value, str):
+        value = value.strip()
+        if value:
+            print(f"{key}={value}")
 
 exp_id = data.get("id") or data.get("pretrain_exp_id")
 if exp_id:
@@ -53,7 +57,8 @@ if exp_id:
 root = data.get("experiment_root")
 if root:
     emit("experiment_root", root)
-    print(f"state_path={os.path.abspath(os.path.join(root, 'pretrain_state.json'))}")
+    joined = os.path.join(root, "pretrain_state.json")
+    print(f"state_path={joined}")
 
 manifest = data.get("encoder_manifest")
 if manifest:
