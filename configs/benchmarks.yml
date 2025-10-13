@@ -13,43 +13,43 @@
 tox21:
   __default__:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
   NR-AR:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
   NR-AR-LBD:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
   NR-AhR:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
   NR-Aromatase:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
   NR-ER:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
   NR-ER-LBD:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
   NR-PPAR-gamma:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
   SR-ARE:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
   SR-ATAD5:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
   SR-HSE:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
   SR-MMP:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
   SR-p53:
     metric: roc_auc
-    threshold: 0.65
+    threshold: 0.86
 
 esol:
   __default__:

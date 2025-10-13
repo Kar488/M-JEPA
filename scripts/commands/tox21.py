@@ -115,14 +115,14 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         threshold_rule = None
 
     threshold_payload: Dict[str, Any] = {}
-    target_baseline = 0.65
+    target_baseline = 0.86
     if threshold_rule is not None:
         metric_name = str(getattr(threshold_rule, "metric", "")).lower()
         if metric_name == "roc_auc":
             try:
                 target_baseline = float(threshold_rule.threshold)
             except Exception:
-                target_baseline = 0.65
+                target_baseline = 0.86
         threshold_payload = {
             "benchmark_metric": threshold_rule.metric,
             "benchmark_threshold": threshold_rule.threshold,

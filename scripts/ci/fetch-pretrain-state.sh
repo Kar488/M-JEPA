@@ -22,13 +22,61 @@ chmod 600 "$KEY_PATH"
 
 REMOTE="${VAST_USER}@${VAST_HOST}"
 REMOTE_STATE="${EXPERIMENTS_ROOT}/pretrain_state.json"
+STATE_SOURCE=""
 
-if scp -P "$VAST_PORT" -i "$KEY_PATH" -o StrictHostKeyChecking=no \
-      "$REMOTE:$REMOTE_STATE" "$STATE_DEST"; then
-  echo "[collect] downloaded $REMOTE_STATE" >&2
-else
-  echo "::warning::unable to download $REMOTE_STATE; downstream steps may fail" >&2
+SCP_CMD=(scp -P "$VAST_PORT" -i "$KEY_PATH" -o StrictHostKeyChecking=no)
+SSH_CMD=(ssh -i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no)
+
+download_state() {
+  local remote_path="$1"
+  [[ -n "$remote_path" ]] || return 1
+  if "${SCP_CMD[@]}" "$REMOTE:$remote_path" "$STATE_DEST"; then
+    STATE_SOURCE="$remote_path"
+    echo "[collect] downloaded $remote_path" >&2
+    return 0
+  fi
+  return 1
+}
+
+if ! download_state "$REMOTE_STATE"; then
+  fallback_path=""
+  if fallback_path="$("${SSH_CMD[@]}" "$REMOTE" bash -s -- "$EXPERIMENTS_ROOT" <<'EOS' 2>/dev/null)
+set -euo pipefail
+root="${1%/}"
+if [[ -z "$root" || ! -d "$root" ]]; then
   exit 0
+fi
+shopt -s nullglob
+latest=""
+latest_mtime=0
+for path in "$root"/*/pretrain_state.json; do
+  [[ -f "$path" ]] || continue
+  mtime=$(stat -c '%Y' "$path" 2>/dev/null || stat -f '%m' "$path" 2>/dev/null || echo 0)
+  if [[ -z "$latest" || "$mtime" -gt "$latest_mtime" ]]; then
+    latest="$path"
+    latest_mtime="$mtime"
+  fi
+done
+if [[ -n "$latest" ]]; then
+  printf '%s' "$latest"
+fi
+EOS
+)"; then
+    fallback_path="${fallback_path:-}"
+  else
+    fallback_path=""
+  fi
+
+  if [[ -n "$fallback_path" ]]; then
+    echo "::warning::unable to download $REMOTE_STATE; retrying with discovered $fallback_path" >&2
+    if ! download_state "$fallback_path"; then
+      echo "::warning::failed to download fallback pretrain state at $fallback_path" >&2
+      exit 0
+    fi
+  else
+    echo "::warning::unable to download $REMOTE_STATE; downstream steps may fail" >&2
+    exit 0
+  fi
 fi
 
 if [[ ! -s "$STATE_DEST" ]]; then
@@ -91,6 +139,14 @@ while IFS='=' read -r key value; do
     state_path) state_path="$value" ;;
   esac
 done <<<"$parse_output"
+
+if [[ -z "$experiment_root" && -n "$STATE_SOURCE" ]]; then
+  experiment_root="${STATE_SOURCE%/pretrain_state.json}"
+fi
+
+if [[ -z "$state_path" && -n "$STATE_SOURCE" ]]; then
+  state_path="$STATE_SOURCE"
+fi
 
 if [[ -n "$exp_id" ]]; then
   {
