@@ -69,19 +69,13 @@ def _coerce_mapping(value: Any, *, context: str) -> Dict[str, Any]:
 
 
 def get_wandb_api(*, allow_missing: bool = False, project: str = "m-jepa"):
-    has_credentials = any(
+    has_env_credentials = any(
         os.getenv(env_var)
         for env_var in ("WANDB_API_KEY", "WANDB_API_KEY_FILE", "WANDB_ANONYMOUS")
     )
-    if not has_credentials:
-        message = (
-            "WANDB_API_KEY is required to access the W&B API in non-interactive environments"
-        )
-        if allow_missing:
-            LOGGER.warning("%s; continuing without remote data", message)
-            return None
-        raise RuntimeError(message)
-
+    credential_message = (
+        "WANDB_API_KEY is required to access the W&B API in non-interactive environments"
+    )
     try:
         silence_pydantic_field_warnings()
         wandb_module = maybe_init_wandb(
@@ -106,8 +100,13 @@ def get_wandb_api(*, allow_missing: bool = False, project: str = "m-jepa"):
         return wandb_module.Api()
     except Exception as exc:  # pragma: no cover - depends on external API
         if allow_missing:
-            LOGGER.warning("Failed to initialise W&B API client: %s", exc)
+            if has_env_credentials:
+                LOGGER.warning("Failed to initialise W&B API client: %s", exc)
+            else:
+                LOGGER.warning("%s; continuing without remote data", credential_message)
             return None
+        if not has_env_credentials:
+            raise RuntimeError(credential_message) from exc
         raise
 
 
