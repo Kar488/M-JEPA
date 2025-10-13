@@ -944,17 +944,91 @@ ci_print_env_diag() {
 }
 
 # --- micromamba bootstrap ---
-ensure_micromamba() {
-  if command -v micromamba >/dev/null 2>&1; then
-    MMBIN="$(command -v micromamba)"
-  elif [ -x "$MAMBA_ROOT_PREFIX/bin/micromamba" ]; then
-    MMBIN="$MAMBA_ROOT_PREFIX/bin/micromamba"
-  else
-    echo "micromamba not found" >&2
+_bootstrap_micromamba() {
+  local prefix="${1:-${MAMBA_ROOT_PREFIX:-$HOME/micromamba}}"
+  local arch="$(uname -m)"
+  local channel=""
+
+  case "$arch" in
+    x86_64|amd64) channel="linux-64" ;;
+    aarch64|arm64) channel="linux-aarch64" ;;
+    *)
+      echo "[ensure_micromamba] unsupported architecture: $arch" >&2
+      return 1
+      ;;
+  esac
+
+  if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    echo "[ensure_micromamba] curl or wget is required to download micromamba" >&2
     return 1
   fi
+
+  if ! command -v tar >/dev/null 2>&1; then
+    echo "[ensure_micromamba] tar is required to extract micromamba" >&2
+    return 1
+  fi
+
+  mkdir -p "$prefix/bin"
+
+  echo "[ensure_micromamba] bootstrapping micromamba into ${prefix}" >&2
+
+  local tmp
+  tmp="$(mktemp -d)"
+  local archive="${tmp}/micromamba.tar.bz2"
+  local url="https://micro.mamba.pm/api/micromamba/${channel}/latest"
+  if command -v curl >/dev/null 2>&1; then
+    if ! curl -fsSL "$url" -o "$archive"; then
+      echo "[ensure_micromamba] failed to download micromamba payload" >&2
+      rm -rf "$tmp"
+      return 1
+    fi
+  else
+    if ! wget -qO "$archive" "$url"; then
+      echo "[ensure_micromamba] failed to download micromamba payload" >&2
+      rm -rf "$tmp"
+      return 1
+    fi
+  fi
+
+  if ! tar -xjf "$archive" -C "$prefix"; then
+    echo "[ensure_micromamba] failed to extract micromamba payload" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  rm -rf "$tmp"
+
+  if [[ ! -x "$prefix/bin/micromamba" ]]; then
+    echo "[ensure_micromamba] micromamba binary missing after bootstrap" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+ensure_micromamba() {
+  local prefix="${MAMBA_ROOT_PREFIX:-$HOME/micromamba}"
+  local candidate="${MMBIN:-}"
+
+  if [[ -n "$candidate" && -x "$candidate" ]]; then
+    :
+  elif command -v micromamba >/dev/null 2>&1; then
+    candidate="$(command -v micromamba)"
+  else
+    candidate="${prefix}/bin/micromamba"
+    if [[ ! -x "$candidate" ]]; then
+      if ! _bootstrap_micromamba "$prefix"; then
+        echo "micromamba not found" >&2
+        return 1
+      fi
+    fi
+  fi
+
+  MAMBA_ROOT_PREFIX="$prefix"
   export MAMBA_ROOT_PREFIX
+  MMBIN="$candidate"
   export MMBIN
+
   eval "$("$MMBIN" shell hook -s bash)" || true
 }
 
