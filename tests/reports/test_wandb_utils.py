@@ -71,7 +71,7 @@ def patch_history(monkeypatch):
 
 def test_fetch_runs_parses_json_summary(monkeypatch):
     run = DummyRun(summary="{\"accuracy\": 0.9}")
-    monkeypatch.setattr(wandb_utils, "get_wandb_api", lambda: StubApi([run]))
+    monkeypatch.setattr(wandb_utils, "get_wandb_api", lambda **_: StubApi([run]))
 
     records = wandb_utils.fetch_runs(entity=None, project="proj")
 
@@ -81,7 +81,7 @@ def test_fetch_runs_parses_json_summary(monkeypatch):
 
 def test_fetch_runs_handles_non_mapping_summary(monkeypatch):
     run = DummyRun(summary="not a mapping")
-    monkeypatch.setattr(wandb_utils, "get_wandb_api", lambda: StubApi([run]))
+    monkeypatch.setattr(wandb_utils, "get_wandb_api", lambda **_: StubApi([run]))
 
     records = wandb_utils.fetch_runs(entity=None, project="proj")
 

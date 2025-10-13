@@ -12,6 +12,8 @@ from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional,
 
 import pandas as pd
 
+from utils.logging import DummyWandb, maybe_init_wandb
+
 try:
     from utils.wandb_filters import silence_pydantic_field_warnings
 except Exception:  # pragma: no cover - optional helper when utils unavailable
@@ -66,21 +68,47 @@ def _coerce_mapping(value: Any, *, context: str) -> Dict[str, Any]:
         return {}
 
 
-def get_wandb_api():
-    if not (
-        os.getenv("WANDB_API_KEY")
-        or os.getenv("WANDB_API_KEY_FILE")
-        or os.getenv("WANDB_ANONYMOUS")
-    ):
-        raise RuntimeError(
+def get_wandb_api(*, allow_missing: bool = False, project: str = "m-jepa"):
+    has_credentials = any(
+        os.getenv(env_var)
+        for env_var in ("WANDB_API_KEY", "WANDB_API_KEY_FILE", "WANDB_ANONYMOUS")
+    )
+    if not has_credentials:
+        message = (
             "WANDB_API_KEY is required to access the W&B API in non-interactive environments"
         )
+        if allow_missing:
+            LOGGER.warning("%s; continuing without remote data", message)
+            return None
+        raise RuntimeError(message)
+
     try:
         silence_pydantic_field_warnings()
-        import wandb  # type: ignore
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise RuntimeError("wandb is required for report generation") from exc
-    return wandb.Api()
+        wandb_module = maybe_init_wandb(
+            enable=True,
+            project=project,
+            initialise_run=False,
+        )
+    except Exception as exc:  # pragma: no cover - defensive; helper already logs
+        if allow_missing:
+            LOGGER.warning("Failed to prepare W&B API client: %s", exc)
+            return None
+        raise
+
+    if isinstance(wandb_module, DummyWandb) or not hasattr(wandb_module, "Api"):
+        message = "wandb is required for report generation"
+        if allow_missing:
+            LOGGER.warning("%s; continuing without remote data", message)
+            return None
+        raise RuntimeError(message)
+
+    try:
+        return wandb_module.Api()
+    except Exception as exc:  # pragma: no cover - depends on external API
+        if allow_missing:
+            LOGGER.warning("Failed to initialise W&B API client: %s", exc)
+            return None
+        raise
 
 
 def _load_history(run, keys: Optional[Sequence[str]] = None) -> Optional[pd.DataFrame]:
@@ -104,8 +132,12 @@ def fetch_runs(
     filters: Optional[Mapping[str, Any]] = None,
     max_runs: int = 1000,
     history_keys: Optional[Sequence[str]] = None,
+    api: Optional[Any] = None,
 ) -> List[RunRecord]:
-    api = get_wandb_api()
+    if api is None:
+        api = get_wandb_api(project=project)
+    if api is None:  # pragma: no cover - defensive; only when allow_missing=True
+        return []
     project_path = f"{entity}/{project}" if entity else project
     runs = api.runs(project_path, filters=filters or {}, per_page=max_runs)
 

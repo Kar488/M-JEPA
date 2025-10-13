@@ -67,6 +67,7 @@ def maybe_init_wandb(
     group: Optional[str] = None,          # optional
     job_type: Optional[str] = None,       # optional
     settings: Optional["wandb.Settings"] = None,  # optional passthrough
+    initialise_run: bool = True,
     **extra: Any,                         # future-proof for more kwargs
 ):
     """Start a tracker if we ask nicely.
@@ -88,6 +89,13 @@ def maybe_init_wandb(
     api_key : Optional[str], optional
         API key for logging in to wandb. If provided, ``wandb.login`` is called
         before initialising the run. Defaults to ``None``.
+
+    Parameters
+    ----------
+    initialise_run : bool, optional
+        When ``False``, import :mod:`wandb` and perform login handling without
+        creating or updating a run. Defaults to ``True`` to maintain the
+        original behaviour for training scripts.
 
     Returns
     -------
@@ -111,6 +119,8 @@ def maybe_init_wandb(
                 logging.warning("Failed to login to wandb: %s", e)
 
         run = getattr(wandb, "run", None)
+        if not initialise_run:
+            return wandb
         if run is None:
             kw = dict(
                 id   = env.get("WANDB_RUN_ID"),         # same id reused across stages
