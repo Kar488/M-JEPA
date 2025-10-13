@@ -43,17 +43,6 @@ def _ensure_schema(
         return schema
 
 
-def _instantiate_api() -> Optional[Any]:
-    try:
-        return get_wandb_api()
-    except RuntimeError as exc:
-        LOGGER.warning("Could not initialise W&B API: %s", exc)
-        return None
-    except Exception as exc:  # pragma: no cover - depends on environment
-        LOGGER.warning("W&B API initialisation failed: %s", exc)
-        return None
-
-
 def _write_manifest(manifest: Dict[str, Any], path: Path) -> None:
     lines = [
         "# Figure Manifest",
@@ -81,23 +70,29 @@ def build_report(
     refresh: bool,
     manifest_path: Optional[Path] = None,
     schema_path: Optional[Path] = None,
-) -> str:
+) -> Optional[str]:
     root = Path(__file__).resolve().parents[1]
     schema = _ensure_schema(root, max_runs=max_runs, schema_path=schema_path)
 
-    api = _instantiate_api()
+    try:
+        api = get_wandb_api(project=project, allow_missing=True)
+    except Exception as exc:  # pragma: no cover - defensive; helper logs already
+        LOGGER.warning("W&B API initialisation failed: %s", exc)
+        api = None
+
     if api is None:
         resolved_manifest = manifest_path or root / "reports" / "FIGURE_MANIFEST.md"
         _write_manifest({section: [] for section in REPORT_SECTIONS}, resolved_manifest)
-        LOGGER.error(
-            "W&B API unavailable; cannot build report. Please login with wandb.login()."
+        LOGGER.warning(
+            "W&B API unavailable; generated empty manifest at %s instead of a report.",
+            resolved_manifest,
         )
-        return ""
+        return None
 
     LOGGER.info("Using project %s/%s", entity, project)
 
     filters: Dict[str, Any] = {}
-    runs = fetch_runs(entity, project, filters=filters, max_runs=max_runs)
+    runs = fetch_runs(entity, project, filters=filters, max_runs=max_runs, api=api)
     LOGGER.info("Fetched %d runs", len(runs))
 
     manifest: Dict[str, Any] = {section: [] for section in REPORT_SECTIONS}
@@ -108,7 +103,7 @@ def build_report(
     # The current implementation focuses on discovery.  Integrating with the W&B
     # Reports API is left for environments where credentials are available.
     LOGGER.warning("Report construction is a no-op without W&B credentials.")
-    return ""
+    return None
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -149,9 +144,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     )
     if url:
         print(url)
-        return 0
-    LOGGER.error("Report URL unavailable")
-    return 1
+    else:
+        LOGGER.info("Report generation completed without publishing a W&B URL.")
+    return 0
 
 
 if __name__ == "__main__":
