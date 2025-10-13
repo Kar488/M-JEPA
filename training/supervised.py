@@ -42,6 +42,38 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["stratified_split", "train_linear_head"]
 
+
+def _resolve_cuda_spawn_context(device_type: str):
+    """Return a torch multiprocessing context compatible with CUDA workers.
+
+    When CUDA is initialised in the parent process, ``fork``-based DataLoader
+    workers can raise ``Cannot re-initialize CUDA in forked subprocess``. To
+    avoid that, prefer the ``spawn`` start method when building worker pools.
+
+    Args:
+        device_type: ``str`` device type (``"cuda"``/``"cpu"``/etc.).
+
+    Returns:
+        A ``torch.multiprocessing`` context configured for ``spawn`` when
+        available, otherwise ``None``.
+    """
+
+    if device_type != "cuda":
+        return None
+
+    mp = getattr(torch, "multiprocessing", None)
+    if mp is None:
+        return None
+
+    get_ctx = getattr(mp, "get_context", None)
+    if get_ctx is None:
+        return None
+
+    try:
+        return get_ctx("spawn")
+    except RuntimeError:
+        return None
+
 # NOTE: keep in sync with experiments.case_study._to_list behaviour for tests.
 def _as_index_list(indices: Iterable[int]) -> List[int]:
     """Convert an arbitrary index container into a plain ``list`` of ``int``."""
@@ -831,6 +863,15 @@ def train_linear_head(
             return None
         worker_count = _effective_worker_count(len(indices))
         loader_prefetch = prefetch_factor
+        spawn_ctx = None
+        if worker_count > 0:
+            spawn_ctx = _resolve_cuda_spawn_context(device_t.type)
+            if device_t.type == "cuda" and spawn_ctx is None:
+                logger.warning(
+                    "CUDA detected but spawn multiprocessing context unavailable; "
+                    "falling back to single-process DataLoader workers."
+                )
+                worker_count = 0
         if worker_count <= 0:
             loader_prefetch = None
         elif loader_prefetch is not None:
@@ -848,6 +889,8 @@ def train_linear_head(
             loader_kwargs["persistent_workers"] = bool(persistent_workers)
             if loader_prefetch is not None:
                 loader_kwargs["prefetch_factor"] = loader_prefetch
+            if spawn_ctx is not None:
+                loader_kwargs["multiprocessing_context"] = spawn_ctx
         return DataLoader(list(indices), **loader_kwargs)
 
     def _refresh_loaders() -> Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]:
