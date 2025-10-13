@@ -54,12 +54,63 @@ def _copy_within_shape(target, source):
         return None
     return new_tensor
 
+def _prepare_state_dict_for_module(module, state_dict: Mapping[str, Any]):
+    """Return a copy of ``state_dict`` aligned with ``module.state_dict()`` shapes."""
+
+    if not hasattr(module, "state_dict"):
+        return None, [], []
+
+    try:
+        current = module.state_dict()
+    except Exception:
+        logger.exception("Could not inspect module %s state_dict(); falling back to raw load.", type(module).__name__)
+        return None, [], []
+
+    if not isinstance(current, Mapping):
+        logger.warning("Module %s state_dict() did not return a Mapping; skipping shape alignment.", type(module).__name__)
+        return None, [], []
+
+    try:
+        prepared = state_dict.copy()
+    except Exception:
+        prepared = dict(state_dict)
+
+    resized: list[str] = []
+    dropped: list[str] = []
+
+    for key, curr_val in current.items():
+        if key not in state_dict:
+            continue
+        incoming_val = state_dict[key]
+        curr_shape = getattr(curr_val, "shape", None)
+        incoming_shape = getattr(incoming_val, "shape", None)
+
+        if curr_shape is None or incoming_shape is None:
+            if curr_shape != incoming_shape:
+                dropped.append(f"{key}: {type(incoming_val).__name__} -> {type(curr_val).__name__}")
+                prepared.pop(key, None)
+            continue
+
+        if curr_shape == incoming_shape:
+            continue
+
+        replacement = _copy_within_shape(curr_val, incoming_val)
+        if replacement is not None:
+            prepared[key] = replacement
+            resized.append(f"{key}: {tuple(incoming_shape)} -> {tuple(curr_shape)}")
+        else:
+            prepared.pop(key, None)
+            dropped.append(f"{key}: {tuple(incoming_shape)} -> {tuple(curr_shape)}")
+
+    return prepared, resized, dropped
+
+
 def load_state_dict_forgiving(module, state_dict):
     """
     Best-effort weight loader:
-      - If module supports .load_state_dict, try non-strict load and log missing/unexpected keys.
-      - On failure, if module exposes .state_dict(), retry with shape-filtered keys.
-      - If module DOES NOT have .load_state_dict/.state_dict (e.g., Dummy in tests), skip and return None.
+      - Align incoming tensors to module parameter shapes before loading.
+      - Gracefully skip modules without load_state_dict/state_dict (e.g., Dummy in tests).
+      - Log resized/dropped tensors but avoid surfacing benign size-mismatch tracebacks.
     Returns the LoadStateDictResult when available; otherwise None.
     """
     # If the "state_dict" isn't even a mapping, there's nothing sensible to load.
@@ -72,63 +123,24 @@ def load_state_dict_forgiving(module, state_dict):
         logger.warning("Module %s has no load_state_dict(); skipping weight load.", type(module).__name__)
         return None
 
-    try:
-        res = module.load_state_dict(state_dict, strict=False)
-        miss = getattr(res, "missing_keys", [])
-        unexp = getattr(res, "unexpected_keys", [])
-        if miss or unexp:
-            logger.warning("Non-strict load: missing=%s unexpected=%s", miss, unexp)
-        return res
-    except Exception:
-        logger.exception("Forgiving load: non-strict load failed, attempting shape-filtered keys")
-
-    # Fallback: only possible if module exposes a reference state to compare shapes
-    if not hasattr(module, "state_dict"):
-        logger.warning("Module %s has no state_dict(); cannot shape-filter. Skipping load.", type(module).__name__)
-        return None
+    prepared, resized, dropped = _prepare_state_dict_for_module(module, state_dict)
+    to_load = prepared if prepared is not None else state_dict
 
     try:
-        current = module.state_dict()
-        if not isinstance(current, Mapping):
-            logger.warning("Module %s state_dict() did not return a Mapping; skipping load.", type(module).__name__)
-            return None
-
-        adapted = {}
-        resized: list[str] = []
-        for key, value in state_dict.items():
-            if key not in current:
-                continue
-            curr_val = current[key]
-            curr_shape = getattr(curr_val, "shape", None)
-            value_shape = getattr(value, "shape", None)
-            if curr_shape is None or value_shape is None:
-                if curr_shape == value_shape:
-                    adapted[key] = value
-                continue
-
-            if curr_shape == value_shape:
-                adapted[key] = value
-                continue
-
-            replacement = _copy_within_shape(curr_val, value)
-            if replacement is not None:
-                adapted[key] = replacement
-                resized.append(f"{key}: {tuple(value_shape)} -> {tuple(curr_shape)}")
-
-        res = module.load_state_dict(adapted, strict=False)
-        miss = getattr(res, "missing_keys", [])
-        unexp = getattr(res, "unexpected_keys", [])
-        if miss or unexp:
-            logger.warning("Filtered load: missing=%s unexpected=%s", miss, unexp)
-        if resized:
-            logger.warning(
-                "Resized checkpoint tensors to match module: %s",
-                "; ".join(resized),
-            )
-        return res
+        res = module.load_state_dict(to_load, strict=False)
     except Exception:
-        logger.exception("Forgiving load: shape-filtered load also failed; skipping.")
+        logger.exception("Forgiving load: unable to load state_dict even after alignment.")
         return None
+
+    miss = getattr(res, "missing_keys", [])
+    unexp = getattr(res, "unexpected_keys", [])
+    if miss or unexp:
+        logger.warning("Non-strict load: missing=%s unexpected=%s", miss, unexp)
+    if resized:
+        logger.warning("Resized checkpoint tensors to match module: %s", "; ".join(resized))
+    if dropped:
+        logger.warning("Dropped checkpoint tensors with incompatible shapes: %s", "; ".join(dropped))
+    return res
     
 def resolve_ckpt_path(primary: str | None,
                       ckpt_dir: str | None = None,
