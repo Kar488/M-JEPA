@@ -7,6 +7,13 @@ export BESTCFG_NO_EPOCHS=1              # drop both epochs from best_config
 export MJEPACI_STAGE="pretrain"
 
 if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then
+  # When exercising the CI flow through a stage shim (used by unit tests) we
+  # still rely on helpers such as ``resolve_ci_python`` from common.sh.  Source
+  # it explicitly here because the early-return path below would otherwise skip
+  # the later ``source" statements, leading to ``command not found`` failures
+  # (exit 127) when the helpers are invoked.
+  source "$(dirname "$0")/common.sh"
+
   if [[ -z "${EXP_ID:-}" || -z "${EXPERIMENTS_ROOT:-}" ]]; then
     echo "[ci] error: MJEPACI_STAGE_SHIM requires EXP_ID and EXPERIMENTS_ROOT" >&2
     exit 1
