@@ -1068,20 +1068,47 @@ build_stage_args() {
   if (( skip_allowlist )); then
     OUT=("${COMBINED[@]}")
   else
-    local -a ALLOWED
-    local -a help_cmd=()
+    local -a ALLOWED=()
+    local help_output=""
+    local fallback_to_micromamba=0
+
     if py=$(python_bin 2>/dev/null); then
-      help_cmd=("$py")
+      if help_output=$(PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+        "$py" "$APP_DIR/scripts/train_jepa.py" "$subcmd" --help 2>&1
+      ); then
+        mapfile -t ALLOWED < <(printf '%s\n' "$help_output" |
+          sed -n 's/.*\(--[a-z0-9-]\+\).*/\1/p' | sort -u)
+      else
+        local status=$?
+        fallback_to_micromamba=1
+        if [[ "$help_output" == *"ModuleNotFoundError"* || "$help_output" == *"ImportError"* ]]; then
+          printf '[stage:%s] python (%s) is missing dependencies for %s --help; retrying via micromamba.\n' \
+            "$s" "$py" "$subcmd" >&2
+        else
+          printf '[stage:%s] python (%s) failed to execute %s --help (exit %d); retrying via micromamba.\n' \
+            "$s" "$py" "$subcmd" "$status" >&2
+          printf '%s\n' "$help_output" >&2
+        fi
+      fi
     else
-      ensure_micromamba
-      help_cmd=("$MMBIN" run -n mjepa python)
+      fallback_to_micromamba=1
     fi
 
-    mapfile -t ALLOWED < <(
-      PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-        "${help_cmd[@]}" "$APP_DIR/scripts/train_jepa.py" "$subcmd" --help |
-          sed -n 's/.*\(--[a-z0-9-]\+\).*/\1/p' | sort -u
-    )
+    if (( fallback_to_micromamba )); then
+      ensure_micromamba
+      if help_output=$(PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+        "$MMBIN" run -n mjepa python "$APP_DIR/scripts/train_jepa.py" "$subcmd" --help 2>&1
+      ); then
+        mapfile -t ALLOWED < <(printf '%s\n' "$help_output" |
+          sed -n 's/.*\(--[a-z0-9-]\+\).*/\1/p' | sort -u)
+      else
+        local status=$?
+        printf '[stage:%s] failed to execute %s --help even via micromamba python (exit %d).\n' \
+          "$s" "$subcmd" "$status" >&2
+        printf '%s\n' "$help_output" >&2
+        return "$status"
+      fi
+    fi
 
     local i=0 j=0
     while (( i < ${#COMBINED[@]} )); do
