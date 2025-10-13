@@ -124,12 +124,38 @@ def load_state_dict_forgiving(module, state_dict):
         return None
 
     prepared, resized, dropped = _prepare_state_dict_for_module(module, state_dict)
-    to_load = prepared if prepared is not None else state_dict
 
-    try:
-        res = module.load_state_dict(to_load, strict=False)
-    except Exception:
-        logger.exception("Forgiving load: unable to load state_dict even after alignment.")
+    load_attempts: list[tuple[str, Mapping[str, Any]]] = []
+    if prepared is not None:
+        load_attempts.append(("aligned", prepared))
+    load_attempts.append(("raw", state_dict))
+
+    res = None
+    errors: list[str] = []
+    for label, payload in load_attempts:
+        try:
+            res = module.load_state_dict(payload, strict=False)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            errors.append(f"{label}: {exc}")
+            logger.exception(
+                "Forgiving load: module %s rejected %s state_dict payload.",
+                type(module).__name__,
+                label,
+            )
+            continue
+
+        if label == "raw" and prepared is not None:
+            logger.warning(
+                "Forgiving load: falling back to raw state_dict after aligned load failed."
+            )
+        break
+
+    if res is None:
+        logger.error(
+            "Forgiving load failed for module %s after attempts: %s",
+            type(module).__name__,
+            ", ".join(errors) if errors else "<none>",
+        )
         return None
 
     miss = getattr(res, "missing_keys", [])
