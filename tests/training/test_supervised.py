@@ -15,9 +15,10 @@ from models.base import EncoderBase
 
 
 from training.supervised import (
+    _resolve_cuda_spawn_context,
+    _pool_batch_embeddings,
     stratified_split,
     train_linear_head,
-    _pool_batch_embeddings,
 )
 
 
@@ -419,3 +420,28 @@ def test_train_linear_head_recovers_from_emfile(monkeypatch):
 
     assert failure["raised"]
     assert "head" in metrics
+def test_resolve_cuda_spawn_context_prefers_spawn(monkeypatch):
+    sentinel = object()
+
+    class _DummyMP:
+        @staticmethod
+        def get_context(method):
+            assert method == "spawn"
+            return sentinel
+
+    monkeypatch.setattr(supervised_mod.torch, "multiprocessing", _DummyMP(), raising=False)
+
+    assert _resolve_cuda_spawn_context("cuda") is sentinel
+
+
+def test_resolve_cuda_spawn_context_returns_none_on_failure(monkeypatch):
+    class _DummyMP:
+        @staticmethod
+        def get_context(method):
+            assert method == "spawn"
+            raise RuntimeError("no spawn available")
+
+    monkeypatch.setattr(supervised_mod.torch, "multiprocessing", _DummyMP(), raising=False)
+
+    assert _resolve_cuda_spawn_context("cuda") is None
+
