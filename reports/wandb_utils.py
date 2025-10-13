@@ -3,19 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
-from dataclasses import dataclass
 import os
-from typing import (
-    Any,
-    Dict,
-    Iterable,
-    List,
-    Mapping,
-    MutableMapping,
-    Optional,
-    Sequence,
-)
+from collections.abc import Mapping as MappingABC
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 import pandas as pd
 
@@ -42,6 +35,35 @@ class RunRecord:
     group: Optional[str]
     job_type: Optional[str]
     url: Optional[str]
+
+
+def _coerce_mapping(value: Any, *, context: str) -> Dict[str, Any]:
+    """Best-effort conversion of W&B payloads to a mapping."""
+
+    if isinstance(value, MappingABC):
+        return dict(value)
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return {}
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            LOGGER.debug("Ignoring non-mapping %s from W&B API: %r", context, value)
+            return {}
+        if isinstance(parsed, MappingABC):
+            return dict(parsed)
+        LOGGER.debug(
+            "Parsed %s JSON is not a mapping (type=%s): %r", context, type(parsed).__name__, parsed
+        )
+        return {}
+    try:
+        return dict(value)
+    except Exception:  # pragma: no cover - defensive fallback
+        LOGGER.debug("Failed to coerce %s into mapping: %r", context, value)
+        return {}
 
 
 def get_wandb_api():
@@ -94,8 +116,8 @@ def fetch_runs(
             run_id=run.id,
             name=run.name,
             tags=tuple(run.tags or []),
-            summary=dict(run.summary or {}),
-            config=dict(getattr(run, "config", {}) or {}),
+            summary=_coerce_mapping(getattr(run, "summary", None), context="summary"),
+            config=_coerce_mapping(getattr(run, "config", None), context="config"),
             history=history,
             group=getattr(run, "group", None),
             job_type=getattr(run, "job_type", None),
