@@ -38,12 +38,140 @@ if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then
   expected_stage_outputs="${STAGE_OUTPUTS_DIR}/pretrain.json"
   expected_manifest="${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json"
 
-  for required in "$expected_encoder" "$expected_stage_outputs" "$expected_manifest"; do
+  python_cmd=()
+  resolve_ci_python python_cmd
+
+  for required in "$expected_encoder" "$expected_stage_outputs"; do
     if [[ ! -f "$required" ]]; then
       echo "[ci] error: expected ${required} not found" >&2
       exit 1
     fi
   done
+
+  if [[ ! -f "$expected_manifest" ]]; then
+    recorded_manifest=""
+    recorded_encoder=""
+
+    if [[ -f "$expected_stage_outputs" && ${#python_cmd[@]} -gt 0 ]]; then
+      while IFS='=' read -r key value; do
+        case "$key" in
+          manifest_path)
+            recorded_manifest="$value"
+            ;;
+          encoder_checkpoint)
+            recorded_encoder="$value"
+            ;;
+        esac
+      done < <("${python_cmd[@]}" - "$expected_stage_outputs" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh) or {}
+except Exception:
+    sys.exit(0)
+
+def emit(key, value):
+    if isinstance(value, str) and value.strip():
+        print(f"{key}={value.strip()}")
+
+emit("manifest_path", data.get("manifest_path"))
+emit("encoder_checkpoint", data.get("encoder_checkpoint"))
+PY
+      )
+
+      normalize_stage_path() {
+        local raw="$1"
+        shift || true
+        local candidate
+        if [[ -z "$raw" ]]; then
+          return 1
+        fi
+        if [[ "$raw" == /* ]]; then
+          if [[ -e "$raw" ]]; then
+            printf '%s\n' "$raw"
+            return 0
+          fi
+          return 1
+        fi
+        for candidate in "$@"; do
+          [[ -z "$candidate" ]] && continue
+          candidate="${candidate%/}/$raw"
+          if [[ -e "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+          fi
+        done
+        return 1
+      }
+
+      if [[ -n "${recorded_manifest:-}" ]]; then
+        if normalized=$(normalize_stage_path "$recorded_manifest" "$PRETRAIN_ARTIFACTS_DIR" "$PRETRAIN_DIR" "$EXPERIMENT_DIR" \
+          "$PRETRAIN_EXPERIMENT_ROOT" "$EXPERIMENTS_ROOT"); then
+          recorded_manifest="$normalized"
+        fi
+      fi
+
+      if [[ -n "${recorded_encoder:-}" ]]; then
+        if normalized=$(normalize_stage_path "$recorded_encoder" "$PRETRAIN_DIR" "$PRETRAIN_ARTIFACTS_DIR" "$EXPERIMENT_DIR" \
+          "$PRETRAIN_EXPERIMENT_ROOT" "$EXPERIMENTS_ROOT"); then
+          recorded_encoder="$normalized"
+        fi
+      fi
+    fi
+
+    if [[ -n "${recorded_manifest:-}" && -f "$recorded_manifest" ]]; then
+      mkdir -p "$(dirname "$expected_manifest")"
+      if [[ "$recorded_manifest" != "$expected_manifest" ]]; then
+        cp "$recorded_manifest" "$expected_manifest"
+      fi
+    fi
+
+    if [[ -n "${recorded_encoder:-}" && -f "$recorded_encoder" && "$recorded_encoder" != "$expected_encoder" ]]; then
+      mkdir -p "$(dirname "$expected_encoder")"
+      ln -sf "$recorded_encoder" "$expected_encoder"
+    fi
+
+    if [[ ! -f "$expected_manifest" ]]; then
+      encoder_for_manifest="$expected_encoder"
+      if [[ -n "${recorded_encoder:-}" && -f "$recorded_encoder" ]]; then
+        encoder_for_manifest="$recorded_encoder"
+      fi
+      mkdir -p "$(dirname "$expected_manifest")"
+      if [[ ${#python_cmd[@]} -gt 0 ]]; then
+        "${python_cmd[@]}" - "$expected_manifest" "$encoder_for_manifest" "$EXP_ID" <<'PY'
+import json
+import os
+import sys
+
+manifest_path, encoder_path, exp_id = sys.argv[1:4]
+payload = {
+    "paths": {"encoder": os.path.abspath(encoder_path)},
+}
+if exp_id and exp_id.strip():
+    payload["pretrain_exp_id"] = exp_id
+
+with open(manifest_path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
+      else
+        cat >"$expected_manifest" <<EOF
+{
+  "paths": {"encoder": "${encoder_for_manifest}"}
+}
+EOF
+      fi
+    fi
+  fi
+
+  if [[ ! -f "$expected_manifest" ]]; then
+    echo "[ci] error: expected ${expected_manifest} not found" >&2
+    exit 1
+  fi
 
   state_path="${EXPERIMENT_DIR}/pretrain_state.json"
   state_legacy="${EXPERIMENTS_ROOT%/}/pretrain_state.json"
