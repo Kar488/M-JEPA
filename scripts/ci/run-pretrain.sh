@@ -3,6 +3,139 @@ set -euo pipefail
 
 trap 'echo "[ci] error at line $LINENO: $BASH_COMMAND" >&2' ERR
 
+ci_pretrain_materialize_manifest() {
+  local stage_outputs="$1"
+  local expected_manifest="$2"
+  local expected_encoder="$3"
+  local artifacts_dir="${4:-}"
+  local pretrain_dir="${5:-}"
+  local experiment_dir="${6:-}"
+  local experiments_root="${7:-}"
+  local pretrain_experiment_root="${8:-}"
+
+  local recorded_manifest="" recorded_encoder=""
+  local python_cmd=()
+
+  resolve_ci_python python_cmd
+
+  if [[ -f "$stage_outputs" && ${#python_cmd[@]} -gt 0 ]]; then
+    while IFS='=' read -r key value; do
+      case "$key" in
+        manifest_path)
+          recorded_manifest="$value"
+          ;;
+        encoder_checkpoint)
+          recorded_encoder="$value"
+          ;;
+      esac
+    done < <("${python_cmd[@]}" - "$stage_outputs" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh) or {}
+except Exception:
+    sys.exit(0)
+
+def emit(key, value):
+    if isinstance(value, str) and value.strip():
+        print(f"{key}={value.strip()}")
+
+emit("manifest_path", data.get("manifest_path"))
+emit("encoder_checkpoint", data.get("encoder_checkpoint"))
+PY
+    )
+  fi
+
+  normalize_stage_path() {
+    local raw="$1"
+    shift || true
+    local candidate
+    if [[ -z "$raw" ]]; then
+      return 1
+    fi
+    if [[ "$raw" == /* ]]; then
+      if [[ -e "$raw" ]]; then
+        printf '%s\n' "$raw"
+        return 0
+      fi
+      return 1
+    fi
+    for candidate in "$@"; do
+      [[ -z "$candidate" ]] && continue
+      candidate="${candidate%/}/$raw"
+      if [[ -e "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+    return 1
+  }
+
+  if [[ -n "${recorded_manifest:-}" ]]; then
+    if normalized=$(normalize_stage_path "$recorded_manifest" "$artifacts_dir" "$pretrain_dir" "$experiment_dir" \
+      "$pretrain_experiment_root" "$experiments_root"); then
+      recorded_manifest="$normalized"
+    fi
+  fi
+
+  if [[ -n "${recorded_encoder:-}" ]]; then
+    if normalized=$(normalize_stage_path "$recorded_encoder" "$pretrain_dir" "$artifacts_dir" "$experiment_dir" \
+      "$pretrain_experiment_root" "$experiments_root"); then
+      recorded_encoder="$normalized"
+    fi
+  fi
+
+  if [[ -n "${recorded_manifest:-}" && -f "$recorded_manifest" ]]; then
+    mkdir -p "$(dirname "$expected_manifest")"
+    if [[ "$recorded_manifest" != "$expected_manifest" ]]; then
+      cp "$recorded_manifest" "$expected_manifest"
+    fi
+  fi
+
+  if [[ -n "${recorded_encoder:-}" && -f "$recorded_encoder" && "$recorded_encoder" != "$expected_encoder" ]]; then
+    mkdir -p "$(dirname "$expected_encoder")"
+    ln -sf "$recorded_encoder" "$expected_encoder"
+  fi
+
+  if [[ ! -f "$expected_manifest" ]]; then
+    local encoder_for_manifest="$expected_encoder"
+    if [[ -n "${recorded_encoder:-}" && -f "$recorded_encoder" ]]; then
+      encoder_for_manifest="$recorded_encoder"
+    fi
+    mkdir -p "$(dirname "$expected_manifest")"
+    if [[ ${#python_cmd[@]} -gt 0 ]]; then
+      "${python_cmd[@]}" - "$expected_manifest" "$encoder_for_manifest" "${EXP_ID:-}" <<'PY'
+import json
+import os
+import sys
+
+manifest_path, encoder_path, exp_id = sys.argv[1:4]
+payload = {
+    "paths": {"encoder": os.path.abspath(encoder_path)},
+}
+if exp_id and exp_id.strip():
+    payload["pretrain_exp_id"] = exp_id
+
+with open(manifest_path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
+    else
+      cat >"$expected_manifest" <<EOF
+{
+  "paths": {"encoder": "${encoder_for_manifest}"}
+}
+EOF
+    fi
+  fi
+
+  [[ -f "$expected_manifest" ]]
+}
+
 export BESTCFG_NO_EPOCHS=1              # drop both epochs from best_config
 export MJEPACI_STAGE="pretrain"
 
@@ -38,9 +171,6 @@ if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then
   expected_stage_outputs="${STAGE_OUTPUTS_DIR}/pretrain.json"
   expected_manifest="${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json"
 
-  python_cmd=()
-  resolve_ci_python python_cmd
-
   for required in "$expected_encoder" "$expected_stage_outputs"; do
     if [[ ! -f "$required" ]]; then
       echo "[ci] error: expected ${required} not found" >&2
@@ -48,127 +178,8 @@ if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then
     fi
   done
 
-  if [[ ! -f "$expected_manifest" ]]; then
-    recorded_manifest=""
-    recorded_encoder=""
-
-    if [[ -f "$expected_stage_outputs" && ${#python_cmd[@]} -gt 0 ]]; then
-      while IFS='=' read -r key value; do
-        case "$key" in
-          manifest_path)
-            recorded_manifest="$value"
-            ;;
-          encoder_checkpoint)
-            recorded_encoder="$value"
-            ;;
-        esac
-      done < <("${python_cmd[@]}" - "$expected_stage_outputs" <<'PY'
-import json
-import os
-import sys
-
-path = sys.argv[1]
-try:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh) or {}
-except Exception:
-    sys.exit(0)
-
-def emit(key, value):
-    if isinstance(value, str) and value.strip():
-        print(f"{key}={value.strip()}")
-
-emit("manifest_path", data.get("manifest_path"))
-emit("encoder_checkpoint", data.get("encoder_checkpoint"))
-PY
-      )
-
-      normalize_stage_path() {
-        local raw="$1"
-        shift || true
-        local candidate
-        if [[ -z "$raw" ]]; then
-          return 1
-        fi
-        if [[ "$raw" == /* ]]; then
-          if [[ -e "$raw" ]]; then
-            printf '%s\n' "$raw"
-            return 0
-          fi
-          return 1
-        fi
-        for candidate in "$@"; do
-          [[ -z "$candidate" ]] && continue
-          candidate="${candidate%/}/$raw"
-          if [[ -e "$candidate" ]]; then
-            printf '%s\n' "$candidate"
-            return 0
-          fi
-        done
-        return 1
-      }
-
-      if [[ -n "${recorded_manifest:-}" ]]; then
-        if normalized=$(normalize_stage_path "$recorded_manifest" "$PRETRAIN_ARTIFACTS_DIR" "$PRETRAIN_DIR" "$EXPERIMENT_DIR" \
-          "$PRETRAIN_EXPERIMENT_ROOT" "$EXPERIMENTS_ROOT"); then
-          recorded_manifest="$normalized"
-        fi
-      fi
-
-      if [[ -n "${recorded_encoder:-}" ]]; then
-        if normalized=$(normalize_stage_path "$recorded_encoder" "$PRETRAIN_DIR" "$PRETRAIN_ARTIFACTS_DIR" "$EXPERIMENT_DIR" \
-          "$PRETRAIN_EXPERIMENT_ROOT" "$EXPERIMENTS_ROOT"); then
-          recorded_encoder="$normalized"
-        fi
-      fi
-    fi
-
-    if [[ -n "${recorded_manifest:-}" && -f "$recorded_manifest" ]]; then
-      mkdir -p "$(dirname "$expected_manifest")"
-      if [[ "$recorded_manifest" != "$expected_manifest" ]]; then
-        cp "$recorded_manifest" "$expected_manifest"
-      fi
-    fi
-
-    if [[ -n "${recorded_encoder:-}" && -f "$recorded_encoder" && "$recorded_encoder" != "$expected_encoder" ]]; then
-      mkdir -p "$(dirname "$expected_encoder")"
-      ln -sf "$recorded_encoder" "$expected_encoder"
-    fi
-
-    if [[ ! -f "$expected_manifest" ]]; then
-      encoder_for_manifest="$expected_encoder"
-      if [[ -n "${recorded_encoder:-}" && -f "$recorded_encoder" ]]; then
-        encoder_for_manifest="$recorded_encoder"
-      fi
-      mkdir -p "$(dirname "$expected_manifest")"
-      if [[ ${#python_cmd[@]} -gt 0 ]]; then
-        "${python_cmd[@]}" - "$expected_manifest" "$encoder_for_manifest" "$EXP_ID" <<'PY'
-import json
-import os
-import sys
-
-manifest_path, encoder_path, exp_id = sys.argv[1:4]
-payload = {
-    "paths": {"encoder": os.path.abspath(encoder_path)},
-}
-if exp_id and exp_id.strip():
-    payload["pretrain_exp_id"] = exp_id
-
-with open(manifest_path, "w", encoding="utf-8") as handle:
-    json.dump(payload, handle, indent=2, sort_keys=True)
-    handle.write("\n")
-PY
-      else
-        cat >"$expected_manifest" <<EOF
-{
-  "paths": {"encoder": "${encoder_for_manifest}"}
-}
-EOF
-      fi
-    fi
-  fi
-
-  if [[ ! -f "$expected_manifest" ]]; then
+  if ! ci_pretrain_materialize_manifest "$expected_stage_outputs" "$expected_manifest" "$expected_encoder" \
+    "$PRETRAIN_ARTIFACTS_DIR" "$PRETRAIN_DIR" "$EXPERIMENT_DIR" "$EXPERIMENTS_ROOT" "${PRETRAIN_EXPERIMENT_ROOT:-}"; then
     echo "[ci] error: expected ${expected_manifest} not found" >&2
     exit 1
   fi
@@ -356,124 +367,8 @@ fi
 python_cmd=()
 resolve_ci_python python_cmd
 
-recorded_manifest=""
-recorded_encoder=""
-
-while IFS='=' read -r key value; do
-  case "$key" in
-    manifest_path)
-      recorded_manifest="$value"
-      ;;
-    encoder_checkpoint)
-      recorded_encoder="$value"
-      ;;
-  esac
-done < <("${python_cmd[@]}" - "$expected_stage_outputs" <<'PY'
-import json
-import os
-import sys
-
-path = sys.argv[1]
-try:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh) or {}
-except Exception:
-    sys.exit(0)
-
-def emit(key, value):
-    if isinstance(value, str) and value.strip():
-        print(f"{key}={value.strip()}")
-
-emit("manifest_path", data.get("manifest_path"))
-emit("encoder_checkpoint", data.get("encoder_checkpoint"))
-PY
-)
-
-# Resolve relative paths emitted by the stage shim.
-normalize_stage_path() {
-  local raw="$1"
-  shift || true
-  local candidate
-  if [[ -z "$raw" ]]; then
-    return 1
-  fi
-  if [[ "$raw" == /* ]]; then
-    if [[ -e "$raw" ]]; then
-      printf '%s\n' "$raw"
-      return 0
-    fi
-    return 1
-  fi
-  for candidate in "$@"; do
-    [[ -z "$candidate" ]] && continue
-    candidate="${candidate%/}/$raw"
-    if [[ -e "$candidate" ]]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
-}
-
-if [[ -n "${recorded_manifest:-}" ]]; then
-  if normalized=$(normalize_stage_path "$recorded_manifest" "$PRETRAIN_ARTIFACTS_DIR" "$PRETRAIN_DIR" "$EXPERIMENT_DIR" "$PRETRAIN_EXPERIMENT_ROOT" "$EXPERIMENTS_ROOT"); then
-    recorded_manifest="$normalized"
-  fi
-fi
-
-if [[ -n "${recorded_encoder:-}" ]]; then
-  if normalized=$(normalize_stage_path "$recorded_encoder" "$PRETRAIN_DIR" "$PRETRAIN_ARTIFACTS_DIR" "$EXPERIMENT_DIR" "$PRETRAIN_EXPERIMENT_ROOT" "$EXPERIMENTS_ROOT"); then
-    recorded_encoder="$normalized"
-  fi
-fi
-
-manifest_path="$expected_manifest"
-encoder_ckpt="$expected_encoder"
-
-if [[ -n "${recorded_manifest:-}" ]]; then
-  manifest_path="$recorded_manifest"
-fi
-
-if [[ -n "${recorded_encoder:-}" ]]; then
-  encoder_ckpt="$recorded_encoder"
-fi
-
-if [[ -f "$manifest_path" && "$manifest_path" != "$expected_manifest" ]]; then
-  mkdir -p "$(dirname "$expected_manifest")"
-  cp "$manifest_path" "$expected_manifest"
-fi
-
-if [[ -f "$encoder_ckpt" && "$encoder_ckpt" != "$expected_encoder" ]]; then
-  mkdir -p "$(dirname "$expected_encoder")"
-  ln -sf "$encoder_ckpt" "$expected_encoder"
-fi
-
-# If the stage skipped manifest creation, synthesise a minimal manifest so
-# downstream stages still find the encoder checkpoint.
-if [[ ! -f "$expected_manifest" && -f "$expected_encoder" ]]; then
-  "${python_cmd[@]}" - "$expected_manifest" "$expected_encoder" "$PRETRAIN_EXP_ID" <<'PY'
-import json
-import os
-import sys
-
-manifest_path, encoder_path, exp_id = sys.argv[1:4]
-manifest_dir = os.path.dirname(manifest_path)
-os.makedirs(manifest_dir, exist_ok=True)
-
-payload = {
-    "paths": {"encoder": os.path.abspath(encoder_path)},
-}
-
-if exp_id and exp_id.strip():
-    payload["pretrain_exp_id"] = exp_id
-
-with open(manifest_path, "w", encoding="utf-8") as handle:
-    json.dump(payload, handle, indent=2, sort_keys=True)
-    handle.write("\n")
-PY
-fi
-
-if [[ ! -f "$expected_manifest" ]]; then
+if ! ci_pretrain_materialize_manifest "$expected_stage_outputs" "$expected_manifest" "$expected_encoder" \
+  "$PRETRAIN_ARTIFACTS_DIR" "$PRETRAIN_DIR" "$EXPERIMENT_DIR" "$EXPERIMENTS_ROOT" "${PRETRAIN_EXPERIMENT_ROOT:-}"; then
   echo "[ci] error: expected file ${expected_manifest} not found" >&2
   exit 1
 fi

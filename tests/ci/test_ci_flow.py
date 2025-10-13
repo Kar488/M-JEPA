@@ -73,6 +73,63 @@ esac
     assert all("18296078427" not in p for p in all_paths)
 
 
+def test_pretrain_materializes_phase2_artifacts(tmp_path):
+    experiments_root = tmp_path / "experiments"
+    phase2_root = tmp_path / "phase2" / "winner"
+    phase2_root.mkdir(parents=True)
+
+    remote_checkpoint = phase2_root / "encoder.pt"
+    remote_checkpoint.write_text("phase2-weights", encoding="utf-8")
+    remote_manifest = phase2_root / "encoder_manifest.json"
+    remote_manifest.write_text(
+        json.dumps({"paths": {"encoder": str(remote_checkpoint)}}) + "\n",
+        encoding="utf-8",
+    )
+
+    shim_path = tmp_path / "phase2_stage_shim.sh"
+    shim_path.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+stage=\"$1\"
+case \"$stage\" in
+  pretrain)
+    mkdir -p \"$PRETRAIN_DIR\" \"$PRETRAIN_DIR/stage-outputs\" \"$PRETRAIN_ARTIFACTS_DIR\"
+    cp \"{remote_checkpoint}\" \"$PRETRAIN_DIR/encoder.pt\"
+    cat <<JSON > \"$PRETRAIN_DIR/stage-outputs/pretrain.json\"
+{{\"manifest_path\":\"{remote_manifest}\",\"encoder_checkpoint\":\"{remote_checkpoint}\"}}
+JSON
+    ;;
+  *)
+    ;;
+esac
+"""
+    )
+    shim_path.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "EXPERIMENTS_ROOT": str(experiments_root),
+            "EXP_ID": "987654321",
+            "MJEPACI_STAGE_SHIM": str(shim_path),
+            "GITHUB_ENV": str(tmp_path / "github_env"),
+            "WANDB_API_KEY": "",
+            "PRETRAIN_EXPERIMENT_ROOT": str(phase2_root),
+        }
+    )
+
+    _run(["bash", "scripts/ci/run-pretrain.sh"], env)
+
+    experiment_dir = experiments_root / "987654321"
+    manifest_path = experiment_dir / "artifacts" / "encoder_manifest.json"
+    encoder_path = experiment_dir / "pretrain" / "encoder.pt"
+
+    assert manifest_path.is_file(), manifest_path
+    assert manifest_path.read_text(encoding="utf-8") == remote_manifest.read_text(encoding="utf-8")
+    assert encoder_path.is_symlink(), encoder_path
+    assert encoder_path.resolve() == remote_checkpoint.resolve()
+
+
 def test_phase1_allocates_new_grid_and_exp_id(tmp_path):
     experiments_root = tmp_path / "experiments"
     shim_path = tmp_path / "phase1_shim.sh"
