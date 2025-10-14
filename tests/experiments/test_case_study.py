@@ -45,7 +45,16 @@ def test_evaluate_case_study_handles_probability_mismatch(monkeypatch):
     dataset = types.SimpleNamespace(graphs=[types.SimpleNamespace(), types.SimpleNamespace()])
     labels = np.array([0.0, 1.0])
 
-    def fake_predict(dataset, indices, encoder, head, device, edge_dim, batch_size=256):
+    def fake_predict(
+        dataset,
+        indices,
+        encoder,
+        head,
+        device,
+        edge_dim,
+        batch_size=256,
+        diag_hook=None,
+    ):
         return torch.zeros((1, 1)), torch.zeros((1, 1))
 
     monkeypatch.setattr(case_study, "_predict_logits_probs_in_chunks", fake_predict)
@@ -83,7 +92,16 @@ def test_evaluate_case_study_handles_resize_failure(monkeypatch):
     dataset = types.SimpleNamespace(graphs=[types.SimpleNamespace(), types.SimpleNamespace()])
     labels = np.array([0.0, 1.0])
 
-    def fake_predict(dataset, indices, encoder, head, device, edge_dim, batch_size=256):
+    def fake_predict(
+        dataset,
+        indices,
+        encoder,
+        head,
+        device,
+        edge_dim,
+        batch_size=256,
+        diag_hook=None,
+    ):
         # Return logits/probabilities shorter than requested to trigger the resize path.
         return torch.zeros((1, 1)), torch.zeros((1, 1))
 
@@ -123,7 +141,16 @@ def test_evaluate_case_study_handles_empty_predictions(monkeypatch):
     dataset = types.SimpleNamespace(graphs=[types.SimpleNamespace(), types.SimpleNamespace()])
     labels = np.array([0.0, 1.0])
 
-    def fake_predict(dataset, indices, encoder, head, device, edge_dim, batch_size=256):
+    def fake_predict(
+        dataset,
+        indices,
+        encoder,
+        head,
+        device,
+        edge_dim,
+        batch_size=256,
+        diag_hook=None,
+    ):
         return torch.empty((0, 1)), torch.empty((0, 1))
 
     monkeypatch.setattr(case_study, "_predict_logits_probs_in_chunks", fake_predict)
