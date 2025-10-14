@@ -1188,10 +1188,17 @@ stage_dataset_preflight() {
 # ---------- timeout + SIGINT ----------
 run_with_timeout() {
   local s="$1"; shift
+  local arr_name="${1:-}"
 
     # --- JEPA mode: run_stage passes an array name ---
   if [[ "$s" != "wandb_agent" ]]; then
     if [ "$s" = "report" ]; then
+      local -a arr=()
+      if [[ -n "$arr_name" ]]; then
+        local -n arr_ref="$arr_name"
+        arr=("${arr_ref[@]}")
+      fi
+
       local BUDGET_MINS="${REPORT_TIME_BUDGET_MINS:-${HARD_WALL_MINS:-30}}"
       local SOFT=$((BUDGET_MINS*60))
       local GRACE="${KILL_AFTER_SECS:-60}"
@@ -1200,27 +1207,90 @@ run_with_timeout() {
       mkdir -p "$LOG_DIR"
       LOG="${LOG_DIR}/${s}.log"
 
+      if [[ -z "${MPLBACKEND:-}" ]]; then
+        if grep -q "matplotlib" "$APP_DIR"/reports/plots_*.py 2>/dev/null; then
+          export MPLBACKEND="Agg"  # debug: enforce non-interactive MPL backend when plots import matplotlib
+        fi
+      fi
+
+      if [[ -n "${OUT_DIR:-}" ]]; then
+        mkdir -p "$OUT_DIR"
+        local stat_output=""
+        if stat_output=$(stat -c '%U:%G %a' "$OUT_DIR" 2>/dev/null); then
+          echo "report: OUT_DIR=${OUT_DIR} perms=${stat_output}"
+        else
+          echo "report: unable to stat OUT_DIR=${OUT_DIR}" >&2
+        fi
+      fi
+
+      local -a report_py_cmd=(python -m reports.build_wandb_report "${arr[@]}")
+      local report_cmd_str=""
+      printf -v report_cmd_str '%q ' "${report_py_cmd[@]}"
+      report_cmd_str="${report_cmd_str% }"
+
+      echo "report: starting at $(date -Is)"
+      echo "report: invoking: ${report_cmd_str}"
+      echo "report: WANDB_MODE=${WANDB_MODE:-<unset>} WANDB_HTTP_TIMEOUT=${WANDB_HTTP_TIMEOUT:-<unset>}"
+
+      local report_start_ts
+      report_start_ts=$(date +%s)
+
+      report_heartbeat() {
+        while true; do
+          echo "report: heartbeat $(date -Is)"
+          sleep 30
+        done
+      }
+      report_heartbeat &
+      local heartbeat_pid=$!
+
       timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
         env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
         "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-        python -m reports.build_wandb_report "${arr[@]}" \
+        "${report_py_cmd[@]}" \
         2>&1 | tee "$LOG_DIR/${s}.log"
 
-      rc=${PIPESTATUS[0]}
-      if [[ $rc -eq 0 ]]; then
+      local -r timeout_rc=${PIPESTATUS[0]}
+
+      if [[ -n "$heartbeat_pid" ]]; then
+        kill "$heartbeat_pid" 2>/dev/null || true
+        wait "$heartbeat_pid" 2>/dev/null || true
+      fi
+
+      echo "report: finished at $(date -Is) (rc=${timeout_rc})"
+
+      local elapsed_ts
+      elapsed_ts=$(($(date +%s) - report_start_ts))
+      echo "report: elapsed ${elapsed_ts}s"
+
+      if [[ -n "${OUT_DIR:-}" && -d "$OUT_DIR" ]]; then
+        local -a report_artifacts=()
+        mapfile -t report_artifacts < <(find "$OUT_DIR" -maxdepth 2 -mindepth 1 -type f | sort)
+        echo "report: artifacts ${#report_artifacts[@]} files under ${OUT_DIR}"
+        local artifact_path
+        for artifact_path in "${report_artifacts[@]}"; do
+          echo "report: artifact ${artifact_path}"
+        done
+      fi
+
+      if [[ $timeout_rc -eq 0 ]]; then
         :
-      elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
-        echo "[INFO][$s] graceful stop (rc=$rc); not marking stage done; outputs should be flushed."
+      elif [[ $timeout_rc -eq 124 || $timeout_rc -eq 130 || $timeout_rc -eq 143 || $timeout_rc -eq 137 ]]; then
+        echo "[INFO][$s] graceful stop (rc=$timeout_rc); not marking stage done; outputs should be flushed."
         mark_graceful_stop "$s"
         return 0
       else
-        echo "[ERROR][$s] build_wandb_report failed with exit code $rc" >&2
-        exit $rc
+        echo "[ERROR][$s] build_wandb_report failed with exit code $timeout_rc" >&2
+        exit $timeout_rc
       fi
       return 0
     fi
 
-    local -n arr="$1"; shift
+    if [[ -n "$arr_name" ]]; then
+      local -n arr="$arr_name"; shift
+    else
+      local -a arr=()
+    fi
     local subcmd; subcmd="$(stage_subcmd "$s")"
 
     #snake to kebab case  
