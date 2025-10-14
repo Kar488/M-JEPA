@@ -3,6 +3,22 @@ set -euo pipefail
 
 trap 'echo "[ci] error at line $LINENO: $BASH_COMMAND" >&2' ERR
 
+ensure_tox21_gate_stub() {
+  # Ensure downstream artifact syncs never fail due to a missing optional
+  # tox21 gate file.  When the gate has not run yet seed a conservative default.
+  local root="${1:-${PRETRAIN_EXPERIMENT_ROOT:-}}"
+  [[ -n "$root" ]] || return 0
+  local gate_path="${root%/}/tox21_gate.env"
+  if [[ -f "$gate_path" ]]; then
+    return 0
+  fi
+  mkdir -p "$(dirname "$gate_path")"
+  {
+    echo "# Seeded by run-pretrain.sh to stabilise artifact collection"
+    echo "TOX21_MET_GATE=false"
+  } >"$gate_path"
+}
+
 ci_pretrain_materialize_manifest() {
   local stage_outputs="$1"
   local expected_manifest="$2"
@@ -236,6 +252,8 @@ PY
     echo "[ci] warn: unable to write pretrain_state.json because no python interpreter was resolved" >&2
   fi
 
+  ensure_tox21_gate_stub "$pretrain_root"
+
   exit 0
 fi
 
@@ -431,5 +449,7 @@ if legacy_path and os.path.abspath(legacy_path) != os.path.abspath(state_path):
     os.replace(tmp_legacy, legacy_path)
     print(f"[pretrain] synced legacy state to {legacy_path}")
 PY
+
+ensure_tox21_gate_stub "$PRETRAIN_EXPERIMENT_ROOT"
 
 unset BESTCFG_NO_EPOCHS                     # avoid leaking to other stages

@@ -5,6 +5,12 @@ export MJEPACI_STAGE="bench"
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
 
+# Default labelled splits when the workflow does not provide overrides.  This
+# keeps the benchmark stage non-empty even in smoke tests that only materialise
+# the repository sample datasets.
+: "${BENCH_VAL_DIR:=${APP_DIR}/data/katielinkmoleculenet_benchmark/val}"
+: "${BENCH_TEST_DIR:=${APP_DIR}/data/katielinkmoleculenet_benchmark/test}"
+
 ci_print_env_diag
 
 encoder_ckpt="$(resolve_encoder_checkpoint)"
