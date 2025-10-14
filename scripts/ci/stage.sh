@@ -1561,6 +1561,7 @@ run_stage() {
   echo "[ci][stage=${stage}] commit=${MJEPACI_COMMIT_SHA:-unknown} config_hash=${config_hash:-<unset>} allow_stale=${allow_stale:-0} forced=${forced} FORCE_RERUN=${FORCE_RERUN:-<unset>} shim=${shim_mode}" >&2
 
   local skip=0
+  local skip_reason=""
   local rerun_reason=""
   if (( forced )); then
     rerun_reason="forced"
@@ -1604,6 +1605,7 @@ run_stage() {
             rerun_reason="inputs updated"
           else
             skip=1
+            skip_reason="cache hit (outputs newer than dependencies; stamp=${stamp})"
           fi
         fi
       fi
@@ -1614,6 +1616,11 @@ run_stage() {
 
   if (( skip )); then
     echo "[${stage}] cache hit - skipping"
+    [[ -z "$skip_reason" ]] && skip_reason="cache hit"
+    echo "[ci][info] stage=${stage} skip_reason=${skip_reason}" >&2
+    if [[ "$stage" == "bench" ]]; then
+      echo "[ci][info] Benchmark reason: ${skip_reason}" >&2
+    fi
     return 0
   fi
 
