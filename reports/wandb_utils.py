@@ -23,6 +23,57 @@ except Exception:  # pragma: no cover - optional helper when utils unavailable
 
 LOGGER = logging.getLogger(__name__)
 
+_MIN_HTTP_TIMEOUT = 30
+
+
+def resolve_wandb_http_timeout(preferred: Optional[int] = None) -> int:
+    """Public helper exposing the timeout resolution for other modules."""
+
+    return _resolve_http_timeout(preferred)
+
+
+def _resolve_http_timeout(preferred: Optional[int]) -> int:
+    """Resolve the timeout to use for ``wandb.Api`` calls.
+
+    The helper favours an explicit ``WANDB_HTTP_TIMEOUT`` environment override when
+    present.  When the environment does not provide a value we fall back to the
+    caller's preferred timeout (``None`` indicating the default of 60 seconds) and
+    enforce a 30 second floor so W&B GraphQL requests do not inherit the legacy
+    19 second deadline.  Existing overrides below the floor are automatically
+    raised to the minimum and a warning is emitted so callers can update their
+    configuration.
+    """
+
+    env_timeout: Optional[int] = None
+    raw_env = os.environ.get("WANDB_HTTP_TIMEOUT")
+    if raw_env:
+        try:
+            env_timeout = int(raw_env)
+        except ValueError:
+            LOGGER.debug(
+                "Ignoring non-integer WANDB_HTTP_TIMEOUT override: %r", raw_env
+            )
+            env_timeout = None
+
+    if env_timeout is not None:
+        if env_timeout < _MIN_HTTP_TIMEOUT:
+            LOGGER.warning(
+                "WANDB_HTTP_TIMEOUT=%s is below the supported floor; raising to %s to avoid GraphQL timeouts",
+                env_timeout,
+                _MIN_HTTP_TIMEOUT,
+            )
+            os.environ["WANDB_HTTP_TIMEOUT"] = str(_MIN_HTTP_TIMEOUT)
+            return _MIN_HTTP_TIMEOUT
+        return env_timeout
+
+    resolved = preferred if preferred is not None else 60
+    resolved = max(_MIN_HTTP_TIMEOUT, resolved)
+
+    if not raw_env:
+        os.environ.setdefault("WANDB_HTTP_TIMEOUT", str(resolved))
+
+    return resolved
+
 
 @dataclass
 class RunRecord:
@@ -68,7 +119,9 @@ def _coerce_mapping(value: Any, *, context: str) -> Dict[str, Any]:
         return {}
 
 
-def get_wandb_api(*, allow_missing: bool = False, project: str = "m-jepa"):
+def get_wandb_api(
+    *, allow_missing: bool = False, project: str = "m-jepa", timeout: Optional[int] = None
+):
     has_env_credentials = any(
         os.getenv(env_var)
         for env_var in ("WANDB_API_KEY", "WANDB_API_KEY_FILE", "WANDB_ANONYMOUS")
@@ -96,18 +149,35 @@ def get_wandb_api(*, allow_missing: bool = False, project: str = "m-jepa"):
             return None
         raise RuntimeError(message)
 
+    resolved_timeout = resolve_wandb_http_timeout(timeout)
+
+    api_error: Optional[Exception] = None
     try:
-        return wandb_module.Api()
+        return wandb_module.Api(timeout=resolved_timeout)
+    except TypeError as type_error:
+        LOGGER.debug(
+            "wandb.Api does not accept a timeout argument; retrying without explicit timeout",
+            exc_info=type_error,
+        )
+        try:
+            return wandb_module.Api()
+        except Exception as fallback_error:  # pragma: no cover - external API dependent
+            api_error = fallback_error
     except Exception as exc:  # pragma: no cover - depends on external API
-        if allow_missing:
-            if has_env_credentials:
-                LOGGER.warning("Failed to initialise W&B API client: %s", exc)
-            else:
-                LOGGER.warning("%s; continuing without remote data", credential_message)
-            return None
-        if not has_env_credentials:
-            raise RuntimeError(credential_message) from exc
-        raise
+        api_error = exc
+
+    if api_error is None:  # pragma: no cover - defensive guard
+        raise RuntimeError("Failed to initialise W&B API client")
+
+    if allow_missing:
+        if has_env_credentials:
+            LOGGER.warning("Failed to initialise W&B API client: %s", api_error)
+        else:
+            LOGGER.warning("%s; continuing without remote data", credential_message)
+        return None
+    if not has_env_credentials:
+        raise RuntimeError(credential_message) from api_error
+    raise api_error
 
 
 def _load_history(run, keys: Optional[Sequence[str]] = None) -> Optional[pd.DataFrame]:

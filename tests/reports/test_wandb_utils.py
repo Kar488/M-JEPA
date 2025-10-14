@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import os
 import types
 
 import pytest
@@ -87,3 +88,57 @@ def test_fetch_runs_handles_non_mapping_summary(monkeypatch):
 
     assert len(records) == 1
     assert records[0].summary == {}
+
+
+def test_get_wandb_api_clamps_low_env_timeout(monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "testing")
+    monkeypatch.setenv("WANDB_HTTP_TIMEOUT", "5")
+
+    class _StubModule:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def Api(self, timeout=None):  # noqa: N803 - mirror wandb.Api
+            self.calls.append(timeout)
+            return timeout
+
+    stub = _StubModule()
+    monkeypatch.setattr(wandb_utils, "maybe_init_wandb", lambda **_: stub)
+
+    api = wandb_utils.get_wandb_api(project="proj")
+
+    assert api == 30
+    assert stub.calls == [30]
+    assert os.environ["WANDB_HTTP_TIMEOUT"] == "30"
+
+
+def test_get_wandb_api_falls_back_when_timeout_unsupported(monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "testing")
+    monkeypatch.delenv("WANDB_HTTP_TIMEOUT", raising=False)
+
+    calls = []
+
+    class _StubModule:
+        def Api(self, timeout=None):  # noqa: N803 - mirror wandb.Api
+            calls.append(timeout)
+            if timeout is not None:
+                raise TypeError("timeout unsupported")
+            return "api"
+
+    stub = _StubModule()
+    monkeypatch.setattr(wandb_utils, "maybe_init_wandb", lambda **_: stub)
+
+    api = wandb_utils.get_wandb_api(project="proj")
+
+    assert api == "api"
+    assert calls == [60, None]
+    assert os.environ["WANDB_HTTP_TIMEOUT"] == "60"
+
+
+def test_resolve_timeout_clamps_preferred(monkeypatch):
+    monkeypatch.delenv("WANDB_HTTP_TIMEOUT", raising=False)
+
+    resolved = wandb_utils.resolve_wandb_http_timeout(10)
+
+    assert resolved == 30
+    assert os.environ["WANDB_HTTP_TIMEOUT"] == "30"

@@ -22,6 +22,8 @@ import numpy as np
 import requests
 import wandb
 
+from reports.wandb_utils import resolve_wandb_http_timeout
+
 
 def _ensure_wandb_env() -> None:
     if not os.environ.get("WANDB_API_KEY"):
@@ -42,12 +44,21 @@ def _ensure_wandb_env() -> None:
 def _init_wandb_api(*, max_attempts: int = 3, timeout: int = 60) -> wandb.Api:
     _ensure_wandb_env()
 
-    os.environ.setdefault("WANDB_HTTP_TIMEOUT", str(timeout))
+    resolved_timeout = resolve_wandb_http_timeout(timeout)
 
     last_error: Optional[Exception] = None
     for attempt in range(1, max_attempts + 1):
         try:
-            return wandb.Api()
+            return wandb.Api(timeout=resolved_timeout)
+        except TypeError:
+            print(
+                "[paired_effect] wandb.Api does not accept a timeout argument; retrying without it",
+                flush=True,
+            )
+            try:
+                return wandb.Api()
+            except Exception as err:
+                last_error = err
         except (
             requests.exceptions.ReadTimeout,
             requests.exceptions.ConnectionError,
@@ -55,15 +66,19 @@ def _init_wandb_api(*, max_attempts: int = 3, timeout: int = 60) -> wandb.Api:
             wandb.errors.AuthenticationError,
         ) as err:
             last_error = err
-            if attempt < max_attempts:
-                sleep_for = min(30.0, 2.0 * attempt)
-                print(
-                    f"[paired_effect] W&B client init failed ({type(err).__name__}); "
-                    f"retrying in {sleep_for:.1f}s..."
-                )
-                time.sleep(sleep_for)
-            else:
-                break
+        if last_error is None:
+            continue
+
+        if attempt < max_attempts:
+            sleep_for = min(30.0, 2.0 * attempt)
+            print(
+                f"[paired_effect] W&B client init failed ({type(last_error).__name__}); "
+                f"retrying in {sleep_for:.1f}s..."
+            )
+            time.sleep(sleep_for)
+            last_error = None
+            continue
+        break
 
     message = "Failed to initialize the W&B client after multiple attempts."
     if last_error:

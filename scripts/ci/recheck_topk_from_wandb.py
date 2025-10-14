@@ -30,6 +30,8 @@ import numpy as np
 import wandb
 from urllib.parse import urlparse
 
+from reports.wandb_utils import resolve_wandb_http_timeout
+
 # ---------------------------------------------------------------------------
 # General helpers
 # ---------------------------------------------------------------------------
@@ -1034,8 +1036,25 @@ def main() -> None:
             pass
 
     success = False
+    timeout = resolve_wandb_http_timeout(60)
+
     try:
-        api = wandb.Api()
+        api = wandb.Api(timeout=timeout)
+    except TypeError:
+        print(
+            "[recheck][warn] wandb.Api does not accept a timeout argument; retrying without it",
+            flush=True,
+        )
+        try:
+            api = wandb.Api()
+        except Exception:
+            print("[recheck][fatal] unable to initialise wandb.Api", flush=True)
+            raise
+    except Exception:
+        print("[recheck][fatal] unable to initialise wandb.Api", flush=True)
+        raise
+
+    try:
         # Derive entity/project if env vars are missing (avoids empty fetches).
         derived_entity, derived_project = _parse_entity_project(args.sweep)
         entity = os.getenv("WANDB_ENTITY") or derived_entity
