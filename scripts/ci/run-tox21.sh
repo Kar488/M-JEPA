@@ -115,12 +115,14 @@ export TOX21_ENCODER_SOURCE="$SOURCE"
 export TOX21_ENCODER_CHECKPOINT
 
 # ensure the parm matches train_jepa_ci.yml
+SECONDS=0
 "$STAGE_BIN" tox21
+elapsed="${SECONDS}" 
 
 stage_file="${TOX21_DIR}/stage-outputs/tox21_${SOURCE}.json"
-"${python_cmd[@]}" - <<'PY' "$stage_file" "$SOURCE" "$env_file"
+"${python_cmd[@]}" - <<'PY' "$stage_file" "$SOURCE" "$env_file" "$elapsed"
 import json, os, sys
-stage_path, source, env_path = sys.argv[1:4]
+stage_path, source, env_path, elapsed = sys.argv[1:5]
 data = {}
 if os.path.exists(env_path):
     with open(env_path, "r", encoding="utf-8") as fh:
@@ -162,6 +164,48 @@ else:
 with open(env_path, "w", encoding="utf-8") as fh:
     for key in sorted(data):
         fh.write(f"{key}={data[key]}\n")
+
+diagnostics = {}
+if isinstance(payload, dict):
+    diagnostics = payload.get("diagnostics") or {}
+
+def _resolve_batches(name):
+    bucket = diagnostics.get("batch_counts") if isinstance(diagnostics, dict) else {}
+    if not isinstance(bucket, dict):
+        return None
+    entry = bucket.get(name)
+    if isinstance(entry, dict):
+        return entry.get("batches")
+    return None
+
+encoder_path = diagnostics.get("encoder_checkpoint") if isinstance(diagnostics, dict) else None
+if not encoder_path:
+    encoder_path = payload.get("selected_path") if isinstance(payload, dict) else None
+tasks = diagnostics.get("task_count") if isinstance(diagnostics, dict) else None
+try:
+    tasks = int(tasks) if tasks is not None else None
+except Exception:
+    tasks = None
+
+try:
+    molecules = int(diagnostics.get("num_molecules"))
+except Exception:
+    molecules = None
+
+try:
+    elapsed_val = float(elapsed)
+except Exception:
+    elapsed_val = None
+
+summary_line = "[ci][info] tox21 summary: model={model} tasks={tasks} molecules={molecules} val_batches={val_batches} test_batches={test_batches} wall={wall}".format(
+    model=encoder_path or "<unknown>",
+    tasks=tasks if tasks is not None else "<unset>",
+    molecules=molecules if molecules is not None else "<unset>",
+    val_batches=_resolve_batches("val") or 0,
+    test_batches=_resolve_batches("test") or 0,
+    wall=(f"{elapsed_val:.1f}s" if isinstance(elapsed_val, float) else "<unknown>"),
+)
+print(summary_line)
 PY
 
 if [[ "${SOURCE}" == "pretrain_frozen" && -f "$env_file" && -n "${PRETRAIN_EXP_ID:-}" ]]; then

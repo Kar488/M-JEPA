@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 from pathlib import Path
@@ -33,14 +34,33 @@ def _ensure_schema(
     default_path = root / "reports" / discover_schema.SCHEMA_FILENAME
     target_path = schema_path or default_path
     try:
-        return discover_schema.load_schema_file(target_path)
-    except FileNotFoundError:
-        LOGGER.info("Schema missing at %s; running discovery", target_path)
-        schema = discover_schema.discover_schema(root, max_runs=max_runs)
-        discover_schema.save_schema(schema, root)
-        if schema_path and schema_path != default_path:
-            discover_schema.save_schema_to(schema, schema_path)
+        schema = discover_schema.load_schema_file(target_path)
+        LOGGER.info("[ci][info] Loaded cached schema from %s", target_path)
         return schema
+    except FileNotFoundError:
+        LOGGER.info("[ci][info] Schema missing at %s; running discovery", target_path)
+    except json.JSONDecodeError as exc:
+        LOGGER.warning(
+            "[ci][warn] Failed to parse schema at %s (%s); regenerating",
+            target_path,
+            exc,
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "[ci][warn] Unexpected error loading schema at %s: %s; regenerating",
+            target_path,
+            exc,
+        )
+    schema = discover_schema.discover_schema(root, max_runs=max_runs)
+    LOGGER.info(
+        "[ci][info] Discovered schema using root=%s max_runs=%s", root, max_runs
+    )
+    discover_schema.save_schema(schema, root)
+    LOGGER.info("[ci][info] Cached schema at %s", default_path)
+    if schema_path and schema_path != default_path:
+        discover_schema.save_schema_to(schema, schema_path)
+        LOGGER.info("[ci][info] Wrote schema copy to %s", schema_path)
+    return schema
 
 
 def _write_manifest(manifest: Dict[str, Any], path: Path) -> None:

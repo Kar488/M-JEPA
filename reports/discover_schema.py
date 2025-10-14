@@ -17,7 +17,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional, Set
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Set
 
 import yaml
 
@@ -141,6 +141,58 @@ def _discover_entity_project(root: Path) -> Mapping[str, Optional[str]]:
     return {"entity": entity, "project": project}
 
 
+def _normalise_summary(run_ref: Any, summary: Any) -> Optional[Mapping[str, Any]]:
+    if summary is None:
+        return {}
+    if isinstance(summary, Mapping):
+        return summary
+    if isinstance(summary, str):
+        try:
+            parsed = json.loads(summary)
+        except json.JSONDecodeError as exc:
+            snippet = summary[:200].replace("\n", " ")
+            LOGGER.warning(
+                "[ci][warn] Unable to decode W&B summary for run %s: %s (snippet=%s)",
+                getattr(run_ref, "id", getattr(run_ref, "name", "<unknown>")),
+                exc,
+                snippet,
+            )
+            return None
+        if isinstance(parsed, Mapping):
+            return parsed
+        LOGGER.warning(
+            "[ci][warn] Summary for run %s decoded to %s; expected mapping",
+            getattr(run_ref, "id", getattr(run_ref, "name", "<unknown>")),
+            type(parsed).__name__,
+        )
+        return None
+    if hasattr(summary, "to_json"):
+        try:
+            converted = summary.to_json()
+        except Exception as exc:
+            LOGGER.warning(
+                "[ci][warn] Failed to convert summary via to_json for run %s: %s",
+                getattr(run_ref, "id", getattr(run_ref, "name", "<unknown>")),
+                exc,
+            )
+            return None
+        return _normalise_summary(run_ref, converted)
+    if hasattr(summary, "to_dict"):
+        try:
+            converted = summary.to_dict()
+        except Exception as exc:
+            LOGGER.warning(
+                "[ci][warn] Failed to convert summary via to_dict for run %s: %s",
+                getattr(run_ref, "id", getattr(run_ref, "name", "<unknown>")),
+                exc,
+            )
+            return None
+        if isinstance(converted, Mapping):
+            return converted
+        return _normalise_summary(run_ref, converted)
+    return None
+
+
 def _collect_remote_schema(
     entity: Optional[str],
     project: Optional[str],
@@ -186,19 +238,35 @@ def _collect_remote_schema(
     tags: Set[str] = set()
     run_types: Set[str] = set()
 
+    skipped_summaries: List[str] = []
+
     for run in runs:
         tags.update(run.tags or [])
         if run.group:
             run_types.add(run.group)
         if run.job_type:
             run_types.add(run.job_type)
-        if run.summary:
-            for key in run.summary.keys():
+        summary_obj = getattr(run, "summary", None)
+        if summary_obj:
+            summary_data = _normalise_summary(run, summary_obj)
+            if summary_data is None:
+                skipped_summaries.append(
+                    str(getattr(run, "id", getattr(run, "name", "<unknown>")))
+                )
+                summary_data = {}
+            for key in summary_data.keys():
                 metrics[key].add("summary")
         config = getattr(run, "config", {}) or {}
         if isinstance(config, Mapping):
             for key in config.keys():
                 configs[key].add("config")
+
+    if skipped_summaries:
+        LOGGER.warning(
+            "[ci][warn] Skipped %d runs with malformed summaries: %s",
+            len(skipped_summaries),
+            ", ".join(skipped_summaries[:5]),
+        )
 
     return {
         "metrics": metrics,
@@ -245,12 +313,21 @@ def discover_schema(root: Path, *, max_runs: int = 200) -> Schema:
         schema.tags.update(remote.get("tags", set()))
         schema.run_types.update(remote.get("run_types", set()))
 
+    if not schema.metrics:
+        LOGGER.warning(
+            "[ci][warn] Schema discovery returned no metrics; remote summaries may be unavailable."
+        )
+
     return schema
 
 
 def save_schema_to(schema: Schema, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(schema.to_json(), indent=2, sort_keys=True))
+    payload = json.dumps(schema.to_json(), indent=2, sort_keys=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        fh.write(payload)
+    os.replace(tmp_path, path)
     return path
 
 

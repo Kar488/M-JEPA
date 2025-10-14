@@ -10,6 +10,7 @@ baseline.
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import os
 import random
@@ -17,7 +18,7 @@ import sys
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -61,6 +62,26 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from data.mdataset import GraphDataset as GraphDatasetT
 
 logger = logging.getLogger(__name__)
+
+
+def _ci_diag_enabled() -> bool:
+    value = os.getenv("CI_DIAG", "")
+    if value is None:
+        return False
+    return str(value).strip().lower() not in {"", "0", "false", "no"}
+
+
+def _ci_log(message: str, **payload: Any) -> None:
+    if not _ci_diag_enabled():
+        return
+    if payload:
+        try:
+            serialised = json.dumps(payload, sort_keys=True)
+        except Exception:
+            serialised = ", ".join(f"{k}={v}" for k, v in sorted(payload.items()))
+        logger.info("[ci][info] %s %s", message, serialised)
+    else:
+        logger.info("[ci][info] %s", message)
 
 
 # ``training.supervised`` and ``training.unsupervised`` are heavy modules that are
@@ -235,6 +256,7 @@ class CaseStudyResult:
 
     evaluations: List[EvaluationResult]
     threshold_rule: Optional["BenchmarkRule"] = None
+    diagnostics: Dict[str, Any] = field(default_factory=dict)
 
 
 def _to_list(x: Any) -> List[Any]:
@@ -319,12 +341,15 @@ def _predict_logits_probs_in_chunks(
     device: str,
     edge_dim: int,
     batch_size: int = 256,
+    diag_hook: Optional[Callable[[int, int], None]] = None,
 ):
     encoder.eval()
     head.eval()
     device_t = torch.device(device) if not isinstance(device, torch.device) else device
     logits_list: List[torch.Tensor] = []
     probs_list: List[torch.Tensor] = []
+    batch_count = 0
+    molecule_count = 0
     with torch.no_grad():
         for start in range(0, len(indices), batch_size):
             chunk = indices[start : start + batch_size]
@@ -350,6 +375,13 @@ def _predict_logits_probs_in_chunks(
             probs = torch.nan_to_num(probs, nan=0.5, posinf=1.0, neginf=0.0)
             logits_list.append(logits.detach().cpu())
             probs_list.append(probs.detach().cpu())
+            batch_count += 1
+            molecule_count += len(chunk)
+    if diag_hook is not None:
+        try:
+            diag_hook(batch_count, molecule_count)
+        except Exception:
+            logger.debug("Diagnostics hook failed", exc_info=True)
     if not logits_list:
         return torch.empty((0, 1)), torch.empty((0, 1))
     return torch.cat(logits_list, dim=0), torch.cat(probs_list, dim=0)
@@ -369,6 +401,7 @@ def _evaluate_case_study(
     edge_dim: int,
     seed: int,
     baseline_embeddings: Optional[dict[str, str]] = None,
+    diagnostics: Optional[Dict[str, Any]] = None,
 ):
     val_idx_arr = np.asarray(val_idx, dtype=int)
     test_idx_arr = np.asarray(test_idx, dtype=int)
@@ -381,11 +414,37 @@ def _evaluate_case_study(
     val_indices = _to_list(val_idx_arr.reshape(-1))
     test_indices = _to_list(test_idx_arr.reshape(-1))
 
+    batch_diag = diagnostics.setdefault("batch_counts", {}) if diagnostics is not None else None
+
+    def _make_batch_hook(split: str) -> Optional[Callable[[int, int], None]]:
+        if batch_diag is None:
+            return None
+
+        def _hook(batch_count: int, molecule_count: int) -> None:
+            batch_diag[split] = {
+                "batches": int(batch_count),
+                "molecules": int(molecule_count),
+            }
+
+        return _hook
+
     val_logits, val_probs = _predict_logits_probs_in_chunks(
-        dataset, val_indices, encoder, head, device, edge_dim
+        dataset,
+        val_indices,
+        encoder,
+        head,
+        device,
+        edge_dim,
+        diag_hook=_make_batch_hook("val"),
     )
     test_logits, test_probs = _predict_logits_probs_in_chunks(
-        dataset, test_indices, encoder, head, device, edge_dim
+        dataset,
+        test_indices,
+        encoder,
+        head,
+        device,
+        edge_dim,
+        diag_hook=_make_batch_hook("test"),
     )
 
     val_logits_np = val_logits.cpu().numpy().reshape(-1, 1) if val_logits.numel() else np.zeros((0, 1))
@@ -606,6 +665,7 @@ def run_tox21_case_study(
     """Run the Tox21 case study and return structured evaluation results."""
 
     logger.info("Running Tox21 case study on %s", csv_path)
+    ci_diag = _ci_diag_enabled()
     if not os.path.isfile(csv_path):
         raise FileNotFoundError(f"CSV file not found: {csv_path}")
 
@@ -620,6 +680,22 @@ def run_tox21_case_study(
     labels_list = _to_list(df[task_name].astype(float))
     logger.debug("Loaded %d molecules", len(smiles_list))
 
+    diagnostics: Dict[str, Any] = {}
+    if ci_diag:
+        diagnostics["csv_path"] = os.path.abspath(csv_path)
+        diagnostics["encoder_checkpoint"] = (
+            os.path.abspath(encoder_checkpoint)
+            if encoder_checkpoint
+            else None
+        )
+        _ci_log(
+            "tox21 encoder checkpoint",
+            encoder_checkpoint=diagnostics["encoder_checkpoint"],
+            encoder_manifest=os.path.abspath(encoder_manifest)
+            if encoder_manifest
+            else None,
+        )
+
     set_seed(seed)
 
     GraphDatasetCls = _load_real_graphdataset()
@@ -633,6 +709,18 @@ def run_tox21_case_study(
     )
     if len(dataset) == 0:
         raise ValueError("No valid molecules could be parsed from the dataset.")
+
+    if ci_diag:
+        labels_arr = dataset.labels
+        task_count = 0
+        if labels_arr is not None:
+            task_count = 1 if labels_arr.ndim == 1 else int(labels_arr.shape[1])
+        diagnostics.update(
+            {
+                "task_count": task_count,
+                "num_molecules": int(len(dataset)),
+            }
+        )
 
     if requires_3d and all(getattr(g, "pos", None) is None for g in dataset.graphs):
         raise ValueError(
@@ -655,6 +743,21 @@ def run_tox21_case_study(
     num_total = len(dataset)
 
     threshold_rule = _resolve_threshold_rule(dataset_name, task_name)
+
+    def _split_summary(indices: List[int]) -> Dict[str, int]:
+        if not ci_diag:
+            return {}
+        if not indices:
+            return {"size": 0, "finite": 0, "positives": 0}
+        arr = all_labels[np.asarray(indices, dtype=int)]
+        mask = np.isfinite(arr)
+        finite = int(mask.sum())
+        positives = int(np.nansum(arr[mask]))
+        return {
+            "size": int(len(indices)),
+            "finite": finite,
+            "positives": positives,
+        }
 
     if scaffold_split_indices and _HAS_RDKIT:
         train_split, val_split, test_split = scaffold_split_indices(
@@ -869,6 +972,21 @@ def run_tox21_case_study(
     val_idx_arr = np.asarray(val_idx, dtype=int)
     test_idx_arr = np.asarray(test_idx, dtype=int)
 
+    if ci_diag:
+        diagnostics["split_counts"] = {
+            "train": _split_summary(train_idx),
+            "val": _split_summary(val_idx),
+            "test": _split_summary(test_idx),
+        }
+        _ci_log(
+            "tox21 dataset split",
+            num_molecules=diagnostics.get("num_molecules", 0),
+            task_count=diagnostics.get("task_count", 0),
+            train=diagnostics["split_counts"].get("train", {}),
+            val=diagnostics["split_counts"].get("val", {}),
+            test=diagnostics["split_counts"].get("test", {}),
+        )
+
     extra_args: Dict[str, Any] = {}
     if use_pos_weight and train_idx_arr.size > 0:
         train_labels = all_labels[train_idx_arr]
@@ -923,11 +1041,22 @@ def run_tox21_case_study(
         edge_dim=edge_dim,
         seed=seed,
         baseline_embeddings=baseline_embeddings,
+        diagnostics=diagnostics if ci_diag else None,
     )
 
     benchmark_metric = threshold_rule.metric if threshold_rule is not None else None
     canonical_metric = _canonical_metric_name(benchmark_metric)
     metric_value = metrics.get(canonical_metric) if canonical_metric else None
+
+    if ci_diag:
+        _ci_log(
+            "tox21 inference",
+            encoder_checkpoint=os.path.abspath(encoder_checkpoint)
+            if encoder_checkpoint
+            else None,
+            batches=diagnostics.get("batch_counts", {}),
+        )
+        _ci_log("tox21 metrics", metrics=metrics)
     met_benchmark = _compute_met_benchmark(
         benchmark_metric,
         metric_value,
@@ -950,7 +1079,11 @@ def run_tox21_case_study(
         manifest_path=encoder_manifest if encoder_checkpoint else None,
     )
 
-    return CaseStudyResult(evaluations=[evaluation], threshold_rule=threshold_rule)
+    return CaseStudyResult(
+        evaluations=[evaluation],
+        threshold_rule=threshold_rule,
+        diagnostics=diagnostics if ci_diag else {},
+    )
 
 
 if __name__ == "__main__":

@@ -211,6 +211,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             encoder_source_override=getattr(args, "encoder_source", None),
         )
 
+        diagnostics = getattr(result, "diagnostics", {}) or {}
+
         evaluations, rule_from_result = _coerce_case_study_result(result)
         if not evaluations:
             raise RuntimeError("run_tox21_case_study returned no evaluation results")
@@ -363,6 +365,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "tox21_gate_passed": bool(gate_passed_flag),
             "benchmark_metric_value": summary_payload.get("benchmark_metric_value"),
             "evaluations": [],
+            "diagnostics": diagnostics,
         }
 
         for eval_res in evaluations:
@@ -452,6 +455,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                     }
                     for ev in evaluations
                 ],
+                "diagnostics": diagnostics,
             }
             with open(stage_path, "w", encoding="utf-8") as fh:
                 json.dump(stage_payload, fh, indent=2, sort_keys=True)
