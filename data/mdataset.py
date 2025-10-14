@@ -114,13 +114,28 @@ class GraphData:
         if torch is None:  # pragma: no cover - optional dependency
             raise ImportError("PyTorch is required for tensor operations")
 
-        x = torch.as_tensor(self.x, dtype=torch.float32)
-        n = x.shape[0]
+        def _ensure_cpu_tensor(value, *, dtype):
+            if torch.is_tensor(value):
+                tensor = value.detach()
+                if tensor.device.type != "cpu":
+                    tensor = tensor.to(device="cpu")
+                if tensor.dtype != dtype:
+                    tensor = tensor.to(dtype=dtype)
+                return tensor
+            return torch.as_tensor(value, dtype=dtype)
+
+        x = _ensure_cpu_tensor(self.x, dtype=torch.float32)
+        n = int(x.shape[0])
         adj = torch.zeros((n, n), dtype=torch.float32)
-        if self.edge_index.size > 0:
-            i = torch.as_tensor(self.edge_index[0], dtype=torch.long)
-            j = torch.as_tensor(self.edge_index[1], dtype=torch.long)
-            adj[i, j] = 1.0
+
+        edge_index = getattr(self, "edge_index", None)
+        if edge_index is not None:
+            idx = _ensure_cpu_tensor(edge_index, dtype=torch.long)
+            if idx.numel() > 0:
+                i = idx[0]
+                j = idx[1]
+                adj[i, j] = 1.0
+
         return x, adj
 
     # ``torch.utils.data`` uses ``ForkingPickler`` to serialise dataset items when
