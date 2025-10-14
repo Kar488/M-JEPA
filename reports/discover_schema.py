@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import logging
 import os
 import re
 from collections import defaultdict
@@ -20,11 +21,15 @@ from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional, Set
 
 import yaml
 
+from .wandb_utils import resolve_wandb_http_timeout
+
 try:
     from utils.wandb_filters import silence_pydantic_field_warnings
 except Exception:  # pragma: no cover - optional dependency in offline use
     def silence_pydantic_field_warnings() -> None:  # type: ignore
         return
+
+LOGGER = logging.getLogger(__name__)
 
 SCHEMA_FILENAME = "schema.json"
 
@@ -154,8 +159,19 @@ def _collect_remote_schema(
     except ImportError:  # pragma: no cover - optional dependency
         return {}
 
+    timeout = resolve_wandb_http_timeout(60)
+
     try:
-        api = wandb.Api()
+        api = wandb.Api(timeout=timeout)
+    except TypeError as type_error:  # pragma: no cover - depends on wandb version
+        LOGGER.debug(
+            "wandb.Api does not accept a timeout argument; retrying without explicit timeout",
+            exc_info=type_error,
+        )
+        try:
+            api = wandb.Api()
+        except Exception:  # pragma: no cover - requires remote API
+            return {}
     except Exception:  # pragma: no cover - requires remote API
         return {}
 
