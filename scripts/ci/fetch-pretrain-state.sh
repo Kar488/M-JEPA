@@ -51,7 +51,14 @@ latest=""
 latest_mtime=0
 for path in "$root"/*/pretrain_state.json; do
   [[ -f "$path" ]] || continue
-  mtime=$(stat -c '%Y' "$path" 2>/dev/null || stat -f '%m' "$path" 2>/dev/null || echo 0)
+  mtime=0
+  # ``stat -c`` fails on BSD/macOS, so fall back to ``stat -f`` but keep
+  # ``set -e`` intact by guarding failures inside conditionals.
+  if ! mtime=$(stat -c '%Y' "$path" 2>/dev/null); then
+    if ! mtime=$(stat -f '%m' "$path" 2>/dev/null); then
+      mtime=0
+    fi
+  fi
   if [[ -z "$latest" || "$mtime" -gt "$latest_mtime" ]]; then
     latest="$path"
     latest_mtime="$mtime"
@@ -68,6 +75,9 @@ EOS
   fi
 
   if [[ -n "$fallback_path" ]]; then
+    # Normalise whitespace just in case remote shells emit trailing newlines.
+    fallback_path="${fallback_path//$'\r'/}"
+    fallback_path="${fallback_path//$'\n'/}"
     echo "::warning::unable to download $REMOTE_STATE; retrying with discovered $fallback_path" >&2
     if ! download_state "$fallback_path"; then
       echo "::warning::failed to download fallback pretrain state at $fallback_path" >&2
