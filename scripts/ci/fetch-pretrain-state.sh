@@ -17,7 +17,14 @@ STATE_DEST="${DEST_DIR}/pretrain_state.json"
 mkdir -p "$DEST_DIR" ~/.ssh
 KEY_PATH=~/.ssh/vast_key
 trap 'rm -f "$KEY_PATH"' EXIT
-printf '%s' "$SSH_KEY" >"$KEY_PATH"
+if [[ "$SSH_KEY" != *$'\n' ]]; then
+  # Vast occasionally serialises SSH_KEY without a trailing newline which makes
+  # ``ssh`` complain about malformed PEM blocks. Normalise it here so the
+  # private key matches the pattern used by the other collectors.
+  printf '%s\n' "$SSH_KEY" >"$KEY_PATH"
+else
+  printf '%s' "$SSH_KEY" >"$KEY_PATH"
+fi
 chmod 600 "$KEY_PATH"
 
 REMOTE="${VAST_USER}@${VAST_HOST}"
@@ -38,9 +45,9 @@ download_state() {
   return 1
 }
 
-if ! download_state "$REMOTE_STATE"; then
-  fallback_path=""
-  if fallback_path="$("${SSH_CMD[@]}" "$REMOTE" bash -s -- "$EXPERIMENTS_ROOT" <<'EOS' 2>/dev/null)
+discover_latest_remote_state() {
+  local remote_root="${1:-}"
+  "${SSH_CMD[@]}" "$REMOTE" bash -s -- "$remote_root" <<'EOS'
 set -euo pipefail
 root="${1%/}"
 if [[ -z "$root" || ! -d "$root" ]]; then
@@ -52,8 +59,6 @@ latest_mtime=0
 for path in "$root"/*/pretrain_state.json; do
   [[ -f "$path" ]] || continue
   mtime=0
-  # ``stat -c`` fails on BSD/macOS, so fall back to ``stat -f`` but keep
-  # ``set -e`` intact by guarding failures inside conditionals.
   if ! mtime=$(stat -c '%Y' "$path" 2>/dev/null); then
     if ! mtime=$(stat -f '%m' "$path" 2>/dev/null); then
       mtime=0
@@ -68,8 +73,45 @@ if [[ -n "$latest" ]]; then
   printf '%s' "$latest"
 fi
 EOS
-)"; then
-    fallback_path="${fallback_path:-}"
+}
+
+list_remote_pretrain_inventory() {
+  local remote_root="${1:-}"
+  "${SSH_CMD[@]}" "$REMOTE" bash -s -- "$remote_root" <<'EOS'
+set -euo pipefail
+root="${1%/}"
+if [[ -z "$root" || ! -d "$root" ]]; then
+  exit 0
+fi
+printf '__ROOT__ %s\n' "$root"
+report_rel() {
+  local rel="$1"
+  local path="$root/$rel"
+  if [[ -e "$path" ]]; then
+    local size
+    if size=$(stat -c '%s' "$path" 2>/dev/null); then
+      :
+    elif size=$(stat -f '%z' "$path" 2>/dev/null); then
+      :
+    else
+      size='?'
+    fi
+    printf '%s %s\n' "$rel" "$size"
+  fi
+}
+report_rel pretrain_state.json
+report_rel artifacts/encoder_manifest.json
+report_rel pretrain/encoder.pt
+report_rel pretrain/stage-outputs/pretrain.json
+report_rel tox21_gate.env
+EOS
+}
+
+if ! download_state "$REMOTE_STATE"; then
+  fallback_path=""
+  fallback_raw="$(discover_latest_remote_state "$EXPERIMENTS_ROOT" 2>/dev/null || true)"
+  if [[ -n "${fallback_raw:-}" ]]; then
+    fallback_path="${fallback_raw}"
   else
     fallback_path=""
   fi
@@ -93,6 +135,9 @@ if [[ ! -s "$STATE_DEST" ]]; then
   echo "::warning::downloaded state file empty: $STATE_DEST" >&2
   exit 0
 fi
+
+state_size=$(wc -c <"$STATE_DEST" 2>/dev/null || printf '0')
+echo "[fetch] pretrain_state.json fetched to $STATE_DEST (${state_size} bytes)" >&2
 
 parse_output=$(python3 - "$STATE_DEST" <<'PY'
 import os
@@ -156,6 +201,33 @@ fi
 
 if [[ -z "$state_path" && -n "$STATE_SOURCE" ]]; then
   state_path="$STATE_SOURCE"
+fi
+
+if [[ -n "$STATE_SOURCE" ]]; then
+  echo "[fetch] STATE_SOURCE=$STATE_SOURCE" >&2
+fi
+
+if [[ -n "$experiment_root" ]]; then
+  echo "[fetch] PRETRAIN_EXPERIMENT_ROOT=$experiment_root" >&2
+  listing_output="$(list_remote_pretrain_inventory "$experiment_root" 2>/dev/null || true)"
+  if [[ -n "$listing_output" ]]; then
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      if [[ "$line" == __ROOT__* ]]; then
+        echo "[fetch] remote root ${line#__ROOT__ }" >&2
+      else
+        rel_name="${line%% *}"
+        rel_size="${line#* }"
+        echo "[fetch] remote has $rel_name (size=${rel_size})" >&2
+      fi
+    done <<<"$listing_output"
+  else
+    echo "[fetch] remote listing unavailable for $experiment_root" >&2
+  fi
+fi
+
+if [[ -n "$tox21_env" ]]; then
+  echo "[fetch] PRETRAIN_TOX21_ENV=$tox21_env" >&2
 fi
 
 if [[ -n "$exp_id" ]]; then
