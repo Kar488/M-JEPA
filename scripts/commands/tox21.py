@@ -108,6 +108,16 @@ def cmd_tox21(args: argparse.Namespace) -> None:
 
     dataset_name = getattr(args, "dataset", "tox21") or "tox21"
     task_name = getattr(args, "task", None)
+    eval_mode = str(
+        getattr(
+            args,
+            "evaluation_mode",
+            getattr(args, "encoder_source", "pretrain_frozen"),
+        )
+        or "pretrain_frozen"
+    ).lower()
+    if getattr(args, "encoder_source", None) is None:
+        setattr(args, "encoder_source", eval_mode)
     threshold_rule: BenchmarkRule | None = None
     try:
         threshold_rule = resolve_metric_threshold(dataset_name, task_name)
@@ -173,6 +183,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "finetune_time_budget_mins": getattr(args, "finetune_time_budget_mins", 0),
             **threshold_payload,
             **target_payload,
+            "evaluation_mode": eval_mode,
         },
     )
     log_effective_gnn(args, logger, wb)
@@ -209,6 +220,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             encoder_manifest=getattr(args, "encoder_manifest", None),
             strict_encoder_config=getattr(args, "strict_encoder_config", False),
             encoder_source_override=getattr(args, "encoder_source", None),
+            evaluation_mode=eval_mode,
         )
 
         diagnostics = getattr(result, "diagnostics", {}) or {}
@@ -278,6 +290,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             **threshold_payload,
         }
         summary_payload["encoder_source"] = source_for_gate
+        summary_payload["evaluation_mode"] = eval_mode
+        summary_payload["encoder_checkpoint"] = getattr(args, "encoder_checkpoint", None)
         summary_payload["tox21_gate_passed"] = bool(gate_passed_flag)
         summary_payload.update(target_payload)
         if gate_metric_name is not None and "benchmark_metric" not in summary_payload:
@@ -314,6 +328,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             payload[f"{prefix}mean_rand"] = float(getattr(eval_res, "mean_random", 0.0))
             payload[f"{prefix}mean_pred"] = float(getattr(eval_res, "mean_pred", 0.0))
             payload[f"{prefix}encoder_source"] = getattr(eval_res, "encoder_source", "unknown")
+            payload[f"{prefix}evaluation_mode"] = eval_mode
 
             benchmark_metric = getattr(eval_res, "benchmark_metric", None)
             benchmark_threshold = getattr(eval_res, "benchmark_threshold", None)
@@ -366,6 +381,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "benchmark_metric_value": summary_payload.get("benchmark_metric_value"),
             "evaluations": [],
             "diagnostics": diagnostics,
+            "evaluation_mode": eval_mode,
+            "encoder_checkpoint": getattr(args, "encoder_checkpoint", None),
         }
 
         for eval_res in evaluations:
@@ -431,6 +448,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             stage_path = os.path.join(stage_dir, f"tox21_{stage_name}.json")
             stage_payload = {
                 "encoder_source": getattr(args, "encoder_source", None),
+                "evaluation_mode": eval_mode,
                 "selected_path": selected_source,
                 "selected_auc": auc_summary.get(selected_source) if selected_source else None,
                 "met_benchmark": selected_benchmark,

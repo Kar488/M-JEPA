@@ -28,7 +28,7 @@ mkdir -p "$(dirname "$GITHUB_ENV")"
 : >"$GITHUB_ENV"
 export GITHUB_ENV
 
-SOURCE="${TOX21_ENCODER_SOURCE:-pretrain_frozen}"
+SOURCE="${TOX21_EVALUATION_MODE:-${TOX21_ENCODER_SOURCE:-pretrain_frozen}}"
 MANIFEST_DEFAULT="${PRETRAIN_MANIFEST:-${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json}"
 MANIFEST_PATH="${TOX21_ENCODER_MANIFEST:-$MANIFEST_DEFAULT}"
 
@@ -55,7 +55,7 @@ fi
 
 MET_ENV_FILE="${PRETRAIN_EXPERIMENT_ROOT}/met_benchmark.env"
 mkdir -p "$(dirname "$MET_ENV_FILE")"
-if [[ "$SOURCE" == "fine_tuned" && -f "$MET_ENV_FILE" ]]; then
+if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]] && [[ -f "$MET_ENV_FILE" ]]; then
   while IFS='=' read -r key value; do
     [[ -z "$key" ]] && continue
     export "$key"="$value"
@@ -96,7 +96,25 @@ PY
   fi
   export TOX21_ENCODER_CHECKPOINT
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
-elif [[ "$SOURCE" == "fine_tuned" ]]; then
+elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
+  stage_json="${FINETUNE_DIR}/stage-outputs/finetune.json"
+  if [[ -f "$stage_json" ]]; then
+    TOX21_ENCODER_CHECKPOINT=$("${python_cmd[@]}" - "$stage_json" <<'PY'
+import json, os, sys
+data = json.load(open(sys.argv[1]))
+enc = data.get("encoder_finetuned") or {}
+path = enc.get("checkpoint")
+if path:
+    print(os.path.abspath(path))
+PY
+    )
+  else
+    echo "[tox21] warning: expected ${stage_json} for frozen_finetuned mode" >&2
+  fi
+  TOX21_ENCODER_CHECKPOINT=${TOX21_ENCODER_CHECKPOINT:-${FINETUNE_DIR}/encoder_ft.pt}
+  export TOX21_ENCODER_CHECKPOINT
+  export TOX21_ENCODER_MANIFEST="$stage_json"
+elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   TOX21_ENCODER_CHECKPOINT="${FINETUNE_DIR}/seed_0/ft_best.pt"
   export TOX21_ENCODER_CHECKPOINT
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
@@ -112,6 +130,7 @@ env_file="$MET_ENV_FILE"
 echo "[tox21] writing summary env to ${env_file}" >&2
 
 export TOX21_ENCODER_SOURCE="$SOURCE"
+export TOX21_EVALUATION_MODE="$SOURCE"
 export TOX21_ENCODER_CHECKPOINT
 
 # ensure the parm matches train_jepa_ci.yml

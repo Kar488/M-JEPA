@@ -893,7 +893,7 @@ def build_parser() -> argparse.ArgumentParser:
         ft.add_argument(
             "--freeze-encoder",
             action=bool_action,
-            default=True,
+            default=None,
             help="Freeze encoder weights during fine-tuning (use --no-freeze-encoder to train them)",
         )
     else:
@@ -901,7 +901,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--freeze-encoder",
             dest="freeze_encoder",
             action="store_true",
-            default=True,
+            default=None,
             help="Freeze encoder weights during fine-tuning",
         )
         ft.add_argument(
@@ -915,6 +915,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="When freezing the encoder, unfreeze the top-N child modules",
+    )
+    ft.add_argument(
+        "--unfreeze",
+        dest="unfreeze_mode",
+        choices=["none", "partial", "full"],
+        default=CONFIG.get("finetune", {}).get("unfreeze", "none"),
+        help="Encoder update policy: none=frozen probe, partial=top layers trainable, full=end-to-end",
     )
     ft.add_argument(
         "--encoder-lr",
@@ -999,6 +1006,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Label describing the encoder variant being evaluated (e.g. pretrain_frozen, fine_tuned)",
+    )
+    tox.add_argument(
+        "--evaluation-mode",
+        dest="evaluation_mode",
+        choices=["pretrain_frozen", "frozen_finetuned", "fine_tuned", "end_to_end"],
+        default="pretrain_frozen",
+        help="Tox21 evaluation policy: frozen pretrain baseline, frozen finetuned encoder, or end-to-end fine-tuned model",
     )
     tox.add_argument(
         "--strict-encoder-config",
