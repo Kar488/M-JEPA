@@ -67,7 +67,11 @@ class StubApi:
 
 @pytest.fixture(autouse=True)
 def patch_history(monkeypatch):
-    monkeypatch.setattr(wandb_utils, "_load_history", lambda run, keys=None: None)
+    monkeypatch.setattr(
+        wandb_utils,
+        "_load_history",
+        lambda run, keys=None, **_: None,
+    )
 
 
 def test_fetch_runs_parses_json_summary(monkeypatch):
