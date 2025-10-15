@@ -113,7 +113,11 @@ PY
   fi
   TOX21_ENCODER_CHECKPOINT=${TOX21_ENCODER_CHECKPOINT:-${FINETUNE_DIR}/encoder_ft.pt}
   export TOX21_ENCODER_CHECKPOINT
-  export TOX21_ENCODER_MANIFEST="$stage_json"
+  # Preserve the original pretrain manifest so downstream evaluation can
+  # reconstruct the encoder configuration when using frozen fine-tuned
+  # checkpoints. The finetune bookkeeping file lacks the required
+  # hyperparameters section.
+  export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
 elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   TOX21_ENCODER_CHECKPOINT="${FINETUNE_DIR}/seed_0/ft_best.pt"
   export TOX21_ENCODER_CHECKPOINT
