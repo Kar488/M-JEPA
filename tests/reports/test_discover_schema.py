@@ -62,8 +62,8 @@ def test_collect_remote_schema_retries_on_timeout(monkeypatch):
         "entity", "project", max_runs=5
     )
 
-    assert payload["metrics"]["summary"] == {"accuracy"}
-    assert payload["configs"]["config"] == {"lr"}
+    assert payload["metrics"]["accuracy"] == {"summary"}
+    assert payload["configs"]["lr"] == {"config"}
     assert calls == [90, 180]
     assert os.environ["WANDB_HTTP_TIMEOUT"] == "180"
 
