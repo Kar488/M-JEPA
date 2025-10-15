@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import shutil
 import sys
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -29,6 +31,39 @@ from utils.pooling import global_mean_pool
 logger = logging.getLogger(__name__)
 
 _GNN_TYPES_REQUIRING_3D = {"schnet3d", "schnet"}
+
+
+def _stage_outputs_dir() -> Optional[Path]:
+    stage_dir = os.getenv("STAGE_OUTPUTS_DIR")
+    if not stage_dir:
+        return None
+    try:
+        path = Path(stage_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except Exception:
+        return None
+
+
+def _record_finetune_stage_outputs(payload: Dict[str, Any]) -> None:
+    stage_dir = _stage_outputs_dir()
+    if stage_dir is None:
+        return
+    try:
+        out_path = stage_dir / "finetune.json"
+        tmp_path = out_path.with_suffix(".tmp")
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        tmp_path.replace(out_path)
+    except Exception:
+        logger.warning("Failed to write finetune stage outputs", exc_info=True)
+
+
+def _sanitize_alias(raw: str) -> str:
+    safe = [c if c.isalnum() or c in {"-", "_", "."} else "_" for c in raw]
+    text = "".join(safe).strip("._")
+    return text or "run"
 
 
 def _maybe_enable_add_3d(args: argparse.Namespace) -> bool:
@@ -103,6 +138,7 @@ def _configure_encoder_trainability(
     *,
     freeze_encoder: bool,
     unfreeze_top_layers: int,
+    unfreeze_mode: str = "none",
 ) -> List[nn.Parameter]:
     """Apply fine-tuning freeze/unfreeze policy and return trainable params."""
 
@@ -118,6 +154,14 @@ def _configure_encoder_trainability(
     except Exception:
         return []
 
+    mode = str(unfreeze_mode or "none").lower()
+    if mode == "full":
+        freeze_encoder = False
+        unfreeze_top_layers = 0
+    elif mode == "partial" and freeze_encoder:
+        modules = list(encoder.children()) or [encoder]
+        if unfreeze_top_layers <= 0:
+            unfreeze_top_layers = max(1, min(len(modules), 1))
     if not freeze_encoder and unfreeze_top_layers <= 0:
         for param in all_params:
             param.requires_grad = True
@@ -275,6 +319,10 @@ def cmd_finetune(args: argparse.Namespace) -> None:
 
     # Aggregate metrics across seeds
     metrics_runs: List[Dict[str, float]] = []
+    seed_best_paths: Dict[int, str] = {}
+    seed_train_steps: Dict[int, float] = {}
+    encoder_unfreeze_mode: Optional[str] = None
+    encoder_was_trainable = False
 
     # --- choose metric & direction (maximize cls metrics, minimize losses/errors) ---
     metric_choice = getattr(args, "metric", None)
@@ -404,24 +452,49 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             _load_state_dict_forgiving(encoder, resume_state["encoder"])
 
         # Build linear head for fine-tuning
-        freeze_flag = bool(getattr(args, "freeze_encoder", True))
+        raw_mode = str(getattr(args, "unfreeze_mode", "none") or "none").lower()
+        if raw_mode not in {"none", "partial", "full"}:
+            raw_mode = "none"
+        freeze_override = getattr(args, "freeze_encoder", None)
+        if freeze_override is True:
+            freeze_flag = True
+            effective_mode = "none"
+        elif freeze_override is False:
+            freeze_flag = False
+            effective_mode = "full"
+        else:
+            effective_mode = raw_mode
+            freeze_flag = effective_mode != "full"
+
         unfreeze_top = int(getattr(args, "unfreeze_top_layers", 0) or 0)
+        if effective_mode == "partial" and unfreeze_top <= 0:
+            modules = list(encoder.children()) or [encoder]
+            unfreeze_top = max(1, min(len(modules), 1))
+            logger.info(
+                "Partial unfreeze selected without explicit layer count; defaulting to top %d module(s).",
+                unfreeze_top,
+            )
+
         trainable_encoder_params = _configure_encoder_trainability(
             encoder,
             freeze_encoder=freeze_flag,
             unfreeze_top_layers=unfreeze_top,
+            unfreeze_mode=effective_mode,
         )
         trainable_param_count = sum(int(p.numel()) for p in trainable_encoder_params)
+        encoder_was_trainable = encoder_was_trainable or (trainable_param_count > 0)
         if trainable_param_count > 0:
             logger.info(
-                "Encoder fine-tuning enabled (%d trainable parameters, freeze=%s, unfreeze_top_layers=%d)",
+                "Encoder fine-tuning enabled (%d trainable parameters, mode=%s, freeze=%s, unfreeze_top_layers=%d)",
                 trainable_param_count,
+                effective_mode,
                 freeze_flag,
                 unfreeze_top,
             )
         else:
             logger.info(
-                "Encoder frozen during fine-tuning (freeze=%s, unfreeze_top_layers=%d)",
+                "Encoder frozen during fine-tuning (mode=%s, freeze=%s, unfreeze_top_layers=%d)",
+                effective_mode,
                 freeze_flag,
                 unfreeze_top,
             )
@@ -431,10 +504,12 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     {
                         "encoder/trainable_params": float(trainable_param_count),
                         "encoder/freeze_flag": bool(freeze_flag),
+                        "encoder/unfreeze_mode": effective_mode,
                     }
                 )
             except Exception:
                 pass
+        encoder_unfreeze_mode = effective_mode
         # compute num_classes robustly for classification; for regression we won’t use it
         _in_dim = getattr(encoder, "hidden_dim", getattr(args, "hidden_dim", None))
         assert (
@@ -481,34 +556,45 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         ]
         head_params = [p for p in head.parameters() if p.requires_grad]
         optimizer_groups = []
+        head_lr = getattr(args, "head_lr", None) or args.lr
+        encoder_lr = getattr(args, "encoder_lr", None)
         if encoder_params:
-            optimizer_groups.append(
-                {
-                    "params": encoder_params,
-                    "lr": getattr(args, "encoder_lr", None) or args.lr,
-                }
-            )
+            if encoder_lr is None:
+                encoder_lr = head_lr * 0.1
+            optimizer_groups.append({"params": encoder_params, "lr": encoder_lr})
         if head_params:
-            optimizer_groups.append(
-                {
-                    "params": head_params,
-                    "lr": getattr(args, "head_lr", None) or args.lr,
-                }
-            )
+            optimizer_groups.append({"params": head_params, "lr": head_lr})
 
         optimizer = (
             torch.optim.AdamW(
                 optimizer_groups,
-                lr=(
-                    getattr(args, "head_lr", None)
-                    or getattr(args, "encoder_lr", None)
-                    or args.lr
-                ),
+                lr=head_lr,
                 weight_decay=1e-4,
             )
             if optimizer_groups
             else None
         )
+        if encoder_params:
+            logger.info(
+                "Optimizer encoder group: %d tensors lr=%.2e",
+                len(encoder_params),
+                float(encoder_lr or 0.0),
+            )
+        if head_params:
+            logger.info(
+                "Optimizer head group: %d tensors lr=%.2e",
+                len(head_params),
+                float(head_lr),
+            )
+        if wb is not None:
+            try:
+                lr_payload = {"optimizer/lr_head": float(head_lr)}
+                if encoder_params:
+                    lr_payload["optimizer/lr_encoder"] = float(encoder_lr or 0.0)
+                wb.log(lr_payload)
+            except Exception:
+                pass
+
         cache_embeddings = not bool(encoder_params)
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -574,6 +660,24 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     cache_graph_embeddings=cache_embeddings,
                 )
 
+                train_batches = float(metrics.get("train/batches", 0.0) or 0.0)
+                if train_batches > 0:
+                    logger.info(
+                        "[finetune] seed=%d epoch=%d encoder batches=%d",
+                        seed,
+                        epoch,
+                        int(train_batches),
+                    )
+                seed_train_steps[seed] = seed_train_steps.get(seed, 0.0) + train_batches
+                if wb is not None:
+                    try:
+                        wb.log({
+                            f"finetune_{seed}/train_batches": train_batches,
+                            "encoder/train_batches": train_batches,
+                        })
+                    except Exception:
+                        pass
+
                 trained_head = metrics.pop("head", None)
                 if trained_head is not None:
                     head = trained_head
@@ -612,6 +716,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                             best_payload["scheduler"] = scheduler.state_dict()
                         save_checkpoint(best_path, **best_payload)
                         wrote_best = True
+                        seed_best_paths[seed] = best_path
                         # optional: stable link at the finetune root
 
                         try:
@@ -663,6 +768,8 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                             "Fallback best: head.pt (%s) -> %s", mode, best_path
                         )
 
+                        seed_best_paths[seed] = best_path
+
                         logger.warning(
                             "No metric '%s' found; promoted %s to ft_best.pt",
                             metric_name,
@@ -678,10 +785,91 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             wb.log({"phase": f"finetune_{seed}", "status": "error"})
             sys.exit(3)
 
+    total_train_batches = float(sum(seed_train_steps.values()))
+    if encoder_was_trainable and total_train_batches <= 0:
+        logger.warning(
+            "Encoder marked trainable but no optimisation batches were recorded; check dataset splits."
+        )
+
+    export_path: Optional[str] = None
+    export_name: Optional[str] = None
+    primary_seed = seeds[0] if seeds else None
+    if encoder_was_trainable and seed_best_paths:
+        best_candidate = seed_best_paths.get(primary_seed) if primary_seed is not None else None
+        if not best_candidate:
+            best_candidate = next(iter(seed_best_paths.values()), None)
+        if best_candidate:
+            try:
+                best_state = load_checkpoint(best_candidate)
+                enc_state = (
+                    best_state.get("encoder")
+                    if isinstance(best_state, dict)
+                    else best_state
+                )
+                if enc_state:
+                    alias_source = (
+                        os.getenv("EXP_ID")
+                        or os.getenv("RUN_ID")
+                        or (f"seed{primary_seed}" if primary_seed is not None else "finetune")
+                    )
+                    # The exported checkpoint is tagged as ``encoder_ft:<alias>`` so
+                    # downstream evaluations can distinguish fine-tuned encoders
+                    # from the original pretraining lineage.
+                    alias = _sanitize_alias(str(alias_source))
+                    export_name = f"encoder_ft:{alias}"
+                    export_path = os.path.join(args.ckpt_dir, f"encoder_ft_{alias}.pt")
+                    save_checkpoint(export_path, encoder=enc_state)
+                    try:
+                        from utils.checkpoint import safe_link_or_copy
+
+                        link_target = os.path.join(args.ckpt_dir, "encoder_ft.pt")
+                        safe_link_or_copy(export_path, link_target)
+                    except Exception:
+                        logger.debug("Could not create encoder_ft.pt symlink", exc_info=True)
+                    logger.info(
+                        "Exported fine-tuned encoder to %s (artifact %s)",
+                        export_path,
+                        export_name,
+                    )
+                    if wb is not None:
+                        try:
+                            wb.log(
+                                {
+                                    "encoder/export_path": export_path,
+                                    "encoder/export_artifact": export_name,
+                                }
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                logger.exception(
+                    "Failed to export fine-tuned encoder from %s", best_candidate
+                )
+
     agg = aggregate_metrics(metrics_runs)
     for k, v in agg.items():
         wb.log({f"metric/{k}": v})
     wb.finish()
+
+    stage_payload: Dict[str, Any] = {
+        "encoder_unfreeze_mode": encoder_unfreeze_mode or "none",
+        "encoder_trainable": bool(encoder_was_trainable),
+        "encoder_train_steps": total_train_batches,
+        "seeds": {
+            str(seed): {
+                "best_checkpoint": seed_best_paths.get(seed),
+                "train_batches": float(seed_train_steps.get(seed, 0.0)),
+            }
+            for seed in seeds
+        },
+    }
+    if export_path:
+        stage_payload["encoder_finetuned"] = {
+            "checkpoint": export_path,
+            "artifact": export_name,
+            "source_seed": primary_seed,
+        }
+    _record_finetune_stage_outputs(stage_payload)
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:

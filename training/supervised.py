@@ -1299,6 +1299,7 @@ def train_linear_head(
         elif val_loader is not None:
             metrics.setdefault("val_loss", float("nan"))
         metrics["head"] = head_param_source
+        metrics["train/batches"] = float(total_batches_done)
 
     if distributed:
         cleanup()

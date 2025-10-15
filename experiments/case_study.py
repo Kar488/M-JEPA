@@ -661,6 +661,7 @@ def run_tox21_case_study(
     strict_encoder_config: bool = False,
     bf16_head: Optional[bool] = None,
     encoder_source_override: Optional[str] = None,
+    evaluation_mode: str = "pretrain_frozen",
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
 
@@ -801,6 +802,7 @@ def run_tox21_case_study(
     manifest_cfg = _load_manifest_config(encoder_manifest)
     state_cfg: Dict[str, Any] = {}
     enc_state: Optional[Dict[str, Any]] = None
+    loaded_head_state: Optional[Dict[str, Any]] = None
     if encoder_checkpoint:
         if safe_load_checkpoint is None:
             raise ImportError("Checkpoint loading utilities are unavailable")
@@ -812,7 +814,11 @@ def run_tox21_case_study(
             allow_missing=False,
         )
         state_cfg = _extract_state_config(state)
-        enc_state = state.get("encoder", state) if isinstance(state, dict) else state
+        if isinstance(state, dict):
+            enc_state = state.get("encoder", state)
+            loaded_head_state = state.get("head")
+        else:
+            enc_state = state
 
     final_cfg: Dict[str, Any] = {
         "gnn_type": gnn_type,
@@ -892,23 +898,40 @@ def run_tox21_case_study(
         edge_dim=edge_dim,
     )
 
-    encoder_source = "scratch"
-    eval_name = "fine_tuned"
-    should_pretrain = True
-    if encoder_checkpoint:
-        encoder_source = "checkpoint"
-        eval_name = "frozen"
-        should_pretrain = False
-        if enc_state:
-            if load_state_dict_forgiving is not None:
-                load_state_dict_forgiving(encoder, enc_state)
-            else:
-                encoder.load_state_dict(enc_state, strict=False)
+    normalized_mode = evaluation_mode.lower().replace("-", "_")
+    if normalized_mode == "fine_tuned":
+        normalized_mode = "end_to_end"
+    valid_modes = {"pretrain_frozen", "frozen_finetuned", "end_to_end"}
+    if normalized_mode not in valid_modes:
+        logger.warning(
+            "Unknown evaluation_mode '%s'; defaulting to pretrain_frozen.",
+            evaluation_mode,
+        )
+        normalized_mode = "pretrain_frozen"
+    if normalized_mode in {"frozen_finetuned", "end_to_end"} and not encoder_checkpoint:
+        logger.warning(
+            "evaluation_mode '%s' requires a checkpoint; falling back to pretrain_frozen.",
+            normalized_mode,
+        )
+        normalized_mode = "pretrain_frozen"
+
+    train_probe = normalized_mode != "end_to_end"
+    should_pretrain = normalized_mode == "pretrain_frozen" and not encoder_checkpoint
+    encoder_source = normalized_mode
+    eval_name = normalized_mode
+
+    if enc_state and encoder_checkpoint:
+        if load_state_dict_forgiving is not None:
+            load_state_dict_forgiving(encoder, enc_state)
         else:
-            logger.warning(
-                "Encoder checkpoint %s contained no weights; using random initialisation",
-                encoder_checkpoint,
-            )
+            encoder.load_state_dict(enc_state, strict=False)
+    elif encoder_checkpoint and not enc_state:
+        logger.warning(
+            "Encoder checkpoint %s contained no weights; using random initialisation",
+            encoder_checkpoint,
+        )
+
+    def _freeze_encoder_params() -> None:
         params_fn = getattr(encoder, "parameters", None)
         if callable(params_fn):
             try:
@@ -916,6 +939,10 @@ def run_tox21_case_study(
                     param.requires_grad = False
             except Exception:
                 pass
+
+    if not should_pretrain:
+        _freeze_encoder_params()
+
     if encoder_source_override:
         encoder_source = str(encoder_source_override)
         eval_name = str(encoder_source_override)
@@ -962,7 +989,15 @@ def run_tox21_case_study(
             time_budget_mins=pretrain_time_budget_mins,
         )
     else:
-        logger.info("Skipping JEPA pretraining; using provided encoder checkpoint.")
+        logger.info(
+            "Skipping JEPA pretraining (mode=%s); using provided encoder weights.",
+            normalized_mode,
+        )
+
+    if train_probe and should_pretrain:
+        # After optional pretraining we freeze the encoder so that the linear head
+        # evaluates the representation quality without further backbone updates.
+        _freeze_encoder_params()
 
     encoder = encoder.to(device)
 
@@ -1001,29 +1036,54 @@ def run_tox21_case_study(
             elif "class_weight" in inspect.signature(train_linear_head).parameters:
                 extra_args["class_weight"] = {0: 1.0, 1: float(n_neg / max(1, n_pos))}
 
-    clf_metrics = train_linear_head(
-        dataset=dataset,
-        encoder=encoder,
-        task_type="classification",
-        epochs=finetune_epochs,
-        lr=lr,
-        batch_size=32,
-        device=device,
-        patience=10,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        persistent_workers=persistent_workers,
-        prefetch_factor=prefetch_factor,
-        bf16=bf16_linear,
-        time_budget_mins=finetune_time_budget_mins,
-        use_scaffold=bool(scaffold_split_indices and _HAS_RDKIT),
-        **extra_args,
-    )
+    clf_metrics: Dict[str, Any]
+    if train_probe:
+        # Linear-probe modes train a fresh classifier on top of a frozen encoder to
+        # measure representation quality without updating the backbone.
+        clf_metrics = train_linear_head(
+            dataset=dataset,
+            encoder=encoder,
+            task_type="classification",
+            epochs=finetune_epochs,
+            lr=lr,
+            batch_size=32,
+            device=device,
+            patience=10,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
+            prefetch_factor=prefetch_factor,
+            bf16=bf16_linear,
+            time_budget_mins=finetune_time_budget_mins,
+            use_scaffold=bool(scaffold_split_indices and _HAS_RDKIT),
+            **extra_args,
+        )
 
-    head = clf_metrics.get("head")
-    if head is None:
-        raise RuntimeError("train_linear_head did not return a head module")
-    head = head.to(device)
+        head = clf_metrics.get("head")
+        if head is None:
+            raise RuntimeError("train_linear_head did not return a head module")
+        head = head.to(device)
+    else:
+        out_dim = 1
+        in_dim = final_hidden_dim
+        if isinstance(loaded_head_state, dict):
+            for key, value in loaded_head_state.items():
+                if key.endswith("weight") and getattr(value, "ndim", 0) == 2:
+                    out_dim, in_dim = value.shape
+                    break
+        head = torch.nn.Linear(int(in_dim), int(out_dim))
+        if isinstance(loaded_head_state, dict) and loaded_head_state:
+            if load_state_dict_forgiving is not None:
+                load_state_dict_forgiving(head, loaded_head_state)
+            else:
+                head.load_state_dict(loaded_head_state, strict=False)
+        elif normalized_mode == "end_to_end":
+            logger.warning(
+                "End-to-end mode requested but head weights were missing; using a randomly initialised head."
+            )
+        head = head.to(device)
+        clf_metrics = {"head": head}
+
     encoder.eval()
     head.eval()
 
