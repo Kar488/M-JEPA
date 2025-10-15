@@ -21,13 +21,7 @@ from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional,
 
 import yaml
 
-from .wandb_utils import resolve_wandb_http_timeout
-
-try:
-    from utils.wandb_filters import silence_pydantic_field_warnings
-except Exception:  # pragma: no cover - optional dependency in offline use
-    def silence_pydantic_field_warnings() -> None:  # type: ignore
-        return
+from .wandb_utils import get_wandb_api, resolve_wandb_http_timeout
 
 LOGGER = logging.getLogger(__name__)
 
@@ -205,75 +199,95 @@ def _collect_remote_schema(
     if not os.getenv("WANDB_API_KEY") and not os.getenv("WANDB_API_KEY_FILE"):
         return {}
 
-    try:
-        silence_pydantic_field_warnings()
-        import wandb  # type: ignore
-    except ImportError:  # pragma: no cover - optional dependency
-        return {}
-
-    timeout = resolve_wandb_http_timeout(60)
-
-    try:
-        api = wandb.Api(timeout=timeout)
-    except TypeError as type_error:  # pragma: no cover - depends on wandb version
-        LOGGER.debug(
-            "wandb.Api does not accept a timeout argument; retrying without explicit timeout",
-            exc_info=type_error,
-        )
-        try:
-            api = wandb.Api()
-        except Exception:  # pragma: no cover - requires remote API
-            return {}
-    except Exception:  # pragma: no cover - requires remote API
-        return {}
+    base_timeout = resolve_wandb_http_timeout(90)
+    timeout_attempts = [base_timeout]
+    if base_timeout < 120:
+        timeout_attempts.append(max(base_timeout * 2, base_timeout + 30))
 
     project_path = f"{entity}/{project}" if entity else project
-    try:
-        runs = api.runs(project_path, per_page=max_runs)
-    except Exception:
-        return {}
+    last_error: Optional[Exception] = None
 
-    metrics: MutableMapping[str, Set[str]] = defaultdict(set)
-    configs: MutableMapping[str, Set[str]] = defaultdict(set)
-    tags: Set[str] = set()
-    run_types: Set[str] = set()
+    for attempt_index, timeout in enumerate(timeout_attempts):
+        if attempt_index > 0:
+            os.environ["WANDB_HTTP_TIMEOUT"] = str(timeout)
+        api = get_wandb_api(project=project, allow_missing=True, timeout=timeout)
+        if api is None:
+            return {}
 
-    skipped_summaries: List[str] = []
+        try:
+            runs = api.runs(project_path, per_page=max_runs)
+        except Exception as exc:  # pragma: no cover - depends on remote API
+            last_error = exc
+            LOGGER.warning(
+                "[ci][warn] Failed to list W&B runs for %s on attempt %d (timeout=%s): %s",
+                project_path,
+                attempt_index + 1,
+                timeout,
+                exc,
+            )
+            continue
 
-    for run in runs:
-        tags.update(run.tags or [])
-        if run.group:
-            run_types.add(run.group)
-        if run.job_type:
-            run_types.add(run.job_type)
-        summary_obj = getattr(run, "summary", None)
-        if summary_obj:
-            summary_data = _normalise_summary(run, summary_obj)
-            if summary_data is None:
-                skipped_summaries.append(
-                    str(getattr(run, "id", getattr(run, "name", "<unknown>")))
-                )
-                summary_data = {}
-            for key in summary_data.keys():
-                metrics[key].add("summary")
-        config = getattr(run, "config", {}) or {}
-        if isinstance(config, Mapping):
-            for key in config.keys():
-                configs[key].add("config")
+        metrics: MutableMapping[str, Set[str]] = defaultdict(set)
+        configs: MutableMapping[str, Set[str]] = defaultdict(set)
+        tags: Set[str] = set()
+        run_types: Set[str] = set()
+        skipped_summaries: List[str] = []
 
-    if skipped_summaries:
+        try:
+            for run in runs:
+                tags.update(run.tags or [])
+                if run.group:
+                    run_types.add(run.group)
+                if run.job_type:
+                    run_types.add(run.job_type)
+                summary_obj = getattr(run, "summary", None)
+                if summary_obj:
+                    summary_data = _normalise_summary(run, summary_obj)
+                    if summary_data is None:
+                        skipped_summaries.append(
+                            str(getattr(run, "id", getattr(run, "name", "<unknown>")))
+                        )
+                        summary_data = {}
+                    for key in summary_data.keys():
+                        metrics[key].add("summary")
+                config = getattr(run, "config", {}) or {}
+                if isinstance(config, Mapping):
+                    for key in config.keys():
+                        configs[key].add("config")
+        except Exception as exc:  # pragma: no cover - depends on remote API
+            last_error = exc
+            LOGGER.warning(
+                "[ci][warn] Failed to stream W&B runs for %s on attempt %d (timeout=%s): %s",
+                project_path,
+                attempt_index + 1,
+                timeout,
+                exc,
+            )
+            continue
+
+        if skipped_summaries:
+            LOGGER.warning(
+                "[ci][warn] Skipped %d runs with malformed summaries: %s",
+                len(skipped_summaries),
+                ", ".join(skipped_summaries[:5]),
+            )
+
+        return {
+            "metrics": metrics,
+            "configs": configs,
+            "tags": tags,
+            "run_types": run_types,
+        }
+
+    if last_error is not None:
         LOGGER.warning(
-            "[ci][warn] Skipped %d runs with malformed summaries: %s",
-            len(skipped_summaries),
-            ", ".join(skipped_summaries[:5]),
+            "[ci][warn] Giving up on remote schema discovery for %s after %d attempts: %s",
+            project_path,
+            len(timeout_attempts),
+            last_error,
         )
 
-    return {
-        "metrics": metrics,
-        "configs": configs,
-        "tags": tags,
-        "run_types": run_types,
-    }
+    return {}
 
 
 def discover_schema(root: Path, *, max_runs: int = 200) -> Schema:
