@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import logging
 import os
+import random
+import time
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple, TypeVar
 
 import pandas as pd
 
@@ -21,9 +24,41 @@ except Exception:  # pragma: no cover - optional helper when utils unavailable
         return
 
 
+try:  # pragma: no cover - wandb is optional in some environments
+    from wandb.errors import CommError as WandbCommError
+except Exception:  # pragma: no cover - fallback when wandb is unavailable
+    WandbCommError = Exception  # type: ignore[assignment]
+
+try:
+    from requests import exceptions as requests_exceptions
+except Exception:  # pragma: no cover - requests may be optional in some contexts
+    requests_exceptions = None  # type: ignore
+
+
+T = TypeVar("T")
+
+
 LOGGER = logging.getLogger(__name__)
 
 _MIN_HTTP_TIMEOUT = 30
+
+REPORT_UNAVAILABLE_SENTINEL = "report unavailable"
+
+
+@dataclass(frozen=True)
+class _RetrySettings:
+    """Retry controls for WANDB API interactions."""
+
+    max_attempts: int = 5
+    base_backoff: float = 1.0
+    max_backoff: float = 30.0
+    max_total_backoff: float = 180.0
+    jitter: float = 0.25
+
+
+class WandbRetryError(RuntimeError):
+    """Raised when a W&B request exhausts transient retries."""
+
 
 
 def resolve_wandb_http_timeout(preferred: Optional[int] = None) -> int:
@@ -119,6 +154,100 @@ def _coerce_mapping(value: Any, *, context: str) -> Dict[str, Any]:
         return {}
 
 
+def _classify_transient_error(exc: Exception) -> Tuple[bool, Optional[float]]:
+    """Return whether ``exc`` is transient and an optional explicit backoff."""
+
+    retry_after: Optional[float] = None
+
+    if isinstance(exc, WandbCommError):
+        return True, None
+
+    if requests_exceptions is None:
+        return False, None
+
+    if isinstance(exc, requests_exceptions.Timeout):
+        return True, None
+    if isinstance(exc, requests_exceptions.ConnectionError):
+        return True, None
+    if isinstance(exc, requests_exceptions.HTTPError):
+        status_code: Optional[int] = None
+        if exc.response is not None:
+            with contextlib.suppress(Exception):
+                status_code = exc.response.status_code
+            if status_code == 429:
+                retry_header = exc.response.headers.get("Retry-After")
+                if retry_header:
+                    with contextlib.suppress(ValueError):
+                        retry_after = float(retry_header)
+        if status_code is None:
+            return True, retry_after
+        if status_code >= 500:
+            return True, retry_after
+        if status_code in {408}:
+            return True, retry_after
+        if status_code in {400, 401, 403, 404}:
+            return False, None
+        if status_code == 429:
+            return True, retry_after
+    return False, None
+
+
+def _retry_wandb_call(
+    operation: Callable[[], T],
+    *,
+    context: str,
+    settings: _RetrySettings,
+) -> T:
+    """Execute ``operation`` with retries for recognised transient failures."""
+
+    attempt = 1
+    total_backoff = 0.0
+    last_exc: Optional[Exception] = None
+
+    while attempt <= settings.max_attempts:
+        try:
+            return operation()
+        except Exception as exc:  # pragma: no cover - depends on external API
+            should_retry, explicit_backoff = _classify_transient_error(exc)
+            if not should_retry:
+                LOGGER.error("Non-retriable error while %s: %s", context, exc)
+                raise
+
+            last_exc = exc
+            backoff = min(settings.max_backoff, settings.base_backoff * (2 ** (attempt - 1)))
+            if explicit_backoff is not None:
+                backoff = max(backoff, explicit_backoff)
+            jitter = random.uniform(0, settings.jitter)
+            sleep_for = backoff + jitter
+            if total_backoff + sleep_for > settings.max_total_backoff:
+                remaining = max(0.0, settings.max_total_backoff - total_backoff)
+                sleep_for = remaining
+
+            if attempt == settings.max_attempts or sleep_for <= 0:
+                break
+
+            LOGGER.warning(
+                "Transient W&B error during %s (attempt %s/%s, %s): %s; retrying in %.1fs",
+                context,
+                attempt,
+                settings.max_attempts,
+                exc.__class__.__name__,
+                exc,
+                sleep_for,
+            )
+
+            time.sleep(sleep_for)
+            total_backoff += sleep_for
+            attempt += 1
+
+    message = (
+        f"Exhausted transient retries while {context}"
+        if last_exc is None
+        else f"Exhausted transient retries while {context}: {last_exc}"
+    )
+    raise WandbRetryError(message) from last_exc
+
+
 def get_wandb_api(
     *, allow_missing: bool = False, project: str = "m-jepa", timeout: Optional[int] = None
 ):
@@ -180,13 +309,29 @@ def get_wandb_api(
     raise api_error
 
 
-def _load_history(run, keys: Optional[Sequence[str]] = None) -> Optional[pd.DataFrame]:
+def _load_history(
+    run,
+    keys: Optional[Sequence[str]] = None,
+    *,
+    settings: _RetrySettings,
+) -> Optional[pd.DataFrame]:
     if keys is None:
         keys = []
     try:
-        history = run.history(samples=10000, pandas=True, keys=list(keys))
+        history = _retry_wandb_call(
+            lambda: run.history(samples=10000, pandas=True, keys=list(keys)),
+            context=f"loading history for {getattr(run, 'id', 'unknown run')}",
+            settings=settings,
+        )
+    except WandbRetryError as exc:  # pragma: no cover - depends on external API
+        LOGGER.warning(
+            "Skipping history for %s after retries: %s",
+            getattr(run, "id", "unknown run"),
+            exc,
+        )
+        return None
     except Exception as exc:  # pragma: no cover - depends on external API
-        LOGGER.debug("Failed to download history for %s: %s", run.id, exc)
+        LOGGER.debug("Failed to download history for %s: %s", getattr(run, "id", "unknown run"), exc)
         return None
     if history is None or history.empty:
         return None
@@ -202,29 +347,107 @@ def fetch_runs(
     max_runs: int = 1000,
     history_keys: Optional[Sequence[str]] = None,
     api: Optional[Any] = None,
+    per_page: int = 75,
+    soft_fail: bool = False,
+    retry_settings: Optional[_RetrySettings] = None,
 ) -> List[RunRecord]:
+    """Download runs for the given project with retry-aware pagination.
+
+    Args:
+        entity: Optional W&B entity (organisation or user).
+        project: W&B project name.
+        filters: Raw W&B run filters.
+        max_runs: Maximum number of runs to materialise locally.
+        history_keys: Optional keys to extract from ``run.history``.
+        api: Pre-initialised ``wandb.Api`` instance.
+        per_page: Number of runs fetched per W&B page (smaller values reduce
+            payload sizes for flaky networks).
+        soft_fail: Whether callers are prepared to handle transient failures via
+            :class:`WandbRetryError` and continue without remote data.
+        retry_settings: Optional override for retry configuration.
+
+    Returns:
+        A list of :class:`RunRecord` instances.  When retries are exhausted a
+        :class:`WandbRetryError` is raised; callers can use the
+        :data:`REPORT_UNAVAILABLE_SENTINEL` to signal soft-fail behaviour.
+    """
     if api is None:
         api = get_wandb_api(project=project)
     if api is None:  # pragma: no cover - defensive; only when allow_missing=True
         return []
+
+    if max_runs <= 0:
+        return []
+
+    settings = retry_settings or _RetrySettings()
+
+    per_page = max(1, min(per_page, max_runs))
+    LOGGER.info(
+        "Fetching W&B runs with per_page=%s max_runs=%s max_attempts=%s soft_fail=%s",
+        per_page,
+        max_runs,
+        settings.max_attempts,
+        soft_fail,
+    )
+
     project_path = f"{entity}/{project}" if entity else project
-    runs = api.runs(project_path, filters=filters or {}, per_page=max_runs)
+    applied_filters = dict(filters or {})
 
     records: List[RunRecord] = []
-    for run in runs:
-        history = _load_history(run, history_keys)
-        record = RunRecord(
-            run_id=run.id,
-            name=run.name,
-            tags=tuple(run.tags or []),
-            summary=_coerce_mapping(getattr(run, "summary", None), context="summary"),
-            config=_coerce_mapping(getattr(run, "config", None), context="config"),
-            history=history,
-            group=getattr(run, "group", None),
-            job_type=getattr(run, "job_type", None),
-            url=getattr(run, "url", None),
-        )
-        records.append(record)
+    fetched = 0
+
+    while len(records) < max_runs:
+        offset = fetched
+
+        def load_page() -> List[Any]:  # pragma: no cover - depends on external API
+            run_iterable = api.runs(
+                project_path,
+                filters=applied_filters,
+                per_page=per_page,
+            )
+            return list(itertools.islice(run_iterable, offset, offset + per_page))
+
+        try:
+            page = _retry_wandb_call(
+                load_page,
+                context=f"fetching runs page offset={offset}",
+                settings=settings,
+            )
+        except WandbRetryError as exc:
+            LOGGER.error(
+                "Failed to fetch W&B runs after retries (soft_fail=%s): %s",
+                soft_fail,
+                exc,
+            )
+            raise
+
+        if not page:
+            break
+
+        fetched += len(page)
+        for run in page:
+            run_id = getattr(run, "id", None)
+            if not run_id:
+                continue
+            history = _load_history(run, history_keys, settings=settings)
+            record = RunRecord(
+                run_id=run_id,
+                name=getattr(run, "name", ""),
+                tags=tuple(getattr(run, "tags", []) or []),
+                summary=_coerce_mapping(getattr(run, "summary", None), context="summary"),
+                config=_coerce_mapping(getattr(run, "config", None), context="config"),
+                history=history,
+                group=getattr(run, "group", None),
+                job_type=getattr(run, "job_type", None),
+                url=getattr(run, "url", None),
+            )
+            records.append(record)
+            if len(records) >= max_runs:
+                break
+
+        if len(page) < per_page:
+            break
+
     return records
 
 

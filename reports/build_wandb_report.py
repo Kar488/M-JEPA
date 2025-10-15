@@ -10,7 +10,21 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 from . import discover_schema
-from .wandb_utils import fetch_runs, get_wandb_api
+from .wandb_utils import (
+    REPORT_UNAVAILABLE_SENTINEL,
+    WandbRetryError,
+    fetch_runs,
+    get_wandb_api,
+)
+
+SOFT_FAIL_ENV_VAR = "WANDB_SOFT_FAIL"
+
+
+def _env_flag(name: str) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 LOGGER = logging.getLogger(__name__)
 
@@ -90,7 +104,14 @@ def build_report(
     refresh: bool,
     manifest_path: Optional[Path] = None,
     schema_path: Optional[Path] = None,
+    wandb_soft_fail: bool = False,
 ) -> Optional[str]:
+    """Construct the report metadata and optionally upload it to W&B.
+
+    When ``wandb_soft_fail`` is enabled and W&B remains unavailable after all
+    retries, the function returns :data:`REPORT_UNAVAILABLE_SENTINEL` instead of
+    raising so downstream automation can continue.
+    """
     root = Path(__file__).resolve().parents[1]
     schema = _ensure_schema(root, max_runs=max_runs, schema_path=schema_path)
 
@@ -110,14 +131,39 @@ def build_report(
         return None
 
     LOGGER.info("Using project %s/%s", entity, project)
+    LOGGER.info(
+        "Soft-fail mode for W&B fetching is %s (env %s)",
+        wandb_soft_fail,
+        SOFT_FAIL_ENV_VAR,
+    )
 
     filters: Dict[str, Any] = {}
-    runs = fetch_runs(entity, project, filters=filters, max_runs=max_runs, api=api)
+    resolved_manifest = manifest_path or root / "reports" / "FIGURE_MANIFEST.md"
+    try:
+        runs = fetch_runs(
+            entity,
+            project,
+            filters=filters,
+            max_runs=max_runs,
+            api=api,
+            soft_fail=wandb_soft_fail,
+        )
+    except WandbRetryError as exc:
+        if wandb_soft_fail:
+            LOGGER.warning(
+                "W&B runs unavailable after retries; returning %s sentinel: %s",
+                REPORT_UNAVAILABLE_SENTINEL,
+                exc,
+            )
+            _write_manifest(
+                {section: [] for section in REPORT_SECTIONS}, resolved_manifest
+            )
+            return REPORT_UNAVAILABLE_SENTINEL
+        raise
     LOGGER.info("Fetched %d runs", len(runs))
 
     manifest: Dict[str, Any] = {section: [] for section in REPORT_SECTIONS}
 
-    resolved_manifest = manifest_path or root / "reports" / "FIGURE_MANIFEST.md"
     _write_manifest(manifest, resolved_manifest)
 
     # The current implementation focuses on discovery.  Integrating with the W&B
@@ -148,6 +194,19 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-runs", type=int, default=500)
     parser.add_argument("--manifest-path", type=Path)
     parser.add_argument("--schema-path", type=Path)
+    parser.add_argument(
+        "--wandb-soft-fail",
+        dest="wandb_soft_fail",
+        action="store_true",
+        default=_env_flag(SOFT_FAIL_ENV_VAR),
+        help="Return a sentinel when W&B fetching exhausts retries",
+    )
+    parser.add_argument(
+        "--no-wandb-soft-fail",
+        dest="wandb_soft_fail",
+        action="store_false",
+        help="Disable W&B soft-fail mode",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -161,8 +220,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         refresh=args.refresh,
         manifest_path=args.manifest_path,
         schema_path=args.schema_path,
+        wandb_soft_fail=args.wandb_soft_fail,
     )
-    if url:
+    if url == REPORT_UNAVAILABLE_SENTINEL:
+        LOGGER.warning(
+            "Report generation skipped because W&B data was unavailable and soft-fail mode is enabled."
+        )
+    elif url:
         print(url)
     else:
         LOGGER.info("Report generation completed without publishing a W&B URL.")
