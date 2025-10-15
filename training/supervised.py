@@ -1082,10 +1082,10 @@ def train_linear_head(
                 if not _should_retry_loader_error(err):
                     raise
 
+    total_batches_done = 0
     if train_loader is None:
         logger.warning("No training samples available; skipping linear-head optimisation.")
     else:
-        total_batches_done = 0
         for epoch in range(epochs):
             if max_batches > 0 and total_batches_done >= max_batches:
                 logger.info(
