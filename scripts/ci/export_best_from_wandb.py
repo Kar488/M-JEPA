@@ -933,9 +933,11 @@ def main():
             _force_param_value("pin-memory", 0)
             _force_param_value("devices", 1)
         else:
-            _ensure_param("persistent-workers", default=1)
-            _ensure_param("pin-memory", default=1)
-            _ensure_param("devices", default=2)
+            # Override CPU defaults captured during phase-1 sweeps so GPU hosts
+            # consistently benefit from pinned memory and multiple devices.
+            _force_param_value("persistent-workers", 1)
+            _force_param_value("pin-memory", 1)
+            _force_param_value("devices", 2)
         _force_param_value("bf16", 1)
         _ensure_param("use-wandb", default=1)
 
