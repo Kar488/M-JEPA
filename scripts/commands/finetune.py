@@ -248,6 +248,20 @@ def cmd_finetune(args: argparse.Namespace) -> None:
 
     requires_3d = _maybe_enable_add_3d(args)
 
+    max_finetune_batches = int(getattr(args, "max_finetune_batches", 0) or 0)
+    setattr(args, "max_finetune_batches", max_finetune_batches)
+    pretrain_cap = int(getattr(args, "max_pretrain_batches", 0) or 0)
+    if pretrain_cap > 0 and max_finetune_batches == 0:
+        logger.warning(
+            "Ignoring --max-pretrain-batches=%d during fine-tuning; use --max-finetune-batches to cap downstream epochs.",
+            pretrain_cap,
+        )
+    if max_finetune_batches > 0:
+        logger.info(
+            "Fine-tune batches per epoch capped at %d via --max-finetune-batches.",
+            max_finetune_batches,
+        )
+
     # Determine seeds: CLI overrides config
     seeds: List[int]
     if args.seeds is not None and len(args.seeds) > 0:
@@ -275,6 +289,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             "add_3d": bool(getattr(args, "add_3d", False)),
             "freeze_encoder": bool(getattr(args, "freeze_encoder", True)),
             "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
+            "max_finetune_batches": max_finetune_batches,
         },
     )
     log_effective_gnn(args, logger, wb)
@@ -323,6 +338,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     seed_train_steps: Dict[int, float] = {}
     encoder_unfreeze_mode: Optional[str] = None
     encoder_was_trainable = False
+    cumulative_encoder_batches = 0.0
 
     # --- choose metric & direction (maximize cls metrics, minimize losses/errors) ---
     metric_choice = getattr(args, "metric", None)
@@ -498,6 +514,11 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                 freeze_flag,
                 unfreeze_top,
             )
+        if effective_mode in {"partial", "full"} and trainable_param_count == 0:
+            raise RuntimeError(
+                "Encoder unfreeze mode '%s' requested but no trainable parameters were found. Check encoder construction."
+                % effective_mode
+            )
         if wb is not None:
             try:
                 wb.log(
@@ -561,6 +582,9 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         if encoder_params:
             if encoder_lr is None:
                 encoder_lr = head_lr * 0.1
+                logger.info(
+                    "Encoder LR defaulting to %.2e (head_lr * 0.1)", float(encoder_lr)
+                )
             optimizer_groups.append({"params": encoder_params, "lr": encoder_lr})
         if head_params:
             optimizer_groups.append({"params": head_params, "lr": head_lr})
@@ -600,6 +624,10 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=args.epochs
         )
+        logger.info(
+            "CosineAnnealingLR configured with T_max=%d epochs for fine-tuning.",
+            args.epochs,
+        )
 
         # If resuming, load head/optim/scheduler from checkpoint
         if "head" in resume_state:
@@ -633,9 +661,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     # head_type=getattr(args, "head", "linear"),  # <- change innvalid param for supervised?
                     task_type=args.task_type,
                     epochs=1,
-                    max_batches=getattr(
-                        args, "max_pretrain_batches", 0
-                    ),  # ensure it does not crash for unit tests
+                    max_batches=max_finetune_batches,
                     time_budget_mins=getattr(
                         args, "time_budget_mins", 0
                     ),  # ensure it does not crash for unit tests
@@ -661,6 +687,15 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                 )
 
                 train_batches = float(metrics.get("train/batches", 0.0) or 0.0)
+                epoch_batches = float(metrics.get("train/epoch_batches", train_batches) or train_batches)
+                loader_batches = float(metrics.get("train/loader_batches", 0.0) or 0.0)
+                if epoch == start_epoch and loader_batches > 0:
+                    logger.info(
+                        "[finetune] seed=%d train loader reports %d batches per epoch (max_finetune_batches=%d)",
+                        seed,
+                        int(loader_batches),
+                        max_finetune_batches,
+                    )
                 if train_batches > 0:
                     logger.info(
                         "[finetune] seed=%d epoch=%d encoder batches=%d",
@@ -668,13 +703,26 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                         epoch,
                         int(train_batches),
                     )
-                seed_train_steps[seed] = seed_train_steps.get(seed, 0.0) + train_batches
+                if max_finetune_batches == 0 and epoch_batches < 10:
+                    logger.warning(
+                        "Fine-tune epoch produced only %d batches (seed=%d epoch=%d); representation updates may be limited.",
+                        int(epoch_batches),
+                        seed,
+                        epoch,
+                    )
+                seed_train_steps[seed] = seed_train_steps.get(seed, 0.0) + epoch_batches
+                cumulative_encoder_batches += epoch_batches
                 if wb is not None:
                     try:
-                        wb.log({
+                        wb_payload = {
                             f"finetune_{seed}/train_batches": train_batches,
                             "encoder/train_batches": train_batches,
-                        })
+                            "encoder/train_batches_epoch": epoch_batches,
+                            "encoder/train_batches_total": cumulative_encoder_batches,
+                        }
+                        if loader_batches > 0:
+                            wb_payload[f"finetune_{seed}/loader_batches"] = loader_batches
+                        wb.log(wb_payload)
                     except Exception:
                         pass
 
@@ -789,6 +837,11 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     if encoder_was_trainable and total_train_batches <= 0:
         logger.warning(
             "Encoder marked trainable but no optimisation batches were recorded; check dataset splits."
+        )
+    elif encoder_was_trainable and total_train_batches < 50:
+        logger.warning(
+            "Encoder fine-tune ran only %d batches across all seeds; consider increasing dataset size, batch size, or epochs.",
+            int(total_train_batches),
         )
 
     export_path: Optional[str] = None

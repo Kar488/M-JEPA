@@ -901,6 +901,21 @@ def train_linear_head(
         )
 
     train_loader, val_loader, test_loader = _refresh_loaders()
+    planned_train_batches = 0
+    train_loader_workers = 0
+    if train_loader is not None:
+        try:
+            planned_train_batches = len(train_loader)  # type: ignore[arg-type]
+        except TypeError:
+            planned_train_batches = 0
+        train_loader_workers = getattr(train_loader, "num_workers", 0)
+        logger.info(
+            "[finetune] train loader built with %d batches (split size=%d, batch_size=%d, workers=%d)",
+            planned_train_batches,
+            len(train_idx_rank),
+            batch_size,
+            train_loader_workers,
+        )
 
     def _get_loader(name: str) -> Optional[DataLoader]:
         if name == "train":
@@ -1083,8 +1098,12 @@ def train_linear_head(
                     raise
 
     total_batches_done = 0
+    last_epoch_batches = 0
     if train_loader is None:
-        logger.warning("No training samples available; skipping linear-head optimisation.")
+        logger.warning(
+            "No training samples available; skipping linear-head optimisation (split size=%d).",
+            len(train_idx_rank),
+        )
     else:
         for epoch in range(epochs):
             if max_batches > 0 and total_batches_done >= max_batches:
@@ -1141,6 +1160,7 @@ def train_linear_head(
                 optimiser.step()
                 epoch_batches += 1
                 total_batches_done += 1
+            last_epoch_batches = epoch_batches
 
             if batch_losses:
                 logger.debug("Epoch %d training loss %.4f", epoch, float(np.mean(batch_losses)))
@@ -1300,6 +1320,8 @@ def train_linear_head(
             metrics.setdefault("val_loss", float("nan"))
         metrics["head"] = head_param_source
         metrics["train/batches"] = float(total_batches_done)
+        metrics["train/loader_batches"] = float(planned_train_batches)
+        metrics["train/epoch_batches"] = float(last_epoch_batches)
 
     if distributed:
         cleanup()

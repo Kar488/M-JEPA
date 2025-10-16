@@ -921,14 +921,18 @@ def build_parser() -> argparse.ArgumentParser:
         dest="unfreeze_mode",
         choices=["none", "partial", "full"],
         default=CONFIG.get("finetune", {}).get("unfreeze", "none"),
-        help="Encoder update policy: none=frozen probe, partial=top layers trainable, full=end-to-end",
+        help=(
+            "Encoder update policy: none=frozen probe, partial=top layers trainable, "
+            "full=end-to-end. When enabling updates start with head_lr≈1e-4 and encoder_lr≈1e-5 "
+            "for partial unfreeze; full unfreeze typically prefers encoder_lr in the 3e-6–1e-5 range."
+        ),
     )
     ft.add_argument(
         "--encoder-lr",
         dest="encoder_lr",
         type=float,
         default=None,
-        help="Learning rate for encoder parameters when trainable",
+        help="Learning rate for encoder parameters when trainable (defaults to head_lr*0.1 if unset)",
     )
     ft.add_argument(
         "--head-lr",
@@ -936,6 +940,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Learning rate for the fine-tuning head",
+    )
+    ft.add_argument(
+        "--max-finetune-batches",
+        dest="max_finetune_batches",
+        type=int,
+        default=0,
+        help=(
+            "Optional cap on batches per fine-tune epoch (0 = uncapped). "
+            "This is independent from --max-pretrain-batches."
+        ),
     )
     _add_common_args(ft, "finetune")
     _add_model_args(ft)
