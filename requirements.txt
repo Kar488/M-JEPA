@@ -15,6 +15,7 @@ fastparquet             # optional parquet I/O alternative
 
 # Logging / plotting
 wandb
+wandb-workspaces        # optional, needed for W&B Reports API
 matplotlib
 seaborn
 

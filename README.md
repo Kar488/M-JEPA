@@ -61,6 +61,11 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
    establish a connection to W&B. Logging is disabled by default when the
    variable is absent.
 
+   To publish full project reports with `reports/build_wandb_report.py`, install
+   the optional `wandb-workspaces` package (provides the W&B Reports API) in
+   addition to the core `wandb` client. Without it, the script falls back to
+   writing `reports/FIGURE_MANIFEST.md` locally.
+
    In Repository → Settings → Secrets and variables → Actions → New repository secret add:
 
    WANDB_API_KEY = your W&B key
