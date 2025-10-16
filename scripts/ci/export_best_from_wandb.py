@@ -861,7 +861,7 @@ def main():
         _force_param_value("cache-datasets", 1)
         _ensure_param("num-workers", default=4)
         _ensure_param("prefetch-factor", default=2)
-        _force_param_value("persistent-workers", 1
+        _force_param_value("persistent-workers", 1)
         _force_param_value("pin-memory", 1)
         _force_param_value("bf16", 1)
         _force_param_value("devices", 2)
