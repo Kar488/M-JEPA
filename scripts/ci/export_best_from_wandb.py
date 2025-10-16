@@ -861,9 +861,9 @@ def main():
         _force_param_value("cache-datasets", 1)
         _ensure_param("num-workers", default=4)
         _ensure_param("prefetch-factor", default=2)
-        _ensure_param("persistent-workers", default=0)
-        _ensure_param("pin-memory", default=0)
-        _ensure_param("bf16", default=1)
+        _force_param_value("persistent-workers", 1
+        _force_param_value("pin-memory", 1)
+        _force_param_value("bf16", 1)
         _ensure_param("devices", default=1)
         _ensure_param("use-wandb", default=1)
 
