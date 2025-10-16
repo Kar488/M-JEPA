@@ -864,7 +864,7 @@ def main():
         _force_param_value("persistent-workers", 1
         _force_param_value("pin-memory", 1)
         _force_param_value("bf16", 1)
-        _ensure_param("devices", default=1)
+        _force_param_value("devices", 2)
         _ensure_param("use-wandb", default=1)
 
         # safety in case Schnet is chosen and 3D is not set
