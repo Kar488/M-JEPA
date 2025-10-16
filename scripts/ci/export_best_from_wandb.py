@@ -933,11 +933,38 @@ def main():
             _force_param_value("pin-memory", 0)
             _force_param_value("devices", 1)
         else:
-            # Override CPU defaults captured during phase-1 sweeps so GPU hosts
-            # consistently benefit from pinned memory and multiple devices.
-            _force_param_value("persistent-workers", 1)
-            _force_param_value("pin-memory", 1)
-            _force_param_value("devices", 2)
+            # Respect explicit GPU overrides from the sweep, only correcting
+            # configs that inherited CPU defaults during phase-1 exploration.
+            pin_memory_cfg = _normalize_config_value(
+                _config_lookup(best.config, "pin-memory")
+            )
+            persistent_workers_cfg = _normalize_config_value(
+                _config_lookup(best.config, "persistent-workers")
+            )
+            devices_cfg = _normalize_config_value(
+                _config_lookup(best.config, "devices")
+            )
+
+            _ensure_param("persistent-workers")
+            _ensure_param("pin-memory")
+            _ensure_param("devices")
+
+            def _as_int(val: Any) -> Optional[int]:
+                try:
+                    return int(val)
+                except (TypeError, ValueError):
+                    return None
+
+            inherited_cpu_defaults = (
+                (_as_int(devices_cfg) in {None, 1})
+                and (_as_int(pin_memory_cfg) in {None, 0})
+                and (_as_int(persistent_workers_cfg) in {None, 0})
+            )
+
+            if inherited_cpu_defaults:
+                _force_param_value("persistent-workers", 1)
+                _force_param_value("pin-memory", 1)
+                _force_param_value("devices", 2)
         _force_param_value("bf16", 1)
         _ensure_param("use-wandb", default=1)
 
