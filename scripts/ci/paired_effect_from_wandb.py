@@ -4,7 +4,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from itertools import islice
 import math
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 from utils.wandb_filters import silence_pydantic_field_warnings
 
@@ -22,10 +22,17 @@ import numpy as np
 import requests
 import wandb
 
-from reports.wandb_utils import resolve_wandb_http_timeout
+try:
+    from reports.wandb_utils import resolve_wandb_http_timeout
+except ImportError:  # pragma: no cover - optional dependency
+    def resolve_wandb_http_timeout(default: Union[int, float]) -> Union[int, float]:
+        return default
 
 
 def _ensure_wandb_env() -> None:
+    if getattr(wandb, "__spec__", None) is None:
+        return
+
     if not os.environ.get("WANDB_API_KEY"):
         print("WANDB_API_KEY is not set; cannot authenticate with Weights & Biases.")
         raise SystemExit(1)

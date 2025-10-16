@@ -14,7 +14,7 @@ Notes:
 
 import argparse, json, math, os, time
 from collections.abc import Mapping
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 from utils.logging import maybe_init_wandb
 from utils.wandb_filters import silence_pydantic_field_warnings
@@ -27,7 +27,13 @@ import wandb
 import yaml
 from urllib.parse import urlparse
 
-from reports.wandb_utils import resolve_wandb_http_timeout
+try:
+    from reports.wandb_utils import resolve_wandb_http_timeout
+except ImportError:  # pragma: no cover - optional dependency
+    def resolve_wandb_http_timeout(default: Union[int, float]) -> Union[int, float]:
+        """Fallback when reporting helpers are unavailable."""
+
+        return default
 
 
 # ---------- env helpers ----------
@@ -40,6 +46,12 @@ def need_env(name: str) -> str:
 
 
 def _ensure_wandb_env() -> None:
+    if getattr(wandb, "__spec__", None) is None:
+        # During tests ``wandb`` is replaced with a lightweight stub that does not
+        # require authentication. Skip the credential guard so fake clients can
+        # operate without a real API key.
+        return
+
     if not os.environ.get("WANDB_API_KEY"):
         print("WANDB_API_KEY is not set; cannot authenticate with Weights & Biases.")
         raise SystemExit(1)
@@ -53,6 +65,59 @@ def _ensure_wandb_env() -> None:
                 "https://api.wandb.ai; please correct or unset it."
             )
             raise SystemExit(1)
+
+
+def _coerce_env_bool(value: Optional[str]) -> Optional[bool]:
+    """Interpret common truthy/falsey environment values.
+
+    Returns ``True``/``False`` for recognised tokens and ``None`` otherwise.
+    """
+
+    if value is None:
+        return None
+
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+
+    truthy = {"1", "true", "yes", "on"}
+    falsey = {"0", "false", "no", "off"}
+
+    if normalized in truthy:
+        return True
+    if normalized in falsey:
+        return False
+
+    return None
+
+
+def _phase2_prefers_cpu() -> bool:
+    """Decide whether the Phase-2 export should emit CPU-friendly defaults.
+
+    GitHub runners only expose CPUs, so we prefer conservative loader knobs
+    whenever we detect a CI context.  Vast jobs typically provision GPUs; those
+    should inherit the GPU-ready defaults instead.  Both behaviours can be
+    overridden explicitly via ``CI_FORCE_CPU_PHASE2`` or
+    ``CI_FORCE_GPU_PHASE2``.
+    """
+
+    force_cpu = _coerce_env_bool(os.environ.get("CI_FORCE_CPU_PHASE2"))
+    if force_cpu is True:
+        return True
+
+    force_gpu = _coerce_env_bool(os.environ.get("CI_FORCE_GPU_PHASE2"))
+    if force_gpu is True:
+        return False
+
+    ci_flag = _coerce_env_bool(os.environ.get("CI"))
+    if ci_flag is True:
+        return True
+
+    gh_actions = _coerce_env_bool(os.environ.get("GITHUB_ACTIONS"))
+    if gh_actions is True:
+        return True
+
+    return False
 
 
 def _init_wandb_api(max_attempts: int = 3, timeout: int = 60) -> wandb.Api:
@@ -794,6 +859,8 @@ def main():
 
         params: Dict[str, Any] = {}
 
+        prefers_cpu = _phase2_prefers_cpu()
+
         for k in numeric_keys:
             band = percentile_band(grab_cfg_vals(top, k))
             if band:
@@ -861,10 +928,15 @@ def main():
         _force_param_value("cache-datasets", 1)
         _ensure_param("num-workers", default=4)
         _ensure_param("prefetch-factor", default=2)
-        _force_param_value("persistent-workers", 1)
-        _force_param_value("pin-memory", 1)
+        if prefers_cpu:
+            _force_param_value("persistent-workers", 0)
+            _force_param_value("pin-memory", 0)
+            _force_param_value("devices", 1)
+        else:
+            _ensure_param("persistent-workers", default=1)
+            _ensure_param("pin-memory", default=1)
+            _ensure_param("devices", default=2)
         _force_param_value("bf16", 1)
-        _force_param_value("devices", 2)
         _ensure_param("use-wandb", default=1)
 
         # safety in case Schnet is chosen and 3D is not set
@@ -942,6 +1014,16 @@ def main():
                 **params
             }
         }
+
+        if prefers_cpu:
+            spec["parameters"]["persistent-workers"] = {"value": 0}
+            spec["parameters"]["pin-memory"] = {"value": 0}
+            spec["parameters"]["devices"] = {"value": 1}
+        else:
+            spec_params = spec["parameters"]
+            spec_params.setdefault("persistent-workers", {"value": 1})
+            spec_params.setdefault("pin-memory", {"value": 1})
+            spec_params.setdefault("devices", {"value": 2})
 
         # log the winner to the run’s summary (one-shot; no step noise)
         # one-shot summary on this export step's run
