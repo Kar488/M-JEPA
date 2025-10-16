@@ -797,17 +797,36 @@ def _assemble_report(
         LOGGER.warning("W&B Reports API unavailable: %s", exc)
         return None
 
-    try:
-        report = reports_v2.Report(
-            api=api,
-            entity=entity,
-            project=project,
-            title="M-JEPA Project Report",
-            description="Auto-generated summary built on "
-            f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}",
+    base_kwargs: Dict[str, Any] = {
+        "entity": entity,
+        "project": project,
+        "title": "M-JEPA Project Report",
+        "description": "Auto-generated summary built on "
+        f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}",
+    }
+
+    attempts: Sequence[Mapping[str, Any]]
+    if api is None:
+        attempts = ({},)
+    else:
+        attempts = (
+            {"api": api},
+            {"client": api},
+            {},
         )
-    except Exception as exc:  # pragma: no cover - external API dependent
-        LOGGER.warning("Failed to initialise W&B report object: %s", exc)
+
+    errors: List[str] = []
+    report = None
+    for extra in attempts:
+        try:
+            report = reports_v2.Report(**{**base_kwargs, **extra})
+            break
+        except Exception as exc:  # pragma: no cover - external API dependent
+            errors.append(f"{sorted(extra.keys()) or ['<none>']}: {exc}")
+
+    if report is None:
+        details = "; ".join(errors) if errors else "no attempts"
+        LOGGER.warning("Failed to initialise W&B report object (%s)", details)
         return None
 
     blocks: List[Any] = []
