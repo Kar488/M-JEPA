@@ -1107,6 +1107,8 @@ def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     out_yaml = tmp_path / "phase2.yaml"
 
     monkeypatch.setenv("SWEEP_CACHE_DIR", "/tmp/cache")
+    monkeypatch.delenv("CI_FORCE_GPU_PHASE2", raising=False)
+    monkeypatch.setenv("CI_FORCE_CPU_PHASE2", "1")
 
     # winner jepa
     monkeypatch.setenv("METHOD_WINNER", "jepa")
@@ -1138,6 +1140,55 @@ def test_export_best_respects_winner_and_missing(monkeypatch, tmp_path):
     data = yaml.safe_load(out_yaml.read_text())
     assert data["parameters"]["training_method"]["value"] == "contrastive"
     assert "aug_rotate" in data["parameters"]
+
+
+def test_export_best_prefers_gpu_outside_ci(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DIR", str(tmp_path))
+    monkeypatch.setenv("GRID_DIR", str(tmp_path))
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setenv("WANDB_PROJECT", "proj")
+    monkeypatch.setenv("SWEEP_CACHE_DIR", "/tmp/cache")
+    monkeypatch.delenv("CI_FORCE_CPU_PHASE2", raising=False)
+    monkeypatch.delenv("CI_FORCE_GPU_PHASE2", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+    runs = [
+        FakeRun(
+            "r1",
+            {
+                "training_method": "jepa",
+                "gnn_type": "gine",
+                "hidden_dim": 384,
+                "num_layers": 4,
+                "mask_ratio": 0.2,
+            },
+            {"val_rmse": 0.4, "val_mae": 0.3},
+            "1",
+        ),
+    ]
+
+    class FakeApi:
+        def sweep(self, sweep_id):
+            return FakeSweep(runs)
+
+    monkeypatch.setattr(eb, "wandb", types.SimpleNamespace(Api=lambda: FakeApi()))
+    monkeypatch.setattr(eb, "maybe_init_wandb", lambda *a, **k: None)
+
+    out_json = tmp_path / "best.json"
+    out_yaml = tmp_path / "phase2.yaml"
+
+    monkeypatch.setattr(sys, "argv", [
+        "eb", "--sweep-id", "ent/proj/sw1", "--task", "regression",
+        "--out", str(out_json), "--phase2-yaml", str(out_yaml), "--emit-bounds"
+    ])
+
+    eb.main()
+    data = yaml.safe_load(out_yaml.read_text())
+
+    assert data["parameters"]["persistent-workers"]["value"] == 1
+    assert data["parameters"]["pin-memory"]["value"] == 1
+    assert data["parameters"]["devices"]["value"] == 2
 
 
 def test_export_best_forces_cache_flags(monkeypatch, tmp_path):
