@@ -82,7 +82,9 @@ def _empty_assets() -> Dict[str, list[Any]]:
     return {section: [] for section in REPORT_SECTIONS}
 
 
-def test_assemble_report_prefers_api(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_assemble_report_passes_supported_api_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class ApiOnlyReport:
         def __init__(self, *, api: Any, **_: Any) -> None:  # pragma: no cover - simple stub
             self.api = api
@@ -94,7 +96,7 @@ def test_assemble_report_prefers_api(monkeypatch: pytest.MonkeyPatch) -> None:
         build_wandb_report._LoggedAsset(
             section="Overview",
             key="dummy-table",
-            run_path="entity/project/run", 
+            run_path="entity/project/run",
             kind="table",
             title="Overview",
         )
@@ -108,16 +110,16 @@ def test_assemble_report_prefers_api(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert report_url is not None
+    assert len(calls) == 1
     assert calls[0]["api"] == "sentinel-api"
 
 
-def test_assemble_report_falls_back_to_client(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_assemble_report_prefers_client_when_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class ClientOnlyReport:
-        def __init__(self, **kwargs: Any) -> None:  # pragma: no cover - simple stub
-            if "api" in kwargs:
-                raise TypeError("unexpected api argument")
-            if "client" not in kwargs:
-                raise TypeError("missing client argument")
+        def __init__(self, *, client: Any, **_: Any) -> None:  # pragma: no cover - simple stub
+            self.client = client
 
     build_wandb_report, calls = _load_report_module(monkeypatch, ClientOnlyReport)
 
@@ -140,6 +142,76 @@ def test_assemble_report_falls_back_to_client(monkeypatch: pytest.MonkeyPatch) -
     )
 
     assert report_url is not None
-    assert calls[0].get("api") == "sentinel-client"
-    assert calls[1]["client"] == "sentinel-client"
+    assert len(calls) == 1
+    assert calls[0]["client"] == "sentinel-client"
+
+
+def test_assemble_report_handles_connection_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ConnectionReport:
+        def __init__(self, *, connection: Any, **_: Any) -> None:  # pragma: no cover - simple stub
+            self.connection = connection
+
+    build_wandb_report, calls = _load_report_module(monkeypatch, ConnectionReport)
+
+    assets = _empty_assets()
+    assets["Overview"].append(
+        build_wandb_report._LoggedAsset(
+            section="Overview",
+            key="dummy-table",
+            run_path="entity/project/run",
+            kind="table",
+            title="Overview",
+        )
+    )
+
+    report_url = build_wandb_report._assemble_report(
+        api="sentinel-connection",
+        entity="entity",
+        project="project",
+        assets_by_section=assets,
+    )
+
+    assert report_url is not None
+    assert len(calls) == 1
+    assert calls[0]["connection"] == "sentinel-connection"
+
+
+def test_assemble_report_falls_back_to_plain_initialisation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PlainReport:
+        _allowed = {"entity", "project", "title", "description"}
+
+        def __init__(self, **kwargs: Any) -> None:  # pragma: no cover - simple stub
+            unexpected = {k: v for k, v in kwargs.items() if k not in self._allowed}
+            if unexpected:
+                raise AssertionError(f"Unexpected kwargs: {unexpected}")
+
+    build_wandb_report, calls = _load_report_module(monkeypatch, PlainReport)
+
+    assets = _empty_assets()
+    assets["Overview"].append(
+        build_wandb_report._LoggedAsset(
+            section="Overview",
+            key="dummy-table",
+            run_path="entity/project/run",
+            kind="table",
+            title="Overview",
+        )
+    )
+
+    report_url = build_wandb_report._assemble_report(
+        api="sentinel-do-not-pass",
+        entity="entity",
+        project="project",
+        assets_by_section=assets,
+    )
+
+    assert report_url is not None
+    assert len(calls) == 1
+    assert set(calls[0]) == {"entity", "project", "title", "description"}
+    assert calls[0]["entity"] == "entity"
+    assert calls[0]["project"] == "project"
 

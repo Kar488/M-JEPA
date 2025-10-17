@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import contextlib
 import json
 import logging
@@ -11,7 +12,7 @@ from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 
@@ -805,15 +806,50 @@ def _assemble_report(
         f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}",
     }
 
-    attempts: Sequence[Mapping[str, Any]]
-    if api is None:
-        attempts = ({},)
-    else:
-        attempts = (
-            {"api": api},
-            {"client": api},
-            {},
+    attempts: List[Mapping[str, Any]] = []
+    if api is not None:
+        allowed_keywords: Set[str] = set()
+        mro_candidates = getattr(reports_v2.Report, "__mro__", ())
+        candidate_targets = [reports_v2.Report, getattr(reports_v2.Report, "__init__", None)]
+        if mro_candidates:
+            candidate_targets.extend(
+                base for base in mro_candidates if base not in {None, reports_v2.Report, object}
+            )
+
+        for candidate in candidate_targets:
+            if candidate is None:
+                continue
+            try:
+                signature = inspect.signature(candidate)
+            except (TypeError, ValueError):
+                continue
+            allowed_keywords.update(
+                name
+                for name in signature.parameters
+                if name not in {"self", "args", "kwargs"}
+            )
+
+        keyword_targets = {reports_v2.Report, *(mro_candidates[1:] if mro_candidates else [])}
+        for target in keyword_targets:
+            if target in {None, object}:
+                continue
+            for field_attr in ("model_fields", "fields"):
+                field_map = getattr(target, field_attr, None)
+                if isinstance(field_map, Mapping):
+                    allowed_keywords.update(field_map.keys())
+
+        candidate_kwargs: Sequence[Tuple[str, Mapping[str, Any]]] = (
+            ("api", {"api": api}),
+            ("client", {"client": api}),
+            ("connection", {"connection": api}),
         )
+        seen: Set[str] = set()
+        for keyword, payload in candidate_kwargs:
+            if keyword in allowed_keywords and keyword not in seen:
+                attempts.append(payload)
+                seen.add(keyword)
+
+    attempts.append({})
 
     errors: List[str] = []
     report = None
