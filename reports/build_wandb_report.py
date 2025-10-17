@@ -844,10 +844,15 @@ def _assemble_report(
             ("connection", {"connection": api}),
         )
         seen: Set[str] = set()
+        matched_keyword = False
         for keyword, payload in candidate_kwargs:
             if keyword in allowed_keywords and keyword not in seen:
                 attempts.append(payload)
                 seen.add(keyword)
+                matched_keyword = True
+
+        if not matched_keyword:
+            attempts.append({"api": api})
 
     attempts.append({})
 
