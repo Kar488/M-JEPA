@@ -833,10 +833,17 @@ def _assemble_report(
         for target in keyword_targets:
             if target in {None, object}:
                 continue
-            for field_attr in ("model_fields", "fields"):
+            for field_attr in (
+                "model_fields",
+                "fields",
+                "allowed_kwargs",
+                "_allowed",
+            ):
                 field_map = getattr(target, field_attr, None)
                 if isinstance(field_map, Mapping):
                     allowed_keywords.update(field_map.keys())
+                elif isinstance(field_map, Iterable) and not isinstance(field_map, (str, bytes)):
+                    allowed_keywords.update(str(entry) for entry in field_map)
 
         candidate_kwargs: Sequence[Tuple[str, Mapping[str, Any]]] = (
             ("api", {"api": api}),
