@@ -52,6 +52,10 @@ if [[ -f "$MET_ENV_FILE" ]]; then
   fi
 fi
 
+# fix: ensure fine-tune emits stage outputs for downstream evaluation
+export STAGE_OUTPUTS_DIR="${FINETUNE_DIR}/stage-outputs"
+mkdir -p "$STAGE_OUTPUTS_DIR"
+
 #ensure the parm matches train_jepa_ci.yml
 run_stage finetune
 

@@ -53,6 +53,68 @@ else
   ensure_micromamba
 fi
 
+orig_encoder_override="${TOX21_ENCODER_CHECKPOINT:-}"
+encoder_decision_source="unknown"
+
+extract_finetune_export() {
+  local json_path="$1"
+  [[ -f "$json_path" ]] || return 1
+  local result
+  local status=0
+  set +e
+  result=$("${python_cmd[@]}" - "$json_path" 2>/dev/null <<'PY'
+import json
+import os
+import sys
+
+try:
+    payload = json.load(open(sys.argv[1], "r", encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+
+entry = payload.get("encoder_finetuned") if isinstance(payload, dict) else None
+if isinstance(entry, dict):
+    path = entry.get("checkpoint")
+    if path:
+        print(os.path.abspath(path))
+PY
+  )
+  status=$?
+  set -e
+  if (( status != 0 )); then
+    return 1
+  fi
+  result=${result:-}
+  [[ -n "$result" ]] || return 1
+  printf '%s\n' "$result"
+  return 0
+}
+
+select_encoder_candidate() {
+  local -n out_path=$1
+  local -n out_label=$2
+  shift 2
+  local last_path="" last_label=""
+  out_path=""
+  out_label=""
+  while (( $# >= 2 )); do
+    local label="$1"; shift
+    local path="$1"; shift
+    [[ -n "$path" ]] || continue
+    last_path="$path"
+    last_label="$label"
+    if [[ -f "$path" ]]; then
+      out_path="$path"
+      out_label="$label"
+      return 0
+    fi
+    echo "[tox21] candidate missing (${label}): $path" >&2
+  done
+  out_path="$last_path"
+  out_label="${last_label:-unknown}"
+  return 1
+}
+
 MET_ENV_FILE="${PRETRAIN_EXPERIMENT_ROOT}/met_benchmark.env"
 mkdir -p "$(dirname "$MET_ENV_FILE")"
 if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]] && [[ -f "$MET_ENV_FILE" ]]; then
@@ -96,22 +158,31 @@ PY
   fi
   export TOX21_ENCODER_CHECKPOINT
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
+  encoder_decision_source="manifest"
 elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   stage_json="${FINETUNE_DIR}/stage-outputs/finetune.json"
-  if [[ -f "$stage_json" ]]; then
-    TOX21_ENCODER_CHECKPOINT=$("${python_cmd[@]}" - "$stage_json" <<'PY'
-import json, os, sys
-data = json.load(open(sys.argv[1]))
-enc = data.get("encoder_finetuned") or {}
-path = enc.get("checkpoint")
-if path:
-    print(os.path.abspath(path))
-PY
-    )
-  else
-    echo "[tox21] warning: expected ${stage_json} for frozen_finetuned mode" >&2
+  ft_export_path=""
+  if ! ft_export_path=$(extract_finetune_export "$stage_json"); then
+    if [[ -f "$stage_json" ]]; then
+      echo "[tox21] warning: encoder_finetuned checkpoint not recorded in ${stage_json}" >&2
+    else
+      echo "[tox21] warning: expected ${stage_json} for frozen_finetuned mode" >&2
+    fi
+    ft_export_path=""
   fi
-  TOX21_ENCODER_CHECKPOINT=${TOX21_ENCODER_CHECKPOINT:-${FINETUNE_DIR}/encoder_ft.pt}
+  resolved_path=""
+  resolved_label=""
+  select_encoder_candidate resolved_path resolved_label \
+    finetune_export "$ft_export_path" \
+    explicit_override "$orig_encoder_override" \
+    encoder_ft "${FINETUNE_DIR}/encoder_ft.pt" \
+    seed_best "${FINETUNE_DIR}/seed_0/ft_best.pt"
+  select_status=$?
+  TOX21_ENCODER_CHECKPOINT="$resolved_path"
+  encoder_decision_source="$resolved_label"
+  if (( select_status )); then
+    echo "[tox21] warning: falling back to ${encoder_decision_source}: ${TOX21_ENCODER_CHECKPOINT}" >&2
+  fi
   export TOX21_ENCODER_CHECKPOINT
   # Preserve the original pretrain manifest so downstream evaluation can
   # reconstruct the encoder configuration when using frozen fine-tuned
@@ -119,16 +190,57 @@ PY
   # hyperparameters section.
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
 elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
-  TOX21_ENCODER_CHECKPOINT="${FINETUNE_DIR}/seed_0/ft_best.pt"
+  stage_json="${FINETUNE_DIR}/stage-outputs/finetune.json"
+  ft_export_path=""
+  if ! ft_export_path=$(extract_finetune_export "$stage_json"); then
+    if [[ -f "$stage_json" ]]; then
+      echo "[tox21] warning: encoder_finetuned checkpoint not recorded in ${stage_json}" >&2
+    else
+      echo "[tox21] warning: expected ${stage_json} for ${SOURCE} mode" >&2
+    fi
+    ft_export_path=""
+  fi
+  resolved_path=""
+  resolved_label=""
+  select_encoder_candidate resolved_path resolved_label \
+    finetune_export "$ft_export_path" \
+    explicit_override "$orig_encoder_override" \
+    seed_best "${FINETUNE_DIR}/seed_0/ft_best.pt" \
+    encoder_ft "${FINETUNE_DIR}/encoder_ft.pt"
+  select_status=$?
+  TOX21_ENCODER_CHECKPOINT="$resolved_path"
+  encoder_decision_source="$resolved_label"
+  if (( select_status )); then
+    echo "[tox21] warning: falling back to ${encoder_decision_source}: ${TOX21_ENCODER_CHECKPOINT}" >&2
+  fi
   export TOX21_ENCODER_CHECKPOINT
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
 else
   TOX21_ENCODER_CHECKPOINT="${TOX21_ENCODER_CHECKPOINT:-$MANIFEST_PATH}"
   export TOX21_ENCODER_CHECKPOINT
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
+  if [[ -n "$orig_encoder_override" ]]; then
+    encoder_decision_source="explicit_override"
+  else
+    encoder_decision_source="manifest"
+  fi
 fi
 
+if [[ -z "${encoder_decision_source:-}" ]]; then
+  encoder_decision_source="manifest"
+fi
+
+if [[ -z "${TOX21_ENCODER_CHECKPOINT:-}" ]]; then
+  echo "[tox21] error: encoder checkpoint path resolved to empty string" >&2
+  exit 1
+fi
+
+echo "[tox21] eval: using encoder_checkpoint=${TOX21_ENCODER_CHECKPOINT} (mode=${SOURCE} origin=${encoder_decision_source})" >&2
+
 ensure_dir "$TOX21_ENCODER_CHECKPOINT"
+
+: "${CI_DIAG:=1}"
+export CI_DIAG
 
 env_file="$MET_ENV_FILE"
 echo "[tox21] writing summary env to ${env_file}" >&2
