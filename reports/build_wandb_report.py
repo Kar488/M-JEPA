@@ -830,6 +830,7 @@ def _assemble_report(
             )
 
         keyword_targets = {reports_v2.Report, *(mro_candidates[1:] if mro_candidates else [])}
+        explicit_allowlists: List[Set[str]] = []
         for target in keyword_targets:
             if target in {None, object}:
                 continue
@@ -841,9 +842,27 @@ def _assemble_report(
             ):
                 field_map = getattr(target, field_attr, None)
                 if isinstance(field_map, Mapping):
-                    allowed_keywords.update(field_map.keys())
+                    entries = {str(entry) for entry in field_map.keys()}
                 elif isinstance(field_map, Iterable) and not isinstance(field_map, (str, bytes)):
-                    allowed_keywords.update(str(entry) for entry in field_map)
+                    entries = {str(entry) for entry in field_map}
+                else:
+                    entries = set()
+
+                if not entries:
+                    continue
+
+                if field_attr in {"allowed_kwargs", "_allowed"}:
+                    explicit_allowlists.append(entries)
+                else:
+                    allowed_keywords.update(entries)
+
+        if explicit_allowlists:
+            combined_allowlist = set(explicit_allowlists[0])
+            for allowlist in explicit_allowlists[1:]:
+                combined_allowlist &= allowlist
+            allowed_keywords = (
+                allowed_keywords & combined_allowlist if allowed_keywords else combined_allowlist
+            )
 
         candidate_kwargs: Sequence[Tuple[str, Mapping[str, Any]]] = (
             ("api", {"api": api}),
