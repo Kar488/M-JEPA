@@ -851,9 +851,6 @@ def _assemble_report(
                 seen.add(keyword)
                 matched_keyword = True
 
-        if not matched_keyword:
-            attempts.append({"api": api})
-
     attempts.append({})
 
     errors: List[str] = []
