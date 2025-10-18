@@ -144,7 +144,7 @@ def test_evaluate_case_study_with_baseline(tmp_path, monkeypatch):
 
     monkeypatch.setattr("sklearn.linear_model.Ridge", DummyRidge)
 
-    mean_true, mean_rand, mean_pred, baselines, metrics = cs._evaluate_case_study(
+    mean_true, mean_rand, mean_pred, baselines, metrics, calibrator = cs._evaluate_case_study(
         dataset=dataset,
         encoder=encoder,
         head=head,
@@ -165,5 +165,6 @@ def test_evaluate_case_study_with_baseline(tmp_path, monkeypatch):
     assert math.isfinite(mean_pred)
     assert "ridge" in baselines
     assert set(metrics) >= {"roc_auc", "pr_auc", "brier", "ece"}
+    assert calibrator == {"enabled": False, "fit_split": "val", "status": "disabled"}
 
 
