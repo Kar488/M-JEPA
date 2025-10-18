@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import logging
 import os
+import shutil
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -10,12 +14,103 @@ except Exception:  # pragma: no cover
     torch = None  # type: ignore
 
 
+logger = logging.getLogger(__name__)
+
+
+def _value_to_bytes(value: Any) -> bytes:
+    """Convert ``value`` into a deterministic byte representation for hashing."""
+
+    if torch is not None and isinstance(value, torch.Tensor):  # type: ignore[arg-type]
+        try:
+            tensor = value.detach().cpu().contiguous()
+            return tensor.numpy().tobytes()
+        except Exception:  # pragma: no cover - defensive path
+            return repr(value).encode("utf-8", errors="ignore")
+
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+
+    if isinstance(value, str):
+        return value.encode("utf-8")
+
+    if isinstance(value, (int, float, bool)):
+        return str(value).encode("utf-8")
+
+    if isinstance(value, Mapping):
+        chunks = []
+        for key in sorted(value.keys(), key=str):
+            chunks.append(str(key).encode("utf-8"))
+            chunks.append(_value_to_bytes(value[key]))
+        return b"".join(chunks)
+
+    if isinstance(value, Iterable):
+        return b"".join(_value_to_bytes(item) for item in value)
+
+    return repr(value).encode("utf-8", errors="ignore")
+
+
+def compute_state_dict_hash(state: Mapping[str, Any]) -> str:
+    """Return a SHA-256 hash for ``state`` using sorted keys and tensor bytes."""
+
+    if torch is None:  # pragma: no cover - optional dependency
+        raise ImportError("PyTorch is required for checkpoint hashing")
+
+    digest = hashlib.sha256()
+    for key in sorted(state.keys(), key=str):
+        digest.update(str(key).encode("utf-8"))
+        try:
+            digest.update(_value_to_bytes(state[key]))
+        except Exception:  # pragma: no cover - defensive
+            digest.update(repr(state[key]).encode("utf-8", errors="ignore"))
+    return digest.hexdigest()
+
+
+def extract_encoder_hash(state: Mapping[str, Any] | None) -> Optional[str]:
+    """Extract an encoder hash from a checkpoint payload when available."""
+
+    if not isinstance(state, Mapping):
+        return None
+
+    hash_value = state.get("encoder_hash")
+    if isinstance(hash_value, str) and hash_value:
+        return hash_value
+
+    hashes = state.get("hashes") if isinstance(state, Mapping) else None
+    if isinstance(hashes, Mapping):
+        candidate = hashes.get("encoder")
+        if isinstance(candidate, str) and candidate:
+            return candidate
+
+    return None
+
+
 def save_checkpoint(path: str, **states: Any) -> None:
     """Save arbitrary state dicts (e.g., encoder=..., optimizer=..., epoch=int)."""
+
     if torch is None:  # pragma: no cover - optional dependency
         raise ImportError("PyTorch is required for checkpointing")
+
+    payload = dict(states)
+    encoder_state = payload.get("encoder")
+    if isinstance(encoder_state, Mapping) and encoder_state:
+        try:
+            encoder_hash = compute_state_dict_hash(encoder_state)
+        except Exception:  # pragma: no cover - defensive logging
+            logger.exception("Failed to hash encoder state for %s", path)
+        else:
+            payload["encoder_hash"] = encoder_hash
+            hashes_bucket = payload.get("hashes") if isinstance(payload.get("hashes"), dict) else {}
+            hashes_bucket["encoder"] = encoder_hash
+            payload["hashes"] = hashes_bucket
+            logger.info(
+                "[encoder_hash]=%s source=export path=%s keys=%d",
+                encoder_hash,
+                os.path.abspath(path),
+                len(encoder_state),
+            )
+
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    torch.save(states, path)
+    torch.save(payload, path)
 
 
 def load_checkpoint(path: str) -> Dict[str, Any]:
@@ -24,12 +119,6 @@ def load_checkpoint(path: str) -> Dict[str, Any]:
     if not os.path.exists(path):
         raise FileNotFoundError(path)
     return torch.load(path, map_location="cpu")
-
-
-# scripts/utils/checkpoint.py
-import os, shutil, logging, torch
-logger = logging.getLogger(__name__)
-from collections.abc import Mapping
 
 
 def _copy_within_shape(target, source):
@@ -54,6 +143,7 @@ def _copy_within_shape(target, source):
         return None
     return new_tensor
 
+
 def _prepare_state_dict_for_module(module, state_dict: Mapping[str, Any]):
     """Return a copy of ``state_dict`` aligned with ``module.state_dict()`` shapes."""
 
@@ -63,11 +153,17 @@ def _prepare_state_dict_for_module(module, state_dict: Mapping[str, Any]):
     try:
         current = module.state_dict()
     except Exception:
-        logger.exception("Could not inspect module %s state_dict(); falling back to raw load.", type(module).__name__)
+        logger.exception(
+            "Could not inspect module %s state_dict(); falling back to raw load.",
+            type(module).__name__,
+        )
         return None, [], []
 
     if not isinstance(current, Mapping):
-        logger.warning("Module %s state_dict() did not return a Mapping; skipping shape alignment.", type(module).__name__)
+        logger.warning(
+            "Module %s state_dict() did not return a Mapping; skipping shape alignment.",
+            type(module).__name__,
+        )
         return None, [], []
 
     try:
@@ -167,10 +263,13 @@ def load_state_dict_forgiving(module, state_dict):
     if dropped:
         logger.warning("Dropped checkpoint tensors with incompatible shapes: %s", "; ".join(dropped))
     return res
-    
-def resolve_ckpt_path(primary: str | None,
-                      ckpt_dir: str | None = None,
-                      default_name: str = "head.pt") -> str:
+
+
+def resolve_ckpt_path(
+    primary: str | None,
+    ckpt_dir: str | None = None,
+    default_name: str = "head.pt",
+) -> str:
     """
     Prefer `primary` if it exists; otherwise fall back to `<ckpt_dir>/<default_name>`.
     Raise FileNotFoundError with a clear message if neither exists.
@@ -183,14 +282,19 @@ def resolve_ckpt_path(primary: str | None,
         if os.path.isfile(fb):
             cand = fb
     if not cand:
-        raise FileNotFoundError(f"Checkpoint not found: {primary!r} (fallback: {ckpt_dir}/{default_name})")
+        raise FileNotFoundError(
+            f"Checkpoint not found: {primary!r} (fallback: {ckpt_dir}/{default_name})"
+        )
     return cand
 
-def safe_load_checkpoint(primary: str | None,
-                         ckpt_dir: str | None = None,
-                         default_name: str = "head.pt",
-                         map_location="cpu",
-                         allow_missing: bool = True):
+
+def safe_load_checkpoint(
+    primary: str | None,
+    ckpt_dir: str | None = None,
+    default_name: str = "head.pt",
+    map_location="cpu",
+    allow_missing: bool = True,
+):
     """
     Try to load a checkpoint from a list of candidates:
       1) primary
@@ -198,6 +302,10 @@ def safe_load_checkpoint(primary: str | None,
     Returns (state, path). If nothing is readable and allow_missing=True,
     returns ({}, None) and logs a warning (used by smoke/tests).
     """
+
+    if torch is None:  # pragma: no cover - optional dependency
+        raise ImportError("PyTorch is required for checkpointing")
+
     candidates = []
     if primary:
         candidates.append(primary)
@@ -217,14 +325,18 @@ def safe_load_checkpoint(primary: str | None,
     # Nothing loaded:
     msg = " / ".join(repr(c) for c in candidates) if candidates else "<none>"
     if allow_missing:
-        logger.warning("Could not load checkpoint from %s; proceeding with random init (test/smoke mode).", msg)
+        logger.warning(
+            "Could not load checkpoint from %s; proceeding with random init (test/smoke mode).",
+            msg,
+        )
         return {"encoder": {}}, None
     raise FileNotFoundError(f"Checkpoint not found or unreadable. Tried: {msg}. Errors: {errors}")
 
 
 def safe_link_or_copy(src: str, dst: str) -> str:
     """Create dst pointing at src. Prefer symlink; fall back to hardlink, then copy. Returns mode."""
-    src = os.path.abspath(src); dst = os.path.abspath(dst)
+    src = os.path.abspath(src)
+    dst = os.path.abspath(dst)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     try:
         if os.path.lexists(dst):
@@ -232,10 +344,13 @@ def safe_link_or_copy(src: str, dst: str) -> str:
     except FileNotFoundError:
         pass
     try:
-        os.symlink(src, dst); return "symlink"
+        os.symlink(src, dst)
+        return "symlink"
     except Exception:
         pass
     try:
-        os.link(src, dst); return "hardlink"
+        os.link(src, dst)
+        return "hardlink"
     except Exception:
-        shutil.copy2(src, dst); return "copy"
+        shutil.copy2(src, dst)
+        return "copy"

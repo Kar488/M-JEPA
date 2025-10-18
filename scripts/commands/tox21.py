@@ -194,6 +194,10 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         start_log.update(target_payload)
         _wandb_log_safe(wb, start_log)
 
+        class_weights_arg = getattr(args, "class_weights", None)
+        if class_weights_arg is None:
+            class_weights_arg = "auto"
+
         result = run_tox21_case_study(
             csv_path=getattr(args, "csv"),
             task_name=getattr(args, "task"),
@@ -201,6 +205,10 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             pretrain_epochs=getattr(args, "pretrain_epochs", 5),
             finetune_epochs=getattr(args, "finetune_epochs", 20),
             lr=getattr(args, "lr", 1e-3),
+            head_lr=getattr(args, "head_lr", None),
+            encoder_lr=getattr(args, "encoder_lr", None),
+            weight_decay=getattr(args, "weight_decay", None),
+            class_weights=class_weights_arg,
             hidden_dim=getattr(args, "hidden_dim", 128),
             num_layers=getattr(args, "num_layers", 2),
             gnn_type=getattr(args, "gnn_type", "edge_mpnn"),
@@ -221,9 +229,20 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             strict_encoder_config=getattr(args, "strict_encoder_config", False),
             encoder_source_override=getattr(args, "encoder_source", None),
             evaluation_mode=eval_mode,
+            allow_shape_coercion=getattr(args, "allow_shape_coercion", False),
+            allow_equal_hash=getattr(args, "allow_equal_hash", False),
+            verify_match_threshold=float(getattr(args, "verify_match_threshold", 0.98)),
+            finetune_patience=getattr(args, "patience", None),
         )
 
         diagnostics = getattr(result, "diagnostics", {}) or {}
+        encoder_hash = getattr(result, "encoder_hash", None)
+        baseline_hash = getattr(result, "baseline_encoder_hash", None)
+        encoder_load = getattr(result, "encoder_load", {}) or {}
+        split_summary = getattr(result, "split_summary", {}) or diagnostics.get("split_counts", {})
+        calibrator_state = getattr(result, "calibrator_state", None)
+        if split_summary and "split_counts" not in diagnostics:
+            diagnostics["split_counts"] = split_summary
 
         evaluations, rule_from_result = _coerce_case_study_result(result)
         if not evaluations:
@@ -294,6 +313,15 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         summary_payload["encoder_checkpoint"] = getattr(args, "encoder_checkpoint", None)
         summary_payload["tox21_gate_passed"] = bool(gate_passed_flag)
         summary_payload.update(target_payload)
+        summary_payload["allow_shape_coercion"] = bool(getattr(args, "allow_shape_coercion", False))
+        summary_payload["allow_equal_hash"] = bool(getattr(args, "allow_equal_hash", False))
+        summary_payload["verify_match_threshold"] = float(getattr(args, "verify_match_threshold", 0.98))
+        if encoder_hash:
+            summary_payload["encoder_hash"] = encoder_hash
+        if baseline_hash:
+            summary_payload["baseline_encoder_hash"] = baseline_hash
+        if split_summary:
+            summary_payload["split_summary"] = split_summary
         if gate_metric_name is not None and "benchmark_metric" not in summary_payload:
             summary_payload["benchmark_metric"] = gate_metric_name
         if gate_threshold is not None and "benchmark_threshold" not in summary_payload:
@@ -383,6 +411,14 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "diagnostics": diagnostics,
             "evaluation_mode": eval_mode,
             "encoder_checkpoint": getattr(args, "encoder_checkpoint", None),
+            "encoder_hash": encoder_hash,
+            "baseline_encoder_hash": baseline_hash,
+            "encoder_load": encoder_load,
+            "split_summary": split_summary,
+            "calibrator": calibrator_state,
+            "allow_shape_coercion": bool(getattr(args, "allow_shape_coercion", False)),
+            "allow_equal_hash": bool(getattr(args, "allow_equal_hash", False)),
+            "verify_match_threshold": float(getattr(args, "verify_match_threshold", 0.98)),
         }
 
         for eval_res in evaluations:
@@ -440,6 +476,56 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 manifest_path = getattr(eval_res, "manifest_path", None)
                 if manifest_path:
                     writer.writerow([name, "encoder_manifest", manifest_path])
+
+        calibrator_path = os.path.join(report_dir, f"{stem}_calibrator.json")
+        with open(calibrator_path, "w", encoding="utf-8") as cal_file:
+            json.dump(calibrator_state or {}, cal_file, indent=2, sort_keys=True)
+            cal_file.write("\n")
+        _wandb_log_safe(wb, {"calibrator_path": calibrator_path})
+
+        manifest_payload = {
+            "csv": os.path.abspath(getattr(args, "csv")),
+            "task": args.task,
+            "evaluation_mode": eval_mode,
+            "encoder": {
+                "checkpoint": getattr(args, "encoder_checkpoint", None),
+                "hash": encoder_hash,
+                "baseline_hash": baseline_hash,
+                "load": encoder_load,
+            },
+            "splits": split_summary,
+            "metrics": {k: float(v) for k, v in (getattr(primary, "metrics", {}) or {}).items()},
+            "calibrator": calibrator_state,
+            "defaults": {
+                "pretrain_epochs": getattr(args, "pretrain_epochs", None),
+                "finetune_epochs": getattr(args, "finetune_epochs", None),
+                "batch_size": getattr(args, "batch_size", None),
+                "head_lr": getattr(args, "head_lr", None),
+                "encoder_lr": getattr(args, "encoder_lr", None),
+                "weight_decay": getattr(args, "weight_decay", None),
+                "class_weights": getattr(args, "class_weights", None),
+                "num_workers": getattr(args, "num_workers", None),
+                "prefetch_factor": getattr(args, "prefetch_factor", None),
+                "pin_memory": getattr(args, "pin_memory", None),
+                "persistent_workers": getattr(args, "persistent_workers", None),
+                "bf16": getattr(args, "bf16", None),
+                "bf16_head": getattr(args, "bf16_head", None),
+                "allow_shape_coercion": bool(getattr(args, "allow_shape_coercion", False)),
+                "allow_equal_hash": bool(getattr(args, "allow_equal_hash", False)),
+                "verify_match_threshold": float(getattr(args, "verify_match_threshold", 0.98)),
+            },
+            "reports": {
+                "summary_json": json_path,
+                "summary_csv": csv_path,
+                "calibrator_json": calibrator_path,
+            },
+        }
+
+        manifest_path = os.path.join(report_dir, "run_manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as manifest_file:
+            json.dump(manifest_payload, manifest_file, indent=2, sort_keys=True)
+            manifest_file.write("\n")
+        json_payload["run_manifest"] = manifest_path
 
         try:
             stage_dir = os.path.join(report_dir, "stage-outputs")

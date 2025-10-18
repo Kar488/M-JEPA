@@ -210,7 +210,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     """Fine‑tune a linear head on labelled data across multiple seeds resume & checkpoints."""
     logger.info("Starting finetune with args: %s", args)
 
-    from utils.checkpoint import load_checkpoint, save_checkpoint
+    from utils.checkpoint import compute_state_dict_hash, load_checkpoint, save_checkpoint
 
     try:
         from ..utils.checkpoint import (
@@ -935,6 +935,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         summary_mode,
         _fmt_metric(summary_metric_value),
     )
+    export_hash: Optional[str] = None
     if encoder_was_trainable and seed_best_paths:
         best_candidate = seed_best_paths.get(primary_seed) if primary_seed is not None else None
         if not best_candidate:
@@ -959,6 +960,11 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     alias = _sanitize_alias(str(alias_source))
                     export_name = f"encoder_ft:{alias}"
                     export_path = os.path.join(args.ckpt_dir, f"encoder_ft_{alias}.pt")
+                    encoder_hash = None
+                    try:
+                        encoder_hash = compute_state_dict_hash(enc_state)
+                    except Exception:
+                        logger.exception("Failed to compute hash for fine-tuned encoder export")
                     save_checkpoint(export_path, encoder=enc_state)
                     try:
                         from utils.checkpoint import safe_link_or_copy
@@ -982,6 +988,9 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                             )
                         except Exception:
                             pass
+                    if encoder_hash:
+                        export_hash = encoder_hash
+                        logger.info("[encoder_hash]=%s source=finetune_export path=%s", encoder_hash, export_path)
             except Exception:
                 logger.exception(
                     "Failed to export fine-tuned encoder from %s", best_candidate
@@ -1017,6 +1026,8 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             "artifact": export_name,
             "source_seed": primary_seed,
         }
+        if export_hash:
+            stage_payload["encoder_finetuned"]["hash"] = export_hash
     _record_finetune_stage_outputs(stage_payload)
 
 

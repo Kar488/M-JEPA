@@ -8,8 +8,7 @@ import torch
 
 
 def test_tox21_case_study_smoke(monkeypatch):
-    
-    
+
     unsup = types.ModuleType("training.unsupervised")
     unsup.train_jepa = lambda *args, **kwargs: {}
     monkeypatch.setitem(sys.modules, "training.unsupervised", unsup)
@@ -65,7 +64,7 @@ def test_evaluate_case_study_handles_probability_mismatch(monkeypatch):
 
     monkeypatch.setattr(case_study.np, "resize", fake_resize)
 
-    mean_true, mean_rand, mean_pred, baselines, metrics = case_study._evaluate_case_study(
+    mean_true, mean_rand, mean_pred, baselines, metrics, calibrator = case_study._evaluate_case_study(
         dataset=dataset,
         encoder=None,
         head=None,
@@ -113,7 +112,7 @@ def test_evaluate_case_study_handles_resize_failure(monkeypatch):
 
     monkeypatch.setattr(case_study.np, "resize", failing_resize)
 
-    mean_true, mean_rand, mean_pred, baselines, metrics = case_study._evaluate_case_study(
+    mean_true, mean_rand, mean_pred, baselines, metrics, calibrator = case_study._evaluate_case_study(
         dataset=dataset,
         encoder=None,
         head=None,
@@ -156,7 +155,7 @@ def test_evaluate_case_study_handles_empty_predictions(monkeypatch):
 
     monkeypatch.setattr(case_study, "_predict_logits_probs_in_chunks", fake_predict)
 
-    mean_true, mean_rand, mean_pred, baselines, metrics = case_study._evaluate_case_study(
+    mean_true, mean_rand, mean_pred, baselines, metrics, calibrator = case_study._evaluate_case_study(
         dataset=dataset,
         encoder=None,
         head=None,
@@ -260,3 +259,47 @@ def test_case_study_frozen_finetuned_trains_linear_probe(monkeypatch, caplog):
     encoder_grad_flags = calls.get("encoder_requires_grad") or []
     assert encoder_grad_flags and all(flag is False for flag in encoder_grad_flags)
     assert any("train_head=yes" in message for message in caplog.messages)
+
+
+def test_case_study_passes_head_lr_and_weight_decay(tmp_path, monkeypatch):
+    import experiments.case_study as case_study
+
+    dummy_ckpt = tmp_path / "encoder.pt"
+    dummy_ckpt.write_text("stub", encoding="utf-8")
+
+    monkeypatch.setattr(case_study, "safe_load_checkpoint", lambda *args, **kwargs: ({"encoder": {}}, {}))
+    monkeypatch.setattr(case_study, "_load_encoder_strict", lambda *args, **kwargs: {"hash": "stub", "matched_ratio": 1.0})
+    monkeypatch.setattr(case_study, "load_state_dict_forgiving", lambda *args, **kwargs: None)
+
+    captured: dict[str, object] = {}
+
+    def fake_train_linear_head(*, dataset, encoder, lr, head_lr, encoder_lr, optimizer=None, head=None, **kwargs):
+        captured["lr"] = lr
+        captured["head_lr"] = head_lr
+        captured["encoder_lr"] = encoder_lr
+        captured["optimizer"] = optimizer
+        captured["head"] = head
+        head_module = head or torch.nn.Linear(getattr(encoder, "hidden_dim", 32), 1)
+        return {"head": head_module, "train/batches": 1.0}
+
+    monkeypatch.setattr(case_study, "train_linear_head", fake_train_linear_head)
+
+    result = case_study.run_tox21_case_study(
+        csv_path="samples/tox21_mini.csv",
+        task_name="NR-AR",
+        encoder_checkpoint=str(dummy_ckpt),
+        evaluation_mode="frozen_finetuned",
+        head_lr=2e-3,
+        encoder_lr=5e-4,
+        weight_decay=1e-2,
+    )
+
+    assert result.evaluations, "expected evaluations to be produced"
+    assert captured["lr"] == pytest.approx(2e-3)
+    assert captured["head_lr"] == pytest.approx(2e-3)
+    assert captured["encoder_lr"] == pytest.approx(5e-4)
+    assert isinstance(captured["optimizer"], torch.optim.AdamW)
+    assert isinstance(captured["head"], torch.nn.Module)
+    opt = captured["optimizer"]
+    assert isinstance(opt, torch.optim.AdamW)
+    assert opt.param_groups[0]["weight_decay"] == pytest.approx(1e-2)
