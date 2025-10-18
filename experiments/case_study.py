@@ -17,6 +17,7 @@ import os
 import random
 import sys
 import types
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
@@ -46,10 +47,22 @@ except Exception:  # pragma: no cover - fallback when scripts package unavailabl
     resolve_metric_threshold = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - optional dependency
-    from utils.checkpoint import load_state_dict_forgiving, safe_load_checkpoint
+    from utils.checkpoint import (
+        compute_state_dict_hash,
+        extract_encoder_hash,
+        load_state_dict_forgiving,
+        safe_load_checkpoint,
+    )
+    try:  # pragma: no cover - optional dependency
+        from utils.checkpoint import _prepare_state_dict_for_module  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover - fall back when helper unavailable
+        _prepare_state_dict_for_module = None  # type: ignore[assignment]
 except Exception:  # pragma: no cover - fallback for environments without checkpoint helpers
     load_state_dict_forgiving = None  # type: ignore[assignment]
     safe_load_checkpoint = None  # type: ignore[assignment]
+    compute_state_dict_hash = None  # type: ignore[assignment]
+    extract_encoder_hash = None  # type: ignore[assignment]
+    _prepare_state_dict_for_module = None  # type: ignore[assignment]
 
 from models.ema import EMA
 from models.encoder import GNNEncoder
@@ -252,12 +265,31 @@ class EvaluationResult:
 
 
 @dataclass
+class EncoderLoadSummary:
+    """Diagnostic information about encoder weight loading."""
+
+    matched_ratio: float
+    matched: int
+    total: int
+    missing: List[str] = field(default_factory=list)
+    unexpected: List[str] = field(default_factory=list)
+    resized: List[str] = field(default_factory=list)
+    dropped: List[str] = field(default_factory=list)
+    shape_mismatch: List[str] = field(default_factory=list)
+
+
+@dataclass
 class CaseStudyResult:
     """Container returned by :func:`run_tox21_case_study`."""
 
     evaluations: List[EvaluationResult]
     threshold_rule: Optional["BenchmarkRule"] = None
     diagnostics: Dict[str, Any] = field(default_factory=dict)
+    encoder_hash: Optional[str] = None
+    baseline_encoder_hash: Optional[str] = None
+    encoder_load: Dict[str, Any] = field(default_factory=dict)
+    calibrator_state: Optional[Dict[str, Any]] = None
+    split_summary: Dict[str, Any] = field(default_factory=dict)
 
 
 def _to_list(x: Any) -> List[Any]:
@@ -301,6 +333,184 @@ def _compute_met_benchmark(metric_name: Optional[str], value: Optional[float], t
     if _metric_is_higher_better(metric_name):
         return bool(value >= threshold)
     return bool(value <= threshold)
+
+
+def _shape_tuple(value: Any) -> Optional[Tuple[int, ...]]:
+    shape = getattr(value, "shape", None)
+    if shape is None:
+        return None
+    try:
+        return tuple(int(dim) for dim in shape)
+    except Exception:
+        return None
+
+
+def _fmt_shape(shape: Optional[Tuple[int, ...]]) -> str:
+    if shape is None:
+        return "<none>"
+    return str(tuple(int(dim) for dim in shape))
+
+
+def _summarise_keys(
+    keys: List[str],
+    module_shapes: Dict[str, Optional[Tuple[int, ...]]],
+    incoming_shapes: Dict[str, Optional[Tuple[int, ...]]],
+    limit: int = 10,
+) -> List[str]:
+    items: List[str] = []
+    for key in keys[:limit]:
+        exp_shape = _fmt_shape(module_shapes.get(key))
+        inc_shape = _fmt_shape(incoming_shapes.get(key))
+        if inc_shape == "<none>":
+            items.append(f"{key} (expected={exp_shape})")
+        else:
+            items.append(f"{key} (expected={exp_shape} got={inc_shape})")
+    if len(keys) > limit:
+        items.append(f"...(+{len(keys) - limit} more)")
+    return items
+
+
+def _summarise_unexpected(
+    keys: List[str],
+    incoming_shapes: Dict[str, Optional[Tuple[int, ...]]],
+    limit: int = 10,
+) -> List[str]:
+    items: List[str] = []
+    for key in keys[:limit]:
+        inc_shape = _fmt_shape(incoming_shapes.get(key))
+        if inc_shape == "<none>":
+            items.append(key)
+        else:
+            items.append(f"{key} (shape={inc_shape})")
+    if len(keys) > limit:
+        items.append(f"...(+{len(keys) - limit} more)")
+    return items
+
+
+def _load_encoder_strict(
+    module: torch.nn.Module,
+    raw_state: Mapping[str, Any],
+    *,
+    allow_shape_coercion: bool,
+    verify_match_threshold: float,
+    hidden_dim: int,
+    ckpt_path: Optional[str],
+) -> Dict[str, Any]:
+    if not isinstance(raw_state, Mapping):
+        raise TypeError("Encoder state must be a mapping for strict load")
+
+    module_state = module.state_dict()
+    total = len(module_state)
+    module_shapes = {k: _shape_tuple(v) for k, v in module_state.items()}
+    incoming_shapes = {k: _shape_tuple(v) for k, v in raw_state.items()}
+
+    unexpected = sorted(k for k in raw_state.keys() if k not in module_state)
+    prepared_state: Mapping[str, Any] | Dict[str, Any]
+    prepared_state = dict(raw_state)
+    resized: List[str] = []
+    dropped: List[str] = []
+    shape_mismatch: List[str] = []
+
+    if allow_shape_coercion:
+        if _prepare_state_dict_for_module is not None:
+            prepared_candidate, resized, dropped = _prepare_state_dict_for_module(module, raw_state)
+            if prepared_candidate is not None:
+                prepared_state = prepared_candidate
+        else:
+            logger.warning(
+                "allow_shape_coercion=True but alignment helper unavailable; proceeding without shape adjustment."
+            )
+        if resized or dropped:
+            logger.warning(
+                "Shape coercion applied during encoder load: resized=%d dropped=%d",
+                len(resized),
+                len(dropped),
+            )
+    else:
+        prepared_state = dict(raw_state)
+        for key in list(prepared_state.keys()):
+            if key not in module_shapes:
+                continue
+            exp_shape = module_shapes.get(key)
+            inc_shape = incoming_shapes.get(key)
+            if exp_shape != inc_shape:
+                shape_mismatch.append(f"{key}: {_fmt_shape(inc_shape)} -> {_fmt_shape(exp_shape)}")
+                prepared_state.pop(key, None)
+
+    try:
+        load_result = module.load_state_dict(prepared_state, strict=False)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to load encoder weights from {ckpt_path or '<checkpoint>'}: {exc}"
+        ) from exc
+
+    missing = sorted(getattr(load_result, "missing_keys", []) or [])
+    unexpected_after = sorted(getattr(load_result, "unexpected_keys", []) or [])
+    unexpected_combined = sorted(dict.fromkeys(unexpected + unexpected_after))
+
+    matched = total - len(missing)
+    ratio = matched / total if total else 1.0
+
+    checkpoint_hash = None
+    if compute_state_dict_hash is not None:
+        try:
+            checkpoint_hash = compute_state_dict_hash(raw_state)
+        except Exception:
+            logger.exception("Failed to compute encoder hash during load")
+
+    logger.info(
+        "[enc_load] matched=%.1f%% (matched/total=%d/%d) missing=%d, unexpected=%d; hidden_dim=%s; hash=%s",
+        ratio * 100.0,
+        matched,
+        total,
+        len(missing),
+        len(unexpected_combined),
+        hidden_dim,
+        checkpoint_hash or "<unknown>",
+    )
+
+    if shape_mismatch and not allow_shape_coercion:
+        preview = ", ".join(shape_mismatch[:10])
+        raise RuntimeError(
+            "Encoder checkpoint has incompatible tensor shapes (first mismatches: %s). "
+            "Set allow_shape_coercion=true to permit alignment." % preview
+        )
+
+    if ratio < verify_match_threshold:
+        diff_parts: List[str] = []
+        if missing:
+            diff_parts.append(
+                "missing=" + ", ".join(_summarise_keys(missing, module_shapes, incoming_shapes))
+            )
+        if unexpected_combined:
+            diff_parts.append(
+                "unexpected="
+                + ", ".join(_summarise_unexpected(unexpected_combined, incoming_shapes))
+            )
+        if shape_mismatch:
+            diff_parts.append("shape_mismatch=" + ", ".join(shape_mismatch[:10]))
+        raise RuntimeError(
+            "Encoder checkpoint mismatch: matched_ratio=%.3f < %.3f (%s)"
+            % (ratio, verify_match_threshold, "; ".join(diff_parts) or "no detail")
+        )
+
+    summary: Dict[str, Any] = {
+        "matched_ratio": ratio,
+        "matched": matched,
+        "total": total,
+        "missing": missing,
+        "unexpected": unexpected_combined,
+        "shape_mismatch": shape_mismatch,
+        "resized": resized,
+        "dropped": dropped,
+    }
+    if checkpoint_hash:
+        summary["hash"] = checkpoint_hash
+    if ckpt_path:
+        summary["checkpoint"] = os.path.abspath(ckpt_path)
+    summary["allow_shape_coercion"] = bool(allow_shape_coercion)
+    summary["verify_match_threshold"] = float(verify_match_threshold)
+    return summary
 
 
 def _load_manifest_config(manifest_path: Optional[str]) -> Dict[str, Any]:
@@ -458,21 +668,48 @@ def _evaluate_case_study(
     if test_probs_np.ndim > 1:
         test_probs_np = test_probs_np[:, 0]
 
+    calibrator_info: Dict[str, Any] = {
+        "enabled": bool(calibrate),
+        "fit_split": "val",
+    }
     calibrated_probs = test_probs_np
     if calibrate:
+        calibrator_info["status"] = "skipped"
         try:
             val_y = all_labels[val_idx_arr].astype(float)
             mask = (~np.isnan(val_y)) & np.isfinite(val_logits_np[:, 0])
             yv = val_y[mask].astype(int)
             Xv = np.nan_to_num(val_logits_np[mask], nan=0.0, posinf=1e6, neginf=-1e6)
+            calibrator_info["n_candidates"] = int(mask.sum())
             if yv.size > 1 and np.unique(yv).size > 1:
                 platt = LogisticRegression(solver="lbfgs", max_iter=1000, class_weight="balanced")
                 platt.fit(Xv, yv)
                 Xt = np.nan_to_num(test_logits_np, nan=0.0, posinf=1e6, neginf=-1e6)
                 calibrated_probs = platt.predict_proba(Xt)[:, 1]
+                calibrator_info.update(
+                    {
+                        "status": "fitted",
+                        "type": "platt",
+                        "class_weight": "balanced",
+                        "n_samples": int(yv.size),
+                        "coef": platt.coef_.reshape(-1).astype(float).tolist(),
+                        "intercept": float(platt.intercept_.reshape(-1)[0]),
+                    }
+                )
+            else:
+                calibrator_info.update(
+                    {
+                        "status": "insufficient_variance",
+                        "reason": "need_two_classes",
+                        "n_samples": int(yv.size),
+                    }
+                )
         except Exception as exc:  # pragma: no cover - calibration optional
             logger.warning("Calibration skipped due to error: %s", exc)
             calibrated_probs = test_probs_np
+            calibrator_info.update({"status": "error", "error": str(exc)})
+    else:
+        calibrator_info["status"] = "disabled"
 
     expected_len = int(test_idx_arr.size)
     calibrated_probs = np.asarray(calibrated_probs, dtype=float).reshape(-1)
@@ -620,7 +857,7 @@ def _evaluate_case_study(
                 remain = test_idx_arr[mask]
                 baseline_means[name] = float(np.mean(all_labels[remain])) if remain.size else 0.0
 
-    return mean_true, mean_rand, mean_pred, baseline_means, metrics
+    return mean_true, mean_rand, mean_pred, baseline_means, metrics, calibrator_info
 
 
 def _import_graphdataset():
@@ -637,6 +874,10 @@ def run_tox21_case_study(
     pretrain_epochs: int = 5,
     finetune_epochs: int = 20,
     lr: float = 1e-3,
+    head_lr: Optional[float] = None,
+    encoder_lr: Optional[float] = None,
+    weight_decay: Optional[float] = None,
+    class_weights: Any = "auto",
     hidden_dim: int = 256,
     num_layers: int = 3,
     gnn_type: str = "mpnn",
@@ -664,6 +905,9 @@ def run_tox21_case_study(
     bf16_head: Optional[bool] = None,
     encoder_source_override: Optional[str] = None,
     evaluation_mode: str = "pretrain_frozen",
+    allow_shape_coercion: bool = False,
+    allow_equal_hash: bool = False,
+    verify_match_threshold: float = 0.98,
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
 
@@ -697,6 +941,11 @@ def run_tox21_case_study(
             encoder_manifest=os.path.abspath(encoder_manifest)
             if encoder_manifest
             else None,
+        )
+    else:
+        diagnostics["csv_path"] = os.path.abspath(csv_path)
+        diagnostics["encoder_checkpoint"] = (
+            os.path.abspath(encoder_checkpoint) if encoder_checkpoint else None
         )
 
     set_seed(seed)
@@ -748,8 +997,6 @@ def run_tox21_case_study(
     threshold_rule = _resolve_threshold_rule(dataset_name, task_name)
 
     def _split_summary(indices: List[int]) -> Dict[str, int]:
-        if not ci_diag:
-            return {}
         if not indices:
             return {"size": 0, "finite": 0, "positives": 0}
         arr = all_labels[np.asarray(indices, dtype=int)]
@@ -791,6 +1038,30 @@ def run_tox21_case_study(
         )
         random.setstate(rand_state)
         np.random.set_state(np_state)
+
+    split_summary = {
+        "train": _split_summary(train_idx),
+        "val": _split_summary(val_idx),
+        "test": _split_summary(test_idx),
+    }
+    diagnostics["split_counts"] = split_summary
+    for split_name, stats in split_summary.items():
+        logger.info(
+            "Split %s: size=%d finite=%d positives=%d",
+            split_name,
+            stats.get("size", 0),
+            stats.get("finite", 0),
+            stats.get("positives", 0),
+        )
+    if ci_diag:
+        _ci_log(
+            "tox21 dataset split",
+            num_molecules=diagnostics.get("num_molecules", 0),
+            task_count=diagnostics.get("task_count", 0),
+            train=split_summary.get("train", {}),
+            val=split_summary.get("val", {}),
+            test=split_summary.get("test", {}),
+        )
 
     input_dim = dataset.graphs[0].x.shape[1]
     edge_dim = 0
@@ -843,15 +1114,17 @@ def run_tox21_case_study(
                 raise ValueError(
                     f"Encoder configuration mismatch for {key}: CLI={current_value} checkpoint={value}"
                 )
-            if current_value is None or str(current_value) == str(value):
+            if allow_shape_coercion:
+                if current_value is None or str(current_value) == str(value):
+                    final_cfg[key] = value
+                else:
+                    original = cli_cfg.get(key)
+                    if original is not None and key not in mismatch_report:
+                        mismatch_report[key] = (original, value)
+                    final_cfg[key] = value
+            elif current_value is None:
                 final_cfg[key] = value
-                continue
-            if not strict_encoder_config:
-                original = cli_cfg.get(key)
-                if original is not None and key not in mismatch_report:
-                    mismatch_report[key] = (original, value)
-                final_cfg[key] = value
-    if mismatch_report:
+    if mismatch_report and allow_shape_coercion:
         details = ", ".join(
             f"{name} {before}→{after}" for name, (before, after) in mismatch_report.items()
         )
@@ -969,16 +1242,67 @@ def run_tox21_case_study(
     encoder_source = normalized_mode
     eval_name = normalized_mode
 
+    encoder_load_info: Dict[str, Any] = {}
+    encoder_hash: Optional[str] = None
+    baseline_hash: Optional[str] = None
+    if encoder_checkpoint:
+        baseline_hash = None
+        if isinstance(state, Mapping):
+            baseline_hash = extract_encoder_hash(state) if extract_encoder_hash else None
+        if baseline_hash is None and isinstance(manifest_cfg, dict):
+            hashes_block = manifest_cfg.get("hashes") if isinstance(manifest_cfg.get("hashes"), dict) else {}
+            if isinstance(hashes_block, dict):
+                baseline_hash = hashes_block.get("encoder")
+            if baseline_hash is None:
+                manifest_hash = manifest_cfg.get("encoder_hash")
+                baseline_hash = manifest_hash if isinstance(manifest_hash, str) else None
     if enc_state and encoder_checkpoint:
-        if load_state_dict_forgiving is not None:
-            load_state_dict_forgiving(encoder, enc_state)
-        else:
-            encoder.load_state_dict(enc_state, strict=False)
+        encoder_load_info = _load_encoder_strict(
+            encoder,
+            enc_state,
+            allow_shape_coercion=bool(allow_shape_coercion),
+            verify_match_threshold=float(verify_match_threshold),
+            hidden_dim=int(final_hidden_dim),
+            ckpt_path=encoder_checkpoint,
+        )
+        encoder_hash = encoder_load_info.get("hash") if isinstance(encoder_load_info, dict) else None
+        logger.info(
+            "[encoder_hash]=%s source=tox21_load path=%s baseline=%s",
+            encoder_hash or "<unknown>",
+            os.path.abspath(encoder_checkpoint),
+            baseline_hash or "<unknown>",
+        )
     elif encoder_checkpoint and not enc_state:
         logger.warning(
             "Encoder checkpoint %s contained no weights; using random initialisation",
             encoder_checkpoint,
         )
+
+    if baseline_hash is not None and isinstance(baseline_hash, bytes):
+        baseline_hash = baseline_hash.decode("utf-8", errors="ignore")
+
+    fine_tuned_modes = {"frozen_finetuned", "end_to_end"}
+    if (
+        normalized_mode in fine_tuned_modes
+        and encoder_hash
+        and baseline_hash
+        and str(encoder_hash) == str(baseline_hash)
+    ):
+        if not allow_equal_hash:
+            raise RuntimeError(
+                "Fine-tuned evaluation aborted: encoder hash matches baseline hash. "
+                "Set allow_equal_hash=true to bypass."
+            )
+        logger.warning(
+            "allow_equal_hash=true; continuing despite identical encoder hashes (%s).",
+            encoder_hash,
+        )
+
+    diagnostics["encoder_load"] = encoder_load_info
+    diagnostics["encoder_hash"] = encoder_hash
+    diagnostics["baseline_encoder_hash"] = baseline_hash
+    diagnostics["allow_shape_coercion"] = bool(allow_shape_coercion)
+    diagnostics["verify_match_threshold"] = float(verify_match_threshold)
 
     def _freeze_encoder_params() -> None:
         params_fn = getattr(encoder, "parameters", None)
@@ -1050,11 +1374,86 @@ def run_tox21_case_study(
 
     encoder = encoder.to(device)
 
+    try:
+        head_lr_value = float(head_lr) if head_lr is not None else float(lr)
+    except Exception:
+        logger.warning("Failed to parse head_lr=%s; falling back to lr=%s", head_lr, lr)
+        head_lr_value = float(lr)
+    try:
+        encoder_lr_value = float(encoder_lr) if encoder_lr is not None else None
+    except Exception:
+        logger.warning("Failed to parse encoder_lr=%s; treating as unset", encoder_lr, exc_info=True)
+        encoder_lr_value = None
+
+    weight_decay_value: Optional[float] = None
+    if weight_decay is not None:
+        try:
+            weight_decay_value = float(weight_decay)
+        except Exception:
+            logger.warning(
+                "Failed to coerce weight_decay=%s to float; ignoring weight decay", weight_decay, exc_info=True
+            )
+            weight_decay_value = None
+
+    optimizer_for_head: Optional[torch.optim.Optimizer] = None
+    probe_head: Optional[torch.nn.Module] = None
+    if train_probe and weight_decay_value is not None:
+        probe_head = torch.nn.Linear(int(final_hidden_dim), 1)
+        optimizer_for_head = torch.optim.AdamW(  # type: ignore[call-arg]
+            [{"params": probe_head.parameters(), "lr": head_lr_value}],
+            lr=head_lr_value,
+            weight_decay=weight_decay_value,
+        )
+
     bf16_linear = bf16_head if bf16_head is not None else bf16
 
     train_idx_arr = np.asarray(train_idx, dtype=int)
     val_idx_arr = np.asarray(val_idx, dtype=int)
     test_idx_arr = np.asarray(test_idx, dtype=int)
+
+    manual_class_weight: Optional[Dict[int, float]] = None
+    automatic_class_weight = bool(use_pos_weight)
+    if isinstance(class_weights, str):
+        mode = class_weights.strip()
+        if not mode:
+            automatic_class_weight = bool(use_pos_weight)
+        elif mode.startswith("{"):
+            try:
+                parsed = json.loads(mode)
+            except Exception:
+                logger.warning("Failed to parse class_weights JSON; falling back to auto", exc_info=True)
+            else:
+                if isinstance(parsed, Mapping):
+                    try:
+                        manual_class_weight = {int(k): float(v) for k, v in parsed.items()}
+                        automatic_class_weight = False
+                    except Exception:
+                        logger.warning(
+                            "Failed to coerce class_weights JSON mapping; falling back to auto", exc_info=True
+                        )
+                        manual_class_weight = None
+                        automatic_class_weight = bool(use_pos_weight)
+                else:
+                    logger.warning("class_weights JSON must be a mapping; falling back to auto")
+        else:
+            mode_l = mode.lower()
+            if mode_l in {"auto", "balanced"}:
+                automatic_class_weight = True
+            elif mode_l in {"none", "off"}:
+                automatic_class_weight = False
+            else:
+                logger.warning("Unknown class_weights mode '%s'; using auto", mode)
+                automatic_class_weight = True
+    elif isinstance(class_weights, Mapping):
+        try:
+            manual_class_weight = {int(k): float(v) for k, v in class_weights.items()}
+            automatic_class_weight = False
+        except Exception:
+            logger.warning("Failed to coerce class_weights mapping; falling back to auto", exc_info=True)
+            manual_class_weight = None
+            automatic_class_weight = bool(use_pos_weight)
+    else:
+        automatic_class_weight = bool(use_pos_weight)
 
     if ci_diag:
         diagnostics["split_counts"] = {
@@ -1072,7 +1471,9 @@ def run_tox21_case_study(
         )
 
     extra_args: Dict[str, Any] = {}
-    if use_pos_weight and train_idx_arr.size > 0:
+    if manual_class_weight is not None:
+        extra_args["class_weight"] = manual_class_weight
+    elif automatic_class_weight and train_idx_arr.size > 0:
         train_labels = all_labels[train_idx_arr]
         mask = ~np.isnan(train_labels)
         n_pos = int(np.nansum(train_labels[mask]))
@@ -1089,25 +1490,33 @@ def run_tox21_case_study(
     if train_probe:
         # Linear-probe modes train a fresh classifier on top of a frozen encoder to
         # measure representation quality without updating the backbone.
-        clf_metrics = train_linear_head(
-            dataset=dataset,
-            encoder=encoder,
-            task_type="classification",
-            epochs=finetune_epochs,
-            lr=lr,
-            batch_size=32,
-            device=device,
-            patience=int(patience_value),
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-            persistent_workers=persistent_workers,
-            prefetch_factor=prefetch_factor,
-            bf16=bf16_linear,
-            time_budget_mins=finetune_time_budget_mins,
-            use_scaffold=bool(scaffold_split_indices and _HAS_RDKIT),
-            freeze_encoder=True,
+        linear_kwargs: Dict[str, Any] = {
+            "dataset": dataset,
+            "encoder": encoder,
+            "task_type": "classification",
+            "epochs": finetune_epochs,
+            "lr": head_lr_value,
+            "batch_size": 32,
+            "device": device,
+            "patience": int(patience_value),
+            "num_workers": num_workers,
+            "pin_memory": pin_memory,
+            "persistent_workers": persistent_workers,
+            "prefetch_factor": prefetch_factor,
+            "bf16": bf16_linear,
+            "time_budget_mins": finetune_time_budget_mins,
+            "use_scaffold": bool(scaffold_split_indices and _HAS_RDKIT),
+            "freeze_encoder": True,
+            "head_lr": head_lr_value,
+            "encoder_lr": encoder_lr_value,
             **extra_args,
-        )
+        }
+        if optimizer_for_head is not None:
+            linear_kwargs["optimizer"] = optimizer_for_head
+        if probe_head is not None:
+            linear_kwargs["head"] = probe_head
+
+        clf_metrics = train_linear_head(**linear_kwargs)
 
         head = clf_metrics.get("head")
         if head is None:
@@ -1142,7 +1551,14 @@ def run_tox21_case_study(
     encoder.eval()
     head.eval()
 
-    mean_true, mean_rand, mean_pred, baseline_means, metrics = _evaluate_case_study(
+    (
+        mean_true,
+        mean_rand,
+        mean_pred,
+        baseline_means,
+        metrics,
+        calibrator_info,
+    ) = _evaluate_case_study(
         dataset=dataset,
         encoder=encoder,
         head=head,
@@ -1157,6 +1573,15 @@ def run_tox21_case_study(
         seed=seed,
         baseline_embeddings=baseline_embeddings,
         diagnostics=diagnostics if ci_diag else None,
+    )
+
+    diagnostics["calibrator"] = calibrator_info
+    logger.info(
+        "Calibration summary: enabled=%s status=%s split=%s samples=%s",
+        calibrator_info.get("enabled"),
+        calibrator_info.get("status"),
+        calibrator_info.get("fit_split"),
+        calibrator_info.get("n_samples", calibrator_info.get("n_candidates")),
     )
 
     benchmark_metric = threshold_rule.metric if threshold_rule is not None else None
@@ -1221,7 +1646,12 @@ def run_tox21_case_study(
     return CaseStudyResult(
         evaluations=[evaluation],
         threshold_rule=threshold_rule,
-        diagnostics=diagnostics if ci_diag else {},
+        diagnostics=diagnostics,
+        encoder_hash=encoder_hash,
+        baseline_encoder_hash=baseline_hash,
+        encoder_load=dict(encoder_load_info),
+        calibrator_state=calibrator_info,
+        split_summary=split_summary,
     )
 
 

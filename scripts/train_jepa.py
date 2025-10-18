@@ -996,6 +996,33 @@ def build_parser() -> argparse.ArgumentParser:
     tox.add_argument("--finetune-epochs", type=int, default=case_cfg.get("finetune_epochs", 20), help="Epochs to train regression head in case study"); 
     tox.add_argument("--tox21-dir", dest="tox21_dir", type=str, required=False, default=None, help="Directory of Tox21 outputs"); 
     tox.add_argument("--learning-rate", dest="lr", type=float, default=1e-3)
+    tox.add_argument(
+        "--head-lr",
+        dest="head_lr",
+        type=float,
+        default=case_cfg.get("head_lr"),
+        help="Learning rate for the linear head during Tox21 fine-tuning (defaults to --learning-rate)",
+    )
+    tox.add_argument(
+        "--encoder-lr",
+        dest="encoder_lr",
+        type=float,
+        default=case_cfg.get("encoder_lr"),
+        help="Learning rate for encoder parameters when they are trainable during Tox21 runs",
+    )
+    tox.add_argument(
+        "--weight-decay",
+        dest="weight_decay",
+        type=float,
+        default=case_cfg.get("weight_decay"),
+        help="Weight decay applied to the Tox21 linear head optimiser",
+    )
+    tox.add_argument(
+        "--class-weights",
+        dest="class_weights",
+        default=case_cfg.get("class_weights"),
+        help="Class weighting policy for Tox21 (auto, none, or JSON mapping)",
+    )
     tox.add_argument("--triage-pct", type=float, default=0.10, help="Fraction of TEST to exclude (e.g., 0.10 = 10%%)")
     tox.add_argument("--no-calibrate", action="store_true", help="Disable Platt scaling on VAL")
     tox.add_argument("--contrastive", action="store_true",
@@ -1033,6 +1060,32 @@ def build_parser() -> argparse.ArgumentParser:
         dest="strict_encoder_config",
         action="store_true",
         help="Require CLI model arguments to match the encoder checkpoint configuration",
+    )
+    tox.add_argument(
+        "--allow-shape-coercion",
+        dest="allow_shape_coercion",
+        action="store_true",
+        help="Permit resizing checkpoint tensors when loading encoders for Tox21 evaluation",
+    )
+    tox.add_argument(
+        "--allow-equal-hash",
+        dest="allow_equal_hash",
+        action="store_true",
+        help="Allow fine-tuned evaluations to proceed even when encoder hash matches the baseline",
+    )
+    tox.add_argument(
+        "--verify-match-threshold",
+        dest="verify_match_threshold",
+        type=float,
+        default=0.98,
+        help="Minimum fraction of encoder parameters that must match when loading checkpoints",
+    )
+    tox.add_argument(
+        "--patience",
+        dest="patience",
+        type=int,
+        default=12,
+        help="Patience (epochs) for Tox21 head training early stopping",
     )
     tox.add_argument(
         "--bf16-head",

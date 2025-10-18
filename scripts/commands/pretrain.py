@@ -270,7 +270,11 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
     import random
 
-    from utils.checkpoint import load_checkpoint, save_checkpoint
+    from utils.checkpoint import (
+        compute_state_dict_hash,
+        load_checkpoint,
+        save_checkpoint,
+    )
 
     # Resume state
     args.ckpt_dir = getattr(args, "ckpt_dir", "ckpts/pretrain")
@@ -508,11 +512,17 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         # Save checkpoints
         ckpt_base = args.output
         os.makedirs(os.path.dirname(ckpt_base) or ".", exist_ok=True)
-        torch.save({"encoder": encoder.state_dict()}, ckpt_base)
+        enc_state = encoder.state_dict()
+        encoder_hash = None
+        try:
+            encoder_hash = compute_state_dict_hash(enc_state)
+        except Exception:
+            logger.exception("Failed to compute encoder hash during export")
+        save_checkpoint(ckpt_base, encoder=enc_state)
         _wb_log(wb, {"jepa_checkpoint": ckpt_base})
         if args.contrastive:
             cont_path = f"{os.path.splitext(ckpt_base)[0]}_contrastive.pt"
-            torch.save({"encoder": cont_encoder.state_dict()}, cont_path)
+            save_checkpoint(cont_path, encoder=cont_encoder.state_dict())
             _wb_log(wb, {"contrastive_checkpoint": cont_path})
 
         # keep a stable pointer the FT step can always find
@@ -648,15 +658,21 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                         pretrain_exp_id = None
                 experiment_root_str = os.path.abspath(str(experiment_root))
 
-                manifest_payload = {
-                    "created_at": timestamp,
-                    "pretrain_exp_id": pretrain_exp_id,
-                    "experiment_root": experiment_root_str,
-                    "paths": manifest_paths,
-                    "hyperparameters": hyperparameters,
-                    "run": _collect_run_metadata(wb),
-                    "metrics": {},
-                }
+            hashes_block: Dict[str, Any] = {}
+            if encoder_hash:
+                hashes_block["encoder"] = encoder_hash
+
+            manifest_payload = {
+                "created_at": timestamp,
+                "pretrain_exp_id": pretrain_exp_id,
+                "experiment_root": experiment_root_str,
+                "paths": manifest_paths,
+                "hyperparameters": hyperparameters,
+                "run": _collect_run_metadata(wb),
+                "metrics": {},
+            }
+            if hashes_block:
+                manifest_payload["hashes"] = hashes_block
                 if manifest_metric is not None:
                     manifest_payload["metrics"]["validation"] = manifest_metric
 
@@ -682,6 +698,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 "manifest_path": str(manifest_path),
                 "manifest_updated": bool(should_write),
             }
+            if encoder_hash:
+                stage_payload["encoder_hash"] = encoder_hash
             if cont_path:
                 stage_payload["contrastive_checkpoint"] = os.path.abspath(cont_path)
             if manifest_metric is not None:
