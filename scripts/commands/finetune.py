@@ -336,6 +336,9 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     metrics_runs: List[Dict[str, float]] = []
     seed_best_paths: Dict[int, str] = {}
     seed_train_steps: Dict[int, float] = {}
+    seed_best_metric: Dict[int, float] = {}
+    seed_best_step: Dict[int, float] = {}
+    seed_best_mode: Dict[int, str] = {}
     encoder_unfreeze_mode: Optional[str] = None
     encoder_was_trainable = False
     cumulative_encoder_batches = 0.0
@@ -619,6 +622,19 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             except Exception:
                 pass
 
+        encoder_lr_display: Optional[float] = None
+        if encoder_params:
+            try:
+                encoder_lr_display = float(encoder_lr or 0.0)
+            except Exception:
+                encoder_lr_display = None
+        logger.info(
+            "[finetune] learning rates: lr_head=%.2e lr_encoder=%s unfreeze_mode=%s",
+            float(head_lr),
+            f"{encoder_lr_display:.2e}" if encoder_lr_display is not None else "<frozen>",
+            effective_mode,
+        )
+
         cache_embeddings = not bool(encoder_params)
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -654,6 +670,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
 
             wrote_best = False
             last_epoch = start_epoch - 1
+            warned_small_loader = False
             for epoch in range(start_epoch, args.epochs):
                 metrics = train_linear_head(
                     dataset=labeled,
@@ -696,6 +713,20 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                         int(loader_batches),
                         max_finetune_batches,
                     )
+                batch_size_hint = int(getattr(args, "batch_size", 0) or 0)
+                if (
+                    not warned_small_loader
+                    and loader_batches > 0
+                    and loader_batches < 6
+                    and batch_size_hint >= 256
+                ):
+                    logger.warning(
+                        "[finetune] seed=%d loader has %d batches with batch_size=%d; consider using 128 or 64 for ≥6 steps per epoch.",
+                        seed,
+                        int(loader_batches),
+                        batch_size_hint,
+                    )
+                    warned_small_loader = True
                 if train_batches > 0:
                     logger.info(
                         "[finetune] seed=%d epoch=%d encoder batches=%d",
@@ -765,6 +796,11 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                         save_checkpoint(best_path, **best_payload)
                         wrote_best = True
                         seed_best_paths[seed] = best_path
+                        seed_best_metric[seed] = float(current)
+                        seed_best_step[seed] = float(
+                            seed_train_steps.get(seed, 0.0)
+                        )
+                        seed_best_mode[seed] = str(current_mode)
                         # optional: stable link at the finetune root
 
                         try:
@@ -847,6 +883,58 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     export_path: Optional[str] = None
     export_name: Optional[str] = None
     primary_seed = seeds[0] if seeds else None
+
+    summary_seed: Optional[int] = None
+    summary_metric_value: Optional[float] = None
+    summary_mode = preferred_mode
+    summary_score: Optional[float] = None
+    for seed, value in seed_best_metric.items():
+        if value is None:
+            continue
+        mode = seed_best_mode.get(seed, preferred_mode)
+        try:
+            val_float = float(value)
+        except Exception:
+            continue
+        score = val_float if mode == "max" else -val_float
+        if summary_score is None or score > summary_score:
+            summary_score = score
+            summary_seed = seed
+            summary_metric_value = val_float
+            summary_mode = mode
+    if summary_seed is None:
+        summary_seed = primary_seed
+        summary_metric_value = (
+            seed_best_metric.get(summary_seed)
+            if summary_seed is not None
+            else None
+        )
+        summary_mode = seed_best_mode.get(summary_seed, preferred_mode)
+    summary_step = (
+        seed_best_step.get(summary_seed)
+        if summary_seed is not None
+        else None
+    )
+    if summary_step is None and summary_seed is not None:
+        summary_step = seed_train_steps.get(summary_seed)
+
+    def _fmt_metric(val: Optional[float]) -> str:
+        if val is None:
+            return "<nan>"
+        try:
+            return f"{float(val):.4f}"
+        except Exception:
+            return "<nan>"
+
+    logger.info(
+        "[finetune] summary: total_encoder_steps=%.1f best_seed=%s best_step=%.1f metric=%s mode=%s value=%s",
+        total_train_batches,
+        summary_seed if summary_seed is not None else "<none>",
+        float(summary_step or 0.0),
+        metric_name,
+        summary_mode,
+        _fmt_metric(summary_metric_value),
+    )
     if encoder_was_trainable and seed_best_paths:
         best_candidate = seed_best_paths.get(primary_seed) if primary_seed is not None else None
         if not best_candidate:
@@ -912,6 +1000,13 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             str(seed): {
                 "best_checkpoint": seed_best_paths.get(seed),
                 "train_batches": float(seed_train_steps.get(seed, 0.0)),
+                "best_metric": float(seed_best_metric.get(seed))
+                if seed in seed_best_metric
+                else None,
+                "best_step": float(seed_best_step.get(seed))
+                if seed in seed_best_step
+                else None,
+                "best_mode": seed_best_mode.get(seed),
             }
             for seed in seeds
         },

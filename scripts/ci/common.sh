@@ -1364,6 +1364,7 @@ finetune_only = {
     "metric": "--metric",
     "patience": "--patience",
     "jepa_encoder": "--jepa-encoder",
+    "max_finetune_batches": "--max-finetune-batches",
 }
 
 benchmark_only = {

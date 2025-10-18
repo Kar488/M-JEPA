@@ -32,6 +32,17 @@ SOURCE="${TOX21_EVALUATION_MODE:-${TOX21_ENCODER_SOURCE:-pretrain_frozen}}"
 MANIFEST_DEFAULT="${PRETRAIN_MANIFEST:-${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json}"
 MANIFEST_PATH="${TOX21_ENCODER_MANIFEST:-$MANIFEST_DEFAULT}"
 
+if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
+  if [[ -z "${FINETUNE_EPOCHS:-}" ]]; then
+    FINETUNE_EPOCHS=18
+  fi
+  if [[ -z "${TOX21_FINETUNE_PATIENCE:-}" ]]; then
+    TOX21_FINETUNE_PATIENCE=10
+  fi
+  export FINETUNE_EPOCHS
+  export TOX21_FINETUNE_PATIENCE
+fi
+
 echo "[tox21] using pretrain experiment id=${PRETRAIN_EXP_ID}" >&2
 echo "[tox21] tox21 env path=${GITHUB_ENV}" >&2
 echo "[tox21] encoder checkpoint source=${SOURCE}" >&2

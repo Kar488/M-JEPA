@@ -67,6 +67,7 @@ finetune:
   finetune_epochs: ${FINETUNE_EPOCHS:-18}    # maps to --epochs for "finetune"
   metric: val_rmse
   patience: 15
+  max_finetune_batches: 0
   no_freeze_encoder: true  # let Vast reruns update encoder weights once the Tox21 gate fails
   use_wandb: true
 
