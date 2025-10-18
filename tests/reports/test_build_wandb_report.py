@@ -22,7 +22,13 @@ def _install_pandas_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "pandas", pandas_stub)
 
 
-def _install_wandb_stub(monkeypatch: pytest.MonkeyPatch, report_cls: type) -> List[Dict[str, Any]]:
+def _install_wandb_stub(
+    monkeypatch: pytest.MonkeyPatch,
+    report_cls: type,
+    *,
+    panels: Any | None = None,
+    blocks: Any | None = None,
+) -> List[Dict[str, Any]]:
     """Install a stub ``wandb_workspaces.reports.v2`` module."""
 
     calls: List[Dict[str, Any]] = []
@@ -36,13 +42,20 @@ def _install_wandb_stub(monkeypatch: pytest.MonkeyPatch, report_cls: type) -> Li
         def save(self) -> None:  # pragma: no cover - simple stub
             return None
 
-    panels = types.SimpleNamespace(
-        RunTable=lambda **kwargs: ("table", kwargs),
-        RunImage=lambda **kwargs: ("image", kwargs),
-    )
-    blocks = types.SimpleNamespace(
-        PanelGrid=lambda panels, title: {"title": title, "panels": panels},
-    )
+    if panels is None:
+        panels = types.SimpleNamespace(
+            RunTable=lambda **kwargs: ("table", kwargs),
+            RunImage=lambda **kwargs: ("image", kwargs),
+        )
+
+    if blocks is None:
+        def _panel_grid(*, title: Any, panels: Any) -> Dict[str, Any]:  # pragma: no cover - stub
+            return {"title": title, "panels": panels}
+
+        def _markdown_block(*args: Any, **kwargs: Any) -> Dict[str, Any]:  # pragma: no cover - stub
+            return {"args": args, "kwargs": kwargs}
+
+        blocks = types.SimpleNamespace(PanelGrid=_panel_grid, Markdown=_markdown_block)
 
     v2_module = types.SimpleNamespace(Report=RecordingReport, panels=panels, blocks=blocks)
     reports_module = types.SimpleNamespace(v2=v2_module)
@@ -55,10 +68,20 @@ def _install_wandb_stub(monkeypatch: pytest.MonkeyPatch, report_cls: type) -> Li
 
 
 def _load_report_module(
-    monkeypatch: pytest.MonkeyPatch, report_cls: type
+    monkeypatch: pytest.MonkeyPatch,
+    report_cls: type,
+    *,
+    panels: Any | None = None,
+    blocks: Any | None = None,
 ) -> Tuple[Any, List[Dict[str, Any]]]:
     _install_pandas_stub(monkeypatch)
-    calls = _install_wandb_stub(monkeypatch, report_cls)
+    yaml_stub = types.SimpleNamespace(
+        safe_load=lambda *args, **kwargs: {},
+        safe_dump=lambda *args, **kwargs: "",
+        dump=lambda *args, **kwargs: "",
+    )
+    monkeypatch.setitem(sys.modules, "yaml", yaml_stub)
+    calls = _install_wandb_stub(monkeypatch, report_cls, panels=panels, blocks=blocks)
     monkeypatch.delitem(sys.modules, "reports.build_wandb_report", raising=False)
     monkeypatch.delitem(sys.modules, "reports", raising=False)
     import tests.conftest as test_conftest
@@ -214,4 +237,104 @@ def test_assemble_report_falls_back_to_plain_initialisation(
     assert set(calls[0]) == {"entity", "project", "title", "description"}
     assert calls[0]["entity"] == "entity"
     assert calls[0]["project"] == "project"
+
+
+def test_assemble_report_prefers_native_panels(monkeypatch: pytest.MonkeyPatch) -> None:
+    class PlainReport:
+        def __init__(self, **_: Any) -> None:
+            self.blocks = []
+
+    panel_calls: List[Dict[str, Any]] = []
+    markdown_calls: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
+
+    def record_panel_grid(*, title: Any, panels: Any) -> Dict[str, Any]:  # pragma: no cover - stub
+        panel_calls.append({"title": title, "panels": panels})
+        return {"title": title, "panels": panels}
+
+    def record_markdown(*args: Any, **kwargs: Any) -> Dict[str, Any]:  # pragma: no cover - stub
+        markdown_calls.append((args, kwargs))
+        return {"args": args, "kwargs": kwargs}
+
+    panels = types.SimpleNamespace(
+        RunTable=lambda **kwargs: ("table", kwargs),
+        RunImage=lambda **kwargs: ("image", kwargs),
+    )
+    blocks = types.SimpleNamespace(PanelGrid=record_panel_grid, Markdown=record_markdown)
+
+    build_wandb_report, _ = _load_report_module(
+        monkeypatch,
+        PlainReport,
+        panels=panels,
+        blocks=blocks,
+    )
+
+    assets = _empty_assets()
+    assets["Overview"].append(
+        build_wandb_report._LoggedAsset(
+            section="Overview",
+            key="dummy-table",
+            run_path="entity/project/run",
+            kind="table",
+            title="Overview",
+        )
+    )
+
+    report_url = build_wandb_report._assemble_report(
+        api=None,
+        entity="entity",
+        project="project",
+        assets_by_section=assets,
+    )
+
+    assert report_url is not None
+    assert panel_calls
+    assert not markdown_calls
+    assert panel_calls[0]["title"] == "Overview"
+
+
+def test_assemble_report_uses_markdown_fallback(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    class PlainReport:
+        def __init__(self, **_: Any) -> None:
+            self.blocks = []
+
+    markdown_calls: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
+
+    def record_markdown(*args: Any, **kwargs: Any) -> Dict[str, Any]:  # pragma: no cover - stub
+        markdown_calls.append((args, kwargs))
+        return {"args": args, "kwargs": kwargs}
+
+    panels = types.SimpleNamespace()
+    blocks = types.SimpleNamespace(Markdown=record_markdown)
+
+    build_wandb_report, _ = _load_report_module(
+        monkeypatch,
+        PlainReport,
+        panels=panels,
+        blocks=blocks,
+    )
+
+    assets = _empty_assets()
+    assets["Overview"].append(
+        build_wandb_report._LoggedAsset(
+            section="Overview",
+            key="dummy-table",
+            run_path="entity/project/run",
+            kind="table",
+            title="Overview",
+        )
+    )
+
+    caplog.set_level("INFO")
+    report_url = build_wandb_report._assemble_report(
+        api=None,
+        entity="entity",
+        project="project",
+        assets_by_section=assets,
+    )
+
+    assert report_url is not None
+    assert markdown_calls
+    messages = " ".join(record.message for record in caplog.records)
+    assert "Markdown fallback" in messages
+    assert "No report blocks were generated" not in messages
 

@@ -893,48 +893,184 @@ def _assemble_report(
         LOGGER.warning("Failed to initialise W&B report object (%s)", details)
         return None
 
-    blocks: List[Any] = []
+    panels_module = getattr(reports_v2, "panels", None)
+    blocks_module = getattr(reports_v2, "blocks", None)
+    has_run_table = bool(panels_module and hasattr(panels_module, "RunTable"))
+    has_run_image = bool(panels_module and hasattr(panels_module, "RunImage"))
+    has_panel_grid = bool(blocks_module and hasattr(blocks_module, "PanelGrid"))
+    LOGGER.debug(
+        "Reports API panel availability: RunTable=%s RunImage=%s PanelGrid=%s",
+        has_run_table,
+        has_run_image,
+        has_panel_grid,
+    )
+
+    section_assets: Dict[str, Sequence[_LoggedAsset]] = {}
+    total_assets = 0
+    needs_table_panel = False
+    needs_image_panel = False
     for section in REPORT_SECTIONS:
-        assets = assets_by_section.get(section, [])
-        if not assets:
-            continue
-        panels: List[Any] = []
-        for asset in assets:
-            try:
-                if asset.kind == "table" and hasattr(reports_v2.panels, "RunTable"):
-                    panels.append(
-                        reports_v2.panels.RunTable(
-                            run_path=asset.run_path,
-                            table_key=asset.key,
-                            title=asset.title,
-                            caption=asset.caption,
-                        )
-                    )
-                elif asset.kind == "image" and hasattr(reports_v2.panels, "RunImage"):
-                    panels.append(
-                        reports_v2.panels.RunImage(
-                            run_path=asset.run_path,
-                            image_key=asset.key,
-                            title=asset.title,
-                            caption=asset.caption,
-                        )
-                    )
-            except Exception as exc:  # pragma: no cover - external API dependent
-                LOGGER.debug("Failed to create panel for %s: %s", asset.manifest_entry, exc)
-        if not panels:
-            continue
-        try:
-            blocks.append(
-                reports_v2.blocks.PanelGrid(
-                    title=section,
-                    panels=panels,
-                )
+        assets = list(assets_by_section.get(section, []))
+        section_assets[section] = assets
+        total_assets += len(assets)
+        LOGGER.debug('Report section summary: section="%s" assets=%d', section, len(assets))
+        if assets:
+            if any(asset.kind == "table" for asset in assets):
+                needs_table_panel = True
+            if any(asset.kind == "image" for asset in assets):
+                needs_image_panel = True
+
+    if total_assets == 0:
+        LOGGER.warning(
+            "No report blocks were generated; skipping report upload (zero assets across sections)"
+        )
+        return None
+
+    fallback_reasons: List[str] = []
+    if needs_table_panel and not has_run_table:
+        fallback_reasons.append("RunTable unavailable")
+    if needs_image_panel and not has_run_image:
+        fallback_reasons.append("RunImage unavailable")
+    if (needs_table_panel or needs_image_panel) and not has_panel_grid:
+        fallback_reasons.append("PanelGrid unavailable")
+
+    blocks: List[Any] = []
+    panel_failures = 0
+
+    def _log_panel_failure(context: str, exc: Exception) -> None:
+        nonlocal panel_failures
+        panel_failures += 1
+        LOGGER.debug("%s (%s: %s)", context, exc.__class__.__name__, exc)
+
+    if fallback_reasons:
+        LOGGER.info(
+            "Using Markdown fallback for W&B report because %s",
+            ", ".join(fallback_reasons),
+        )
+        markdown_cls = None
+        if blocks_module is not None:
+            for attr in ("Markdown", "Text", "Paragraph", "RichText"):
+                if hasattr(blocks_module, attr):
+                    markdown_cls = getattr(blocks_module, attr)
+                    break
+        if markdown_cls is None:
+            LOGGER.warning(
+                "No Markdown-compatible block available in wandb_workspaces; cannot build report"
             )
-        except Exception as exc:  # pragma: no cover - depends on API
-            LOGGER.debug("Failed to build PanelGrid for section %s: %s", section, exc)
+        else:
+            for section, assets in section_assets.items():
+                if not assets:
+                    continue
+                bullet_lines = [
+                    f"- **{asset.title}**: {asset.run_path}::{asset.key} ({asset.kind})"
+                    for asset in assets
+                ]
+                body = f"### {section}\n\n" + "\n".join(bullet_lines)
+                block: Optional[Any] = None
+                start_failures = panel_failures
+                for payload in (
+                    {"title": section, "markdown": body},
+                    {"title": section, "text": body},
+                    {"title": section, "content": body},
+                    {"title": section, "body": body},
+                    {"markdown": body},
+                    {"text": body},
+                    {"content": body},
+                    {"body": body},
+                ):
+                    try:
+                        block = markdown_cls(**payload)
+                    except TypeError:
+                        continue
+                    except Exception as exc:  # pragma: no cover - external API dependent
+                        _log_panel_failure(
+                            f"Failed to create Markdown block for section {section}", exc
+                        )
+                        block = None
+                        break
+                    else:
+                        break
+                if block is None:
+                    try:
+                        block = markdown_cls(body)
+                    except TypeError:
+                        pass
+                    except Exception as exc:  # pragma: no cover - external API dependent
+                        _log_panel_failure(
+                            f"Failed to create Markdown block for section {section}", exc
+                        )
+                        block = None
+                if block is not None:
+                    blocks.append(block)
+                else:
+                    if panel_failures == start_failures:
+                        panel_failures += 1
+                    LOGGER.debug(
+                        "Unable to construct Markdown block for section %s; incompatible signature",
+                        section,
+                    )
+    else:
+        for section, assets in section_assets.items():
+            if not assets:
+                continue
+            panels: List[Any] = []
+            for asset in assets:
+                try:
+                    if asset.kind == "table" and has_run_table:
+                        panels.append(
+                            panels_module.RunTable(  # type: ignore[union-attr]
+                                run_path=asset.run_path,
+                                table_key=asset.key,
+                                title=asset.title,
+                                caption=asset.caption,
+                            )
+                        )
+                    elif asset.kind == "image" and has_run_image:
+                        panels.append(
+                            panels_module.RunImage(  # type: ignore[union-attr]
+                                run_path=asset.run_path,
+                                image_key=asset.key,
+                                title=asset.title,
+                                caption=asset.caption,
+                            )
+                        )
+                    elif asset.kind == "table":
+                        LOGGER.debug(
+                            "RunTable panel unavailable; deferring asset %s to fallback",
+                            asset.manifest_entry,
+                        )
+                    elif asset.kind == "image":
+                        LOGGER.debug(
+                            "RunImage panel unavailable; deferring asset %s to fallback",
+                            asset.manifest_entry,
+                        )
+                except Exception as exc:  # pragma: no cover - external API dependent
+                    _log_panel_failure(f"Failed to create panel for {asset.manifest_entry}", exc)
+            if not panels:
+                continue
+            try:
+                blocks.append(
+                    blocks_module.PanelGrid(  # type: ignore[union-attr]
+                        title=section,
+                        panels=panels,
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - depends on API
+                _log_panel_failure(
+                    f"Failed to build PanelGrid for section {section}", exc
+                )
 
     if not blocks:
-        LOGGER.warning("No report blocks were generated; skipping report upload")
+        if fallback_reasons:
+            reason = "no panels available in wandb_workspaces"
+        elif panel_failures:
+            reason = f"panel construction failures={panel_failures}"
+        else:
+            reason = "panel construction failures"
+        LOGGER.warning(
+            "No report blocks were generated; skipping report upload (%s)",
+            reason,
+        )
         return None
 
     try:
