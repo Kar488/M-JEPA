@@ -1446,6 +1446,8 @@ def build_report(
     manifest_path: Optional[Path] = None,
     schema_path: Optional[Path] = None,
     wandb_soft_fail: bool = False,
+    per_page: Optional[int] = None,
+    max_attempts: Optional[int] = None,
 ) -> Optional[str]:
     """Construct the report metadata and optionally upload it to W&B.
 
@@ -1460,31 +1462,46 @@ def build_report(
     generated_at = datetime.utcnow()
     base_url = _resolve_base_url()
 
-    per_page = 75
-    per_page_override = os.getenv("REPORT_PER_PAGE")
-    if per_page_override:
-        try:
-            per_page = max(1, int(per_page_override))
-        except ValueError:
+    resolved_per_page = 75
+    if per_page is not None:
+        if per_page < 1:
             LOGGER.warning(
-                "Invalid REPORT_PER_PAGE override %r; falling back to %s",
-                per_page_override,
-                per_page,
+                "Invalid per_page override %s; falling back to minimum of 1", per_page
             )
+        resolved_per_page = max(1, per_page)
+    else:
+        per_page_override = os.getenv("REPORT_PER_PAGE")
+        if per_page_override:
+            try:
+                resolved_per_page = max(1, int(per_page_override))
+            except ValueError:
+                LOGGER.warning(
+                    "Invalid REPORT_PER_PAGE override %r; falling back to %s",
+                    per_page_override,
+                    resolved_per_page,
+                )
 
-    max_attempts = RetrySettings().max_attempts
-    attempts_override = os.getenv("REPORT_MAX_ATTEMPTS")
-    if attempts_override:
-        try:
-            max_attempts = max(1, int(attempts_override))
-        except ValueError:
+    resolved_max_attempts = RetrySettings().max_attempts
+    if max_attempts is not None:
+        if max_attempts < 1:
             LOGGER.warning(
-                "Invalid REPORT_MAX_ATTEMPTS override %r; falling back to %s",
-                attempts_override,
+                "Invalid max_attempts override %s; falling back to minimum of 1",
                 max_attempts,
             )
+        resolved_max_attempts = max(1, max_attempts)
+    else:
+        attempts_override = os.getenv("REPORT_MAX_ATTEMPTS")
+        if attempts_override:
+            try:
+                resolved_max_attempts = max(1, int(attempts_override))
+            except ValueError:
+                LOGGER.warning(
+                    "Invalid REPORT_MAX_ATTEMPTS override %r; falling back to %s",
+                    attempts_override,
+                    resolved_max_attempts,
+                )
 
-    retry_settings = RetrySettings(max_attempts=max_attempts)
+    retry_settings = RetrySettings(max_attempts=resolved_max_attempts)
 
     try:
         api = get_wandb_api(project=project, allow_missing=True)
@@ -1508,7 +1525,9 @@ def build_report(
         SOFT_FAIL_ENV_VAR,
     )
     LOGGER.info(
-        "Report pagination configured with per_page=%s max_attempts=%s", per_page, max_attempts
+        "Report pagination configured with per_page=%s max_attempts=%s",
+        resolved_per_page,
+        resolved_max_attempts,
     )
 
     filters: Dict[str, Any] = {}
@@ -1521,7 +1540,7 @@ def build_report(
             max_runs=max_runs,
             api=api,
             soft_fail=wandb_soft_fail,
-            per_page=per_page,
+            per_page=resolved_per_page,
             retry_settings=retry_settings,
         )
     except WandbRetryError as exc:
@@ -1616,6 +1635,18 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument("--manifest-path", type=Path)
     parser.add_argument("--schema-path", type=Path)
     parser.add_argument(
+        "--per-page",
+        type=int,
+        default=None,
+        help="Number of runs to request per W&B page (overrides REPORT_PER_PAGE)",
+    )
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=None,
+        help="Retry attempts for W&B API pagination (overrides REPORT_MAX_ATTEMPTS)",
+    )
+    parser.add_argument(
         "--wandb-soft-fail",
         dest="wandb_soft_fail",
         action="store_true",
@@ -1642,6 +1673,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         manifest_path=args.manifest_path,
         schema_path=args.schema_path,
         wandb_soft_fail=args.wandb_soft_fail,
+        per_page=args.per_page,
+        max_attempts=args.max_attempts,
     )
     if url == REPORT_UNAVAILABLE_SENTINEL:
         LOGGER.warning(
