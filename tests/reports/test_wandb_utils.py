@@ -78,20 +78,20 @@ def test_fetch_runs_parses_json_summary(monkeypatch):
     run = DummyRun(summary="{\"accuracy\": 0.9}")
     monkeypatch.setattr(wandb_utils, "get_wandb_api", lambda **_: StubApi([run]))
 
-    records = wandb_utils.fetch_runs(entity=None, project="proj")
+    result = wandb_utils.fetch_runs(entity=None, project="proj")
 
-    assert len(records) == 1
-    assert records[0].summary == {"accuracy": 0.9}
+    assert len(result.runs) == 1
+    assert result.runs[0].summary == {"accuracy": 0.9}
 
 
 def test_fetch_runs_handles_non_mapping_summary(monkeypatch):
     run = DummyRun(summary="not a mapping")
     monkeypatch.setattr(wandb_utils, "get_wandb_api", lambda **_: StubApi([run]))
 
-    records = wandb_utils.fetch_runs(entity=None, project="proj")
+    result = wandb_utils.fetch_runs(entity=None, project="proj")
 
-    assert len(records) == 1
-    assert records[0].summary == {}
+    assert len(result.runs) == 1
+    assert result.runs[0].summary == {}
 
 
 def test_get_wandb_api_clamps_low_env_timeout(monkeypatch):

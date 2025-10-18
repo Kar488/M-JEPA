@@ -11,6 +11,8 @@ import random
 import time
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
+import inspect
+import sys
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple, TypeVar
 
 import pandas as pd
@@ -45,8 +47,138 @@ _MIN_HTTP_TIMEOUT = 30
 REPORT_UNAVAILABLE_SENTINEL = "report unavailable"
 
 
+def detect_wandb_capabilities() -> WandbCapabilities:
+    """Return runtime capabilities for the W&B Reports v2 API."""
+
+    wandb_version: Optional[str] = None
+    workspaces_version: Optional[str] = None
+    reports_module: Optional[Any] = None
+    panels_module: Optional[Any] = None
+    blocks_module: Optional[Any] = None
+    has_v2_panels = False
+    has_v2_blocks = False
+    can_instantiate_panels = False
+    can_instantiate_blocks = False
+
+    try:  # pragma: no cover - diagnostic logging only
+        import wandb  # type: ignore
+
+        wandb_version = getattr(wandb, "__version__", None)
+    except Exception as exc:  # pragma: no cover - wandb optional
+        LOGGER.debug("Failed to import wandb while probing capabilities: %s", exc)
+        wandb = None  # type: ignore[assignment]
+
+    try:  # pragma: no cover - optional dependency
+        import wandb_workspaces  # type: ignore
+
+        workspaces_version = getattr(wandb_workspaces, "__version__", None)
+    except Exception as exc:  # pragma: no cover - optional dependency
+        LOGGER.debug("Failed to import wandb_workspaces: %s", exc)
+        wandb_workspaces = None  # type: ignore[assignment]
+
+    try:  # pragma: no cover - optional dependency
+        from wandb_workspaces.reports import v2 as reports_v2  # type: ignore
+
+        reports_module = reports_v2
+        panels_module = getattr(reports_v2, "panels", None)
+        blocks_module = getattr(reports_v2, "blocks", None)
+    except Exception as exc:  # pragma: no cover - optional dependency
+        LOGGER.debug("Failed to import wandb_workspaces.reports.v2: %s", exc)
+        reports_module = None
+        panels_module = None
+        blocks_module = None
+
+    panel_members: Optional[List[str]] = None
+    block_members: Optional[List[str]] = None
+    if panels_module is not None:
+        try:
+            panel_members = [name for name, _ in inspect.getmembers(panels_module)]
+        except Exception as exc:  # pragma: no cover - diagnostic fallback
+            LOGGER.debug("Failed to inspect reports.v2.panels: %s", exc)
+    if blocks_module is not None:
+        try:
+            block_members = [name for name, _ in inspect.getmembers(blocks_module)]
+        except Exception as exc:  # pragma: no cover - diagnostic fallback
+            LOGGER.debug("Failed to inspect reports.v2.blocks: %s", exc)
+
+    if panels_module is not None:
+        has_v2_panels = all(
+            hasattr(panels_module, attribute) for attribute in ("RunTable", "RunImage")
+        )
+        if has_v2_panels:
+            try:
+                panels_module.RunTable(runs=[], columns=[])  # type: ignore[call-arg]
+                can_instantiate_panels = True
+            except Exception as exc:  # pragma: no cover - depends on API
+                LOGGER.info(
+                    "[report_diag] RunTable instantiation failed: %s", exc
+                )
+            else:
+                LOGGER.info("[report_diag] RunTable instantiation succeeded")
+
+    block_constructor: Optional[Callable[..., Any]] = None
+    if blocks_module is not None:
+        for attribute in ("Markdown", "Text", "Paragraph"):
+            if hasattr(blocks_module, attribute):
+                has_v2_blocks = True
+                block_constructor = getattr(blocks_module, attribute)
+                break
+        if block_constructor is not None:
+            try:
+                block_constructor("ok")  # type: ignore[misc]
+                can_instantiate_blocks = True
+            except Exception as exc:  # pragma: no cover - depends on API
+                LOGGER.info("[report_diag] Markdown/Text instantiation failed: %s", exc)
+            else:
+                LOGGER.info("[report_diag] Markdown/Text instantiation succeeded")
+
+    LOGGER.info(
+        "[report_diag] wandb.__version__=%s wandb_workspaces.__version__=%s",
+        wandb_version or "<unavailable>",
+        workspaces_version or "<unavailable>",
+    )
+    LOGGER.info("[report_diag] sys.executable=%s", sys.executable)
+    LOGGER.info("[report_diag] sys.path=%s", sys.path)
+    LOGGER.info(
+        "[report_diag] wandb_workspaces.reports.v2.panels members=%s",
+        panel_members if panel_members is not None else "<unavailable>",
+    )
+    LOGGER.info(
+        "[report_diag] wandb_workspaces.reports.v2.blocks members=%s",
+        block_members if block_members is not None else "<unavailable>",
+    )
+
+    base_url = os.getenv("WANDB_BASE_URL", "<unset>")
+    entity_env = os.getenv("WANDB_ENTITY", "<unset>")
+    project_env = os.getenv("WANDB_PROJECT", "<unset>")
+    LOGGER.info(
+        "[report_caps] wandb=%s workspaces=%s has_panels=%s has_blocks=%s can_panels=%s can_blocks=%s base=%s entity=%s project=%s",
+        wandb_version or "<unavailable>",
+        workspaces_version or "<unavailable>",
+        has_v2_panels,
+        has_v2_blocks,
+        can_instantiate_panels,
+        can_instantiate_blocks,
+        base_url,
+        entity_env,
+        project_env,
+    )
+
+    return WandbCapabilities(
+        has_v2_panels=has_v2_panels,
+        has_v2_blocks=has_v2_blocks,
+        can_instantiate_panels=can_instantiate_panels,
+        can_instantiate_blocks=can_instantiate_blocks,
+        wandb_version=wandb_version,
+        workspaces_version=workspaces_version,
+        reports_module=reports_module,
+        panels_module=panels_module,
+        blocks_module=blocks_module,
+    )
+
+
 @dataclass(frozen=True)
-class _RetrySettings:
+class RetrySettings:
     """Retry controls for WANDB API interactions."""
 
     max_attempts: int = 5
@@ -54,6 +186,29 @@ class _RetrySettings:
     max_backoff: float = 30.0
     max_total_backoff: float = 180.0
     jitter: float = 0.25
+
+
+@dataclass(frozen=True)
+class WandbCapabilities:
+    """Runtime capabilities for the Reports v2 API."""
+
+    has_v2_panels: bool
+    has_v2_blocks: bool
+    can_instantiate_panels: bool
+    can_instantiate_blocks: bool
+    wandb_version: Optional[str]
+    workspaces_version: Optional[str]
+    reports_module: Optional[Any]
+    panels_module: Optional[Any]
+    blocks_module: Optional[Any]
+
+
+@dataclass(frozen=True)
+class RunFetchResult:
+    """Container describing fetched runs and fetch status."""
+
+    runs: List["RunRecord"]
+    partial: bool = False
 
 
 class WandbRetryError(RuntimeError):
@@ -196,7 +351,7 @@ def _retry_wandb_call(
     operation: Callable[[], T],
     *,
     context: str,
-    settings: _RetrySettings,
+    settings: RetrySettings,
 ) -> T:
     """Execute ``operation`` with retries for recognised transient failures."""
 
@@ -313,7 +468,7 @@ def _load_history(
     run,
     keys: Optional[Sequence[str]] = None,
     *,
-    settings: _RetrySettings,
+    settings: RetrySettings,
 ) -> Optional[pd.DataFrame]:
     if keys is None:
         keys = []
@@ -349,8 +504,8 @@ def fetch_runs(
     api: Optional[Any] = None,
     per_page: int = 75,
     soft_fail: bool = False,
-    retry_settings: Optional[_RetrySettings] = None,
-) -> List[RunRecord]:
+    retry_settings: Optional[RetrySettings] = None,
+) -> RunFetchResult:
     """Download runs for the given project with retry-aware pagination.
 
     Args:
@@ -367,19 +522,19 @@ def fetch_runs(
         retry_settings: Optional override for retry configuration.
 
     Returns:
-        A list of :class:`RunRecord` instances.  When retries are exhausted a
-        :class:`WandbRetryError` is raised; callers can use the
-        :data:`REPORT_UNAVAILABLE_SENTINEL` to signal soft-fail behaviour.
+        A :class:`RunFetchResult` describing the downloaded runs and whether the
+        pagination completed successfully. When retries are exhausted a
+        :class:`WandbRetryError` is raised unless ``soft_fail`` is enabled.
     """
     if api is None:
         api = get_wandb_api(project=project)
     if api is None:  # pragma: no cover - defensive; only when allow_missing=True
-        return []
+        return RunFetchResult(runs=[], partial=False)
 
     if max_runs <= 0:
-        return []
+        return RunFetchResult(runs=[], partial=False)
 
-    settings = retry_settings or _RetrySettings()
+    settings = retry_settings or RetrySettings()
 
     per_page = max(1, min(per_page, max_runs))
     LOGGER.info(
@@ -395,6 +550,7 @@ def fetch_runs(
 
     records: List[RunRecord] = []
     fetched = 0
+    partial_fetch = False
 
     while len(records) < max_runs:
         offset = fetched
@@ -414,6 +570,15 @@ def fetch_runs(
                 settings=settings,
             )
         except WandbRetryError as exc:
+            if soft_fail:
+                partial_fetch = True
+                LOGGER.warning(
+                    "Failed to fetch all W&B runs after retries; continuing with %d runs (partial=%s): %s",
+                    len(records),
+                    partial_fetch,
+                    exc,
+                )
+                break
             LOGGER.error(
                 "Failed to fetch W&B runs after retries (soft_fail=%s): %s",
                 soft_fail,
@@ -448,7 +613,13 @@ def fetch_runs(
         if len(page) < per_page:
             break
 
-    return records
+    LOGGER.info(
+        "Fetched %d runs for filters=%s (partial=%s)",
+        len(records),
+        applied_filters or {},
+        partial_fetch,
+    )
+    return RunFetchResult(runs=records, partial=partial_fetch)
 
 
 def normalise_tag(tag: str) -> str:

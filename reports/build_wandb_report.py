@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import inspect
 import contextlib
+import inspect
 import json
 import logging
 import os
+import tempfile
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,7 +35,11 @@ from .wandb_utils import (
     REPORT_UNAVAILABLE_SENTINEL,
     WandbRetryError,
     RunRecord,
+    RunFetchResult,
+    RetrySettings,
+    WandbCapabilities,
     aggregate_metrics,
+    detect_wandb_capabilities,
     fetch_runs,
     get_wandb_api,
     group_runs_by_seed,
@@ -115,6 +120,597 @@ class _LoggedAsset:
         return f"{self.kind}:{self.title} ({self.run_path}::{self.key}){caption}"
 
 
+def _resolve_base_url() -> str:
+    base = os.getenv("WANDB_BASE_URL")
+    if base:
+        return base.rstrip("/")
+    return "https://wandb.ai"
+
+
+def _format_run_url(run_path: str, base_url: str) -> str:
+    if run_path.startswith("http://") or run_path.startswith("https://"):
+        return run_path
+    return f"{base_url.rstrip('/')}/{run_path.lstrip('/')}"
+
+
+def _build_markdown_block(blocks_module: Any, text: str) -> Optional[Any]:
+    if blocks_module is None:
+        return None
+    for attribute in ("Markdown", "Text", "Paragraph"):
+        if not hasattr(blocks_module, attribute):
+            continue
+        constructor = getattr(blocks_module, attribute)
+        try:
+            return constructor(text)  # type: ignore[misc]
+        except TypeError:
+            for keyword in ("text", "content", "body", "markdown", "value"):
+                try:
+                    return constructor(**{keyword: text})  # type: ignore[misc]
+                except TypeError:
+                    continue
+                except Exception as exc:  # pragma: no cover - depends on external API
+                    LOGGER.debug(
+                        "Failed to instantiate %s block with keyword %s: %s",
+                        attribute,
+                        keyword,
+                        exc,
+                    )
+                    break
+        except Exception as exc:  # pragma: no cover - depends on external API
+            LOGGER.debug("Failed to instantiate %s block: %s", attribute, exc)
+    LOGGER.debug("No Markdown-compatible block constructor available")
+    return None
+
+
+def _render_markdown_section(
+    section: str,
+    assets: Sequence[_LoggedAsset],
+    base_url: str,
+    *,
+    heading_level: int = 3,
+) -> str:
+    heading = "#" * max(1, heading_level)
+    lines = [f"{heading} {section}", ""]
+    if not assets:
+        lines.append("_No assets were generated for this section._")
+    else:
+        for asset in assets:
+            run_url = _format_run_url(asset.run_path, base_url)
+            title = asset.title or asset.key
+            kind = asset.kind.replace("_", " ").title()
+            line = (
+                f"- **{kind}** `{title}` — key `{asset.key}` ([run link]({run_url}))"
+            )
+            lines.append(line)
+            if asset.caption:
+                lines.append(f"  - {asset.caption}")
+    return "\n".join(lines)
+
+
+def _build_header_block(
+    blocks_module: Any,
+    *,
+    generated_at: datetime,
+    partial_fetch: bool,
+) -> Optional[Any]:
+    lines = [
+        "## M-JEPA Automation Report",
+        "",
+        f"Generated automatically on {generated_at.strftime('%Y-%m-%d %H:%M:%S UTC')}.",
+    ]
+    if partial_fetch:
+        lines.append(
+            "\n> ⚠️ Partial data: run fetching was incomplete because WANDB_SOFT_FAIL=1."
+        )
+    text = "\n".join(lines)
+    return _build_markdown_block(blocks_module, text)
+
+
+def _instantiate_report(
+    reports_module: Any,
+    base_kwargs: Mapping[str, Any],
+    api: Any,
+) -> Optional[Any]:
+    if not hasattr(reports_module, "Report"):
+        LOGGER.warning("Reports module does not expose a Report class")
+        return None
+
+    attempts: List[Mapping[str, Any]] = []
+    if api is not None:
+        allowed_keywords: Set[str] = set()
+        report_cls = reports_module.Report
+        mro_candidates = getattr(report_cls, "__mro__", ())
+        candidate_targets = [report_cls, getattr(report_cls, "__init__", None)]
+        if mro_candidates:
+            candidate_targets.extend(
+                base for base in mro_candidates if base not in {None, report_cls, object}
+            )
+
+        for candidate in candidate_targets:
+            if candidate is None:
+                continue
+            try:
+                signature = inspect.signature(candidate)
+            except (TypeError, ValueError):
+                continue
+            allowed_keywords.update(
+                name
+                for name in signature.parameters
+                if name not in {"self", "args", "kwargs"}
+            )
+
+        keyword_targets = {report_cls, *(mro_candidates[1:] if mro_candidates else [])}
+        explicit_allowlists: List[Set[str]] = []
+        for target in keyword_targets:
+            if target in {None, object}:
+                continue
+            for field_attr in (
+                "model_fields",
+                "fields",
+                "allowed_kwargs",
+                "_allowed",
+            ):
+                field_map = getattr(target, field_attr, None)
+                if isinstance(field_map, Mapping):
+                    entries = {str(entry) for entry in field_map.keys()}
+                elif isinstance(field_map, Iterable) and not isinstance(field_map, (str, bytes)):
+                    entries = {str(entry) for entry in field_map}
+                else:
+                    entries = set()
+
+                if not entries:
+                    continue
+
+                if field_attr in {"allowed_kwargs", "_allowed"}:
+                    explicit_allowlists.append(entries)
+                else:
+                    allowed_keywords.update(entries)
+
+        if explicit_allowlists:
+            combined_allowlist = set(explicit_allowlists[0])
+            for allowlist in explicit_allowlists[1:]:
+                combined_allowlist &= allowlist
+            allowed_keywords = (
+                allowed_keywords & combined_allowlist if allowed_keywords else combined_allowlist
+            )
+
+        candidate_kwargs: Sequence[Tuple[str, Mapping[str, Any]]] = (
+            ("api", {"api": api}),
+            ("client", {"client": api}),
+            ("connection", {"connection": api}),
+        )
+        seen: Set[str] = set()
+        for keyword, payload in candidate_kwargs:
+            if keyword in allowed_keywords and keyword not in seen:
+                attempts.append(payload)
+                seen.add(keyword)
+
+    attempts.append({})
+
+    errors: List[str] = []
+    for extra in attempts:
+        try:
+            return reports_module.Report(**{**base_kwargs, **extra})
+        except Exception as exc:  # pragma: no cover - external API dependent
+            errors.append(f"{sorted(extra.keys()) or ['<none>']}: {exc}")
+
+    details = "; ".join(errors) if errors else "no attempts"
+    LOGGER.warning("Failed to initialise W&B report object (%s)", details)
+    return None
+
+
+def _initialise_report_object(
+    capabilities: WandbCapabilities,
+    api: Any,
+    entity: Optional[str],
+    project: str,
+    *,
+    generated_at: datetime,
+    partial_fetch: bool,
+) -> Tuple[Optional[Any], Optional[Any], Optional[Any]]:
+    reports_module = capabilities.reports_module
+    if reports_module is None:
+        try:
+            from wandb_workspaces.reports import v2 as reports_v2  # type: ignore
+
+            reports_module = reports_v2
+        except Exception as exc:  # pragma: no cover - optional dependency
+            LOGGER.warning("W&B Reports API unavailable: %s", exc)
+            return None, None, None
+
+    base_kwargs: Dict[str, Any] = {
+        "entity": entity,
+        "project": project,
+        "title": "M-JEPA Project Report",
+        "description": (
+            "Auto-generated summary built on "
+            f"{generated_at.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        ),
+    }
+    if partial_fetch:
+        base_kwargs["description"] += (
+            "\n\nPartial data: run fetching exhausted retries with WANDB_SOFT_FAIL=1."
+        )
+
+    report = _instantiate_report(reports_module, base_kwargs, api)
+    if report is None:
+        return None, None, None
+
+    panels_module = capabilities.panels_module or getattr(reports_module, "panels", None)
+    blocks_module = capabilities.blocks_module or getattr(reports_module, "blocks", None)
+    return report, panels_module, blocks_module
+
+
+def _build_report_with_panels(
+    capabilities: WandbCapabilities,
+    api: Any,
+    entity: Optional[str],
+    project: str,
+    assets_by_section: Mapping[str, Sequence[_LoggedAsset]],
+    *,
+    generated_at: datetime,
+    base_url: str,
+    partial_fetch: bool,
+) -> Optional[str]:
+    report, panels_module, blocks_module = _initialise_report_object(
+        capabilities,
+        api,
+        entity,
+        project,
+        generated_at=generated_at,
+        partial_fetch=partial_fetch,
+    )
+    if report is None or blocks_module is None:
+        return None
+
+    blocks: List[Any] = []
+    header_block = _build_header_block(
+        blocks_module,
+        generated_at=generated_at,
+        partial_fetch=partial_fetch,
+    )
+    if header_block is not None:
+        blocks.append(header_block)
+
+    has_panel_grid = hasattr(blocks_module, "PanelGrid")
+    has_run_table = bool(panels_module and hasattr(panels_module, "RunTable"))
+    has_run_image = bool(panels_module and hasattr(panels_module, "RunImage"))
+
+    for section in REPORT_SECTIONS:
+        assets = list(assets_by_section.get(section, []))
+        markdown_assets: List[_LoggedAsset] = []
+        section_panels: List[Any] = []
+
+        for asset in assets:
+            if not has_panel_grid:
+                markdown_assets.append(asset)
+                continue
+            try:
+                if asset.kind == "table" and has_run_table:
+                    section_panels.append(
+                        panels_module.RunTable(  # type: ignore[union-attr]
+                            run_path=asset.run_path,
+                            table_key=asset.key,
+                            title=asset.title,
+                            caption=asset.caption,
+                        )
+                    )
+                elif asset.kind == "image" and has_run_image:
+                    section_panels.append(
+                        panels_module.RunImage(  # type: ignore[union-attr]
+                            run_path=asset.run_path,
+                            image_key=asset.key,
+                            title=asset.title,
+                            caption=asset.caption,
+                        )
+                    )
+                else:
+                    markdown_assets.append(asset)
+            except Exception as exc:  # pragma: no cover - depends on external API
+                LOGGER.warning(
+                    "Failed to create panel for %s: %s; falling back to Markdown",
+                    asset.manifest_entry,
+                    exc,
+                )
+                markdown_assets.append(asset)
+
+        if section_panels and has_panel_grid:
+            try:
+                blocks.append(
+                    blocks_module.PanelGrid(  # type: ignore[union-attr]
+                        title=section,
+                        panels=section_panels,
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - depends on external API
+                LOGGER.warning(
+                    "Failed to build PanelGrid for section %s: %s; using Markdown fallback",
+                    section,
+                    exc,
+                )
+                markdown_assets = list(assets)
+
+        if markdown_assets or not section_panels:
+            markdown_text = _render_markdown_section(
+                section,
+                markdown_assets or assets,
+                base_url,
+            )
+            block = _build_markdown_block(blocks_module, markdown_text)
+            if block is not None:
+                blocks.append(block)
+
+    if not blocks:
+        placeholder = _build_markdown_block(
+            blocks_module,
+            "### Report Overview\n_No report content could be generated for the selected runs._",
+        )
+        if placeholder is not None:
+            blocks.append(placeholder)
+
+    try:
+        report.blocks = blocks
+        report.save()
+    except Exception as exc:  # pragma: no cover - depends on external API
+        LOGGER.warning("Failed to save W&B report: %s", exc)
+        return None
+    return getattr(report, "url", None)
+
+
+def _build_markdown_only_report(
+    capabilities: WandbCapabilities,
+    api: Any,
+    entity: Optional[str],
+    project: str,
+    assets_by_section: Mapping[str, Sequence[_LoggedAsset]],
+    *,
+    generated_at: datetime,
+    base_url: str,
+    partial_fetch: bool,
+) -> Optional[str]:
+    report, _, blocks_module = _initialise_report_object(
+        capabilities,
+        api,
+        entity,
+        project,
+        generated_at=generated_at,
+        partial_fetch=partial_fetch,
+    )
+    if report is None or blocks_module is None:
+        return None
+
+    blocks: List[Any] = []
+    header_block = _build_header_block(
+        blocks_module,
+        generated_at=generated_at,
+        partial_fetch=partial_fetch,
+    )
+    if header_block is not None:
+        blocks.append(header_block)
+
+    for section in REPORT_SECTIONS:
+        markdown_text = _render_markdown_section(
+            section,
+            assets_by_section.get(section, []),
+            base_url,
+        )
+        block = _build_markdown_block(blocks_module, markdown_text)
+        if block is not None:
+            blocks.append(block)
+
+    if not blocks:
+        return None
+
+    try:
+        report.blocks = blocks
+        report.save()
+    except Exception as exc:  # pragma: no cover - depends on external API
+        LOGGER.warning("Failed to save Markdown-only W&B report: %s", exc)
+        return None
+    return getattr(report, "url", None)
+
+
+def _render_static_markdown(
+    assets_by_section: Mapping[str, Sequence[_LoggedAsset]],
+    *,
+    base_url: str,
+    generated_at: datetime,
+    partial_fetch: bool,
+) -> str:
+    lines = [
+        "# M-JEPA Static Report",
+        "",
+        f"Generated automatically on {generated_at.strftime('%Y-%m-%d %H:%M:%S UTC')}.",
+        "",
+    ]
+    if partial_fetch:
+        lines.append(
+            "> ⚠️ Partial data: run fetching was incomplete because WANDB_SOFT_FAIL=1."
+        )
+        lines.append("")
+
+    for section in REPORT_SECTIONS:
+        markdown = _render_markdown_section(
+            section,
+            assets_by_section.get(section, []),
+            base_url,
+            heading_level=2,
+        )
+        lines.append(markdown)
+        lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+def _upload_static_report_artifact(
+    api: Any,
+    entity: Optional[str],
+    project: str,
+    assets_by_section: Mapping[str, Sequence[_LoggedAsset]],
+    *,
+    base_url: str,
+    generated_at: datetime,
+    partial_fetch: bool,
+) -> Optional[str]:
+    content = _render_static_markdown(
+        assets_by_section,
+        base_url=base_url,
+        generated_at=generated_at,
+        partial_fetch=partial_fetch,
+    )
+
+    timestamp = generated_at.strftime("%Y%m%d-%H%M%S")
+    artifact_name = f"report-static-{timestamp}"
+    file_name = f"{artifact_name}.md"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file_path = Path(tmpdir) / file_name
+        file_path.write_text(content, encoding="utf-8")
+
+        artifact = None
+        artifact_kwargs = {
+            "name": artifact_name,
+            "type": "report-static",
+            "description": "Static fallback report for M-JEPA",
+            "metadata": {"partial": partial_fetch},
+        }
+
+        if hasattr(api, "artifact_type"):
+            try:
+                collection = api.artifact_type(  # type: ignore[call-arg]
+                    type_name="report-static",
+                    project=project,
+                    entity=entity,
+                )
+                if collection is not None and hasattr(collection, "create_artifact"):
+                    artifact = collection.create_artifact(**artifact_kwargs)
+            except TypeError:
+                try:
+                    collection = api.artifact_type("report-static")  # type: ignore[call-arg]
+                    if collection is not None and hasattr(collection, "create_artifact"):
+                        artifact = collection.create_artifact(**artifact_kwargs)
+                except Exception as exc:  # pragma: no cover - external API dependent
+                    LOGGER.debug("artifact_type fallback failed: %s", exc)
+            except Exception as exc:  # pragma: no cover - external API dependent
+                LOGGER.debug("Failed to use artifact_type API: %s", exc)
+
+        if artifact is None and hasattr(api, "create_artifact"):
+            try:
+                artifact = api.create_artifact(**artifact_kwargs)
+            except Exception as exc:  # pragma: no cover - external API dependent
+                LOGGER.warning("Failed to create artifact via Api.create_artifact: %s", exc)
+                artifact = None
+
+        if artifact is None:
+            LOGGER.error("Unable to create W&B artifact for static report fallback")
+            return None
+
+        added = False
+        if hasattr(artifact, "add_file"):
+            try:
+                artifact.add_file(str(file_path), name=file_name)
+                added = True
+            except Exception as exc:  # pragma: no cover - external API dependent
+                LOGGER.warning("Failed to add file to artifact via add_file: %s", exc)
+        if not added and hasattr(artifact, "new_file"):
+            try:
+                handle = artifact.new_file(file_name)  # type: ignore[call-arg]
+                with open(file_path, "rb") as stream:
+                    handle.write(stream.read())  # type: ignore[union-attr]
+                if hasattr(handle, "close"):
+                    handle.close()
+                added = True
+            except Exception as exc:  # pragma: no cover - external API dependent
+                LOGGER.warning("Failed to add file to artifact via new_file: %s", exc)
+
+        if not added:
+            LOGGER.error("Static report artifact could not accept file contents")
+            return None
+
+        if hasattr(artifact, "save"):
+            try:
+                artifact.save()
+            except Exception as exc:  # pragma: no cover - external API dependent
+                LOGGER.debug("Artifact save reported error: %s", exc)
+
+        target_path = f"{entity}/{project}" if entity else project
+        for method_name in ("link", "attach", "use"):
+            method = getattr(artifact, method_name, None)
+            if method is None:
+                continue
+            try:
+                method(target_path)  # type: ignore[misc]
+                break
+            except Exception as exc:  # pragma: no cover - external API dependent
+                LOGGER.debug("Failed to %s artifact: %s", method_name, exc)
+
+        artifact_url = (
+            getattr(artifact, "url", None)
+            or getattr(artifact, "versioned_url", None)
+            or getattr(artifact, "download_url", None)
+        )
+        if not artifact_url:
+            artifact_url = (
+                f"{base_url.rstrip('/')}/{target_path.strip('/')}/artifacts/report-static/{artifact_name}"
+            )
+
+    return artifact_url
+
+
+def _publish_report(
+    capabilities: WandbCapabilities,
+    api: Any,
+    entity: Optional[str],
+    project: str,
+    assets_by_section: Mapping[str, Sequence[_LoggedAsset]],
+    *,
+    generated_at: datetime,
+    base_url: str,
+    partial_fetch: bool,
+) -> Optional[str]:
+    if capabilities.can_instantiate_panels and capabilities.can_instantiate_blocks:
+        url = _build_report_with_panels(
+            capabilities,
+            api,
+            entity,
+            project,
+            assets_by_section,
+            generated_at=generated_at,
+            base_url=base_url,
+            partial_fetch=partial_fetch,
+        )
+        if url:
+            return url
+
+    if capabilities.can_instantiate_blocks:
+        LOGGER.info(
+            "[report_fallback] using markdown_only=True static_artifact_upload=False"
+        )
+        url = _build_markdown_only_report(
+            capabilities,
+            api,
+            entity,
+            project,
+            assets_by_section,
+            generated_at=generated_at,
+            base_url=base_url,
+            partial_fetch=partial_fetch,
+        )
+        if url:
+            return url
+
+    LOGGER.info(
+        "[report_fallback] using markdown_only=False static_artifact_upload=True"
+    )
+    return _upload_static_report_artifact(
+        api,
+        entity,
+        project,
+        assets_by_section,
+        base_url=base_url,
+        generated_at=generated_at,
+        partial_fetch=partial_fetch,
+    )
 def _flatten_schema_values(mapping: Mapping[str, Sequence[str]]) -> List[str]:
     """Return a sorted list of unique values from a schema mapping."""
 
@@ -786,301 +1382,6 @@ def _build_section_assets(
     return []
 
 
-def _assemble_report(
-    api: Any,
-    entity: Optional[str],
-    project: str,
-    assets_by_section: Mapping[str, Sequence[_LoggedAsset]],
-) -> Optional[str]:
-    try:
-        from wandb_workspaces.reports import v2 as reports_v2  # type: ignore
-    except Exception as exc:  # pragma: no cover - optional dependency
-        LOGGER.warning("W&B Reports API unavailable: %s", exc)
-        return None
-
-    base_kwargs: Dict[str, Any] = {
-        "entity": entity,
-        "project": project,
-        "title": "M-JEPA Project Report",
-        "description": "Auto-generated summary built on "
-        f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}",
-    }
-
-    attempts: List[Mapping[str, Any]] = []
-    if api is not None:
-        allowed_keywords: Set[str] = set()
-        mro_candidates = getattr(reports_v2.Report, "__mro__", ())
-        candidate_targets = [reports_v2.Report, getattr(reports_v2.Report, "__init__", None)]
-        if mro_candidates:
-            candidate_targets.extend(
-                base for base in mro_candidates if base not in {None, reports_v2.Report, object}
-            )
-
-        for candidate in candidate_targets:
-            if candidate is None:
-                continue
-            try:
-                signature = inspect.signature(candidate)
-            except (TypeError, ValueError):
-                continue
-            allowed_keywords.update(
-                name
-                for name in signature.parameters
-                if name not in {"self", "args", "kwargs"}
-            )
-
-        keyword_targets = {reports_v2.Report, *(mro_candidates[1:] if mro_candidates else [])}
-        explicit_allowlists: List[Set[str]] = []
-        for target in keyword_targets:
-            if target in {None, object}:
-                continue
-            for field_attr in (
-                "model_fields",
-                "fields",
-                "allowed_kwargs",
-                "_allowed",
-            ):
-                field_map = getattr(target, field_attr, None)
-                if isinstance(field_map, Mapping):
-                    entries = {str(entry) for entry in field_map.keys()}
-                elif isinstance(field_map, Iterable) and not isinstance(field_map, (str, bytes)):
-                    entries = {str(entry) for entry in field_map}
-                else:
-                    entries = set()
-
-                if not entries:
-                    continue
-
-                if field_attr in {"allowed_kwargs", "_allowed"}:
-                    explicit_allowlists.append(entries)
-                else:
-                    allowed_keywords.update(entries)
-
-        if explicit_allowlists:
-            combined_allowlist = set(explicit_allowlists[0])
-            for allowlist in explicit_allowlists[1:]:
-                combined_allowlist &= allowlist
-            allowed_keywords = (
-                allowed_keywords & combined_allowlist if allowed_keywords else combined_allowlist
-            )
-
-        candidate_kwargs: Sequence[Tuple[str, Mapping[str, Any]]] = (
-            ("api", {"api": api}),
-            ("client", {"client": api}),
-            ("connection", {"connection": api}),
-        )
-        seen: Set[str] = set()
-        matched_keyword = False
-        for keyword, payload in candidate_kwargs:
-            if keyword in allowed_keywords and keyword not in seen:
-                attempts.append(payload)
-                seen.add(keyword)
-                matched_keyword = True
-
-    attempts.append({})
-
-    errors: List[str] = []
-    report = None
-    for extra in attempts:
-        try:
-            report = reports_v2.Report(**{**base_kwargs, **extra})
-            break
-        except Exception as exc:  # pragma: no cover - external API dependent
-            errors.append(f"{sorted(extra.keys()) or ['<none>']}: {exc}")
-
-    if report is None:
-        details = "; ".join(errors) if errors else "no attempts"
-        LOGGER.warning("Failed to initialise W&B report object (%s)", details)
-        return None
-
-    panels_module = getattr(reports_v2, "panels", None)
-    blocks_module = getattr(reports_v2, "blocks", None)
-    has_run_table = bool(panels_module and hasattr(panels_module, "RunTable"))
-    has_run_image = bool(panels_module and hasattr(panels_module, "RunImage"))
-    has_panel_grid = bool(blocks_module and hasattr(blocks_module, "PanelGrid"))
-    LOGGER.debug(
-        "Reports API panel availability: RunTable=%s RunImage=%s PanelGrid=%s",
-        has_run_table,
-        has_run_image,
-        has_panel_grid,
-    )
-
-    section_assets: Dict[str, Sequence[_LoggedAsset]] = {}
-    total_assets = 0
-    needs_table_panel = False
-    needs_image_panel = False
-    for section in REPORT_SECTIONS:
-        assets = list(assets_by_section.get(section, []))
-        section_assets[section] = assets
-        total_assets += len(assets)
-        LOGGER.debug('Report section summary: section="%s" assets=%d', section, len(assets))
-        if assets:
-            if any(asset.kind == "table" for asset in assets):
-                needs_table_panel = True
-            if any(asset.kind == "image" for asset in assets):
-                needs_image_panel = True
-
-    if total_assets == 0:
-        LOGGER.warning(
-            "No report blocks were generated; skipping report upload (zero assets across sections)"
-        )
-        return None
-
-    fallback_reasons: List[str] = []
-    if needs_table_panel and not has_run_table:
-        fallback_reasons.append("RunTable unavailable")
-    if needs_image_panel and not has_run_image:
-        fallback_reasons.append("RunImage unavailable")
-    if (needs_table_panel or needs_image_panel) and not has_panel_grid:
-        fallback_reasons.append("PanelGrid unavailable")
-
-    blocks: List[Any] = []
-    panel_failures = 0
-
-    def _log_panel_failure(context: str, exc: Exception) -> None:
-        nonlocal panel_failures
-        panel_failures += 1
-        LOGGER.debug("%s (%s: %s)", context, exc.__class__.__name__, exc)
-
-    if fallback_reasons:
-        LOGGER.info(
-            "Using Markdown fallback for W&B report because %s",
-            ", ".join(fallback_reasons),
-        )
-        markdown_cls = None
-        if blocks_module is not None:
-            for attr in ("Markdown", "Text", "Paragraph", "RichText"):
-                if hasattr(blocks_module, attr):
-                    markdown_cls = getattr(blocks_module, attr)
-                    break
-        if markdown_cls is None:
-            LOGGER.warning(
-                "No Markdown-compatible block available in wandb_workspaces; cannot build report"
-            )
-        else:
-            for section, assets in section_assets.items():
-                if not assets:
-                    continue
-                bullet_lines = [
-                    f"- **{asset.title}**: {asset.run_path}::{asset.key} ({asset.kind})"
-                    for asset in assets
-                ]
-                body = f"### {section}\n\n" + "\n".join(bullet_lines)
-                block: Optional[Any] = None
-                start_failures = panel_failures
-                for payload in (
-                    {"title": section, "markdown": body},
-                    {"title": section, "text": body},
-                    {"title": section, "content": body},
-                    {"title": section, "body": body},
-                    {"markdown": body},
-                    {"text": body},
-                    {"content": body},
-                    {"body": body},
-                ):
-                    try:
-                        block = markdown_cls(**payload)
-                    except TypeError:
-                        continue
-                    except Exception as exc:  # pragma: no cover - external API dependent
-                        _log_panel_failure(
-                            f"Failed to create Markdown block for section {section}", exc
-                        )
-                        block = None
-                        break
-                    else:
-                        break
-                if block is None:
-                    try:
-                        block = markdown_cls(body)
-                    except TypeError:
-                        pass
-                    except Exception as exc:  # pragma: no cover - external API dependent
-                        _log_panel_failure(
-                            f"Failed to create Markdown block for section {section}", exc
-                        )
-                        block = None
-                if block is not None:
-                    blocks.append(block)
-                else:
-                    if panel_failures == start_failures:
-                        panel_failures += 1
-                    LOGGER.debug(
-                        "Unable to construct Markdown block for section %s; incompatible signature",
-                        section,
-                    )
-    else:
-        for section, assets in section_assets.items():
-            if not assets:
-                continue
-            panels: List[Any] = []
-            for asset in assets:
-                try:
-                    if asset.kind == "table" and has_run_table:
-                        panels.append(
-                            panels_module.RunTable(  # type: ignore[union-attr]
-                                run_path=asset.run_path,
-                                table_key=asset.key,
-                                title=asset.title,
-                                caption=asset.caption,
-                            )
-                        )
-                    elif asset.kind == "image" and has_run_image:
-                        panels.append(
-                            panels_module.RunImage(  # type: ignore[union-attr]
-                                run_path=asset.run_path,
-                                image_key=asset.key,
-                                title=asset.title,
-                                caption=asset.caption,
-                            )
-                        )
-                    elif asset.kind == "table":
-                        LOGGER.debug(
-                            "RunTable panel unavailable; deferring asset %s to fallback",
-                            asset.manifest_entry,
-                        )
-                    elif asset.kind == "image":
-                        LOGGER.debug(
-                            "RunImage panel unavailable; deferring asset %s to fallback",
-                            asset.manifest_entry,
-                        )
-                except Exception as exc:  # pragma: no cover - external API dependent
-                    _log_panel_failure(f"Failed to create panel for {asset.manifest_entry}", exc)
-            if not panels:
-                continue
-            try:
-                blocks.append(
-                    blocks_module.PanelGrid(  # type: ignore[union-attr]
-                        title=section,
-                        panels=panels,
-                    )
-                )
-            except Exception as exc:  # pragma: no cover - depends on API
-                _log_panel_failure(
-                    f"Failed to build PanelGrid for section {section}", exc
-                )
-
-    if not blocks:
-        if fallback_reasons:
-            reason = "no panels available in wandb_workspaces"
-        elif panel_failures:
-            reason = f"panel construction failures={panel_failures}"
-        else:
-            reason = "panel construction failures"
-        LOGGER.warning(
-            "No report blocks were generated; skipping report upload (%s)",
-            reason,
-        )
-        return None
-
-    try:
-        report.blocks = blocks
-        report.save()
-    except Exception as exc:  # pragma: no cover - depends on API
-        LOGGER.warning("Failed to save W&B report: %s", exc)
-        return None
-    return getattr(report, "url", None)
-
 
 def _ensure_schema(
     root: Path, max_runs: int, schema_path: Optional[Path]
@@ -1155,6 +1456,36 @@ def build_report(
     root = Path(__file__).resolve().parents[1]
     schema = _ensure_schema(root, max_runs=max_runs, schema_path=schema_path)
 
+    capabilities = detect_wandb_capabilities()
+    generated_at = datetime.utcnow()
+    base_url = _resolve_base_url()
+
+    per_page = 75
+    per_page_override = os.getenv("REPORT_PER_PAGE")
+    if per_page_override:
+        try:
+            per_page = max(1, int(per_page_override))
+        except ValueError:
+            LOGGER.warning(
+                "Invalid REPORT_PER_PAGE override %r; falling back to %s",
+                per_page_override,
+                per_page,
+            )
+
+    max_attempts = RetrySettings().max_attempts
+    attempts_override = os.getenv("REPORT_MAX_ATTEMPTS")
+    if attempts_override:
+        try:
+            max_attempts = max(1, int(attempts_override))
+        except ValueError:
+            LOGGER.warning(
+                "Invalid REPORT_MAX_ATTEMPTS override %r; falling back to %s",
+                attempts_override,
+                max_attempts,
+            )
+
+    retry_settings = RetrySettings(max_attempts=max_attempts)
+
     try:
         api = get_wandb_api(project=project, allow_missing=True)
     except Exception as exc:  # pragma: no cover - defensive; helper logs already
@@ -1176,17 +1507,22 @@ def build_report(
         wandb_soft_fail,
         SOFT_FAIL_ENV_VAR,
     )
+    LOGGER.info(
+        "Report pagination configured with per_page=%s max_attempts=%s", per_page, max_attempts
+    )
 
     filters: Dict[str, Any] = {}
     resolved_manifest = manifest_path or root / "reports" / "FIGURE_MANIFEST.md"
     try:
-        runs = fetch_runs(
+        fetch_result = fetch_runs(
             entity,
             project,
             filters=filters,
             max_runs=max_runs,
             api=api,
             soft_fail=wandb_soft_fail,
+            per_page=per_page,
+            retry_settings=retry_settings,
         )
     except WandbRetryError as exc:
         if wandb_soft_fail:
@@ -1200,13 +1536,13 @@ def build_report(
             )
             return REPORT_UNAVAILABLE_SENTINEL
         raise
-    LOGGER.info("Fetched %d runs", len(runs))
 
+    runs = fetch_result.runs
+    partial_fetch = fetch_result.partial
     if not runs:
-        LOGGER.warning("No runs were fetched from W&B; nothing to report.")
-        manifest = {section: [] for section in REPORT_SECTIONS}
-        _write_manifest(manifest, resolved_manifest)
-        return None
+        LOGGER.warning(
+            "No runs were fetched from W&B; the generated report will contain placeholders."
+        )
 
     flattened_metrics = _flatten_schema_values(schema.metrics)
     flattened_configs = _flatten_schema_values(schema.configs)
@@ -1240,9 +1576,20 @@ def build_report(
 
     _write_manifest(manifest, resolved_manifest)
 
-    report_url = _assemble_report(api, entity, project, assets_by_section)
+    report_url = _publish_report(
+        capabilities,
+        api,
+        entity,
+        project,
+        assets_by_section,
+        generated_at=generated_at,
+        base_url=base_url,
+        partial_fetch=partial_fetch,
+    )
     if report_url:
-        LOGGER.info("Created W&B report at %s", report_url)
+        LOGGER.info("Report output available at %s", report_url)
+    else:
+        LOGGER.error("Report generation failed to produce a report or artifact URL")
     return report_url
 
 
@@ -1303,7 +1650,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     elif url:
         print(url)
     else:
-        LOGGER.info("Report generation completed without publishing a W&B URL.")
+        LOGGER.error("Report generation failed: no report or artifact URL was produced.")
     return 0
 
 
