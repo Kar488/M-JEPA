@@ -116,6 +116,8 @@ report:
   manifest_path: ${REPORTS_DIR}/FIGURE_MANIFEST.md
   schema_path: ${REPORTS_DIR}/schema.json
   max_runs: ${REPORT_MAX_RUNS:-500}
+  per_page: ${REPORT_PER_PAGE:-75}
+  max_attempts: ${REPORT_MAX_ATTEMPTS:-5}
   refresh: true
 
 artifacts:
