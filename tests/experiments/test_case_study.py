@@ -1,3 +1,4 @@
+import logging
 import sys
 import types
 
@@ -179,3 +180,83 @@ def test_evaluate_case_study_handles_empty_predictions(monkeypatch):
     assert metrics["pr_auc"] == pytest.approx(0.5)
     assert metrics["brier"] == pytest.approx(0.5)
     assert metrics["ece"] == pytest.approx(0.5)
+
+
+def test_case_study_trains_head_when_missing(tmp_path, monkeypatch, caplog):
+    import experiments.case_study as case_study
+
+    dummy_ckpt = tmp_path / "ft_encoder.pt"
+    dummy_ckpt.write_text("placeholder", encoding="utf-8")
+
+    def fake_safe_load_checkpoint(primary, **_kwargs):
+        return {"encoder": {}}, {}
+
+    monkeypatch.setattr(case_study, "safe_load_checkpoint", fake_safe_load_checkpoint)
+    monkeypatch.setattr(case_study, "load_state_dict_forgiving", lambda *args, **kwargs: None)
+
+    train_calls: dict[str, object] = {}
+
+    def fake_train_linear_head(*, dataset, encoder, epochs, freeze_encoder, patience, **kwargs):
+        train_calls["called"] = True
+        train_calls["epochs"] = epochs
+        train_calls["freeze_encoder"] = freeze_encoder
+        train_calls["patience"] = patience
+        head = torch.nn.Linear(getattr(encoder, "hidden_dim", 32), 1)
+        return {"head": head, "train/batches": 8.0}
+
+    monkeypatch.setattr(case_study, "train_linear_head", fake_train_linear_head)
+
+    caplog.set_level(logging.INFO, logger=case_study.logger.name)
+
+    result = case_study.run_tox21_case_study(
+        csv_path="samples/tox21_mini.csv",
+        task_name="NR-AR",
+        finetune_epochs=3,
+        encoder_checkpoint=str(dummy_ckpt),
+        evaluation_mode="fine_tuned",
+    )
+
+    assert result.evaluations, "expected evaluations to be produced"
+    assert train_calls.get("called") is True
+    assert train_calls.get("epochs") == 3
+    assert train_calls.get("freeze_encoder") is True
+    assert train_calls.get("patience") == 10
+    assert any("train_head=yes" in message for message in caplog.messages)
+    assert any("head_trained=yes" in message for message in caplog.messages)
+
+
+def test_case_study_frozen_finetuned_trains_linear_probe(monkeypatch, caplog):
+    import experiments.case_study as case_study
+
+    def fake_safe_load_checkpoint(primary, **_kwargs):
+        return {"encoder": {}}, {}
+
+    monkeypatch.setattr(case_study, "safe_load_checkpoint", fake_safe_load_checkpoint)
+    monkeypatch.setattr(case_study, "load_state_dict_forgiving", lambda *args, **kwargs: None)
+
+    calls: dict[str, object] = {}
+
+    def fake_train_linear_head(*, dataset, encoder, freeze_encoder, **kwargs):
+        calls["called"] = True
+        calls["freeze_encoder"] = freeze_encoder
+        params = list(getattr(encoder, "parameters", lambda: [])())
+        calls["encoder_requires_grad"] = [getattr(p, "requires_grad", None) for p in params]
+        head = torch.nn.Linear(getattr(encoder, "hidden_dim", 32), 1)
+        return {"head": head, "train/batches": 4.0}
+
+    monkeypatch.setattr(case_study, "train_linear_head", fake_train_linear_head)
+
+    caplog.set_level(logging.INFO, logger=case_study.logger.name)
+
+    case_study.run_tox21_case_study(
+        csv_path="samples/tox21_mini.csv",
+        task_name="NR-AR",
+        encoder_checkpoint="dummy_ft.pt",
+        evaluation_mode="frozen_finetuned",
+    )
+
+    assert calls.get("called") is True
+    assert calls.get("freeze_encoder") is True
+    encoder_grad_flags = calls.get("encoder_requires_grad") or []
+    assert encoder_grad_flags and all(flag is False for flag in encoder_grad_flags)
+    assert any("train_head=yes" in message for message in caplog.messages)

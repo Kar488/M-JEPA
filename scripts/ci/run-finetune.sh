@@ -11,6 +11,13 @@ source "$(dirname "$0")/stage.sh"
 
 ci_print_env_diag
 
+if [[ -n "${BESTCFG_SKIP:-}" ]]; then
+  BESTCFG_SKIP="${BESTCFG_SKIP} max_pretrain_batches max_finetune_batches"
+else
+  BESTCFG_SKIP="max_pretrain_batches max_finetune_batches"
+fi
+export BESTCFG_SKIP
+
 export WANDB_NAME="finetune"
 export WANDB_JOB_TYPE="finetune"
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import math
 import os
 import random
 import sys
@@ -654,6 +655,7 @@ def run_tox21_case_study(
     bf16: bool = False,
     pretrain_time_budget_mins: int = 0,
     finetune_time_budget_mins: int = 0,
+    finetune_patience: Optional[int] = None,
     *,
     dataset_name: str = "tox21",
     encoder_checkpoint: Optional[str] = None,
@@ -826,28 +828,37 @@ def run_tox21_case_study(
         "num_layers": num_layers,
     }
     cli_cfg = final_cfg.copy()
+    mismatch_report: Dict[str, Tuple[Any, Any]] = {}
     for source in (state_cfg, manifest_cfg):
         for key in ("gnn_type", "hidden_dim", "num_layers"):
             value = source.get(key)
             if value is None:
                 continue
-            cli_value = cli_cfg.get(key)
+            current_value = final_cfg.get(key)
             if (
                 strict_encoder_config
-                and cli_value is not None
-                and str(cli_value) != str(value)
+                and current_value is not None
+                and str(current_value) != str(value)
             ):
                 raise ValueError(
-                    f"Encoder configuration mismatch for {key}: CLI={cli_value} checkpoint={value}"
+                    f"Encoder configuration mismatch for {key}: CLI={current_value} checkpoint={value}"
                 )
-            if cli_value is not None and str(cli_value) != str(value) and not strict_encoder_config:
-                logger.warning(
-                    "Overriding encoder %s from %s to %s based on checkpoint metadata",
-                    key,
-                    cli_value,
-                    value,
-                )
-            final_cfg[key] = value
+            if current_value is None or str(current_value) == str(value):
+                final_cfg[key] = value
+                continue
+            if not strict_encoder_config:
+                original = cli_cfg.get(key)
+                if original is not None and key not in mismatch_report:
+                    mismatch_report[key] = (original, value)
+                final_cfg[key] = value
+    if mismatch_report:
+        details = ", ".join(
+            f"{name} {before}→{after}" for name, (before, after) in mismatch_report.items()
+        )
+        logger.info(
+            "Normalising encoder configuration from checkpoint metadata: %s",
+            details,
+        )
 
     final_hidden_dim = int(final_cfg.get("hidden_dim", hidden_dim))
     final_num_layers = int(final_cfg.get("num_layers", num_layers))
@@ -898,9 +909,12 @@ def run_tox21_case_study(
         edge_dim=edge_dim,
     )
 
-    normalized_mode = evaluation_mode.lower().replace("-", "_")
+    requested_mode = evaluation_mode
+    normalized_mode = requested_mode.lower().replace("-", "_")
+    display_mode = normalized_mode
     if normalized_mode == "fine_tuned":
         normalized_mode = "end_to_end"
+        display_mode = "fine_tuned"
     valid_modes = {"pretrain_frozen", "frozen_finetuned", "end_to_end"}
     if normalized_mode not in valid_modes:
         logger.warning(
@@ -908,14 +922,49 @@ def run_tox21_case_study(
             evaluation_mode,
         )
         normalized_mode = "pretrain_frozen"
+        display_mode = "pretrain_frozen"
     if normalized_mode in {"frozen_finetuned", "end_to_end"} and not encoder_checkpoint:
         logger.warning(
             "evaluation_mode '%s' requires a checkpoint; falling back to pretrain_frozen.",
             normalized_mode,
         )
         normalized_mode = "pretrain_frozen"
+        display_mode = "pretrain_frozen"
 
-    train_probe = normalized_mode != "end_to_end"
+    head_from_checkpoint = isinstance(loaded_head_state, dict) and bool(loaded_head_state)
+    train_head_missing = normalized_mode == "end_to_end" and not head_from_checkpoint
+    train_probe = normalized_mode != "end_to_end" or train_head_missing
+
+    patience_value = finetune_patience
+    if patience_value is None:
+        env_patience = os.getenv("TOX21_FINETUNE_PATIENCE", "").strip()
+        if env_patience:
+            try:
+                patience_value = int(env_patience)
+            except ValueError:
+                logger.warning(
+                    "Invalid TOX21_FINETUNE_PATIENCE=%s; falling back to default patience.",
+                    env_patience,
+                )
+                patience_value = None
+    if patience_value is None:
+        patience_value = 10
+
+    logger.info(
+        "Tox21 evaluation configuration: mode=%s head_from_checkpoint=%s train_head=%s epochs=%d patience=%s",
+        display_mode,
+        "yes" if head_from_checkpoint else "no",
+        "yes" if train_probe else "no",
+        int(finetune_epochs if train_probe else 0),
+        str(patience_value if train_probe else "<skip>"),
+    )
+
+    head_trained = False
+    head_training_steps = 0.0
+    head_loader_batches = 0.0
+    head_epoch_batches = 0.0
+    random_head_used = False
+
     should_pretrain = normalized_mode == "pretrain_frozen" and not encoder_checkpoint
     encoder_source = normalized_mode
     eval_name = normalized_mode
@@ -1048,7 +1097,7 @@ def run_tox21_case_study(
             lr=lr,
             batch_size=32,
             device=device,
-            patience=10,
+            patience=int(patience_value),
             num_workers=num_workers,
             pin_memory=pin_memory,
             persistent_workers=persistent_workers,
@@ -1056,6 +1105,7 @@ def run_tox21_case_study(
             bf16=bf16_linear,
             time_budget_mins=finetune_time_budget_mins,
             use_scaffold=bool(scaffold_split_indices and _HAS_RDKIT),
+            freeze_encoder=True,
             **extra_args,
         )
 
@@ -1063,6 +1113,10 @@ def run_tox21_case_study(
         if head is None:
             raise RuntimeError("train_linear_head did not return a head module")
         head = head.to(device)
+        head_trained = True
+        head_training_steps = float(clf_metrics.get("train/batches", 0.0) or 0.0)
+        head_loader_batches = float(clf_metrics.get("train/loader_batches", 0.0) or 0.0)
+        head_epoch_batches = float(clf_metrics.get("train/epoch_batches", 0.0) or 0.0)
     else:
         out_dim = 1
         in_dim = final_hidden_dim
@@ -1078,6 +1132,7 @@ def run_tox21_case_study(
             else:
                 head.load_state_dict(loaded_head_state, strict=False)
         elif normalized_mode == "end_to_end":
+            random_head_used = True
             logger.warning(
                 "End-to-end mode requested but head weights were missing; using a randomly initialised head."
             )
@@ -1122,6 +1177,30 @@ def run_tox21_case_study(
         metric_value,
         threshold_rule.threshold if threshold_rule is not None else None,
     )
+
+    def _fmt_metric(value: Any) -> str:
+        try:
+            num = float(value)
+        except Exception:
+            return "<nan>"
+        if math.isnan(num):
+            return "<nan>"
+        return f"{num:.4f}"
+
+    roc_auc_val = metrics.get("roc_auc")
+    pr_auc_val = metrics.get("pr_auc")
+    logger.info(
+        "Tox21 evaluation summary: mode=%s head_trained=%s steps=%.1f roc_auc=%s pr_auc=%s",
+        display_mode,
+        "yes" if head_trained else "no",
+        head_training_steps,
+        _fmt_metric(roc_auc_val),
+        _fmt_metric(pr_auc_val),
+    )
+    if random_head_used:
+        logger.warning(
+            "Tox21 evaluation used a randomly initialised head; metrics may be unreliable."
+        )
 
     evaluation = EvaluationResult(
         name=eval_name,
