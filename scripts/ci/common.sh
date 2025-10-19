@@ -1404,7 +1404,9 @@ maps = {
     },
 }
 
-# Build a flat cfg the rest of the code expects
+# Build a flat cfg the rest of the code expects. Start from all mapped keys so
+# newly supported flags flow automatically, then ensure legacy singular knobs
+# remain available even if a future refactor drops them from the stage maps.
 cfg = {}
 known_keys = set()
 for mapping in maps.values():
@@ -1412,6 +1414,32 @@ for mapping in maps.values():
 known_keys.update({"training_method", "method", "learning_rate", "lr"})
 
 for key in sorted(known_keys):
+    value = _lookup_with_aliases(key)
+    if value is _MISSING or value is None:
+        continue
+    cfg[key] = value
+
+# Backfill historical singular fields that other tooling expects, regardless of
+# whether they are still covered by the dynamic maps above.
+legacy_keys = [
+    "gnn_type",
+    "hidden_dim",
+    "num_layers",
+    "ema_decay",
+    "contiguity",
+    "add_3d",
+    "lr",
+    "learning_rate",
+    "temperature",
+    "training_method",
+    "method",
+    "pretrain_epochs",
+    "finetune_epochs",
+]
+
+for key in legacy_keys:
+    if key in cfg:
+        continue
     value = _lookup_with_aliases(key)
     if value is _MISSING or value is None:
         continue
