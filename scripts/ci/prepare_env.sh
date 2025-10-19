@@ -25,17 +25,24 @@ ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
 # ----------- driver / gpu sanity -----------
 CUDA_EXPECTED=0
 if command -v nvidia-smi >/dev/null 2>&1; then
-  if nvidia-smi -L >/dev/null 2>&1; then
-    CUDA_EXPECTED=1
-  else
-    if [ "${PYTORCH_FAIL_FAST_ON_BAD_CUDA:-1}" -eq 1 ]; then
-      echo "[prepare-env][error] NVIDIA driver detected but unhealthy (nvidia-smi -L failed)."
-      echo "[prepare-env][error] Inspect the host GPU configuration before retrying."
-      exit 1
-    else
-      echo "[prepare-env][warn] NVIDIA driver check failed; continuing because PYTORCH_FAIL_FAST_ON_BAD_CUDA=0"
-    fi
+  nv_output=""
+  if ! nv_output=$(nvidia-smi -L 2>&1); then
+    echo "[prepare-env][error] Unable to query NVIDIA devices via nvidia-smi -L."
+    echo "[prepare-env][error] Output: $nv_output"
+    echo "[prepare-env][error] Inspect the host GPU configuration before retrying."
+    exit 1
   fi
+
+  if [ -z "$nv_output" ] || printf '%s\n' "$nv_output" | grep -qiE 'no devices were found'; then
+    echo "[prepare-env][error] nvidia-smi reports no accessible GPU devices."
+    echo "[prepare-env][error] Ensure a CUDA-capable GPU and matching drivers are available."
+    exit 1
+  fi
+
+  CUDA_EXPECTED=1
+else
+  echo "[prepare-env][error] nvidia-smi not found; GPU-equipped host is required."
+  exit 1
 fi
 
 # ----------- micromamba install / hook -----------
