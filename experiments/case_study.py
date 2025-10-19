@@ -908,6 +908,9 @@ def run_tox21_case_study(
     allow_shape_coercion: bool = False,
     allow_equal_hash: bool = False,
     verify_match_threshold: float = 0.98,
+    cli_hidden_dim_provided: bool = True,
+    cli_num_layers_provided: bool = True,
+    cli_gnn_type_provided: bool = True,
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
 
@@ -1093,11 +1096,13 @@ def run_tox21_case_study(
         else:
             enc_state = state
 
-    final_cfg: Dict[str, Any] = {
-        "gnn_type": gnn_type,
-        "hidden_dim": hidden_dim,
-        "num_layers": num_layers,
-    }
+    final_cfg: Dict[str, Any] = {}
+    if cli_gnn_type_provided and gnn_type is not None:
+        final_cfg["gnn_type"] = gnn_type
+    if cli_hidden_dim_provided and hidden_dim is not None:
+        final_cfg["hidden_dim"] = hidden_dim
+    if cli_num_layers_provided and num_layers is not None:
+        final_cfg["num_layers"] = num_layers
     cli_cfg = final_cfg.copy()
     mismatch_report: Dict[str, Tuple[Any, Any]] = {}
     for source in (state_cfg, manifest_cfg):
@@ -1133,9 +1138,27 @@ def run_tox21_case_study(
             details,
         )
 
-    final_hidden_dim = int(final_cfg.get("hidden_dim", hidden_dim))
-    final_num_layers = int(final_cfg.get("num_layers", num_layers))
-    final_gnn_type = str(final_cfg.get("gnn_type", gnn_type))
+    hidden_dim_fallback = hidden_dim if hidden_dim is not None else 256
+    num_layers_fallback = num_layers if num_layers is not None else 3
+    gnn_type_fallback = gnn_type or "mpnn"
+
+    resolved_hidden_dim = final_cfg.get("hidden_dim", hidden_dim_fallback)
+    resolved_num_layers = final_cfg.get("num_layers", num_layers_fallback)
+    resolved_gnn_type = final_cfg.get("gnn_type", gnn_type_fallback)
+
+    if resolved_hidden_dim is None or resolved_num_layers is None or resolved_gnn_type is None:
+        raise ValueError("Unable to determine encoder architecture from CLI or metadata")
+
+    final_hidden_dim = int(resolved_hidden_dim)
+    final_num_layers = int(resolved_num_layers)
+    final_gnn_type = str(resolved_gnn_type)
+
+    logger.info(
+        "[enc_cfg] gnn_type=%s hidden_dim=%s num_layers=%s",
+        final_gnn_type,
+        final_hidden_dim,
+        final_num_layers,
+    )
 
     gnn_type_lower = final_gnn_type.lower()
     if gnn_type_lower in {

@@ -93,6 +93,24 @@ export -f rewrite_path _wrap_args_and_exec mkdir install cp mv touch tee
             out = ""
         return out
 
+
+def parse_cli(stdout: str) -> dict:
+    tokens = stdout.split()
+    parsed: dict = {}
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.startswith("--"):
+            if i + 1 < len(tokens) and not tokens[i + 1].startswith("--"):
+                parsed.setdefault(tok, []).append(tokens[i + 1])
+                i += 2
+            else:
+                parsed.setdefault(tok, []).append(True)
+                i += 1
+        else:
+            i += 1
+    return parsed
+
 def test_wandb_shape_injects_model_flags_for_bench():
     # Simulate W&B-like JSON: parameters.<key>.value
     cfg = {
@@ -156,6 +174,32 @@ def test_flat_shape_also_works_and_epochs_can_be_skipped_for_tox21():
     assert "--finetune-epochs" not in out_no_epochs
     assert "--gnn-type" in out_no_epochs and "gine" in out_no_epochs
     assert "--hidden-dim" in out_no_epochs and "--num-layers" in out_no_epochs
+
+
+def test_pretrain_stage_emits_data_loader_and_sampling_winners():
+    cfg = {
+        "mask_ratio": 0.2154,
+        "pretrain_batch_size": 64,
+        "sample_unlabeled": 50000,
+        "prefetch_factor": 2,
+        "persistent_workers": True,
+        "pin_memory": True,
+    }
+    out = run_bestcfg("pretrain", cfg)
+    parsed = parse_cli(out)
+
+    def single(flag: str):
+        values = parsed.get(flag)
+        assert values, f"expected {flag} in {parsed}"
+        assert len(values) == 1, f"expected single value for {flag}, got {values}"
+        return values[0]
+
+    assert float(single("--mask-ratio")) == pytest.approx(0.2154)
+    assert single("--batch-size") == "64"
+    assert single("--sample-unlabeled") == "50000"
+    assert single("--prefetch-factor") == "2"
+    assert single("--persistent-workers") is True
+    assert single("--pin-memory") is True
 
 def test_finetune_stage_emits_epochs_and_honors_no_epochs():
     cfg = {"finetune_epochs": 3, "gnn_type": "gine", "hidden_dim": 64, "num_layers": 2}
