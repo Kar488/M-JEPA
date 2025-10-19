@@ -125,6 +125,41 @@ def test_tox21_parser_defaults_and_handler(tmp_path):
     assert args.hidden_dim == CONFIG["model"]["hidden_dim"]
     assert args.pretrain_time_budget_mins == 0
     assert args.finetune_time_budget_mins == 0
+    assert args._hidden_dim_provided is False
+    assert args._num_layers_provided is False
+    assert args._gnn_type_provided is False
+
+
+def test_tox21_help_lists_structural_flags(capsys):
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["tox21", "--help"])
+    help_output = capsys.readouterr().out
+    for flag in ("--gnn-type", "--hidden-dim", "--num-layers"):
+        assert flag in help_output
+
+
+def test_model_shape_flags_track_provided_state(tmp_path):
+    parser = build_parser()
+    args = parser.parse_args([
+        "tox21",
+        "--csv",
+        str(tmp_path / "tox.csv"),
+        "--task",
+        "NR-AR",
+        "--hidden-dim",
+        "192",
+        "--num-layers",
+        "4",
+        "--gnn-type",
+        "gin",
+    ])
+    assert args._hidden_dim_provided is True
+    assert args._num_layers_provided is True
+    assert args._gnn_type_provided is True
+    assert args.hidden_dim == 192
+    assert args.num_layers == 4
+    assert args.gnn_type == "gin"
 
 
 def test_grid_search_parser_defaults_and_handler(tmp_path):

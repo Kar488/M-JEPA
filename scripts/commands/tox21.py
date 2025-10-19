@@ -233,6 +233,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             allow_equal_hash=getattr(args, "allow_equal_hash", False),
             verify_match_threshold=float(getattr(args, "verify_match_threshold", 0.98)),
             finetune_patience=getattr(args, "patience", None),
+            cli_hidden_dim_provided=getattr(args, "_hidden_dim_provided", True),
+            cli_num_layers_provided=getattr(args, "_num_layers_provided", True),
+            cli_gnn_type_provided=getattr(args, "_gnn_type_provided", True),
         )
 
         diagnostics = getattr(result, "diagnostics", {}) or {}
