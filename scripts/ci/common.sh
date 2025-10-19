@@ -1226,7 +1226,9 @@ if stage == "benchmark":
 raw = json.load(open(path))
 
 # --- flatten possible W&B shapes ---
-def _get(key, default=None):
+_MISSING = object()
+
+def _get(key, default=_MISSING):
     # 1) flat
     if isinstance(raw, dict) and key in raw:
         v = raw[key]
@@ -1242,22 +1244,21 @@ def _get(key, default=None):
         return v
     return default
 
-# Build a flat cfg the rest of the code expects
-cfg = {}
-for k in ["gnn_type","hidden_dim","num_layers","ema_decay","contiguity","add_3d",
-          "lr","learning_rate","temperature","training_method","method","pretrain_epochs","finetune_epochs"]:
-    v = _get(k)
-    if v is not None:
-        cfg[k] = v
-
-# normalise: learning_rate → lr (benchmark/help only exposes --lr)
-if "lr" not in cfg and "learning_rate" in cfg:
-    cfg["lr"] = cfg["learning_rate"]
-
-# normalise: method → contrastive flag
-tm = cfg.get("training_method") or cfg.get("method")
-if isinstance(tm, str) and tm.lower().startswith("con"):
-    cfg["contrastive"] = True
+def _lookup_with_aliases(key):
+    """Return the first non-missing value for key or its underscore/hyphen aliases."""
+    value = _get(key)
+    if value is not _MISSING:
+        return value
+    candidates = []
+    if "_" in key:
+        candidates.append(key.replace("_", "-"))
+    if "-" in key:
+        candidates.append(key.replace("-", "_"))
+    for alias in candidates:
+        value = _get(alias)
+        if value is not _MISSING:
+            return value
+    return _MISSING
 
 # --- Unified, refactor-safe mappings (kebab-case) ---
 # 1) Dataset / loader / device knobs that multiple stages accept
@@ -1356,6 +1357,7 @@ pretrain_only = {
     "pretrain_batch_size": "--batch-size",
     "pretrain_epochs": "--epochs",
     "save_every": "--save-every",
+    "sample_unlabeled": "--sample-unlabeled",
 }
 
 finetune_only = {
@@ -1402,10 +1404,48 @@ maps = {
     },
 }
 
+# Build a flat cfg the rest of the code expects
+cfg = {}
+known_keys = set()
+for mapping in maps.values():
+    known_keys.update(mapping.keys())
+known_keys.update({"training_method", "method", "learning_rate", "lr"})
+
+for key in sorted(known_keys):
+    value = _lookup_with_aliases(key)
+    if value is _MISSING or value is None:
+        continue
+    cfg[key] = value
+
+# normalise: learning_rate → lr (benchmark/help only exposes --lr)
+if "lr" not in cfg and "learning_rate" in cfg:
+    cfg["lr"] = cfg["learning_rate"]
+
+# normalise: method → contrastive flag
+tm = cfg.get("training_method") or cfg.get("method")
+if isinstance(tm, str) and tm.lower().startswith("con"):
+    cfg["contrastive"] = True
+
 # Build the skip set from env (accept space- or comma-separated)
 _raw = os.environ.get("BESTCFG_SKIP", "")
 # accept comma- or space-separated values and normalize
 skip = {s.strip() for s in _raw.replace(",", " ").split() if s.strip()}
+
+sorted_skip = sorted(skip)
+joined_skip = ", ".join(sorted_skip)
+print(f"[bestcfg] skip=[{joined_skip}]" if joined_skip else "[bestcfg] skip=[]", file=sys.stderr)
+
+# Policy: structural winners (gnn_type, hidden_dim, num_layers) should not be
+# skipped in normal flows. Use BESTCFG_NO_EPOCHS=1 to drop epochs when needed.
+structural = {"hidden_dim", "num_layers", "gnn_type"}
+structural_hits = sorted(structural.intersection(skip))
+if structural_hits:
+    print(
+        "[bestcfg][warn] structural winner(s) skipped: "
+        + ", ".join(structural_hits)
+        + "; this can cause shape mismatches.",
+        file=sys.stderr,
+    )
 
 # treat 'learning_rate' as an alias for 'lr'
 if "learning_rate" in skip:
