@@ -9,14 +9,34 @@ set -euxo pipefail
 : "${RUN_ID:=$(date +%s)}"
 : "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
 ENV_NAME="mjepa"
-: "${PYTORCH_INDEX_URL:=https://download.pytorch.org/whl/nightly/cu128}"
-: "${PYTORCH_PACKAGE_SPEC:=--pre torch}"
+: "${PYTORCH_INDEX_URL:=https://download.pytorch.org/whl/cu128}"
+: "${PYTORCH_PACKAGE_SPEC:=torch==2.8.*}"
+: "${PYTORCH_NIGHTLY_INDEX_URL:=https://download.pytorch.org/whl/nightly/cu128}"
+: "${PYTORCH_NIGHTLY_PACKAGE_SPEC:=--pre torch}"
+: "${PYTORCH_ALLOW_NIGHTLY_FALLBACK:=1}"
+: "${PYTORCH_FAIL_FAST_ON_BAD_CUDA:=1}"
 : "${BUILD_SCATTER_FROM_SOURCE:=0}"
 
 # ----------- persistent dirs -----------
 mkdir -p /data/mjepa/experiments "$WANDB_DIR" "$CACHE_DIR"
 mkdir -p "$EXP_ROOT"/{grid,pretrain,finetune,bench,tox21,logs}
 ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
+
+# ----------- driver / gpu sanity -----------
+CUDA_EXPECTED=0
+if command -v nvidia-smi >/dev/null 2>&1; then
+  if nvidia-smi -L >/dev/null 2>&1; then
+    CUDA_EXPECTED=1
+  else
+    if [ "${PYTORCH_FAIL_FAST_ON_BAD_CUDA:-1}" -eq 1 ]; then
+      echo "[prepare-env][error] NVIDIA driver detected but unhealthy (nvidia-smi -L failed)."
+      echo "[prepare-env][error] Inspect the host GPU configuration before retrying."
+      exit 1
+    else
+      echo "[prepare-env][warn] NVIDIA driver check failed; continuing because PYTORCH_FAIL_FAST_ON_BAD_CUDA=0"
+    fi
+  fi
+fi
 
 # ----------- micromamba install / hook -----------
 MM_PREFIX="$HOME/micromamba"
@@ -75,21 +95,33 @@ import torch, sys; sys.exit(0 if torch.cuda.is_available() or torch.__version__ 
 PY
 then
   IFS=' ' read -r -a _torch_spec <<<"$PYTORCH_PACKAGE_SPEC"
-  micromamba run -n "$ENV_NAME" python -m pip install --no-cache-dir \
+  echo "[prepare-env] Installing PyTorch from ${PYTORCH_INDEX_URL} (${_torch_spec[*]})"
+  if ! micromamba run -n "$ENV_NAME" python -m pip install --no-cache-dir \
     --index-url "$PYTORCH_INDEX_URL" \
-    "${_torch_spec[@]}"
+    "${_torch_spec[@]}"; then
+    if [ "${PYTORCH_ALLOW_NIGHTLY_FALLBACK:-1}" -eq 1 ]; then
+      IFS=' ' read -r -a _torch_nightly_spec <<<"$PYTORCH_NIGHTLY_PACKAGE_SPEC"
+      echo "[prepare-env][warn] Stable PyTorch install failed, attempting nightly from ${PYTORCH_NIGHTLY_INDEX_URL} (${_torch_nightly_spec[*]})"
+      micromamba run -n "$ENV_NAME" python -m pip install --no-cache-dir \
+        --index-url "$PYTORCH_NIGHTLY_INDEX_URL" \
+        "${_torch_nightly_spec[@]}"
+    else
+      echo "[prepare-env][error] Failed to install stable PyTorch and nightly fallback disabled (PYTORCH_ALLOW_NIGHTLY_FALLBACK=0)"
+      exit 1
+    fi
+  fi
 fi
 
-# ----------- Optional PyG if required -----------
-if ! micromamba run -n "$ENV_NAME" python - <<'PY' >/dev/null 2>&1
-import importlib.util, sys
-sys.exit(0 if importlib.util.find_spec("torch_scatter") else 1)
-PY
-then
-  TORCH_META=$(micromamba run -n "$ENV_NAME" python - <<'PY'
+TORCH_META=$(micromamba run -n "$ENV_NAME" python - <<'PY'
 import shlex
 import sys
-import torch
+
+try:
+    import torch
+except Exception as exc:  # pragma: no cover - defensive
+    print("TORCH_SUPPORTED=0")
+    print(f"TORCH_ERROR={shlex.quote('Torch import failed: ' + repr(exc))}")
+    sys.exit(0)
 
 raw = torch.__version__
 base = raw.split('+')[0]
@@ -113,11 +145,25 @@ print(f"TORCH_CUDA_VERSION={shlex.quote(cuda_version)}")
 print(f"TORCH_SCATTER_SUFFIX={shlex.quote(suffix)}")
 print(f"TORCH_CUDA_AVAILABLE={1 if torch.cuda.is_available() else 0}")
 PY
-  )
-  eval "$TORCH_META"
+)
+eval "$TORCH_META"
 
-  echo "[prepare-env] Torch version: ${TORCH_VERSION:-unknown} (cuda available: ${TORCH_CUDA_AVAILABLE:-0}, torch.version.cuda='${TORCH_CUDA_VERSION:-}')"
+echo "[prepare-env] Torch version: ${TORCH_VERSION:-unknown} (cuda available: ${TORCH_CUDA_AVAILABLE:-0}, torch.version.cuda='${TORCH_CUDA_VERSION:-}')"
 
+if [ "${PYTORCH_FAIL_FAST_ON_BAD_CUDA:-1}" -eq 1 ] && [ "$CUDA_EXPECTED" -eq 1 ]; then
+  if [ "${TORCH_CUDA_AVAILABLE:-0}" -ne 1 ]; then
+    echo "[prepare-env][error] CUDA-capable driver detected but torch.cuda.is_available()=False."
+    echo "[prepare-env][error] Ensure matching NVIDIA drivers are installed and CUDA_VISIBLE_DEVICES is set correctly."
+    exit 1
+  fi
+fi
+
+# ----------- Optional PyG if required -----------
+if ! micromamba run -n "$ENV_NAME" python - <<'PY' >/dev/null 2>&1
+import importlib.util, sys
+sys.exit(0 if importlib.util.find_spec("torch_scatter") else 1)
+PY
+then
   need_source_build=$BUILD_SCATTER_FROM_SOURCE
   case "$need_source_build" in
     0|1) ;;
