@@ -1227,8 +1227,21 @@ best_config_args() {
   fi
 
   local py; py=$(python_bin) || { echo "python not found" >&2; return 127; }
-  "$py" - "$cfg" "$stage" <<'PY'
-import os, json, sys
+  local __ci_dir
+  __ci_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local bestcfg_policy_default="${__ci_dir}/bestcfg_policy.yml"
+  local bestcfg_policy_env="${BESTCFG_POLICY:-$bestcfg_policy_default}"
+  BESTCFG_POLICY="$bestcfg_policy_env" "$py" - "$cfg" "$stage" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - optional dependency
+    yaml = None
+
 path = sys.argv[1]
 # normalize stage and support 'benchmark' alias
 stage = (sys.argv[2].lower().strip() if len(sys.argv) > 2 else "bench")
@@ -1270,6 +1283,74 @@ def _lookup_with_aliases(key):
         if value is not _MISSING:
             return value
     return _MISSING
+
+
+def _simple_yaml_load(text):
+    lines = text.splitlines()
+    result = {}
+    stack = [(-1, result)]
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        stripped_comment = raw.split("#", 1)[0].rstrip()
+        if not stripped_comment.strip():
+            i += 1
+            continue
+        if stripped_comment.strip() == "---":
+            i += 1
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        while stack and indent <= stack[-1][0]:
+            stack.pop()
+        container = stack[-1][1]
+        stripped = stripped_comment.strip()
+        if stripped.startswith("- "):
+            if not isinstance(container, list):
+                raise ValueError("yaml list item without list context")
+            container.append(stripped[2:].strip())
+            i += 1
+            continue
+        if ":" in stripped:
+            key, remainder = stripped.split(":", 1)
+            key = key.strip()
+            remainder = remainder.strip()
+            if remainder:
+                if not isinstance(container, dict):
+                    raise ValueError("yaml scalar outside mapping")
+                container[key] = remainder
+                i += 1
+                continue
+            lookahead = None
+            j = i + 1
+            while j < len(lines):
+                look_raw = lines[j]
+                look = look_raw.split("#", 1)[0]
+                if not look.strip():
+                    j += 1
+                    continue
+                look_indent = len(look_raw) - len(look_raw.lstrip(" "))
+                if look_indent <= indent:
+                    break
+                look_stripped = look.strip()
+                lookahead = [] if look_stripped.startswith("- ") else {}
+                break
+            if lookahead is None:
+                lookahead = {}
+            if not isinstance(container, dict):
+                raise ValueError("yaml mapping outside dict context")
+            container[key] = lookahead
+            stack.append((indent, lookahead))
+            i += 1
+            continue
+        raise ValueError(f"unsupported policy line: {raw!r}")
+    return result
+
+
+def _load_policy_manifest(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    if yaml is not None:
+        return yaml.safe_load(text) or {}
+    return _simple_yaml_load(text)
 
 # --- Unified, refactor-safe mappings (kebab-case) ---
 # 1) Dataset / loader / device knobs that multiple stages accept
@@ -1465,6 +1546,58 @@ tm = cfg.get("training_method") or cfg.get("method")
 if isinstance(tm, str) and tm.lower().startswith("con"):
     cfg["contrastive"] = True
 
+# Load policy manifest and collapse default + per-stage rules.
+policy_candidates = []
+policy_hint = os.environ.get("BESTCFG_POLICY")
+if policy_hint:
+    policy_candidates.append(Path(policy_hint))
+app_dir = os.environ.get("APP_DIR")
+if app_dir:
+    policy_candidates.append(Path(app_dir) / "scripts" / "ci" / "bestcfg_policy.yml")
+
+policy_path = None
+policy_manifest = {}
+for candidate in policy_candidates:
+    if candidate and candidate.is_file():
+        policy_path = str(candidate)
+        policy_manifest = _load_policy_manifest(candidate)
+        break
+
+if not policy_manifest:
+    policy_manifest = {}
+if policy_path is None:
+    policy_path = policy_hint or "<unset>"
+
+def _policy_values(section_name):
+    section = policy_manifest.get(section_name) or {}
+    return {
+        "yaml_only": list(section.get("yaml_only") or []),
+        "bestcfg_only": list(section.get("bestcfg_only") or []),
+        "allow": list(section.get("allow") or []),
+    }
+
+default_policy = _policy_values("default")
+stage_policy = _policy_values(stage)
+
+def _merged(category):
+    merged = []
+    merged.extend(default_policy[category])
+    merged.extend(stage_policy[category])
+    return {str(v) for v in merged}
+
+policy_sets = {category: _merged(category) for category in ("yaml_only", "bestcfg_only", "allow")}
+
+# Prepare keep overrides and summary buckets.
+keep_raw = os.environ.get("BESTCFG_KEEP", "")
+keep = {s.strip() for s in keep_raw.replace(",", " ").split() if s.strip()}
+if "learning_rate" in keep:
+    keep.add("lr")
+
+# Track provenance for auditing.
+dropped_yaml = []
+dropped_skip = []
+forced_keep = []
+
 # Build the skip set from env (accept space- or comma-separated)
 _raw = os.environ.get("BESTCFG_SKIP", "")
 # accept comma- or space-separated values and normalize
@@ -1494,9 +1627,20 @@ if "learning_rate" in skip:
 if os.environ.get("BESTCFG_NO_EPOCHS") == "1":
   skip.update(["pretrain_epochs", "finetune_epochs"])
 
-# Drop the keys (if present) - run this ALWAYS
-for k in list(skip):
-    cfg.pop(k, None)
+# Apply skip + policy filtering while recording provenance.
+yaml_owned = policy_sets.get("yaml_only", set())
+
+for key in list(cfg.keys()):
+    if key in skip:
+        dropped_skip.append(key)
+        cfg.pop(key, None)
+        continue
+    if key in yaml_owned and key not in keep:
+        dropped_yaml.append(key)
+        cfg.pop(key, None)
+        continue
+    if key in keep:
+        forced_keep.append(key)
 
 mapping = maps.get(stage, {})
 seen_flags = set()
@@ -1514,5 +1658,15 @@ for key, flag in mapping.items():
         print(flag)
         seen_flags.add(flag)
         print(val)
+
+summary = {
+    "stage": stage,
+    "policy_file": policy_path,
+    "best_config_keys": sorted(cfg.keys()),
+    "yaml_owned": sorted(dropped_yaml),
+    "skipped": sorted(dropped_skip),
+    "forced": sorted(forced_keep),
+}
+print("[bestcfg][summary] " + json.dumps(summary, sort_keys=True), file=sys.stderr)
 PY
 }

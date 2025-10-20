@@ -1,0 +1,103 @@
+# Stage policy for best_config_args: identifies which hyperparameters are owned by
+# stage YAML ("yaml_only"), which must come from the exported best config
+# ("bestcfg_only"), and which can be sourced from either without conflict
+# ("allow"). Keys are expressed using the canonical best_config_args dictionary
+# identifiers (kebab-case friendly snake_case).
+#
+# The "default" section applies to every stage; stage-specific blocks extend or
+# override those defaults.
+---
+default:
+  yaml_only:
+    - dataset_dir
+    - unlabeled_dir
+    - labeled_dir
+    - test_dir
+    - report_stem
+    - csv
+    - label_col
+    - smiles_col
+    - cache_dir
+    - no_cache
+    - num_workers
+    - prefetch_factor
+    - persistent_workers
+    - pin_memory
+    - devices
+    - device
+    - out_csv
+    - best_config_out
+    - ckpt_dir
+    - ckpt_every
+    - output
+    - force_tqdm
+    - use_wandb
+    - wandb_project
+    - wandb_tags
+    - report_dir
+  bestcfg_only:
+    - gnn_type
+    - hidden_dim
+    - num_layers
+    - ema_decay
+    - contiguity
+    - add_3d
+    - lr
+    - learning_rate
+    - temperature
+    - mask_ratio
+    - pretrain_epochs
+    - finetune_epochs
+    - pretrain_batch_size
+    - finetune_batch_size
+    - sample_unlabeled
+    - sample_labeled
+    - warmup_steps
+    - use_scheduler
+    - contrastive
+  allow:
+    - bf16
+    - ema_decays
+    - contiguities
+    - add_3d_options
+    - learning_rates
+pretrain:
+  yaml_only:
+    - save_every
+  bestcfg_only:
+    - mask_ratio
+    - pretrain_batch_size
+    - sample_unlabeled
+finetune:
+  yaml_only:
+    - jepa_encoder
+    - ckpt_dir
+  bestcfg_only:
+    - finetune_batch_size
+    - finetune_epochs
+bench:
+  yaml_only:
+    - dataset
+    - task
+    - jepa_encoder
+    - ft_ckpt
+grid:
+  yaml_only:
+    - cache_dir
+    - use_wandb
+    - wandb_project
+    - wandb_tags
+  bestcfg_only:
+    - methods
+    - pretrain_batch_sizes
+    - finetune_batch_sizes
+    - pretrain_epochs_options
+    - finetune_epochs_options
+    - seeds
+tox21:
+  yaml_only:
+    - dataset
+    - task
+    - pretrain_time_budget_mins
+    - finetune_time_budget_mins
+    - report_dir
