@@ -1105,6 +1105,12 @@ def run_tox21_case_study(
         final_cfg["num_layers"] = num_layers
     cli_cfg = final_cfg.copy()
     mismatch_report: Dict[str, Tuple[Any, Any]] = {}
+    allow_shape_normalisation = (
+        bool(allow_shape_coercion)
+        if allow_shape_coercion is not None
+        else bool(state_cfg or manifest_cfg)
+    )
+    auto_shape_normalisation = allow_shape_coercion is None and allow_shape_normalisation
     for source in (state_cfg, manifest_cfg):
         for key in ("gnn_type", "hidden_dim", "num_layers"):
             value = source.get(key)
@@ -1119,7 +1125,7 @@ def run_tox21_case_study(
                 raise ValueError(
                     f"Encoder configuration mismatch for {key}: CLI={current_value} checkpoint={value}"
                 )
-            if allow_shape_coercion:
+            if allow_shape_normalisation:
                 if current_value is None or str(current_value) == str(value):
                     final_cfg[key] = value
                 else:
@@ -1129,14 +1135,20 @@ def run_tox21_case_study(
                     final_cfg[key] = value
             elif current_value is None:
                 final_cfg[key] = value
-    if mismatch_report and allow_shape_coercion:
+    if mismatch_report and allow_shape_normalisation:
         details = ", ".join(
             f"{name} {before}→{after}" for name, (before, after) in mismatch_report.items()
         )
-        logger.info(
-            "Normalising encoder configuration from checkpoint metadata: %s",
-            details,
-        )
+        if auto_shape_normalisation:
+            logger.info(
+                "Auto shape coercion enabled; normalising encoder configuration from checkpoint metadata: %s",
+                details,
+            )
+        else:
+            logger.info(
+                "Normalising encoder configuration from checkpoint metadata: %s",
+                details,
+            )
 
     hidden_dim_fallback = hidden_dim if hidden_dim is not None else 256
     num_layers_fallback = num_layers if num_layers is not None else 3
