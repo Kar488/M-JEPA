@@ -1135,7 +1135,18 @@ expand_array_vars() {
   local i
   for i in "${!_arr[@]}"; do
     [[ "${_arr[$i]}" == --* ]] && continue
-    _arr[$i]=$(eval "echo ${_arr[$i]}")
+    local _had_u=0
+    if [[ $- == *u* ]]; then
+      _had_u=1
+      set +u
+    fi
+    # shellcheck disable=SC2086 # intentional env/parameter expansion via eval
+    local _expanded
+    _expanded=$(eval "echo ${_arr[$i]}")
+    if ((_had_u)); then
+      set -u
+    fi
+    _arr[$i]="$_expanded"
   done
 }
 
