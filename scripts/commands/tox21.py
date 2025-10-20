@@ -198,6 +198,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         if class_weights_arg is None:
             class_weights_arg = "auto"
 
+        allow_shape_flag = getattr(args, "allow_shape_coercion", None)
+
         result = run_tox21_case_study(
             csv_path=getattr(args, "csv"),
             task_name=getattr(args, "task"),
@@ -229,7 +231,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             strict_encoder_config=getattr(args, "strict_encoder_config", False),
             encoder_source_override=getattr(args, "encoder_source", None),
             evaluation_mode=eval_mode,
-            allow_shape_coercion=getattr(args, "allow_shape_coercion", False),
+            allow_shape_coercion=allow_shape_flag,
             allow_equal_hash=getattr(args, "allow_equal_hash", False),
             verify_match_threshold=float(getattr(args, "verify_match_threshold", 0.98)),
             finetune_patience=getattr(args, "patience", None),
@@ -244,6 +246,18 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         encoder_load = getattr(result, "encoder_load", {}) or {}
         split_summary = getattr(result, "split_summary", {}) or diagnostics.get("split_counts", {})
         calibrator_state = getattr(result, "calibrator_state", None)
+
+        allow_shape_requested_val = diagnostics.get("allow_shape_coercion_requested", allow_shape_flag)
+        allow_shape_effective_val = diagnostics.get("allow_shape_coercion_effective")
+        if allow_shape_effective_val is None:
+            allow_shape_effective_val = bool(allow_shape_flag)
+        else:
+            allow_shape_effective_val = bool(allow_shape_effective_val)
+        auto_allow_shape = bool(diagnostics.get("allow_shape_coercion_auto", False))
+        if allow_shape_requested_val in (True, False):
+            allow_shape_requested_marker: Any = bool(allow_shape_requested_val)
+        else:
+            allow_shape_requested_marker = "auto"
         if split_summary and "split_counts" not in diagnostics:
             diagnostics["split_counts"] = split_summary
 
@@ -316,7 +330,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         summary_payload["encoder_checkpoint"] = getattr(args, "encoder_checkpoint", None)
         summary_payload["tox21_gate_passed"] = bool(gate_passed_flag)
         summary_payload.update(target_payload)
-        summary_payload["allow_shape_coercion"] = bool(getattr(args, "allow_shape_coercion", False))
+        summary_payload["allow_shape_coercion"] = bool(allow_shape_effective_val)
+        summary_payload["allow_shape_coercion_requested"] = allow_shape_requested_marker
+        summary_payload["allow_shape_coercion_auto"] = bool(auto_allow_shape)
         summary_payload["allow_equal_hash"] = bool(getattr(args, "allow_equal_hash", False))
         summary_payload["verify_match_threshold"] = float(getattr(args, "verify_match_threshold", 0.98))
         if encoder_hash:
@@ -419,7 +435,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "encoder_load": encoder_load,
             "split_summary": split_summary,
             "calibrator": calibrator_state,
-            "allow_shape_coercion": bool(getattr(args, "allow_shape_coercion", False)),
+            "allow_shape_coercion": bool(allow_shape_effective_val),
+            "allow_shape_coercion_requested": allow_shape_requested_marker,
+            "allow_shape_coercion_auto": bool(auto_allow_shape),
             "allow_equal_hash": bool(getattr(args, "allow_equal_hash", False)),
             "verify_match_threshold": float(getattr(args, "verify_match_threshold", 0.98)),
         }
@@ -513,7 +531,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 "persistent_workers": getattr(args, "persistent_workers", None),
                 "bf16": getattr(args, "bf16", None),
                 "bf16_head": getattr(args, "bf16_head", None),
-                "allow_shape_coercion": bool(getattr(args, "allow_shape_coercion", False)),
+                "allow_shape_coercion": bool(allow_shape_effective_val),
+                "allow_shape_coercion_requested": allow_shape_requested_marker,
+                "allow_shape_coercion_auto": bool(auto_allow_shape),
                 "allow_equal_hash": bool(getattr(args, "allow_equal_hash", False)),
                 "verify_match_threshold": float(getattr(args, "verify_match_threshold", 0.98)),
             },

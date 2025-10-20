@@ -1114,7 +1114,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-shape-coercion",
         dest="allow_shape_coercion",
         action="store_true",
-        help="Permit resizing checkpoint tensors when loading encoders for Tox21 evaluation",
+        default=None,
+        help=(
+            "Permit resizing checkpoint tensors when loading encoders for Tox21 evaluation. "
+            "If omitted, a best-effort fallback will retry with coercion when strictly loading fails."
+        ),
     )
     tox.add_argument(
         "--allow-equal-hash",

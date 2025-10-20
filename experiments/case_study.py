@@ -905,7 +905,7 @@ def run_tox21_case_study(
     bf16_head: Optional[bool] = None,
     encoder_source_override: Optional[str] = None,
     evaluation_mode: str = "pretrain_frozen",
-    allow_shape_coercion: bool = False,
+    allow_shape_coercion: Optional[bool] = None,
     allow_equal_hash: bool = False,
     verify_match_threshold: float = 0.98,
     cli_hidden_dim_provided: bool = True,
@@ -1279,15 +1279,41 @@ def run_tox21_case_study(
             if baseline_hash is None:
                 manifest_hash = manifest_cfg.get("encoder_hash")
                 baseline_hash = manifest_hash if isinstance(manifest_hash, str) else None
+    allow_shape_requested: Optional[bool] = allow_shape_coercion
+    allow_shape_effective = bool(allow_shape_coercion) if allow_shape_coercion is not None else False
+    auto_shape_retry = False
+
     if enc_state and encoder_checkpoint:
-        encoder_load_info = _load_encoder_strict(
-            encoder,
-            enc_state,
-            allow_shape_coercion=bool(allow_shape_coercion),
-            verify_match_threshold=float(verify_match_threshold),
-            hidden_dim=int(final_hidden_dim),
-            ckpt_path=encoder_checkpoint,
-        )
+        try:
+            encoder_load_info = _load_encoder_strict(
+                encoder,
+                enc_state,
+                allow_shape_coercion=allow_shape_effective,
+                verify_match_threshold=float(verify_match_threshold),
+                hidden_dim=int(final_hidden_dim),
+                ckpt_path=encoder_checkpoint,
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            hint_present = "allow_shape_coercion" in message
+            if allow_shape_coercion is None and hint_present:
+                logger.warning(
+                    "Encoder checkpoint shapes mismatched (strict load failed: %s); "
+                    "retrying with allow_shape_coercion enabled.",
+                    message,
+                )
+                allow_shape_effective = True
+                auto_shape_retry = True
+                encoder_load_info = _load_encoder_strict(
+                    encoder,
+                    enc_state,
+                    allow_shape_coercion=True,
+                    verify_match_threshold=float(verify_match_threshold),
+                    hidden_dim=int(final_hidden_dim),
+                    ckpt_path=encoder_checkpoint,
+                )
+            else:
+                raise
         encoder_hash = encoder_load_info.get("hash") if isinstance(encoder_load_info, dict) else None
         logger.info(
             "[encoder_hash]=%s source=tox21_load path=%s baseline=%s",
@@ -1324,7 +1350,11 @@ def run_tox21_case_study(
     diagnostics["encoder_load"] = encoder_load_info
     diagnostics["encoder_hash"] = encoder_hash
     diagnostics["baseline_encoder_hash"] = baseline_hash
-    diagnostics["allow_shape_coercion"] = bool(allow_shape_coercion)
+    diagnostics["allow_shape_coercion_requested"] = (
+        None if allow_shape_requested is None else bool(allow_shape_requested)
+    )
+    diagnostics["allow_shape_coercion_effective"] = bool(allow_shape_effective)
+    diagnostics["allow_shape_coercion_auto"] = bool(auto_shape_retry)
     diagnostics["verify_match_threshold"] = float(verify_match_threshold)
 
     def _freeze_encoder_params() -> None:
