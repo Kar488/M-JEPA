@@ -952,11 +952,12 @@ def test_phase1_decision_handles_ties_and_missing_keys():
         "pairs": 1,
     }
 
-    winner, task, tie, tie_breaker = pd.resolve_phase1_decision(payload)
-    assert winner == "tie"
+    winner, task, tie, tie_breaker, tied_primary = pd.resolve_phase1_decision(payload)
+    assert winner == "contrastive"
     assert task == "regression"
-    assert tie is True
+    assert tie is False
     assert tie_breaker is False
+    assert tied_primary is True
 
     # Missing winner but non-zero delta → derive from direction.
     payload2 = {
@@ -965,11 +966,12 @@ def test_phase1_decision_handles_ties_and_missing_keys():
         "task": None,
     }
 
-    winner2, task2, tie2, tie_breaker2 = pd.resolve_phase1_decision(payload2)
+    winner2, task2, tie2, tie_breaker2, tied_primary2 = pd.resolve_phase1_decision(payload2)
     assert winner2 == "contrastive"
     assert task2 == "classification"
     assert tie2 is False
     assert tie_breaker2 is False
+    assert tied_primary2 is False
 
 
 def test_phase1_decision_detects_tie_breaker_resolution():
@@ -982,11 +984,12 @@ def test_phase1_decision_detects_tie_breaker_resolution():
         "task": "regression",
     }
 
-    winner, task, tie, tie_breaker = pd.resolve_phase1_decision(payload)
+    winner, task, tie, tie_breaker, tied_primary = pd.resolve_phase1_decision(payload)
     assert winner == "jepa"
     assert task == "regression"
     assert tie is False
     assert tie_breaker is True
+    assert tied_primary is True
 
 
 def test_export_best_reads_summary_metrics(monkeypatch, tmp_path):
