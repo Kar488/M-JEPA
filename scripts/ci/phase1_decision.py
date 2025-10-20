@@ -49,8 +49,8 @@ def resolve_phase1_decision(
     default_winner: Optional[str] = DEFAULT_WINNER,
     default_task: str = DEFAULT_TASK,
     tie_tol: float = 1e-2,
-) -> Tuple[str, str, bool, bool]:
-    """Return (winner, task, tie_flag, tie_breaker_used) for the payload.
+) -> Tuple[str, str, bool, bool, bool]:
+    """Return (winner, task, tie_flag, tie_breaker_used, primary_tied) for the payload.
 
     The paired-effect tool already reports a ``winner`` string, but shell callers
     need a resilient interpretation that remains correct if the JSON artifact is
@@ -92,47 +92,31 @@ def resolve_phase1_decision(
     delta_is_tie = bool(
         effective_tol is not None and delta is not None and abs(delta) <= effective_tol
     )
+    tied_by_tolerance = bool(primary_tied) if isinstance(primary_tied, bool) else False
+    if not tied_by_tolerance and primary_tied is None and delta_is_tie:
+        tied_by_tolerance = True
 
-    if winner not in VALID_METHODS | {"tie"}:
+    raw_winner = winner if winner in VALID_METHODS | {"tie"} else None
+    tie = raw_winner == "tie"
+    if raw_winner in VALID_METHODS:
+        winner = raw_winner
+    else:
         winner = None
 
     if winner is None:
-        if delta_is_tie and not tie_breaker_used:
-            winner = "tie"
-        elif delta is not None and direction in VALID_DIRECTIONS:
-            if abs(delta) <= (effective_tol or 0.0) and not tie_breaker_used:
-                winner = "tie"
-            elif direction == "min":
-                winner = "contrastive" if delta < 0 else "jepa"
-            else:
-                winner = "contrastive" if delta > 0 else "jepa"
-        elif default_winner in VALID_METHODS:
-            winner = default_winner
-
-    tie = winner == "tie"
-
-    if not tie and not tie_breaker_used:
-        if primary_tied is True or (primary_tied is None and delta_is_tie):
-            tie = True
-            winner = "tie"
-
-    if winner not in VALID_METHODS and winner != "tie":
         if delta is not None and direction in VALID_DIRECTIONS:
-            if abs(delta) <= (effective_tol or 0.0) and not tie_breaker_used:
-                tie = True
-                winner = "tie"
-            elif direction == "min":
+            if direction == "min":
                 winner = "contrastive" if delta < 0 else "jepa"
             else:
                 winner = "contrastive" if delta > 0 else "jepa"
         elif default_winner in VALID_METHODS:
             winner = default_winner
-
-    if winner is None:
-        if tie:
+        elif tie:
             winner = "tie"
         else:
             raise ValueError("unable to determine phase-1 winner from payload")
+
+    tie = winner == "tie"
 
     if task is None:
         if direction == "max":
@@ -140,7 +124,7 @@ def resolve_phase1_decision(
         else:
             task = default_task
 
-    return winner, task, tie, tie_breaker_used
+    return winner, task, tie, tie_breaker_used, tied_by_tolerance
 
 
 def main(argv: Any = None) -> int:
@@ -154,10 +138,17 @@ def main(argv: Any = None) -> int:
     )
     args = ap.parse_args(argv)
 
-    winner, task, tie, tie_breaker_used = resolve_phase1_decision(
+    winner, task, tie, tie_breaker_used, tied_by_tolerance = resolve_phase1_decision(
         args.path, tie_tol=args.tie_tol
     )
-    status = "tie" if tie else ("tie-breaker" if tie_breaker_used else "clear")
+    if tie:
+        status = "tie"
+    elif tie_breaker_used:
+        status = "tie-breaker"
+    elif tied_by_tolerance:
+        status = "tied-primary"
+    else:
+        status = "clear"
     print(f"{winner} {task} {status}")
     return 0
 

@@ -254,6 +254,41 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
           echo "[phase1][fatal] tie detected; set PHASE1_TIE_BREAKER to 'jepa' or 'contrastive' to continue" >&2
           exit 1
         fi
+      elif [[ "$PE_DECISION_STATUS" == "tied-primary" ]]; then
+        echo "[phase1][warn] paired-effect primary metric within tie tolerance; defaulting to ${METHOD_WINNER}"
+        if tie_note=$("$py" - "$PE_JSON" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+info = payload.get("tiebreaker_metric") or {}
+label = info.get("label") or info.get("canonical") or "tie-breaker metric"
+counts = info.get("counts") or {}
+reasons = info.get("unavailable_reasons") or []
+extra = []
+for method in ("jepa", "contrastive"):
+    method_counts = counts.get(method) or {}
+    raw = method_counts.get("raw") or 0
+    valid = method_counts.get("valid") or 0
+    if raw and valid and raw != valid:
+        extra.append(f"{method} discarded {raw - valid} non-finite value(s)")
+    elif raw and not valid:
+        extra.append(f"{method} recorded only NaNs ({raw} value(s))")
+    elif not raw:
+        extra.append(f"{method} missing {label}")
+notes = reasons if reasons else extra
+if notes:
+    print(f"{label}: " + "; ".join(notes))
+PY
+        ); then
+          if [[ -n "$tie_note" ]]; then
+            echo "[phase1][info] tie-breaker diagnostics: $tie_note"
+          fi
+        else
+          echo "[phase1][warn] failed to summarise tie-breaker diagnostics" >&2
+        fi
       fi
     else
       echo "[phase1][fatal] failed to interpret paired-effect output" >&2
