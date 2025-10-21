@@ -132,26 +132,47 @@ def test_wandb_shape_injects_model_flags_for_bench():
             "pretrain",
             {
                 "mask_ratio": 0.2154,
-                "pretrain_batch_size": 64,
-                "lr": 3e-4,
+                "batch_size": 64,
+                "epochs": 12,
+                "learning_rate": 3e-4,
                 "prefetch_factor": 2,
+                "persistent_workers": 1,
+                "devices": 2,
                 "cache_dir": "/tmp/cache",
                 "wandb_project": "ci-pretrain",
             },
-            ["--mask-ratio", "--batch-size", "--lr"],
-            ["--prefetch-factor", "--cache-dir", "--wandb-project"],
-            {"prefetch_factor", "cache_dir", "wandb_project"},
+            [
+                "--mask-ratio",
+                "--batch-size",
+                "--epochs",
+                "--lr",
+                "--prefetch-factor",
+                "--persistent-workers",
+                "--devices",
+            ],
+            ["--cache-dir", "--wandb-project"],
+            {"cache_dir", "wandb_project"},
         ),
         (
             "finetune",
             {
-                "finetune_batch_size": 32,
-                "finetune_epochs": 3,
-                "lr": 1e-4,
+                "batch_size": 32,
+                "epochs": 3,
+                "learning_rate": 1e-4,
+                "prefetch_factor": 2,
+                "persistent_workers": 1,
+                "devices": 2,
                 "jepa_encoder": "/tmp/encoder.pt",
                 "ckpt_dir": "/tmp/ckpt",
             },
-            ["--batch-size", "--epochs", "--lr"],
+            [
+                "--batch-size",
+                "--epochs",
+                "--lr",
+                "--prefetch-factor",
+                "--persistent-workers",
+                "--devices",
+            ],
             ["--jepa-encoder", "--ckpt-dir"],
             {"jepa_encoder", "ckpt_dir"},
         ),
@@ -161,13 +182,28 @@ def test_wandb_shape_injects_model_flags_for_bench():
                 "gnn_type": "gine",
                 "hidden_dim": 128,
                 "num_layers": 2,
-                "lr": 1e-4,
+                "learning_rate": 1e-4,
+                "batch_size": 128,
+                "epochs": 4,
+                "prefetch_factor": 2,
+                "persistent_workers": 1,
+                "devices": 2,
                 "dataset": "tox21",
                 "task": "roc_auc",
                 "jepa_encoder": "/tmp/encoder.pt",
                 "ft_ckpt": "/tmp/ft.pt",
             },
-            ["--gnn-type", "--hidden-dim", "--num-layers", "--lr"],
+            [
+                "--gnn-type",
+                "--hidden-dim",
+                "--num-layers",
+                "--epochs",
+                "--lr",
+                "--batch-size",
+                "--prefetch-factor",
+                "--persistent-workers",
+                "--devices",
+            ],
             ["--dataset", "--task", "--jepa-encoder", "--ft-ckpt"],
             {"dataset", "task", "jepa_encoder", "ft_ckpt"},
         ),
@@ -177,14 +213,29 @@ def test_wandb_shape_injects_model_flags_for_bench():
                 "gnn_type": "gine",
                 "hidden_dim": 64,
                 "num_layers": 2,
-                "lr": 2e-4,
+                "learning_rate": 2e-4,
+                "batch_size": 256,
                 "pretrain_epochs": 5,
                 "finetune_epochs": 1,
+                "prefetch_factor": 2,
+                "persistent_workers": 1,
+                "devices": 2,
                 "pretrain_time_budget_mins": 60,
                 "finetune_time_budget_mins": 30,
                 "report_dir": "/tmp/report",
             },
-            ["--gnn-type", "--hidden-dim", "--num-layers", "--lr", "--pretrain-epochs", "--finetune-epochs"],
+            [
+                "--gnn-type",
+                "--hidden-dim",
+                "--num-layers",
+                "--batch-size",
+                "--lr",
+                "--pretrain-epochs",
+                "--finetune-epochs",
+                "--prefetch-factor",
+                "--persistent-workers",
+                "--devices",
+            ],
             ["--pretrain-time-budget-mins", "--finetune-time-budget-mins", "--report-dir"],
             {"pretrain_time_budget_mins", "finetune_time_budget_mins", "report_dir"},
         ),
@@ -206,7 +257,7 @@ def test_wandb_shape_injects_model_flags_for_bench():
 def test_stage_policy_filters_yaml_owned_keys(stage, cfg, present, absent, yaml_hits):
     stdout, stderr = run_bestcfg(stage, cfg)
     for flag in present:
-        assert flag in stdout, f"expected {flag} in stdout for {stage}" 
+        assert flag in stdout, f"expected {flag} in stdout for {stage}"
     for flag in absent:
         assert flag not in stdout, f"expected {flag} to be suppressed for {stage}"
 
@@ -215,17 +266,50 @@ def test_stage_policy_filters_yaml_owned_keys(stage, cfg, present, absent, yaml_
     assert set(yaml_hits).issubset(set(summary["yaml_owned"]))
 
 
+def test_alias_values_promote_to_canonical_keys():
+    cfg = {
+        "batch_size": 96,
+        "epochs": 11,
+        "learning_rate": 7.5e-5,
+    }
+    _, stderr = run_bestcfg("pretrain", cfg)
+    summary = extract_summary(stderr)
+    assert "pretrain_batch_size" in summary["best_config_keys"]
+    assert "pretrain_epochs" in summary["best_config_keys"]
+    assert "lr" in summary["best_config_keys"]
+    assert "batch_size" not in summary["best_config_keys"]
+    assert "epochs" not in summary["best_config_keys"]
+
+    bench_cfg = {
+        "batch_size": 48,
+        "epochs": 6,
+        "learning_rate": 5e-4,
+    }
+    _, bench_stderr = run_bestcfg("bench", bench_cfg)
+    bench_summary = extract_summary(bench_stderr)
+    assert any(
+        key in bench_summary["best_config_keys"]
+        for key in ("finetune_batch_size", "pretrain_batch_size")
+    )
+    assert any(
+        key in bench_summary["best_config_keys"]
+        for key in ("finetune_epochs", "pretrain_epochs")
+    )
+    assert "batch_size" not in bench_summary["best_config_keys"]
+    assert "epochs" not in bench_summary["best_config_keys"]
+
+
 def test_bestcfg_keep_overrides_yaml_policy():
     cfg = {
         "mask_ratio": 0.2,
         "pretrain_batch_size": 32,
-        "prefetch_factor": 2,
+        "cache_dir": "/tmp/cache",
     }
-    stdout, stderr = run_bestcfg("pretrain", cfg, env={"BESTCFG_KEEP": "prefetch_factor"})
-    assert "--prefetch-factor" in stdout
+    stdout, stderr = run_bestcfg("pretrain", cfg, env={"BESTCFG_KEEP": "cache_dir"})
+    assert "--cache-dir" in stdout
     summary = extract_summary(stderr)
-    assert "prefetch_factor" in summary["forced"]
-    assert "prefetch_factor" not in summary["yaml_owned"]
+    assert "cache_dir" in summary["forced"]
+    assert "cache_dir" not in summary["yaml_owned"]
 
 
 def test_bestcfg_skip_reflected_in_summary():

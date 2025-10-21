@@ -20,10 +20,7 @@ default:
     - cache_dir
     - no_cache
     - num_workers
-    - prefetch_factor
-    - persistent_workers
     - pin_memory
-    - devices
     - device
     - out_csv
     - best_config_out
@@ -42,6 +39,9 @@ default:
     - ema_decay
     - contiguity
     - add_3d
+    - devices
+    - prefetch_factor
+    - persistent_workers
     - lr
     - learning_rate
     - temperature

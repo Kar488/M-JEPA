@@ -1268,18 +1268,39 @@ def _get(key, default=_MISSING):
         return v
     return default
 
+_ALIASES = {
+    "pretrain_epochs": ("epochs",),
+    "finetune_epochs": ("epochs",),
+    "pretrain_batch_size": ("batch_size",),
+    "finetune_batch_size": ("batch_size",),
+    "learning_rate": ("lr",),
+    "lr": ("learning_rate",),
+}
+
+
+def _alias_variants(name: str) -> list[str]:
+    variants = [name]
+    if "_" in name:
+        variants.append(name.replace("_", "-"))
+    if "-" in name:
+        variants.append(name.replace("-", "_"))
+    return variants
+
+
 def _lookup_with_aliases(key):
-    """Return the first non-missing value for key or its underscore/hyphen aliases."""
-    value = _get(key)
-    if value is not _MISSING:
-        return value
-    candidates = []
-    if "_" in key:
-        candidates.append(key.replace("_", "-"))
-    if "-" in key:
-        candidates.append(key.replace("-", "_"))
-    for alias in candidates:
-        value = _get(alias)
+    """Return the first non-missing value for key or any configured aliases."""
+
+    seen: set[str] = set()
+    queue: list[str] = []
+    queue.extend(_alias_variants(key))
+    for alias in _ALIASES.get(key, ()):  # prefer canonical aliases first
+        queue.extend(_alias_variants(alias))
+
+    for candidate in queue:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        value = _get(candidate)
         if value is not _MISSING:
             return value
     return _MISSING
@@ -1466,6 +1487,10 @@ benchmark_only = {
     "ft_ckpt": "--ft-ckpt",
     "dataset": "--dataset",
     "task": "--task",
+    "finetune_batch_size": "--batch-size",
+    "pretrain_batch_size": "--batch-size",
+    "finetune_epochs": "--epochs",
+    "pretrain_epochs": "--epochs",
 }
 
 tox21_only = {
@@ -1473,6 +1498,8 @@ tox21_only = {
     "dataset": "--dataset",
     "pretrain_epochs": "--pretrain-epochs",
     "finetune_epochs": "--finetune-epochs",
+    "finetune_batch_size": "--batch-size",
+    "pretrain_batch_size": "--batch-size",
     "pretrain_time_budget_mins": "--pretrain-time-budget-mins",
     "finetune_time_budget_mins": "--finetune-time-budget-mins",
 }
@@ -1592,6 +1619,8 @@ keep_raw = os.environ.get("BESTCFG_KEEP", "")
 keep = {s.strip() for s in keep_raw.replace(",", " ").split() if s.strip()}
 if "learning_rate" in keep:
     keep.add("lr")
+if "lr" in keep:
+    keep.add("learning_rate")
 
 # Track provenance for auditing.
 dropped_yaml = []
@@ -1622,6 +1651,8 @@ if structural_hits:
 # treat 'learning_rate' as an alias for 'lr'
 if "learning_rate" in skip:
   skip.add("lr")
+if "lr" in skip:
+  skip.add("learning_rate")
 
 # Add epochs if requested
 if os.environ.get("BESTCFG_NO_EPOCHS") == "1":
