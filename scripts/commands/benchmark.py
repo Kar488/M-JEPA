@@ -60,6 +60,14 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         "batch_size": args.batch_size,
         "lr": args.lr,
         "seeds": seeds,
+        "gnn_type": getattr(args, "gnn_type", None),
+        "hidden_dim": getattr(args, "hidden_dim", None),
+        "num_layers": getattr(args, "num_layers", None),
+        "add_3d": bool(getattr(args, "add_3d", False)),
+        "num_workers": getattr(args, "num_workers", None),
+        "pin_memory": getattr(args, "pin_memory", None),
+        "persistent_workers": getattr(args, "persistent_workers", None),
+        "prefetch_factor": getattr(args, "prefetch_factor", None),
     }
     if dataset_name:
         config_payload["dataset"] = dataset_name

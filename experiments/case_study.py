@@ -881,6 +881,7 @@ def run_tox21_case_study(
     hidden_dim: int = 256,
     num_layers: int = 3,
     gnn_type: str = "mpnn",
+    add_3d: bool = False,
     contiguous: bool = False,
     mask_ratio: float = 0.15,
     contrastive: bool = False,
@@ -956,11 +957,13 @@ def run_tox21_case_study(
     GraphDatasetCls = _load_real_graphdataset()
     gnn_type_lower = (gnn_type or "").lower()
     requires_3d = gnn_type_lower in {"schnet3d", "schnet"}
+    requested_add_3d = bool(add_3d)
+    effective_add_3d = requested_add_3d or requires_3d
 
     dataset = GraphDatasetCls.from_smiles_list(
         smiles_list,
         labels=labels_list,
-        add_3d=requires_3d,
+        add_3d=effective_add_3d,
     )
     if len(dataset) == 0:
         raise ValueError("No valid molecules could be parsed from the dataset.")
@@ -982,6 +985,9 @@ def run_tox21_case_study(
             "SchNet-style encoders require 3D coordinates, but none were generated. "
             "Ensure RDKit is installed with 3D conformer support."
         )
+
+    diagnostics["add_3d_requested"] = requested_add_3d
+    diagnostics["add_3d_effective"] = effective_add_3d
 
     for i, graph in enumerate(dataset.graphs):
         smi = getattr(graph, "smiles", None) or (
@@ -1166,11 +1172,19 @@ def run_tox21_case_study(
     final_gnn_type = str(resolved_gnn_type)
 
     logger.info(
-        "[enc_cfg] gnn_type=%s hidden_dim=%s num_layers=%s",
+        "[enc_cfg] gnn_type=%s hidden_dim=%s num_layers=%s add_3d=%s",
         final_gnn_type,
         final_hidden_dim,
         final_num_layers,
+        bool(effective_add_3d),
     )
+
+    diagnostics["encoder_config"] = {
+        "gnn_type": final_gnn_type,
+        "hidden_dim": int(final_hidden_dim),
+        "num_layers": int(final_num_layers),
+        "add_3d": bool(effective_add_3d),
+    }
 
     gnn_type_lower = final_gnn_type.lower()
     if gnn_type_lower in {

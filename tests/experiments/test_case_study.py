@@ -409,6 +409,8 @@ def test_auto_shape_coercion_normalises_metadata(tmp_path, monkeypatch):
             self.edge_attr = torch.zeros((4, 1))
             self.smiles = smiles
 
+    add3d_calls: list[bool] = []
+
     class DummyDataset:
         def __init__(self, graphs, labels, smiles):
             self.graphs = graphs
@@ -417,6 +419,7 @@ def test_auto_shape_coercion_normalises_metadata(tmp_path, monkeypatch):
 
         @classmethod
         def from_smiles_list(cls, smiles_list, labels, add_3d=False):
+            add3d_calls.append(bool(add_3d))
             graphs = [DummyGraph(smi) for smi in smiles_list]
             return cls(graphs, labels, list(smiles_list))
 
@@ -478,6 +481,7 @@ def test_auto_shape_coercion_normalises_metadata(tmp_path, monkeypatch):
         num_layers=2,
         gnn_type="mpnn",
         evaluation_mode="pretrain_frozen",
+        add_3d=True,
     )
 
     assert result.evaluations, "expected evaluations to be produced"
@@ -486,3 +490,5 @@ def test_auto_shape_coercion_normalises_metadata(tmp_path, monkeypatch):
     assert build_calls["gnn_type"] == "gin"
     assert load_calls["hidden_dim"] == 512
     assert load_calls["allow_shape_coercion"] is False
+    assert add3d_calls == [True]
+    assert result.diagnostics.get("encoder_config", {}).get("hidden_dim") == 512

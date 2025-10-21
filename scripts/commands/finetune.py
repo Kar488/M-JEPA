@@ -290,6 +290,11 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             "freeze_encoder": bool(getattr(args, "freeze_encoder", True)),
             "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
             "max_finetune_batches": max_finetune_batches,
+            "num_workers": getattr(args, "num_workers", None),
+            "pin_memory": getattr(args, "pin_memory", None),
+            "persistent_workers": getattr(args, "persistent_workers", None),
+            "prefetch_factor": getattr(args, "prefetch_factor", None),
+            "bf16": bool(getattr(args, "bf16", False)),
         },
     )
     log_effective_gnn(args, logger, wb)

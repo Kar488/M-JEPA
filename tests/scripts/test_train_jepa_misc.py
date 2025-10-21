@@ -75,6 +75,7 @@ def test_cmd_benchmark_selects_best_method(tmp_path, monkeypatch):
     holder = {}
 
     def maybe_init_wandb_stub(*args, **kwargs):
+        holder["config"] = kwargs.get("config")
         holder["wb"] = DummyWB()
         return holder["wb"]
 
@@ -103,6 +104,10 @@ def test_cmd_benchmark_selects_best_method(tmp_path, monkeypatch):
         wandb_project="test",
         wandb_tags=[],
         add_3d=False,
+        num_workers=3,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=6,
     )
 
     tj.cmd_benchmark(args)
@@ -110,6 +115,13 @@ def test_cmd_benchmark_selects_best_method(tmp_path, monkeypatch):
     logs = holder["wb"].logs
     assert any(log.get("best_method") == "contrastive" for log in logs)
     assert any(log.get("benchmark_metric") == "rmse" for log in logs)
+
+    config = holder["config"]
+    assert config["hidden_dim"] == 16
+    assert config["num_layers"] == 2
+    assert config["gnn_type"] == "gcn"
+    assert config["persistent_workers"] is False
+    assert config["prefetch_factor"] == 6
 
 
 def test_cmd_benchmark_modules_missing(monkeypatch):
@@ -282,6 +294,7 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
     holder = {}
 
     def maybe_init_wandb_stub(*args, **kwargs):
+        holder["config"] = kwargs.get("config")
         holder["wb"] = DummyWB()
         return holder["wb"]
 
@@ -306,6 +319,10 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         bf16=True,
         pretrain_time_budget_mins=7,
         finetune_time_budget_mins=3,
+        gnn_type="edge_mpnn",
+        hidden_dim=256,
+        num_layers=3,
+        add_3d=True,
     )
 
     tj.cmd_tox21(args)
@@ -328,6 +345,13 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         "pretrain_time_budget_mins": 7,
         "finetune_time_budget_mins": 3,
     }
+
+    config = holder["config"]
+    assert config["hidden_dim"] == 256
+    assert config["num_layers"] == 3
+    assert config["gnn_type"] == "edge_mpnn"
+    assert config["persistent_workers"] is False
+    assert config["prefetch_factor"] == 5
 
 
 def test_cmd_tox21_failure(tmp_path,monkeypatch):
