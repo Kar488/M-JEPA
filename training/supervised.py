@@ -1005,6 +1005,9 @@ def train_linear_head(
             return _handle_pin_memory_failure(err)
         return False
 
+    def _grad_context():
+        return contextlib.nullcontext() if encoder_has_trainable else torch.no_grad()
+
     def _get_graph_embeddings(
         batch_x: torch.Tensor,
         batch_adj: torch.Tensor,
@@ -1023,7 +1026,7 @@ def train_linear_head(
 
         if idx_list is not None and hasattr(base_encoder, "encode_graph"):
             graphs = [dataset.graphs[idx] for idx in idx_list]
-            with torch.no_grad():
+            with _grad_context():
                 with _amp_context():
                     emb_list = []
                     for graph in graphs:
@@ -1044,7 +1047,7 @@ def train_linear_head(
             return graph_emb
 
         graph_obj = _build_graph_view(batch_x, batch_adj, batch_ptr, batch_meta)
-        with torch.no_grad():
+        with _grad_context():
             with _amp_context():
                 node_embeddings = _encode_graph(encoder, graph_obj)
 
