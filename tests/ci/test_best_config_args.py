@@ -312,6 +312,25 @@ def test_bestcfg_keep_overrides_yaml_policy():
     assert "cache_dir" not in summary["yaml_owned"]
 
 
+def test_bestcfg_bool_false_emits_zero():
+    cfg = {
+        "gnn_type": "gine",
+        "hidden_dim": 128,
+        "num_layers": 2,
+        "learning_rate": 1e-4,
+        "persistent_workers": False,
+        "add_3d": False,
+    }
+    stdout, _ = run_bestcfg("finetune", cfg)
+    tokens = stdout.split()
+    assert "--persistent-workers" in tokens
+    pw_index = tokens.index("--persistent-workers")
+    assert tokens[pw_index + 1] == "0"
+    assert "--add-3d" in tokens
+    add3d_index = tokens.index("--add-3d")
+    assert tokens[add3d_index + 1] == "0"
+
+
 def test_bestcfg_skip_reflected_in_summary():
     cfg = {
         "gnn_type": "gine",

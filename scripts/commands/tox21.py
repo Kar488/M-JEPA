@@ -175,12 +175,19 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "csv": args.csv,
             "task": args.task,
             "dataset": dataset_name,
+            "gnn_type": getattr(args, "gnn_type", None),
+            "hidden_dim": getattr(args, "hidden_dim", None),
+            "num_layers": getattr(args, "num_layers", None),
+            "add_3d": bool(getattr(args, "add_3d", False)),
             "pretrain_epochs": getattr(args, "pretrain_epochs", 5),
             "finetune_epochs": getattr(args, "finetune_epochs", 20),
             "triage_pct": triage_pct,
             "calibrate": calibrate,
             "pretrain_time_budget_mins": getattr(args, "pretrain_time_budget_mins", 0),
             "finetune_time_budget_mins": getattr(args, "finetune_time_budget_mins", 0),
+            "num_workers": getattr(args, "num_workers", None),
+            "prefetch_factor": getattr(args, "prefetch_factor", None),
+            "persistent_workers": getattr(args, "persistent_workers", None),
             **threshold_payload,
             **target_payload,
             "evaluation_mode": eval_mode,
@@ -214,6 +221,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             hidden_dim=getattr(args, "hidden_dim", 128),
             num_layers=getattr(args, "num_layers", 2),
             gnn_type=getattr(args, "gnn_type", "edge_mpnn"),
+            add_3d=getattr(args, "add_3d", False),
             contrastive=getattr(args, "contrastive", False),
             triage_pct=triage_pct,
             calibrate=calibrate,
@@ -325,6 +333,11 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "calibrate": calibrate,
             **threshold_payload,
         }
+        summary_payload["gnn_type"] = getattr(args, "gnn_type", None)
+        summary_payload["hidden_dim"] = getattr(args, "hidden_dim", None)
+        summary_payload["num_layers"] = getattr(args, "num_layers", None)
+        summary_payload["persistent_workers"] = getattr(args, "persistent_workers", None)
+        summary_payload["prefetch_factor"] = getattr(args, "prefetch_factor", None)
         summary_payload["encoder_source"] = source_for_gate
         summary_payload["evaluation_mode"] = eval_mode
         summary_payload["encoder_checkpoint"] = getattr(args, "encoder_checkpoint", None)
@@ -525,6 +538,10 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 "encoder_lr": getattr(args, "encoder_lr", None),
                 "weight_decay": getattr(args, "weight_decay", None),
                 "class_weights": getattr(args, "class_weights", None),
+                "gnn_type": getattr(args, "gnn_type", None),
+                "hidden_dim": getattr(args, "hidden_dim", None),
+                "num_layers": getattr(args, "num_layers", None),
+                "add_3d": bool(getattr(args, "add_3d", False)),
                 "num_workers": getattr(args, "num_workers", None),
                 "prefetch_factor": getattr(args, "prefetch_factor", None),
                 "pin_memory": getattr(args, "pin_memory", None),

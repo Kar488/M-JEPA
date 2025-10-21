@@ -1682,9 +1682,9 @@ for key, flag in mapping.items():
         continue
     val = cfg[key]
     if isinstance(val, bool):
-        if val:
-            print(flag)
-            seen_flags.add(flag)
+        print(flag)
+        seen_flags.add(flag)
+        print("1" if val else "0")
     else:
         print(flag)
         seen_flags.add(flag)
