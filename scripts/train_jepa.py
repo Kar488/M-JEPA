@@ -1060,6 +1060,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Learning rate for encoder parameters when they are trainable during Tox21 runs",
     )
     tox.add_argument(
+        "--full-finetune",
+        dest="full_finetune",
+        action="store_true",
+        default=case_cfg.get("full_finetune", False),
+        help="Enable full encoder fine-tuning on the Tox21 train split",
+    )
+    tox.add_argument(
+        "--unfreeze-top-layers",
+        dest="unfreeze_top_layers",
+        type=int,
+        default=case_cfg.get("unfreeze_top_layers", 0),
+        help="When fine-tuning, number of top encoder layers to unfreeze (0 = all)",
+    )
+    tox.add_argument(
+        "--tox21-head-batch-size",
+        dest="tox21_head_batch_size",
+        type=int,
+        default=case_cfg.get("tox21_head_batch_size", 256),
+        help="Batch size for the Tox21 head/encoder fine-tuning stage",
+    )
+    tox.add_argument(
         "--weight-decay",
         dest="weight_decay",
         type=float,

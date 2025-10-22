@@ -646,6 +646,13 @@ def train_linear_head(
     early_stop_metric: str = "val_loss",
     early_stop_mode: Optional[str] = None,
     cache_graph_embeddings: bool = True,
+    train_indices: Optional[Iterable[int]] = None,
+    val_indices: Optional[Iterable[int]] = None,
+    test_indices: Optional[Iterable[int]] = None,
+    enable_batch_autoscale: bool = False,
+    batch_autoscale_min_steps: int = 10,
+    batch_autoscale_floor: int = 64,
+    unfreeze_top_layers: int = 0,
     **unused,
 ) -> Dict[str, float]:
     """Train a linear head on a frozen encoder for classification or regression.
@@ -707,10 +714,40 @@ def train_linear_head(
     if enc_param is not None:
         device_t = enc_param.device
 
+    def _apply_encoder_trainability(module: nn.Module) -> None:
+        params_fn = getattr(module, "parameters", None)
+        if not callable(params_fn):
+            return
+        params = list(params_fn())
+        if freeze_encoder:
+            for param in params:
+                param.requires_grad = False
+            return
+        if unfreeze_top_layers is None or unfreeze_top_layers <= 0:
+            for param in params:
+                param.requires_grad = True
+            return
+        for param in params:
+            param.requires_grad = False
+        modules = list(module.children())
+        if not modules:
+            for param in params:
+                param.requires_grad = True
+            return
+        top_count = max(1, int(unfreeze_top_layers))
+        selected = modules[-top_count:]
+        for selected_module in selected:
+            sub_params_fn = getattr(selected_module, "parameters", None)
+            if not callable(sub_params_fn):
+                continue
+            try:
+                for param in sub_params_fn():
+                    param.requires_grad = True
+            except Exception:
+                continue
+
     encoder = encoder.to(device_t)
-    if freeze_encoder:
-        for p in encoder.parameters():
-            p.requires_grad = False
+    _apply_encoder_trainability(encoder)
     encoder_has_trainable = any(p.requires_grad for p in encoder.parameters())
     if encoder_has_trainable and cache_graph_embeddings:
         logger.info(
@@ -718,6 +755,59 @@ def train_linear_head(
         )
         cache_graph_embeddings = False
     num_graphs = _dataset_size(dataset)
+
+    indices = list(range(num_graphs))
+
+    explicit_indices = any(
+        value is not None for value in (train_indices, val_indices, test_indices)
+    )
+    if explicit_indices:
+        train_idx = _as_index_list(train_indices or [])
+        val_idx = _as_index_list(val_indices or [])
+        test_idx = _as_index_list(test_indices or [])
+    elif use_scaffold and getattr(dataset, "smiles", None) is not None:
+        train_idx, val_idx, test_idx = scaffold_split_indices(dataset.smiles)
+        train_idx = _as_index_list(train_idx)
+        val_idx = _as_index_list(val_idx)
+        test_idx = _as_index_list(test_idx)
+    elif task_type == "classification":
+        train_idx, val_idx, test_idx = stratified_split(
+            indices, dataset.labels, train_frac=0.8, val_frac=0.1
+        )
+    else:
+        random.shuffle(indices)
+        train_end = int(0.8 * num_graphs)
+        val_end = int(0.9 * num_graphs)
+        train_idx = indices[:train_end]
+        val_idx = indices[train_end:val_end]
+        test_idx = indices[val_end:]
+
+    try:
+        requested_batch_size = int(batch_size)
+    except Exception:
+        requested_batch_size = 1
+    if requested_batch_size <= 0:
+        requested_batch_size = 1
+    batch_size = requested_batch_size
+
+    if enable_batch_autoscale:
+        min_steps = max(1, int(batch_autoscale_min_steps))
+        floor = max(1, int(batch_autoscale_floor))
+        total_train = max(0, len(train_idx))
+        scaled = batch_size
+        if total_train > 0 and min_steps > 0:
+            while scaled > floor and (total_train // scaled) < min_steps:
+                next_scaled = max(floor, scaled // 2)
+                if next_scaled == scaled:
+                    break
+                scaled = next_scaled
+        batch_size = max(1, scaled)
+        logger.info(
+            "[batch_autoscale] requested=%d actual=%d (N_train=%d)",
+            requested_batch_size,
+            batch_size,
+            total_train,
+        )
 
     requested_workers = num_workers
     num_workers, persistent_workers, prefetch_factor = autotune_worker_pool(
@@ -742,26 +832,6 @@ def train_linear_head(
             4096, 1024 + 128 * max(worker_count, 1) * max(prefetch_budget, 1)
         )
         ensure_open_file_limit(min_fd_budget)
-
-    indices = list(range(num_graphs))
-
-    # Use provided batch_indices for single-batch training, else split dataset
-    if use_scaffold and getattr(dataset, "smiles", None) is not None:
-        train_idx, val_idx, test_idx = scaffold_split_indices(dataset.smiles)
-        train_idx = _as_index_list(train_idx)
-        val_idx = _as_index_list(val_idx)
-        test_idx = _as_index_list(test_idx)
-    elif task_type == "classification":
-        train_idx, val_idx, test_idx = stratified_split(
-            indices, dataset.labels, train_frac=0.8, val_frac=0.1
-        )
-    else:
-        random.shuffle(indices)
-        train_end = int(0.8 * num_graphs)
-        val_end = int(0.9 * num_graphs)
-        train_idx = indices[:train_end]
-        val_idx = indices[train_end:val_end]
-        test_idx = indices[val_end:]
 
     head_module = head
     if head_module is None:

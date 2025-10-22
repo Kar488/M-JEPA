@@ -1498,10 +1498,12 @@ tox21_only = {
     "dataset": "--dataset",
     "pretrain_epochs": "--pretrain-epochs",
     "finetune_epochs": "--finetune-epochs",
-    "finetune_batch_size": "--batch-size",
     "pretrain_batch_size": "--batch-size",
     "pretrain_time_budget_mins": "--pretrain-time-budget-mins",
     "finetune_time_budget_mins": "--finetune-time-budget-mins",
+    "full_finetune": "--full-finetune",
+    "unfreeze_top_layers": "--unfreeze-top-layers",
+    "tox21_head_batch_size": "--tox21-head-batch-size",
 }
 
 # 6) Final per-stage maps (compose without duplication)
