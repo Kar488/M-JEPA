@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import types
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict
 
 fake_pandas = types.ModuleType("pandas")
@@ -189,3 +190,98 @@ def test_publish_report_uses_static_artifact(monkeypatch: pytest.MonkeyPatch) ->
 
     assert url == "https://wandb.test/artifact"
     assert called == {"artifact": 1}
+
+
+def test_ensure_schema_refresh_forces_regeneration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def fake_discover(root: Path, max_runs: int) -> str:
+        calls.append("discover")
+        return "fresh"
+
+    def fake_load(path: Path) -> str:
+        calls.append("load")
+        return "cached"
+
+    monkeypatch.setattr(build.discover_schema, "discover_schema", fake_discover)
+    monkeypatch.setattr(build.discover_schema, "load_schema_file", fake_load)
+    monkeypatch.setattr(build.discover_schema, "save_schema", lambda schema, root: None)
+
+    schema = build._ensure_schema(tmp_path, max_runs=5, schema_path=None, refresh=True)
+
+    assert schema == "fresh"
+    assert calls == ["discover"]
+
+
+def test_ensure_schema_reuses_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def fake_discover(root: Path, max_runs: int) -> str:
+        calls.append("discover")
+        return "fresh"
+
+    def fake_load(path: Path) -> str:
+        calls.append("load")
+        return "cached"
+
+    monkeypatch.setattr(build.discover_schema, "discover_schema", fake_discover)
+    monkeypatch.setattr(build.discover_schema, "load_schema_file", fake_load)
+    monkeypatch.setattr(build.discover_schema, "save_schema", lambda schema, root: None)
+
+    schema = build._ensure_schema(tmp_path, max_runs=5, schema_path=None, refresh=False)
+
+    assert schema == "cached"
+    assert calls == ["load"]
+
+
+def test_load_manifest_parses_entries(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "FIGURE_MANIFEST.md"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "# Figure Manifest",
+                "",
+                "## Overview",
+                "- table:overview_metrics (entity/project/run::overview_metrics) – Summary table",
+                "",
+                "## Sweeps & Ablations",
+                "- image:sweep_curve (entity/project/sweep::sweep_curve)",
+            ]
+        )
+    )
+
+    cached = build._load_manifest(manifest_path)
+
+    assert cached["Overview"]["overview_metrics"].caption == "Summary table"
+    assert cached["Sweeps & Ablations"]["sweep_curve"].kind == "image"
+
+
+def test_log_assets_reuses_cached_assets(monkeypatch: pytest.MonkeyPatch) -> None:
+    reused = build._LoggedAsset(
+        section="Overview",
+        key="overview_metrics",
+        run_path="entity/project/run",
+        kind="table",
+        title="overview_metrics",
+        caption="existing",
+    )
+
+    class DummyFrame:
+        empty = False
+
+    tables = [("overview_metrics", DummyFrame(), "Overview metrics")]
+
+    # ``wandb`` should never be imported when we reuse cached assets
+    monkeypatch.setitem(sys.modules, "wandb", types.SimpleNamespace())
+
+    result = build._log_assets_to_wandb(
+        "Overview",
+        entity=None,
+        project="project",
+        tables=tables,
+        figures=[],
+        existing_assets={"overview_metrics": reused},
+        refresh=False,
+    )
+
+    assert result == [reused]
