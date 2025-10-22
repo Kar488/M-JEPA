@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import json
+import logging
 import math
+import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from . import log_effective_gnn
 
@@ -16,6 +20,135 @@ except ImportError:  # pragma: no cover - fallback when executed as a script
 
 
 logger = logging.getLogger(__name__)
+
+
+def _flag_was_provided(flags: Iterable[str]) -> bool:
+    argv = sys.argv[1:]
+    for token in argv:
+        for flag in flags:
+            if token == flag or token.startswith(f"{flag}="):
+                return True
+    return False
+
+
+def _extract_bestcfg_value(raw: Dict[str, Any], key: str) -> Any:
+    direct = raw.get(key)
+    if isinstance(direct, dict) and "value" in direct:
+        return direct.get("value")
+    if direct is not None:
+        return direct
+    for container_key in ("parameters", "config"):
+        container = raw.get(container_key)
+        if isinstance(container, dict):
+            value = container.get(key)
+            if isinstance(value, dict) and "value" in value:
+                return value.get("value")
+            if value is not None:
+                return value
+    return None
+
+
+def _coerce_bool_like(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        norm = value.strip().lower()
+        if norm in {"1", "true", "yes", "on"}:
+            return True
+        if norm in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _coerce_int_like(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _discover_best_config_path(args: argparse.Namespace) -> Optional[Path]:
+    candidates: List[Path] = []
+    for attr in ("best_config_path", "best_config", "best_config_json"):
+        val = getattr(args, attr, None)
+        if val:
+            candidates.append(Path(str(val)))
+    for attr in ("tox21_dir", "report_dir"):
+        val = getattr(args, attr, None)
+        if val:
+            candidates.append(Path(str(val)) / "best_grid_config.json")
+    env_hints = [
+        os.getenv("BEST_CONFIG_PATH"),
+        os.getenv("TOX21_BEST_CONFIG"),
+        os.getenv("TRAIN_JEPA_BEST_CONFIG"),
+    ]
+    for hint in env_hints:
+        if hint:
+            candidates.append(Path(hint))
+    for env in ("GRID_DIR", "GRID_SOURCE_DIR", "EXPERIMENT_DIR", "EXPERIMENTS_ROOT"):
+        base = os.getenv(env)
+        if not base:
+            continue
+        root = Path(base)
+        candidates.append(root / "best_grid_config.json")
+        candidates.append(root / "phase2_export" / "best_grid_config.json")
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve()
+        except Exception:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.is_file():
+            return resolved
+    return None
+
+
+def _load_best_config_overrides(args: argparse.Namespace) -> Tuple[Dict[str, Any], Optional[Path]]:
+    path = _discover_best_config_path(args)
+    if path is None:
+        return {}, None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.debug("Failed to read best_config from %s", path, exc_info=True)
+        return {}, path
+    overrides: Dict[str, Any] = {}
+    hidden_raw = _extract_bestcfg_value(raw, "hidden_dim")
+    hidden_val = _coerce_int_like(hidden_raw)
+    if hidden_val is not None:
+        overrides["hidden_dim"] = hidden_val
+    add_raw = _extract_bestcfg_value(raw, "add_3d")
+    add_val = _coerce_bool_like(add_raw)
+    if add_val is not None:
+        overrides["add_3d"] = add_val
+    return overrides, path
+
+
+def _schema_cache_dir(base: Optional[str], add_3d: Optional[bool], hidden_dim: Optional[int]) -> Optional[str]:
+    if not base:
+        return base
+    bits: List[str] = []
+    if add_3d is not None:
+        bits.append(f"3d{int(add_3d)}")
+    if hidden_dim is not None:
+        bits.append(f"hd{int(hidden_dim)}")
+    if not bits:
+        return base
+    suffix = "_".join(bits)
+    path = Path(base).expanduser()
+    if path.name.endswith(suffix):
+        return str(path)
+    schema_path = path.with_name(f"{path.name}_{suffix}")
+    return str(schema_path)
 
 
 def _wandb_log_safe(wb: Any, payload: Dict[str, Any]) -> None:
@@ -106,6 +239,26 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     triage_pct = getattr(args, "triage_pct", 0.10)
     calibrate = not getattr(args, "no_calibrate", False)
 
+    best_overrides, best_path = _load_best_config_overrides(args)
+    inherited: List[str] = []
+    if "add_3d" in best_overrides and not _flag_was_provided(("--add-3d", "--add_3d")):
+        desired = bool(best_overrides["add_3d"])
+        if bool(getattr(args, "add_3d", desired)) != desired:
+            inherited.append(f"add_3d={desired}")
+        setattr(args, "add_3d", desired)
+    if "hidden_dim" in best_overrides and not getattr(args, "_hidden_dim_provided", False):
+        desired_hidden = int(best_overrides["hidden_dim"])
+        if getattr(args, "hidden_dim", desired_hidden) != desired_hidden:
+            inherited.append(f"hidden_dim={desired_hidden}")
+        setattr(args, "hidden_dim", desired_hidden)
+        setattr(args, "_hidden_dim_provided", True)
+    if inherited and best_path is not None:
+        logger.info(
+            "Inheriting Phase-2 best_config overrides from %s: %s",
+            best_path,
+            ", ".join(inherited),
+        )
+
     dataset_name = getattr(args, "dataset", "tox21") or "tox21"
     task_name = getattr(args, "task", None)
     eval_mode = str(
@@ -139,6 +292,30 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         }
 
     target_payload = {"target_baseline_roc_auc": float(target_baseline)}
+
+    cache_dir = getattr(args, "cache_dir", None)
+    schema_cache_dir = _schema_cache_dir(
+        cache_dir,
+        bool(getattr(args, "add_3d", False)),
+        _coerce_int_like(getattr(args, "hidden_dim", None)),
+    )
+    if schema_cache_dir and schema_cache_dir != cache_dir:
+        try:
+            Path(schema_cache_dir).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            logger.debug(
+                "Failed to create schema-aware cache dir %s", schema_cache_dir, exc_info=True
+            )
+        else:
+            args.cache_dir = schema_cache_dir
+            cache_dir = schema_cache_dir
+    if cache_dir:
+        logger.info(
+            "[cache] selected_cache=%s (add_3d=%s, hidden_dim=%s)",
+            cache_dir,
+            bool(getattr(args, "add_3d", False)),
+            getattr(args, "hidden_dim", None),
+        )
 
     report_dir = (
         getattr(args, "tox21_dir", None)
@@ -179,6 +356,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "hidden_dim": getattr(args, "hidden_dim", None),
             "num_layers": getattr(args, "num_layers", None),
             "add_3d": bool(getattr(args, "add_3d", False)),
+            "cache_dir": cache_dir,
             "pretrain_epochs": getattr(args, "pretrain_epochs", 5),
             "finetune_epochs": getattr(args, "finetune_epochs", 20),
             "triage_pct": triage_pct,
@@ -237,6 +415,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             bf16_head=getattr(args, "bf16_head", None),
             pretrain_time_budget_mins=getattr(args, "pretrain_time_budget_mins", 0),
             finetune_time_budget_mins=getattr(args, "finetune_time_budget_mins", 0),
+            cache_dir=cache_dir,
             encoder_checkpoint=getattr(args, "encoder_checkpoint", None),
             encoder_manifest=getattr(args, "encoder_manifest", None),
             strict_encoder_config=getattr(args, "strict_encoder_config", False),

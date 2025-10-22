@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import os
+import pickle
 import random
 import sys
 import types
@@ -928,6 +929,7 @@ def run_tox21_case_study(
     full_finetune: bool = False,
     unfreeze_top_layers: int = 0,
     tox21_head_batch_size: int = 256,
+    cache_dir: Optional[str] = None,
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
 
@@ -976,19 +978,95 @@ def run_tox21_case_study(
     requested_add_3d = bool(add_3d)
     effective_add_3d = requested_add_3d or requires_3d
 
+    cache_dir_path: Optional[Path] = None
+    dataset_cache_path: Optional[Path] = None
+    dataset_cache_hit = False
+    if cache_dir:
+        try:
+            cache_dir_path = Path(cache_dir).expanduser()
+            cache_dir_path.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            logger.debug(
+                "Failed to prepare tox21 cache directory %s", cache_dir, exc_info=True
+            )
+            cache_dir_path = None
+
     try:
         head_batch_size = int(tox21_head_batch_size)
     except Exception:
         head_batch_size = 256
     head_batch_size = max(1, head_batch_size)
 
-    dataset = GraphDatasetCls.from_smiles_list(
-        smiles_list,
-        labels=labels_list,
-        add_3d=effective_add_3d,
-    )
+    dataset: "GraphDatasetT" | None = None
+    if cache_dir_path is not None:
+        csv_stem = Path(csv_path).stem or "dataset"
+        task_part = str(task_name or dataset_name or "task")
+        hidden_key = f"hd{int(hidden_dim)}" if hidden_dim is not None else "hdunk"
+        cache_name = f"tox21_{csv_stem}_{task_part}_3d{int(effective_add_3d)}_{hidden_key}.pkl"
+        dataset_cache_path = cache_dir_path / cache_name
+        if dataset_cache_path.exists():
+            try:
+                with dataset_cache_path.open("rb") as handle:
+                    graphs, labels_cached, smiles_cached = pickle.load(handle)
+                dataset = GraphDatasetCls(graphs, labels_cached, smiles_cached)
+                dataset_cache_hit = True
+            except Exception:
+                logger.warning(
+                    "Failed to load tox21 dataset cache %s; regenerating graphs.",
+                    dataset_cache_path,
+                    exc_info=True,
+                )
+                dataset = None
+
+    if dataset is None:
+        dataset = GraphDatasetCls.from_smiles_list(
+            smiles_list,
+            labels=labels_list,
+            add_3d=effective_add_3d,
+        )
+        if cache_dir_path is not None and dataset_cache_path is not None:
+            try:
+                payload = (
+                    dataset.graphs,
+                    dataset.labels.tolist() if dataset.labels is not None else None,
+                    dataset.smiles,
+                )
+                tmp_path = dataset_cache_path.with_suffix(dataset_cache_path.suffix + ".tmp")
+                with tmp_path.open("wb") as handle:
+                    pickle.dump(payload, handle)
+                tmp_path.replace(dataset_cache_path)
+            except Exception:
+                logger.debug(
+                    "Failed to materialise tox21 dataset cache at %s",
+                    dataset_cache_path,
+                    exc_info=True,
+                )
+
     if len(dataset) == 0:
         raise ValueError("No valid molecules could be parsed from the dataset.")
+
+    if dataset_cache_path is not None:
+        logger.info(
+            "[cache] selected_cache=%s (hit=%s add_3d=%s hidden_dim=%s)",
+            dataset_cache_path,
+            "yes" if dataset_cache_hit else "no",
+            bool(effective_add_3d),
+            hidden_dim if hidden_dim is not None else "<unset>",
+        )
+        diagnostics["cache"] = {
+            "path": str(dataset_cache_path),
+            "hit": bool(dataset_cache_hit),
+            "add_3d": bool(effective_add_3d),
+            "hidden_dim": int(hidden_dim) if hidden_dim is not None else None,
+        }
+        if ci_diag:
+            _ci_log(
+                "tox21 dataset cache",
+                path=str(dataset_cache_path),
+                hit=bool(dataset_cache_hit),
+                add_3d=bool(effective_add_3d),
+                hidden_dim=int(hidden_dim) if hidden_dim is not None else None,
+            )
 
     if ci_diag:
         labels_arr = dataset.labels
