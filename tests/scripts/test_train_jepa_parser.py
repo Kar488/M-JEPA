@@ -58,6 +58,7 @@ def test_finetune_parser_defaults_and_handler(tmp_path):
     assert args.batch_size == CONFIG["finetune"]["batch_size"]
     assert args.lr == CONFIG["finetune"]["lr"]
     assert args.patience == CONFIG["finetune"]["patience"]
+    assert args.use_scaffold is False
 
 
 def test_evaluate_parser_defaults_and_handler(tmp_path):

@@ -779,6 +779,10 @@ class BoolFlag(argparse.Action):
             setattr(namespace, self.dest, True)
         else:
             setattr(namespace, self.dest, _to_bool(values))
+        try:
+            setattr(namespace, f"_{self.dest}_provided", True)
+        except Exception:
+            pass
 
 def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     """Add arguments common to multiple commands."""
@@ -931,6 +935,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ft.add_argument("--task-type", choices=["classification", "regression"], default="classification")
     ft.add_argument("--patience", type=int, default=CONFIG.get("finetune", {}).get("patience", 10), help="Early stopping patience")
+    ft.add_argument(
+        "--use-scaffold",
+        dest="use_scaffold",
+        action=BoolFlag,
+        default=False,
+        help="Enable Murcko scaffold splits when SMILES are available during fine-tune",
+    )
     ft.add_argument(
         "--load-encoder-checkpoint",
         dest="load_encoder_checkpoint",

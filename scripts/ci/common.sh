@@ -1150,6 +1150,39 @@ expand_array_vars() {
   done
 }
 
+prune_empty_args() {
+  local -n _arr="$1"
+  local -a filtered=()
+  local i=0
+  while (( i < ${#_arr[@]} )); do
+    local token="${_arr[$i]}"
+    if [[ "$token" == --* ]]; then
+      local j=$((i + 1))
+      local -a values=()
+      while (( j < ${#_arr[@]} )) && [[ "${_arr[$j]}" != --* ]]; do
+        local candidate="${_arr[$j]}"
+        if [[ -n "$candidate" && "$candidate" != "null" && "$candidate" != '""' ]]; then
+          values+=("$candidate")
+        fi
+        ((j++))
+      done
+      if (( j == i + 1 )); then
+        filtered+=("$token")
+      elif (( ${#values[@]} > 0 )); then
+        filtered+=("$token")
+        filtered+=("${values[@]}")
+      fi
+      i=$j
+      continue
+    fi
+    if [[ -n "$token" && "$token" != "null" && "$token" != '""' ]]; then
+      filtered+=("$token")
+    fi
+    ((i++))
+  done
+  _arr=("${filtered[@]}")
+}
+
 # --- inject best grid search configuration ---
 best_config_args() {
   # Usage: best_config_args <stage>
