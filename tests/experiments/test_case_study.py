@@ -449,12 +449,16 @@ def test_auto_shape_coercion_normalises_metadata(tmp_path, monkeypatch):
         allow_shape_coercion,
         verify_match_threshold,
         hidden_dim,
+        edge_dim=None,
+        checkpoint_hidden_dim=None,
+        checkpoint_edge_dim=None,
         ckpt_path,
     ):
         load_calls.update(
             {
                 "allow_shape_coercion": allow_shape_coercion,
                 "hidden_dim": hidden_dim,
+                "edge_dim": edge_dim,
                 "ckpt_path": ckpt_path,
             }
         )
@@ -490,5 +494,6 @@ def test_auto_shape_coercion_normalises_metadata(tmp_path, monkeypatch):
     assert build_calls["gnn_type"] == "gin"
     assert load_calls["hidden_dim"] == 512
     assert load_calls["allow_shape_coercion"] is False
+    assert load_calls["edge_dim"] == 1
     assert add3d_calls == [True]
     assert result.diagnostics.get("encoder_config", {}).get("hidden_dim") == 512
