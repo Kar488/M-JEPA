@@ -188,6 +188,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "num_workers": getattr(args, "num_workers", None),
             "prefetch_factor": getattr(args, "prefetch_factor", None),
             "persistent_workers": getattr(args, "persistent_workers", None),
+            "full_finetune": bool(getattr(args, "full_finetune", False)),
+            "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
+            "tox21_head_batch_size": int(getattr(args, "tox21_head_batch_size", 256) or 256),
             **threshold_payload,
             **target_payload,
             "evaluation_mode": eval_mode,
@@ -246,6 +249,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             cli_hidden_dim_provided=getattr(args, "_hidden_dim_provided", True),
             cli_num_layers_provided=getattr(args, "_num_layers_provided", True),
             cli_gnn_type_provided=getattr(args, "_gnn_type_provided", True),
+            full_finetune=bool(getattr(args, "full_finetune", False)),
+            unfreeze_top_layers=int(getattr(args, "unfreeze_top_layers", 0) or 0),
+            tox21_head_batch_size=int(getattr(args, "tox21_head_batch_size", 256) or 256),
         )
 
         diagnostics = getattr(result, "diagnostics", {}) or {}

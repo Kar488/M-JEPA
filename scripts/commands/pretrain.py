@@ -518,11 +518,23 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             encoder_hash = compute_state_dict_hash(enc_state)
         except Exception:
             logger.exception("Failed to compute encoder hash during export")
-        save_checkpoint(ckpt_base, encoder=enc_state)
+        encoder_cfg = {
+            "gnn_type": args.gnn_type,
+            "hidden_dim": args.hidden_dim,
+            "num_layers": args.num_layers,
+            "add_3d": bool(getattr(args, "add_3d", False)),
+            "edge_dim": int(edge_dim) if edge_dim is not None else None,
+            "input_dim": int(input_dim),
+        }
+        save_checkpoint(ckpt_base, encoder=enc_state, encoder_cfg=encoder_cfg)
         _wb_log(wb, {"jepa_checkpoint": ckpt_base})
         if args.contrastive:
             cont_path = f"{os.path.splitext(ckpt_base)[0]}_contrastive.pt"
-            save_checkpoint(cont_path, encoder=cont_encoder.state_dict())
+            save_checkpoint(
+                cont_path,
+                encoder=cont_encoder.state_dict(),
+                encoder_cfg=encoder_cfg,
+            )
             _wb_log(wb, {"contrastive_checkpoint": cont_path})
 
         # keep a stable pointer the FT step can always find
@@ -627,6 +639,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     "pin_memory": bool(getattr(args, "pin_memory", False)),
                     "persistent_workers": bool(getattr(args, "persistent_workers", False)),
                     "prefetch_factor": getattr(args, "prefetch_factor", None),
+                    "edge_dim": int(edge_dim) if edge_dim is not None else None,
+                    "input_dim": int(input_dim),
                 }
                 if seeds:
                     try:
@@ -670,6 +684,12 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 "hyperparameters": hyperparameters,
                 "run": _collect_run_metadata(wb),
                 "metrics": {},
+            }
+            manifest_payload["featurizer"] = {
+                "add_3d": bool(getattr(args, "add_3d", False)),
+                "edge_dim": int(edge_dim) if edge_dim is not None else None,
+                "input_dim": int(input_dim),
+                "contiguity": bool(getattr(args, "contiguity", False)),
             }
             if hashes_block:
                 manifest_payload["hashes"] = hashes_block
