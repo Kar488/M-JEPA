@@ -2,8 +2,10 @@ import json
 import math
 from types import SimpleNamespace
 
-import numpy as np
-import torch
+import pytest
+
+np = pytest.importorskip("numpy")
+torch = pytest.importorskip("torch")
 
 import experiments.case_study as cs
 
@@ -167,4 +169,30 @@ def test_evaluate_case_study_with_baseline(tmp_path, monkeypatch):
     assert set(metrics) >= {"roc_auc", "pr_auc", "brier", "ece"}
     assert calibrator == {"enabled": False, "fit_split": "val", "status": "disabled"}
 
+
+def test_tox21_cache_name_builds_path(tmp_path, monkeypatch):
+    csv_path = tmp_path / "tox21.csv"
+    csv_path.write_text("smiles,NR-AR\nC,1\nN,0\n", encoding="utf-8")
+    cache_dir = tmp_path / "cache"
+
+    class HaltExecution(RuntimeError):
+        pass
+
+    class StubDataset:
+        @classmethod
+        def from_smiles_list(cls, *args, **kwargs):
+            raise HaltExecution
+
+    monkeypatch.setattr(cs, "_load_real_graphdataset", lambda: StubDataset)
+    monkeypatch.setattr(cs, "set_seed", lambda *args, **kwargs: None)
+
+    with pytest.raises(HaltExecution):
+        cs.run_tox21_case_study(
+            csv_path=str(csv_path),
+            task_name="NR-AR",
+            cache_dir=str(cache_dir),
+            encoder_checkpoint=None,
+        )
+
+    assert cache_dir.exists()
 

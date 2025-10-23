@@ -9,11 +9,13 @@ baseline.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import logging
 import math
 import os
+import pickle
 import random
 import sys
 import types
@@ -394,7 +396,10 @@ def _load_encoder_strict(
     allow_shape_coercion: bool,
     verify_match_threshold: float,
     hidden_dim: int,
-    ckpt_path: Optional[str],
+    edge_dim: Optional[int] = None,
+    checkpoint_hidden_dim: Optional[Any] = None,
+    checkpoint_edge_dim: Optional[Any] = None,
+    ckpt_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not isinstance(raw_state, Mapping):
         raise TypeError("Encoder state must be a mapping for strict load")
@@ -471,9 +476,13 @@ def _load_encoder_strict(
 
     if shape_mismatch and not allow_shape_coercion:
         preview = ", ".join(shape_mismatch[:10])
+        model_edge_dim = edge_dim if edge_dim is not None else "<unknown>"
+        ck_hidden = checkpoint_hidden_dim if checkpoint_hidden_dim is not None else "<unknown>"
+        ck_edge = checkpoint_edge_dim if checkpoint_edge_dim is not None else "<unknown>"
         raise RuntimeError(
-            "Encoder checkpoint has incompatible tensor shapes (first mismatches: %s). "
-            "Set allow_shape_coercion=true to permit alignment." % preview
+            "[enc_load] mismatch: model hidden_dim=%s edge_dim=%s checkpoint hidden_dim=%s edge_dim=%s. "
+            "Set allow_shape_coercion=true to override. First mismatches: %s"
+            % (hidden_dim, model_edge_dim, ck_hidden, ck_edge, preview)
         )
 
     if ratio < verify_match_threshold:
@@ -522,7 +531,13 @@ def _load_manifest_config(manifest_path: Optional[str]) -> Dict[str, Any]:
         with open(manifest_path, "r", encoding="utf-8") as fh:
             payload = json.load(fh)
         hyper = payload.get("hyperparameters") if isinstance(payload, dict) else None
-        return hyper if isinstance(hyper, dict) else {}
+        manifest_cfg = hyper.copy() if isinstance(hyper, dict) else {}
+        if isinstance(payload, dict):
+            featurizer_cfg = payload.get("featurizer")
+            if isinstance(featurizer_cfg, dict):
+                for key, value in featurizer_cfg.items():
+                    manifest_cfg.setdefault(key, value)
+        return manifest_cfg
     except Exception:
         logger.warning("Failed to read encoder manifest from %s", manifest_path, exc_info=True)
         return {}
@@ -881,6 +896,7 @@ def run_tox21_case_study(
     hidden_dim: int = 256,
     num_layers: int = 3,
     gnn_type: str = "mpnn",
+    add_3d: bool = False,
     contiguous: bool = False,
     mask_ratio: float = 0.15,
     contrastive: bool = False,
@@ -905,9 +921,16 @@ def run_tox21_case_study(
     bf16_head: Optional[bool] = None,
     encoder_source_override: Optional[str] = None,
     evaluation_mode: str = "pretrain_frozen",
-    allow_shape_coercion: bool = False,
+    allow_shape_coercion: Optional[bool] = None,
     allow_equal_hash: bool = False,
     verify_match_threshold: float = 0.98,
+    cli_hidden_dim_provided: bool = True,
+    cli_num_layers_provided: bool = True,
+    cli_gnn_type_provided: bool = True,
+    full_finetune: bool = False,
+    unfreeze_top_layers: int = 0,
+    tox21_head_batch_size: int = 256,
+    cache_dir: Optional[str] = None,
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
 
@@ -953,14 +976,108 @@ def run_tox21_case_study(
     GraphDatasetCls = _load_real_graphdataset()
     gnn_type_lower = (gnn_type or "").lower()
     requires_3d = gnn_type_lower in {"schnet3d", "schnet"}
+    requested_add_3d = bool(add_3d)
+    effective_add_3d = requested_add_3d or requires_3d
 
-    dataset = GraphDatasetCls.from_smiles_list(
-        smiles_list,
-        labels=labels_list,
-        add_3d=requires_3d,
-    )
+    cache_dir_path: Optional[Path] = None
+    dataset_cache_path: Optional[Path] = None
+    dataset_cache_hit = False
+    schema_digest: Optional[str] = None
+    if cache_dir:
+        try:
+            cache_dir_path = Path(cache_dir).expanduser()
+            cache_dir_path.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            logger.debug(
+                "Failed to prepare tox21 cache directory %s", cache_dir, exc_info=True
+            )
+            cache_dir_path = None
+
+    try:
+        head_batch_size = int(tox21_head_batch_size)
+    except Exception:
+        head_batch_size = 256
+    head_batch_size = max(1, head_batch_size)
+
+    dataset: "GraphDatasetT" | None = None
+    if cache_dir_path is not None:
+        csv_stem = Path(csv_path).stem or "dataset"
+        task_part = str(task_name or dataset_name or "task")
+        hidden_key = f"hd{int(hidden_dim)}" if hidden_dim is not None else "hdunk"
+        schema_parts = [f"3d{int(effective_add_3d)}", hidden_key]
+        fingerprint = "|".join(schema_parts)
+        schema_digest = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:8]
+        cache_name = (
+            f"tox21_{csv_stem}_{task_part}_"
+            f"{'_'.join(schema_parts)}_h{schema_digest}.pkl"
+        )
+        dataset_cache_path = cache_dir_path / cache_name
+        if dataset_cache_path.exists():
+            try:
+                with dataset_cache_path.open("rb") as handle:
+                    graphs, labels_cached, smiles_cached = pickle.load(handle)
+                dataset = GraphDatasetCls(graphs, labels_cached, smiles_cached)
+                dataset_cache_hit = True
+            except Exception:
+                logger.warning(
+                    "Failed to load tox21 dataset cache %s; regenerating graphs.",
+                    dataset_cache_path,
+                    exc_info=True,
+                )
+                dataset = None
+
+    if dataset is None:
+        dataset = GraphDatasetCls.from_smiles_list(
+            smiles_list,
+            labels=labels_list,
+            add_3d=effective_add_3d,
+        )
+        if cache_dir_path is not None and dataset_cache_path is not None:
+            try:
+                payload = (
+                    dataset.graphs,
+                    dataset.labels.tolist() if dataset.labels is not None else None,
+                    dataset.smiles,
+                )
+                tmp_path = dataset_cache_path.with_suffix(dataset_cache_path.suffix + ".tmp")
+                with tmp_path.open("wb") as handle:
+                    pickle.dump(payload, handle)
+                tmp_path.replace(dataset_cache_path)
+            except Exception:
+                logger.debug(
+                    "Failed to materialise tox21 dataset cache at %s",
+                    dataset_cache_path,
+                    exc_info=True,
+                )
+
     if len(dataset) == 0:
         raise ValueError("No valid molecules could be parsed from the dataset.")
+
+    if dataset_cache_path is not None:
+        logger.info(
+            "[cache] selected_cache=%s (hit=%s add_3d=%s hidden_dim=%s schema_hash=%s)",
+            dataset_cache_path,
+            "yes" if dataset_cache_hit else "no",
+            bool(effective_add_3d),
+            hidden_dim if hidden_dim is not None else "<unset>",
+            schema_digest if schema_digest is not None else "<unknown>",
+        )
+        diagnostics["cache"] = {
+            "path": str(dataset_cache_path),
+            "hit": bool(dataset_cache_hit),
+            "add_3d": bool(effective_add_3d),
+            "hidden_dim": int(hidden_dim) if hidden_dim is not None else None,
+            "schema_hash": schema_digest,
+        }
+        if ci_diag:
+            _ci_log(
+                "tox21 dataset cache",
+                path=str(dataset_cache_path),
+                hit=bool(dataset_cache_hit),
+                add_3d=bool(effective_add_3d),
+                hidden_dim=int(hidden_dim) if hidden_dim is not None else None,
+                schema_hash=schema_digest,
+            )
 
     if ci_diag:
         labels_arr = dataset.labels
@@ -979,6 +1096,9 @@ def run_tox21_case_study(
             "SchNet-style encoders require 3D coordinates, but none were generated. "
             "Ensure RDKit is installed with 3D conformer support."
         )
+
+    diagnostics["add_3d_requested"] = requested_add_3d
+    diagnostics["add_3d_effective"] = effective_add_3d
 
     for i, graph in enumerate(dataset.graphs):
         smi = getattr(graph, "smiles", None) or (
@@ -1093,15 +1213,69 @@ def run_tox21_case_study(
         else:
             enc_state = state
 
-    final_cfg: Dict[str, Any] = {
-        "gnn_type": gnn_type,
-        "hidden_dim": hidden_dim,
-        "num_layers": num_layers,
-    }
+    def _maybe_int_value(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    def _maybe_bool_value(value: Any) -> Optional[bool]:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            norm = value.strip().lower()
+            if norm in {"1", "true", "yes", "on"}:
+                return True
+            if norm in {"0", "false", "no", "off"}:
+                return False
+        return None
+
+    checkpoint_hidden_dim = None
+    checkpoint_edge_dim = None
+    checkpoint_add_3d = None
+    for candidate in (state_cfg.get("hidden_dim"), manifest_cfg.get("hidden_dim")):
+        coerced = _maybe_int_value(candidate)
+        if coerced is not None:
+            checkpoint_hidden_dim = coerced
+            break
+    for candidate in (state_cfg.get("edge_dim"), manifest_cfg.get("edge_dim")):
+        coerced = _maybe_int_value(candidate)
+        if coerced is not None:
+            checkpoint_edge_dim = coerced
+            break
+    for candidate in (state_cfg.get("add_3d"), manifest_cfg.get("add_3d")):
+        coerced = _maybe_bool_value(candidate)
+        if coerced is not None:
+            checkpoint_add_3d = coerced
+            break
+
+    final_cfg: Dict[str, Any] = {}
+    if cli_gnn_type_provided and gnn_type is not None:
+        final_cfg["gnn_type"] = gnn_type
+    if cli_hidden_dim_provided and hidden_dim is not None:
+        final_cfg["hidden_dim"] = hidden_dim
+    if cli_num_layers_provided and num_layers is not None:
+        final_cfg["num_layers"] = num_layers
+    final_cfg["add_3d"] = bool(effective_add_3d)
+    final_cfg["edge_dim"] = int(edge_dim) if edge_dim is not None else None
     cli_cfg = final_cfg.copy()
     mismatch_report: Dict[str, Tuple[Any, Any]] = {}
+    allow_shape_normalisation = (
+        bool(allow_shape_coercion)
+        if allow_shape_coercion is not None
+        else bool(state_cfg or manifest_cfg)
+    )
+    auto_shape_normalisation = allow_shape_coercion is None and allow_shape_normalisation
     for source in (state_cfg, manifest_cfg):
-        for key in ("gnn_type", "hidden_dim", "num_layers"):
+        for key in ("gnn_type", "hidden_dim", "num_layers", "add_3d", "edge_dim"):
             value = source.get(key)
             if value is None:
                 continue
@@ -1114,7 +1288,15 @@ def run_tox21_case_study(
                 raise ValueError(
                     f"Encoder configuration mismatch for {key}: CLI={current_value} checkpoint={value}"
                 )
-            if allow_shape_coercion:
+            if key == "add_3d":
+                coerced = _maybe_bool_value(value)
+                if coerced is not None:
+                    value = coerced
+            elif key == "edge_dim":
+                coerced_int = _maybe_int_value(value)
+                if coerced_int is not None:
+                    value = coerced_int
+            if allow_shape_normalisation:
                 if current_value is None or str(current_value) == str(value):
                     final_cfg[key] = value
                 else:
@@ -1124,18 +1306,74 @@ def run_tox21_case_study(
                     final_cfg[key] = value
             elif current_value is None:
                 final_cfg[key] = value
-    if mismatch_report and allow_shape_coercion:
+    if mismatch_report and allow_shape_normalisation:
         details = ", ".join(
             f"{name} {before}→{after}" for name, (before, after) in mismatch_report.items()
         )
-        logger.info(
-            "Normalising encoder configuration from checkpoint metadata: %s",
-            details,
+        if auto_shape_normalisation:
+            logger.info(
+                "Auto shape coercion enabled; normalising encoder configuration from checkpoint metadata: %s",
+                details,
+            )
+        else:
+            logger.info(
+                "Normalising encoder configuration from checkpoint metadata: %s",
+                details,
+            )
+
+    hidden_dim_fallback = hidden_dim if hidden_dim is not None else 256
+    num_layers_fallback = num_layers if num_layers is not None else 3
+    gnn_type_fallback = gnn_type or "mpnn"
+
+    resolved_hidden_dim = final_cfg.get("hidden_dim", hidden_dim_fallback)
+    resolved_num_layers = final_cfg.get("num_layers", num_layers_fallback)
+    resolved_gnn_type = final_cfg.get("gnn_type", gnn_type_fallback)
+
+    final_edge_dim = final_cfg.get("edge_dim", edge_dim)
+    if final_edge_dim is not None:
+        try:
+            final_edge_dim = int(final_edge_dim)
+        except Exception:
+            final_edge_dim = edge_dim
+    effective_add_3d = bool(final_cfg.get("add_3d", effective_add_3d))
+
+    dataset_edge_dim = int(final_edge_dim) if final_edge_dim is not None else 0
+    if checkpoint_edge_dim is not None and dataset_edge_dim != int(checkpoint_edge_dim):
+        raise RuntimeError(
+            "Encoder featurizer mismatch: checkpoint edge_dim=%s dataset edge_dim=%s. "
+            "Set allow_shape_coercion=true to override."
+            % (checkpoint_edge_dim, dataset_edge_dim)
+        )
+    if checkpoint_add_3d is not None and bool(checkpoint_add_3d) != bool(effective_add_3d):
+        raise RuntimeError(
+            "Encoder featurizer mismatch: checkpoint add_3d=%s requested add_3d=%s. "
+            "Set allow_shape_coercion=true to override."
+            % (checkpoint_add_3d, bool(effective_add_3d))
         )
 
-    final_hidden_dim = int(final_cfg.get("hidden_dim", hidden_dim))
-    final_num_layers = int(final_cfg.get("num_layers", num_layers))
-    final_gnn_type = str(final_cfg.get("gnn_type", gnn_type))
+    if resolved_hidden_dim is None or resolved_num_layers is None or resolved_gnn_type is None:
+        raise ValueError("Unable to determine encoder architecture from CLI or metadata")
+
+    final_hidden_dim = int(resolved_hidden_dim)
+    final_num_layers = int(resolved_num_layers)
+    final_gnn_type = str(resolved_gnn_type)
+
+    logger.info(
+        "[enc_cfg] gnn_type=%s hidden_dim=%s num_layers=%s add_3d=%s edge_dim=%s",
+        final_gnn_type,
+        final_hidden_dim,
+        final_num_layers,
+        bool(effective_add_3d),
+        final_edge_dim,
+    )
+
+    diagnostics["encoder_config"] = {
+        "gnn_type": final_gnn_type,
+        "hidden_dim": int(final_hidden_dim),
+        "num_layers": int(final_num_layers),
+        "add_3d": bool(effective_add_3d),
+        "edge_dim": int(final_edge_dim) if final_edge_dim is not None else None,
+    }
 
     gnn_type_lower = final_gnn_type.lower()
     if gnn_type_lower in {
@@ -1149,8 +1387,10 @@ def run_tox21_case_study(
         "chemprop",
         "attentivefp",
         "attnfp",
-    } and edge_dim <= 0:
-        edge_dim = 1
+    } and (final_edge_dim is None or final_edge_dim <= 0):
+        final_edge_dim = 1
+
+    edge_dim = int(final_edge_dim) if final_edge_dim is not None else 0
 
     for i, graph in enumerate(dataset.graphs):
         dataset.graphs[i] = ensure_edge_attr(graph, edge_dim, device=device)
@@ -1207,6 +1447,8 @@ def run_tox21_case_study(
     head_from_checkpoint = isinstance(loaded_head_state, dict) and bool(loaded_head_state)
     train_head_missing = normalized_mode == "end_to_end" and not head_from_checkpoint
     train_probe = normalized_mode != "end_to_end" or train_head_missing
+    if full_finetune:
+        train_probe = True
 
     patience_value = finetune_patience
     if patience_value is None:
@@ -1221,13 +1463,14 @@ def run_tox21_case_study(
                 )
                 patience_value = None
     if patience_value is None:
-        patience_value = 10
+        patience_value = 12 if full_finetune else 10
 
     logger.info(
-        "Tox21 evaluation configuration: mode=%s head_from_checkpoint=%s train_head=%s epochs=%d patience=%s",
+        "Tox21 evaluation configuration: mode=%s head_from_checkpoint=%s train_head=%s full_finetune=%s epochs=%d patience=%s",
         display_mode,
         "yes" if head_from_checkpoint else "no",
         "yes" if train_probe else "no",
+        "yes" if full_finetune else "no",
         int(finetune_epochs if train_probe else 0),
         str(patience_value if train_probe else "<skip>"),
     )
@@ -1256,15 +1499,47 @@ def run_tox21_case_study(
             if baseline_hash is None:
                 manifest_hash = manifest_cfg.get("encoder_hash")
                 baseline_hash = manifest_hash if isinstance(manifest_hash, str) else None
+    allow_shape_requested: Optional[bool] = allow_shape_coercion
+    allow_shape_effective = bool(allow_shape_coercion) if allow_shape_coercion is not None else False
+    auto_shape_retry = False
+
     if enc_state and encoder_checkpoint:
-        encoder_load_info = _load_encoder_strict(
-            encoder,
-            enc_state,
-            allow_shape_coercion=bool(allow_shape_coercion),
-            verify_match_threshold=float(verify_match_threshold),
-            hidden_dim=int(final_hidden_dim),
-            ckpt_path=encoder_checkpoint,
-        )
+        try:
+            encoder_load_info = _load_encoder_strict(
+                encoder,
+                enc_state,
+                allow_shape_coercion=allow_shape_effective,
+                verify_match_threshold=float(verify_match_threshold),
+                hidden_dim=int(final_hidden_dim),
+                edge_dim=edge_dim,
+                checkpoint_hidden_dim=checkpoint_hidden_dim,
+                checkpoint_edge_dim=checkpoint_edge_dim,
+                ckpt_path=encoder_checkpoint,
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            hint_present = "allow_shape_coercion" in message
+            if allow_shape_coercion is None and hint_present:
+                logger.warning(
+                    "Encoder checkpoint shapes mismatched (strict load failed: %s); "
+                    "retrying with allow_shape_coercion enabled.",
+                    message,
+                )
+                allow_shape_effective = True
+                auto_shape_retry = True
+                encoder_load_info = _load_encoder_strict(
+                    encoder,
+                    enc_state,
+                    allow_shape_coercion=True,
+                    verify_match_threshold=float(verify_match_threshold),
+                    hidden_dim=int(final_hidden_dim),
+                    edge_dim=edge_dim,
+                    checkpoint_hidden_dim=checkpoint_hidden_dim,
+                    checkpoint_edge_dim=checkpoint_edge_dim,
+                    ckpt_path=encoder_checkpoint,
+                )
+            else:
+                raise
         encoder_hash = encoder_load_info.get("hash") if isinstance(encoder_load_info, dict) else None
         logger.info(
             "[encoder_hash]=%s source=tox21_load path=%s baseline=%s",
@@ -1283,7 +1558,7 @@ def run_tox21_case_study(
 
     fine_tuned_modes = {"frozen_finetuned", "end_to_end"}
     if (
-        normalized_mode in fine_tuned_modes
+        (full_finetune or normalized_mode in fine_tuned_modes)
         and encoder_hash
         and baseline_hash
         and str(encoder_hash) == str(baseline_hash)
@@ -1301,7 +1576,11 @@ def run_tox21_case_study(
     diagnostics["encoder_load"] = encoder_load_info
     diagnostics["encoder_hash"] = encoder_hash
     diagnostics["baseline_encoder_hash"] = baseline_hash
-    diagnostics["allow_shape_coercion"] = bool(allow_shape_coercion)
+    diagnostics["allow_shape_coercion_requested"] = (
+        None if allow_shape_requested is None else bool(allow_shape_requested)
+    )
+    diagnostics["allow_shape_coercion_effective"] = bool(allow_shape_effective)
+    diagnostics["allow_shape_coercion_auto"] = bool(auto_shape_retry)
     diagnostics["verify_match_threshold"] = float(verify_match_threshold)
 
     def _freeze_encoder_params() -> None:
@@ -1319,6 +1598,9 @@ def run_tox21_case_study(
     if encoder_source_override:
         encoder_source = str(encoder_source_override)
         eval_name = str(encoder_source_override)
+    elif full_finetune:
+        encoder_source = "full_finetune"
+        eval_name = "full_finetune"
     if should_pretrain:
         ema_encoder = build_encoder(
             gnn_type=final_gnn_type,
@@ -1367,7 +1649,7 @@ def run_tox21_case_study(
             normalized_mode,
         )
 
-    if train_probe and should_pretrain:
+    if train_probe and should_pretrain and not full_finetune:
         # After optional pretraining we freeze the encoder so that the linear head
         # evaluates the representation quality without further backbone updates.
         _freeze_encoder_params()
@@ -1384,6 +1666,8 @@ def run_tox21_case_study(
     except Exception:
         logger.warning("Failed to parse encoder_lr=%s; treating as unset", encoder_lr, exc_info=True)
         encoder_lr_value = None
+    if full_finetune and encoder_lr_value is None:
+        encoder_lr_value = 3e-4
 
     weight_decay_value: Optional[float] = None
     if weight_decay is not None:
@@ -1496,7 +1780,7 @@ def run_tox21_case_study(
             "task_type": "classification",
             "epochs": finetune_epochs,
             "lr": head_lr_value,
-            "batch_size": 32,
+            "batch_size": head_batch_size,
             "device": device,
             "patience": int(patience_value),
             "num_workers": num_workers,
@@ -1506,15 +1790,23 @@ def run_tox21_case_study(
             "bf16": bf16_linear,
             "time_budget_mins": finetune_time_budget_mins,
             "use_scaffold": bool(scaffold_split_indices and _HAS_RDKIT),
-            "freeze_encoder": True,
+            "freeze_encoder": not full_finetune,
             "head_lr": head_lr_value,
             "encoder_lr": encoder_lr_value,
+            "train_indices": train_idx,
+            "val_indices": val_idx,
+            "test_indices": test_idx,
+            "enable_batch_autoscale": False,
+            "unfreeze_top_layers": int(unfreeze_top_layers),
             **extra_args,
         }
         if optimizer_for_head is not None:
             linear_kwargs["optimizer"] = optimizer_for_head
         if probe_head is not None:
             linear_kwargs["head"] = probe_head
+
+        if full_finetune:
+            linear_kwargs["early_stop_metric"] = "val_auc"
 
         clf_metrics = train_linear_head(**linear_kwargs)
 

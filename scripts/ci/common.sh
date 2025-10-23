@@ -1135,8 +1135,52 @@ expand_array_vars() {
   local i
   for i in "${!_arr[@]}"; do
     [[ "${_arr[$i]}" == --* ]] && continue
-    _arr[$i]=$(eval "echo ${_arr[$i]}")
+    local _had_u=0
+    if [[ $- == *u* ]]; then
+      _had_u=1
+      set +u
+    fi
+    # shellcheck disable=SC2086 # intentional env/parameter expansion via eval
+    local _expanded
+    _expanded=$(eval "echo ${_arr[$i]}")
+    if ((_had_u)); then
+      set -u
+    fi
+    _arr[$i]="$_expanded"
   done
+}
+
+prune_empty_args() {
+  local -n _arr="$1"
+  local -a filtered=()
+  local i=0
+  while (( i < ${#_arr[@]} )); do
+    local token="${_arr[$i]}"
+    if [[ "$token" == --* ]]; then
+      local j=$((i + 1))
+      local -a values=()
+      while (( j < ${#_arr[@]} )) && [[ "${_arr[$j]}" != --* ]]; do
+        local candidate="${_arr[$j]}"
+        if [[ -n "$candidate" && "$candidate" != "null" && "$candidate" != '""' ]]; then
+          values+=("$candidate")
+        fi
+        ((j++))
+      done
+      if (( j == i + 1 )); then
+        filtered+=("$token")
+      elif (( ${#values[@]} > 0 )); then
+        filtered+=("$token")
+        filtered+=("${values[@]}")
+      fi
+      i=$j
+      continue
+    fi
+    if [[ -n "$token" && "$token" != "null" && "$token" != '""' ]]; then
+      filtered+=("$token")
+    fi
+    ((i++))
+  done
+  _arr=("${filtered[@]}")
 }
 
 # --- inject best grid search configuration ---
@@ -1216,8 +1260,21 @@ best_config_args() {
   fi
 
   local py; py=$(python_bin) || { echo "python not found" >&2; return 127; }
-  "$py" - "$cfg" "$stage" <<'PY'
-import os, json, sys
+  local __ci_dir
+  __ci_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local bestcfg_policy_default="${__ci_dir}/bestcfg_policy.yml"
+  local bestcfg_policy_env="${BESTCFG_POLICY:-$bestcfg_policy_default}"
+  BESTCFG_POLICY="$bestcfg_policy_env" "$py" - "$cfg" "$stage" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - optional dependency
+    yaml = None
+
 path = sys.argv[1]
 # normalize stage and support 'benchmark' alias
 stage = (sys.argv[2].lower().strip() if len(sys.argv) > 2 else "bench")
@@ -1226,7 +1283,9 @@ if stage == "benchmark":
 raw = json.load(open(path))
 
 # --- flatten possible W&B shapes ---
-def _get(key, default=None):
+_MISSING = object()
+
+def _get(key, default=_MISSING):
     # 1) flat
     if isinstance(raw, dict) and key in raw:
         v = raw[key]
@@ -1242,22 +1301,110 @@ def _get(key, default=None):
         return v
     return default
 
-# Build a flat cfg the rest of the code expects
-cfg = {}
-for k in ["gnn_type","hidden_dim","num_layers","ema_decay","contiguity","add_3d",
-          "lr","learning_rate","temperature","training_method","method","pretrain_epochs","finetune_epochs"]:
-    v = _get(k)
-    if v is not None:
-        cfg[k] = v
+_ALIASES = {
+    "pretrain_epochs": ("epochs",),
+    "finetune_epochs": ("epochs",),
+    "pretrain_batch_size": ("batch_size",),
+    "finetune_batch_size": ("batch_size",),
+    "learning_rate": ("lr",),
+    "lr": ("learning_rate",),
+}
 
-# normalise: learning_rate → lr (benchmark/help only exposes --lr)
-if "lr" not in cfg and "learning_rate" in cfg:
-    cfg["lr"] = cfg["learning_rate"]
 
-# normalise: method → contrastive flag
-tm = cfg.get("training_method") or cfg.get("method")
-if isinstance(tm, str) and tm.lower().startswith("con"):
-    cfg["contrastive"] = True
+def _alias_variants(name: str) -> list[str]:
+    variants = [name]
+    if "_" in name:
+        variants.append(name.replace("_", "-"))
+    if "-" in name:
+        variants.append(name.replace("-", "_"))
+    return variants
+
+
+def _lookup_with_aliases(key):
+    """Return the first non-missing value for key or any configured aliases."""
+
+    seen: set[str] = set()
+    queue: list[str] = []
+    queue.extend(_alias_variants(key))
+    for alias in _ALIASES.get(key, ()):  # prefer canonical aliases first
+        queue.extend(_alias_variants(alias))
+
+    for candidate in queue:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        value = _get(candidate)
+        if value is not _MISSING:
+            return value
+    return _MISSING
+
+
+def _simple_yaml_load(text):
+    lines = text.splitlines()
+    result = {}
+    stack = [(-1, result)]
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        stripped_comment = raw.split("#", 1)[0].rstrip()
+        if not stripped_comment.strip():
+            i += 1
+            continue
+        if stripped_comment.strip() == "---":
+            i += 1
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        while stack and indent <= stack[-1][0]:
+            stack.pop()
+        container = stack[-1][1]
+        stripped = stripped_comment.strip()
+        if stripped.startswith("- "):
+            if not isinstance(container, list):
+                raise ValueError("yaml list item without list context")
+            container.append(stripped[2:].strip())
+            i += 1
+            continue
+        if ":" in stripped:
+            key, remainder = stripped.split(":", 1)
+            key = key.strip()
+            remainder = remainder.strip()
+            if remainder:
+                if not isinstance(container, dict):
+                    raise ValueError("yaml scalar outside mapping")
+                container[key] = remainder
+                i += 1
+                continue
+            lookahead = None
+            j = i + 1
+            while j < len(lines):
+                look_raw = lines[j]
+                look = look_raw.split("#", 1)[0]
+                if not look.strip():
+                    j += 1
+                    continue
+                look_indent = len(look_raw) - len(look_raw.lstrip(" "))
+                if look_indent <= indent:
+                    break
+                look_stripped = look.strip()
+                lookahead = [] if look_stripped.startswith("- ") else {}
+                break
+            if lookahead is None:
+                lookahead = {}
+            if not isinstance(container, dict):
+                raise ValueError("yaml mapping outside dict context")
+            container[key] = lookahead
+            stack.append((indent, lookahead))
+            i += 1
+            continue
+        raise ValueError(f"unsupported policy line: {raw!r}")
+    return result
+
+
+def _load_policy_manifest(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    if yaml is not None:
+        return yaml.safe_load(text) or {}
+    return _simple_yaml_load(text)
 
 # --- Unified, refactor-safe mappings (kebab-case) ---
 # 1) Dataset / loader / device knobs that multiple stages accept
@@ -1356,6 +1503,7 @@ pretrain_only = {
     "pretrain_batch_size": "--batch-size",
     "pretrain_epochs": "--epochs",
     "save_every": "--save-every",
+    "sample_unlabeled": "--sample-unlabeled",
 }
 
 finetune_only = {
@@ -1372,6 +1520,10 @@ benchmark_only = {
     "ft_ckpt": "--ft-ckpt",
     "dataset": "--dataset",
     "task": "--task",
+    "finetune_batch_size": "--batch-size",
+    "pretrain_batch_size": "--batch-size",
+    "finetune_epochs": "--epochs",
+    "pretrain_epochs": "--epochs",
 }
 
 tox21_only = {
@@ -1379,8 +1531,12 @@ tox21_only = {
     "dataset": "--dataset",
     "pretrain_epochs": "--pretrain-epochs",
     "finetune_epochs": "--finetune-epochs",
+    "pretrain_batch_size": "--batch-size",
     "pretrain_time_budget_mins": "--pretrain-time-budget-mins",
     "finetune_time_budget_mins": "--finetune-time-budget-mins",
+    "full_finetune": "--full-finetune",
+    "unfreeze_top_layers": "--unfreeze-top-layers",
+    "tox21_head_batch_size": "--tox21-head-batch-size",
 }
 
 # 6) Final per-stage maps (compose without duplication)
@@ -1402,22 +1558,155 @@ maps = {
     },
 }
 
+# Build a flat cfg the rest of the code expects. Start from all mapped keys so
+# newly supported flags flow automatically, then ensure legacy singular knobs
+# remain available even if a future refactor drops them from the stage maps.
+cfg = {}
+known_keys = set()
+for mapping in maps.values():
+    known_keys.update(mapping.keys())
+known_keys.update({"training_method", "method", "learning_rate", "lr"})
+
+for key in sorted(known_keys):
+    value = _lookup_with_aliases(key)
+    if value is _MISSING or value is None:
+        continue
+    cfg[key] = value
+
+# Backfill historical singular fields that other tooling expects, regardless of
+# whether they are still covered by the dynamic maps above.
+legacy_keys = [
+    "gnn_type",
+    "hidden_dim",
+    "num_layers",
+    "ema_decay",
+    "contiguity",
+    "add_3d",
+    "lr",
+    "learning_rate",
+    "temperature",
+    "training_method",
+    "method",
+    "pretrain_epochs",
+    "finetune_epochs",
+]
+
+for key in legacy_keys:
+    if key in cfg:
+        continue
+    value = _lookup_with_aliases(key)
+    if value is _MISSING or value is None:
+        continue
+    cfg[key] = value
+
+# normalise: learning_rate → lr (benchmark/help only exposes --lr)
+if "lr" not in cfg and "learning_rate" in cfg:
+    cfg["lr"] = cfg["learning_rate"]
+
+# normalise: method → contrastive flag
+tm = cfg.get("training_method") or cfg.get("method")
+if isinstance(tm, str) and tm.lower().startswith("con"):
+    cfg["contrastive"] = True
+
+# Load policy manifest and collapse default + per-stage rules.
+policy_candidates = []
+policy_hint = os.environ.get("BESTCFG_POLICY")
+if policy_hint:
+    policy_candidates.append(Path(policy_hint))
+app_dir = os.environ.get("APP_DIR")
+if app_dir:
+    policy_candidates.append(Path(app_dir) / "scripts" / "ci" / "bestcfg_policy.yml")
+
+policy_path = None
+policy_manifest = {}
+for candidate in policy_candidates:
+    if candidate and candidate.is_file():
+        policy_path = str(candidate)
+        policy_manifest = _load_policy_manifest(candidate)
+        break
+
+if not policy_manifest:
+    policy_manifest = {}
+if policy_path is None:
+    policy_path = policy_hint or "<unset>"
+
+def _policy_values(section_name):
+    section = policy_manifest.get(section_name) or {}
+    return {
+        "yaml_only": list(section.get("yaml_only") or []),
+        "bestcfg_only": list(section.get("bestcfg_only") or []),
+        "allow": list(section.get("allow") or []),
+    }
+
+default_policy = _policy_values("default")
+stage_policy = _policy_values(stage)
+
+def _merged(category):
+    merged = []
+    merged.extend(default_policy[category])
+    merged.extend(stage_policy[category])
+    return {str(v) for v in merged}
+
+policy_sets = {category: _merged(category) for category in ("yaml_only", "bestcfg_only", "allow")}
+
+# Prepare keep overrides and summary buckets.
+keep_raw = os.environ.get("BESTCFG_KEEP", "")
+keep = {s.strip() for s in keep_raw.replace(",", " ").split() if s.strip()}
+if "learning_rate" in keep:
+    keep.add("lr")
+if "lr" in keep:
+    keep.add("learning_rate")
+
+# Track provenance for auditing.
+dropped_yaml = []
+dropped_skip = []
+forced_keep = []
+
 # Build the skip set from env (accept space- or comma-separated)
 _raw = os.environ.get("BESTCFG_SKIP", "")
 # accept comma- or space-separated values and normalize
 skip = {s.strip() for s in _raw.replace(",", " ").split() if s.strip()}
 
+sorted_skip = sorted(skip)
+joined_skip = ", ".join(sorted_skip)
+print(f"[bestcfg] skip=[{joined_skip}]" if joined_skip else "[bestcfg] skip=[]", file=sys.stderr)
+
+# Policy: structural winners (gnn_type, hidden_dim, num_layers) should not be
+# skipped in normal flows. Use BESTCFG_NO_EPOCHS=1 to drop epochs when needed.
+structural = {"hidden_dim", "num_layers", "gnn_type"}
+structural_hits = sorted(structural.intersection(skip))
+if structural_hits:
+    print(
+        "[bestcfg][warn] structural winner(s) skipped: "
+        + ", ".join(structural_hits)
+        + "; this can cause shape mismatches.",
+        file=sys.stderr,
+    )
+
 # treat 'learning_rate' as an alias for 'lr'
 if "learning_rate" in skip:
   skip.add("lr")
+if "lr" in skip:
+  skip.add("learning_rate")
 
 # Add epochs if requested
 if os.environ.get("BESTCFG_NO_EPOCHS") == "1":
   skip.update(["pretrain_epochs", "finetune_epochs"])
 
-# Drop the keys (if present) - run this ALWAYS
-for k in list(skip):
-    cfg.pop(k, None)
+# Apply skip + policy filtering while recording provenance.
+yaml_owned = policy_sets.get("yaml_only", set())
+
+for key in list(cfg.keys()):
+    if key in skip:
+        dropped_skip.append(key)
+        cfg.pop(key, None)
+        continue
+    if key in yaml_owned and key not in keep:
+        dropped_yaml.append(key)
+        cfg.pop(key, None)
+        continue
+    if key in keep:
+        forced_keep.append(key)
 
 mapping = maps.get(stage, {})
 seen_flags = set()
@@ -1428,12 +1717,22 @@ for key, flag in mapping.items():
         continue
     val = cfg[key]
     if isinstance(val, bool):
-        if val:
-            print(flag)
-            seen_flags.add(flag)
+        print(flag)
+        seen_flags.add(flag)
+        print("1" if val else "0")
     else:
         print(flag)
         seen_flags.add(flag)
         print(val)
+
+summary = {
+    "stage": stage,
+    "policy_file": policy_path,
+    "best_config_keys": sorted(cfg.keys()),
+    "yaml_owned": sorted(dropped_yaml),
+    "skipped": sorted(dropped_skip),
+    "forced": sorted(forced_keep),
+}
+print("[bestcfg][summary] " + json.dumps(summary, sort_keys=True), file=sys.stderr)
 PY
 }

@@ -779,6 +779,10 @@ class BoolFlag(argparse.Action):
             setattr(namespace, self.dest, True)
         else:
             setattr(namespace, self.dest, _to_bool(values))
+        try:
+            setattr(namespace, f"_{self.dest}_provided", True)
+        except Exception:
+            pass
 
 def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     """Add arguments common to multiple commands."""
@@ -815,18 +819,67 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     p.add_argument("--wandb-project", type=str, default=d.wandb_project, help="W&B project name")
     p.add_argument("--wandb-tags", nargs="*", default=d.wandb_tags, help="Tags for W&B run")
 
+class _RecordProvided(argparse.Action):
+    """Argparse action that tracks whether a flag was explicitly provided."""
+
+    def __call__(self, parser, namespace, values, option_string=None):  # type: ignore[override]
+        setattr(namespace, self.dest, values)
+        setattr(namespace, f"_{self.dest}_provided", True)
+
+
 def _add_model_args(p: argparse.ArgumentParser) -> None:
     md = CONFIG.get("model", {})
-    p.add_argument("--gnn-type", "--gnn_type", dest="gnn_type",
-                   choices=["gcn","gat","mpnn","edge_mpnn","graphsage","gin", "gine", "dmpnn", "attentivefp", "schnet3d"],
-                    default=md.get("gnn_type", "edge_mpnn"),
-                    help=(
-                        "Backbone GNN. Use 'gine' (GIN+edge) or 'dmpnn' (Chemprop-style directed MPNN) "
-                        "for 2D/bond-aware runs; 'schnet3d' for 3D geometry (requires pos); "
-                        "'attentivefp' for attention readout over atoms/bonds."
-                    ),)
-    p.add_argument("--hidden-dim", "--hidden_dim", dest="hidden_dim", type=int, default=md.get("hidden_dim", 128))
-    p.add_argument("--num-layers", "--num_layers", dest="num_layers", type=int, default=md.get("num_layers", 2))
+    # Track whether structural knobs were supplied explicitly. CI can then
+    # distinguish between defaults vs. best-config overrides when routing
+    # encoder metadata into downstream stages such as Tox21.
+    p.set_defaults(
+        _gnn_type_provided=False,
+        _hidden_dim_provided=False,
+        _num_layers_provided=False,
+    )
+    gnn_default = md.get("gnn_type", "edge_mpnn")
+    hidden_default = md.get("hidden_dim", 128)
+    layers_default = md.get("num_layers", 2)
+    p.add_argument(
+        "--gnn-type",
+        "--gnn_type",
+        dest="gnn_type",
+        choices=[
+            "gcn",
+            "gat",
+            "mpnn",
+            "edge_mpnn",
+            "graphsage",
+            "gin",
+            "gine",
+            "dmpnn",
+            "attentivefp",
+            "schnet3d",
+        ],
+        default=gnn_default,
+        action=_RecordProvided,
+        help=(
+            "Backbone GNN. Use 'gine' (GIN+edge) or 'dmpnn' (Chemprop-style directed MPNN) "
+            "for 2D/bond-aware runs; 'schnet3d' for 3D geometry (requires pos); "
+            "'attentivefp' for attention readout over atoms/bonds."
+        ),
+    )
+    p.add_argument(
+        "--hidden-dim",
+        "--hidden_dim",
+        dest="hidden_dim",
+        type=int,
+        default=hidden_default,
+        action=_RecordProvided,
+    )
+    p.add_argument(
+        "--num-layers",
+        "--num_layers",
+        dest="num_layers",
+        type=int,
+        default=layers_default,
+        action=_RecordProvided,
+    )
     p.add_argument("--mask-ratio", "--mask_ratio", dest="mask_ratio", type=float, default=md.get("mask_ratio", 0.15))
     p.add_argument("--ema-decay", "--ema_decay", dest="ema_decay", type=float, default=md.get("ema_decay", 0.996))
     p.add_argument("--temperature", dest="temperature", type=float, default=md.get("temperature", 0.1))
@@ -882,6 +935,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ft.add_argument("--task-type", choices=["classification", "regression"], default="classification")
     ft.add_argument("--patience", type=int, default=CONFIG.get("finetune", {}).get("patience", 10), help="Early stopping patience")
+    ft.add_argument(
+        "--use-scaffold",
+        dest="use_scaffold",
+        action=BoolFlag,
+        default=False,
+        help="Enable Murcko scaffold splits when SMILES are available during fine-tune",
+    )
     ft.add_argument(
         "--load-encoder-checkpoint",
         dest="load_encoder_checkpoint",
@@ -1011,6 +1071,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Learning rate for encoder parameters when they are trainable during Tox21 runs",
     )
     tox.add_argument(
+        "--full-finetune",
+        dest="full_finetune",
+        action="store_true",
+        default=case_cfg.get("full_finetune", False),
+        help="Enable full encoder fine-tuning on the Tox21 train split",
+    )
+    tox.add_argument(
+        "--unfreeze-top-layers",
+        dest="unfreeze_top_layers",
+        type=int,
+        default=case_cfg.get("unfreeze_top_layers", 0),
+        help="When fine-tuning, number of top encoder layers to unfreeze (0 = all)",
+    )
+    tox.add_argument(
+        "--tox21-head-batch-size",
+        dest="tox21_head_batch_size",
+        type=int,
+        default=case_cfg.get("tox21_head_batch_size", 256),
+        help="Batch size for the Tox21 head/encoder fine-tuning stage",
+    )
+    tox.add_argument(
         "--weight-decay",
         dest="weight_decay",
         type=float,
@@ -1065,7 +1146,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-shape-coercion",
         dest="allow_shape_coercion",
         action="store_true",
-        help="Permit resizing checkpoint tensors when loading encoders for Tox21 evaluation",
+        default=None,
+        help=(
+            "Permit resizing checkpoint tensors when loading encoders for Tox21 evaluation. "
+            "If omitted, a best-effort fallback will retry with coercion when strictly loading fails."
+        ),
     )
     tox.add_argument(
         "--allow-equal-hash",

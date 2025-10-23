@@ -32,6 +32,21 @@ logger = logging.getLogger(__name__)
 
 _GNN_TYPES_REQUIRING_3D = {"schnet3d", "schnet"}
 
+_TOX21_TASKS = {
+    "NR-AR",
+    "NR-AR-LBD",
+    "NR-AhR",
+    "NR-Aromatase",
+    "NR-ER",
+    "NR-ER-LBD",
+    "NR-PPAR-gamma",
+    "SR-ARE",
+    "SR-ATAD5",
+    "SR-HSE",
+    "SR-MMP",
+    "SR-p53",
+}
+
 
 def _stage_outputs_dir() -> Optional[Path]:
     stage_dir = os.getenv("STAGE_OUTPUTS_DIR")
@@ -290,6 +305,13 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             "freeze_encoder": bool(getattr(args, "freeze_encoder", True)),
             "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
             "max_finetune_batches": max_finetune_batches,
+            "num_workers": getattr(args, "num_workers", None),
+            "pin_memory": getattr(args, "pin_memory", None),
+            "persistent_workers": getattr(args, "persistent_workers", None),
+            "prefetch_factor": getattr(args, "prefetch_factor", None),
+            "bf16": bool(getattr(args, "bf16", False)),
+            "use_scaffold": bool(getattr(args, "use_scaffold", False)),
+            "dataset_override_reason": os.getenv("FINETUNE_DATASET_OVERRIDE_REASON"),
         },
     )
     log_effective_gnn(args, logger, wb)
@@ -324,6 +346,45 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         wb.log({"phase": "data_load", "status": "error"})
         sys.exit(1)
 
+    dataset_size = len(labeled)
+    dataset_override_reason = (os.getenv("FINETUNE_DATASET_OVERRIDE_REASON", "") or "").strip()
+    if dataset_override_reason:
+        logger.info("[finetune] dataset override reason=%s", dataset_override_reason)
+    logger.info(
+        "[finetune] dataset path=%s label_col=%s task=%s samples=%d",
+        getattr(args, "labeled_dir", "<unset>"),
+        getattr(args, "label_col", "<unset>"),
+        getattr(args, "task_type", "<unset>"),
+        dataset_size,
+    )
+
+    if wb is not None:
+        try:
+            wb.config.update({"dataset_size": dataset_size}, allow_val_change=True)
+        except Exception:
+            try:
+                wb.config.update({"dataset_size": dataset_size})
+            except Exception:
+                pass
+
+    scaffold_requested = bool(getattr(args, "_use_scaffold_provided", False))
+    use_scaffold_flag = bool(getattr(args, "use_scaffold", False))
+    labeled_lower = str(getattr(args, "labeled_dir", "") or "").lower()
+    label_col_name = str(getattr(args, "label_col", "") or "")
+    detected_tox21 = "tox21" in labeled_lower or label_col_name in _TOX21_TASKS
+    task_type_norm = str(getattr(args, "task_type", "") or "").strip().lower()
+    auto_scaffold = False
+    if (
+        not use_scaffold_flag
+        and not scaffold_requested
+        and detected_tox21
+        and task_type_norm == "classification"
+    ):
+        use_scaffold_flag = True
+        auto_scaffold = True
+        setattr(args, "use_scaffold", True)
+        logger.info("[finetune] enabling scaffold split for Tox21 fine-tune dataset")
+
     input_dim = labeled.graphs[0].x.shape[1]
     edge_dim = (
         None
@@ -332,6 +393,32 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     )
     device = resolve_device(args.device)
 
+    autoscale_env = str(os.getenv("BATCH_AUTOSCALE", "1")).strip().lower()
+    enable_batch_autoscale = autoscale_env not in {"0", "false", "no", "off"}
+
+    encoder_cfg_template = {
+        "gnn_type": args.gnn_type,
+        "hidden_dim": int(args.hidden_dim) if args.hidden_dim is not None else None,
+        "num_layers": int(args.num_layers) if args.num_layers is not None else None,
+        "add_3d": bool(getattr(args, "add_3d", False)),
+        "edge_dim": int(edge_dim) if edge_dim is not None else None,
+        "input_dim": int(input_dim),
+    }
+
+    def _resolved_encoder_cfg(module: nn.Module) -> Dict[str, Any]:
+        cfg = dict(encoder_cfg_template)
+        for key in ("hidden_dim", "num_layers"):
+            attr = getattr(module, key, None)
+            if attr is not None:
+                try:
+                    cfg[key] = int(attr)
+                except Exception:
+                    cfg[key] = attr
+        gnn_attr = getattr(module, "gnn_type", None)
+        if gnn_attr is not None:
+            cfg["gnn_type"] = gnn_attr
+        return cfg
+
     # Aggregate metrics across seeds
     metrics_runs: List[Dict[str, float]] = []
     seed_best_paths: Dict[int, str] = {}
@@ -339,6 +426,8 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     seed_best_metric: Dict[int, float] = {}
     seed_best_step: Dict[int, float] = {}
     seed_best_mode: Dict[int, str] = {}
+    seed_baseline_hash: Dict[int, str] = {}
+
     encoder_unfreeze_mode: Optional[str] = None
     encoder_was_trainable = False
     cumulative_encoder_batches = 0.0
@@ -534,6 +623,21 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             except Exception:
                 pass
         encoder_unfreeze_mode = effective_mode
+
+        baseline_hash = None
+        try:
+            enc_state_snapshot = encoder.state_dict()
+        except Exception:
+            enc_state_snapshot = None
+        if enc_state_snapshot:
+            try:
+                baseline_hash = compute_state_dict_hash(enc_state_snapshot)
+            except Exception:
+                logger.exception("Failed to compute baseline encoder hash")
+        if baseline_hash:
+            logger.info("[baseline_encoder_hash]=%s", baseline_hash)
+            seed_baseline_hash[seed] = baseline_hash
+
         # compute num_classes robustly for classification; for regression we won’t use it
         _in_dim = getattr(encoder, "hidden_dim", getattr(args, "hidden_dim", None))
         assert (
@@ -580,14 +684,28 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         ]
         head_params = [p for p in head.parameters() if p.requires_grad]
         optimizer_groups = []
-        head_lr = getattr(args, "head_lr", None) or args.lr
-        encoder_lr = getattr(args, "encoder_lr", None)
+        raw_head_lr = getattr(args, "head_lr", None)
+        head_lr = raw_head_lr if raw_head_lr is not None else args.lr
+        try:
+            head_lr = float(head_lr)
+        except Exception:
+            logger.warning("Failed to parse head_lr=%s; falling back to lr=%s", raw_head_lr, args.lr)
+            head_lr = float(args.lr)
+
+        raw_encoder_lr = getattr(args, "encoder_lr", None)
+        encoder_lr = None
+        if raw_encoder_lr is not None:
+            try:
+                encoder_lr = float(raw_encoder_lr)
+            except Exception:
+                logger.warning(
+                    "Failed to parse encoder_lr=%s; treating as unset", raw_encoder_lr, exc_info=True
+                )
+                encoder_lr = None
         if encoder_params:
             if encoder_lr is None:
-                encoder_lr = head_lr * 0.1
-                logger.info(
-                    "Encoder LR defaulting to %.2e (head_lr * 0.1)", float(encoder_lr)
-                )
+                encoder_lr = 3e-4
+                logger.info("Encoder LR defaulting to 3.00e-04")
             optimizer_groups.append({"params": encoder_params, "lr": encoder_lr})
         if head_params:
             optimizer_groups.append({"params": head_params, "lr": head_lr})
@@ -629,11 +747,11 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             except Exception:
                 encoder_lr_display = None
         logger.info(
-            "[finetune] learning rates: lr_head=%.2e lr_encoder=%s unfreeze_mode=%s",
+            "[finetune] lr_head=%.2e lr_encoder=%s",
             float(head_lr),
             f"{encoder_lr_display:.2e}" if encoder_lr_display is not None else "<frozen>",
-            effective_mode,
         )
+        logger.info("[finetune] unfreeze_mode=%s", effective_mode)
 
         cache_embeddings = not bool(encoder_params)
 
@@ -687,6 +805,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     device=device,
                     patience=args.patience,
                     devices=args.devices,
+                    use_scaffold=use_scaffold_flag,
                     head=head,
                     optimizer=optimizer,
                     scheduler=scheduler,
@@ -696,11 +815,12 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     persistent_workers=getattr(args, "persistent_workers", True),
                     prefetch_factor=getattr(args, "prefetch_factor", 4),
                     bf16=getattr(args, "bf16", False),
-                    encoder_lr=getattr(args, "encoder_lr", None),
-                    head_lr=getattr(args, "head_lr", None),
+                    encoder_lr=encoder_lr,
+                    head_lr=head_lr,
                     freeze_encoder=False,
                     early_stop_metric=getattr(args, "metric", "val_loss"),
                     cache_graph_embeddings=cache_embeddings,
+                    enable_batch_autoscale=enable_batch_autoscale,
                 )
 
                 train_batches = float(metrics.get("train/batches", 0.0) or 0.0)
@@ -787,6 +907,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                         head_state = _maybe_state_dict(head)
                         if enc_state is not None:
                             best_payload["encoder"] = enc_state
+                            best_payload["encoder_cfg"] = _resolved_encoder_cfg(encoder)
                         if head_state is not None:
                             best_payload["head"] = head_state
                         if optimizer is not None and hasattr(optimizer, "state_dict"):
@@ -821,6 +942,8 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                         sd = _maybe_state_dict(obj)
                         if sd is not None:
                             save_payload[name] = sd
+                            if name == "encoder":
+                                save_payload["encoder_cfg"] = _resolved_encoder_cfg(encoder)
                     if len(save_payload) > 1:
                         save_checkpoint(
                             os.path.join(seed_dir, f"ft_epoch_{epoch+1}.pt"),
@@ -965,7 +1088,11 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                         encoder_hash = compute_state_dict_hash(enc_state)
                     except Exception:
                         logger.exception("Failed to compute hash for fine-tuned encoder export")
-                    save_checkpoint(export_path, encoder=enc_state)
+                    save_checkpoint(
+                        export_path,
+                        encoder=enc_state,
+                        encoder_cfg=_resolved_encoder_cfg(encoder),
+                    )
                     try:
                         from utils.checkpoint import safe_link_or_copy
 
@@ -1016,10 +1143,23 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                 if seed in seed_best_step
                 else None,
                 "best_mode": seed_best_mode.get(seed),
+                "baseline_encoder_hash": seed_baseline_hash.get(seed),
             }
             for seed in seeds
         },
     }
+    if seed_baseline_hash:
+        stage_payload["baseline_encoder_hashes"] = {
+            str(k): v for k, v in seed_baseline_hash.items() if v
+        }
+        primary_hash_seed = summary_seed if summary_seed is not None else primary_seed
+        baseline_candidate = None
+        if primary_hash_seed is not None:
+            baseline_candidate = seed_baseline_hash.get(primary_hash_seed)
+        if baseline_candidate is None and seed_baseline_hash:
+            baseline_candidate = next(iter(seed_baseline_hash.values()), None)
+        if baseline_candidate:
+            stage_payload["baseline_encoder_hash"] = baseline_candidate
     if export_path:
         stage_payload["encoder_finetuned"] = {
             "checkpoint": export_path,
@@ -1028,6 +1168,25 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         }
         if export_hash:
             stage_payload["encoder_finetuned"]["hash"] = export_hash
+
+    try:
+        seed_list_summary = [int(s) for s in seeds]
+    except Exception:
+        seed_list_summary = list(seeds)
+
+    dataset_summary: Dict[str, Any] = {
+        "path": os.path.abspath(getattr(args, "labeled_dir", "")) if getattr(args, "labeled_dir", None) else getattr(args, "labeled_dir", None),
+        "label_col": getattr(args, "label_col", None),
+        "task_type": getattr(args, "task_type", None),
+        "size": int(dataset_size),
+        "use_scaffold": bool(use_scaffold_flag),
+        "auto_scaffold": bool(auto_scaffold),
+        "detected_tox21": bool(detected_tox21),
+        "metric": metric_name,
+        "override_reason": dataset_override_reason or None,
+    }
+    stage_payload["dataset"] = dataset_summary
+    stage_payload["seed_list"] = seed_list_summary
     _record_finetune_stage_outputs(stage_payload)
 
 

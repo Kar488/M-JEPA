@@ -1,26 +1,30 @@
-import os, json, tempfile, subprocess, shlex, pathlib, sys, shutil
+import json
+import os
+import pathlib
+import shlex
+import shutil
+import subprocess
+import tempfile
+
 import pytest
 
 
-# Path to your real common.sh (override with env COMMON_SH if repo layout differs)
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 COMMON_SH = os.getenv("COMMON_SH", str(ROOT / "scripts" / "ci" / "common.sh"))
-
-# Find a bash to run common.sh (Windows-friendly)
 BASH = os.getenv("BASH") or shutil.which("bash")
+
 pytestmark = [
-    pytest.mark.skipif(not pathlib.Path(COMMON_SH).exists(),
-                       reason=f"common.sh not found at {COMMON_SH}"),
-    pytest.mark.skipif(BASH is None,
-                       reason="bash not found; set env BASH to Git Bash (e.g., C:\\Program Files\\Git\\bin\\bash.exe)"),
+    pytest.mark.skipif(
+        not pathlib.Path(COMMON_SH).exists(),
+        reason=f"common.sh not found at {COMMON_SH}",
+    ),
+    pytest.mark.skipif(BASH is None, reason="bash not found; set env BASH to Git Bash"),
 ]
 
-import os
-import pytest
 
+def run_bestcfg(stage: str, cfg: dict, env: dict | None = None) -> tuple[str, str]:
+    """Execute best_config_args <stage> and capture stdout/stderr."""
 
-def run_bestcfg(stage: str, cfg: dict, env: dict | None = None) -> str:
-    """Call best_config_args <stage> from common.sh with a temp best_grid_config.json."""
     with tempfile.TemporaryDirectory() as td:
         grid_dir = pathlib.Path(td)
         (grid_dir / "best_grid_config.json").write_text(json.dumps(cfg), encoding="utf-8")
@@ -28,13 +32,11 @@ def run_bestcfg(stage: str, cfg: dict, env: dict | None = None) -> str:
         cache_dir = grid_dir / ".cache"
         data_dir.mkdir(parents=True, exist_ok=True)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        # Inherit env and inject writable dirs for the bash subprocess.
+
         run_env = dict(os.environ, **(env or {}))
         run_env.setdefault("DATA_DIR", str(data_dir))
         run_env.setdefault("XDG_CACHE_HOME", str(cache_dir))
-         
-        # Shim: rewrite any '/data...' path used by common.sh (or scripts it sources)
-        # to the per-test DATA_DIR. We wrap common file ops that might target /data.
+
         shim = r'''
 rewrite_path() {
   case "$1" in
@@ -58,11 +60,9 @@ touch()  { _wrap_args_and_exec touch "$@"; }
 tee()    { _wrap_args_and_exec tee "$@"; }
 export -f rewrite_path _wrap_args_and_exec mkdir install cp mv touch tee
 '''
-        # Export DATA_DIR/XDG_CACHE_HOME, install shim, then source common.sh.
-        # set -x to surface commands in stderr for easier debugging.
-        # Convert Windows paths to POSIX so Git Bash can source them
+
         msys_common = pathlib.Path(COMMON_SH).as_posix()
-        msys_grid   = pathlib.Path(str(grid_dir)).as_posix()
+        msys_grid = pathlib.Path(str(grid_dir)).as_posix()
         cmd = (
             "set -euo pipefail; set -x; "
             f"export DATA_DIR={shlex.quote(pathlib.Path(data_dir).as_posix())}; "
@@ -86,15 +86,20 @@ export -f rewrite_path _wrap_args_and_exec mkdir install cp mv touch tee
                 f"----- STDERR -----\n{proc.stderr}\n"
                 f"----- STDOUT -----\n{proc.stdout}\n"
             )
-        # Be robust if the script prints nothing on some platforms
-        # Always return a string (never None)
-        out = proc.stdout
-        if out is None:
-            out = ""
-        return out
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        return stdout, stderr
+
+
+def extract_summary(stderr: str) -> dict:
+    for line in stderr.splitlines():
+        if line.startswith("[bestcfg][summary] "):
+            payload = line.split(" ", 1)[1]
+            return json.loads(payload)
+    raise AssertionError(f"summary line not found in stderr:\n{stderr}")
+
 
 def test_wandb_shape_injects_model_flags_for_bench():
-    # Simulate W&B-like JSON: parameters.<key>.value
     cfg = {
         "parameters": {
             "gnn_type": {"value": "gine"},
@@ -102,94 +107,254 @@ def test_wandb_shape_injects_model_flags_for_bench():
             "num_layers": {"value": 2},
             "learning_rate": {"value": 2.774674e-4},
             "training_method": {"value": "contrastive"},
-            "pretrain_epochs": {"value": 5},
-            "finetune_epochs": {"value": 1},
         }
     }
-    out = run_bestcfg("bench", cfg)
-    # Flags must be present for benchmark
-    assert "--gnn-type" in out and "gine" in out
-    assert "--hidden-dim" in out and "128" in out
-    assert "--num-layers" in out and "2" in out
-    # learning_rate should map to --lr (not --learning-rate) so benchmark keeps it
-    assert "--lr" in out and "--learning-rate" not in out
-    # method should toggle --contrastive
-    assert "--contrastive" in out
+    stdout, stderr = run_bestcfg("bench", cfg)
+    assert "--gnn-type" in stdout
+    assert "--hidden-dim" in stdout
+    assert "--num-layers" in stdout
+    assert "--lr" in stdout and "--learning-rate" not in stdout
+    assert "--contrastive" in stdout
 
-    # Tokens should not be duplicated when aliases collapse (regression test).
-    tokens = out.split()
+    tokens = stdout.split()
     assert tokens.count("--lr") == 1
     assert tokens.count("--contrastive") == 1
 
-def test_flat_shape_also_works_and_epochs_can_be_skipped_for_tox21():
-    # Simulate flat JSON keys
+    summary = extract_summary(stderr)
+    assert summary["stage"] == "bench"
+    assert "lr" in summary["best_config_keys"]
+
+
+@pytest.mark.parametrize(
+    "stage,cfg,present,absent,yaml_hits",
+    [
+        (
+            "pretrain",
+            {
+                "mask_ratio": 0.2154,
+                "batch_size": 64,
+                "epochs": 12,
+                "learning_rate": 3e-4,
+                "prefetch_factor": 2,
+                "persistent_workers": 1,
+                "devices": 2,
+                "cache_dir": "/tmp/cache",
+                "wandb_project": "ci-pretrain",
+            },
+            [
+                "--mask-ratio",
+                "--batch-size",
+                "--epochs",
+                "--lr",
+                "--prefetch-factor",
+                "--persistent-workers",
+                "--devices",
+            ],
+            ["--cache-dir", "--wandb-project"],
+            {"cache_dir", "wandb_project"},
+        ),
+        (
+            "finetune",
+            {
+                "batch_size": 32,
+                "epochs": 3,
+                "learning_rate": 1e-4,
+                "prefetch_factor": 2,
+                "persistent_workers": 1,
+                "devices": 2,
+                "jepa_encoder": "/tmp/encoder.pt",
+                "ckpt_dir": "/tmp/ckpt",
+            },
+            [
+                "--batch-size",
+                "--epochs",
+                "--lr",
+                "--prefetch-factor",
+                "--persistent-workers",
+                "--devices",
+            ],
+            ["--jepa-encoder", "--ckpt-dir"],
+            {"jepa_encoder", "ckpt_dir"},
+        ),
+        (
+            "bench",
+            {
+                "gnn_type": "gine",
+                "hidden_dim": 128,
+                "num_layers": 2,
+                "learning_rate": 1e-4,
+                "batch_size": 128,
+                "epochs": 4,
+                "prefetch_factor": 2,
+                "persistent_workers": 1,
+                "devices": 2,
+                "dataset": "tox21",
+                "task": "roc_auc",
+                "jepa_encoder": "/tmp/encoder.pt",
+                "ft_ckpt": "/tmp/ft.pt",
+            },
+            [
+                "--gnn-type",
+                "--hidden-dim",
+                "--num-layers",
+                "--epochs",
+                "--lr",
+                "--batch-size",
+                "--prefetch-factor",
+                "--persistent-workers",
+                "--devices",
+            ],
+            ["--dataset", "--task", "--jepa-encoder", "--ft-ckpt"],
+            {"dataset", "task", "jepa_encoder", "ft_ckpt"},
+        ),
+        (
+            "tox21",
+            {
+                "gnn_type": "gine",
+                "hidden_dim": 64,
+                "num_layers": 2,
+                "learning_rate": 2e-4,
+                "batch_size": 256,
+                "pretrain_epochs": 5,
+                "finetune_epochs": 1,
+                "prefetch_factor": 2,
+                "persistent_workers": 1,
+                "devices": 2,
+                "pretrain_time_budget_mins": 60,
+                "finetune_time_budget_mins": 30,
+                "report_dir": "/tmp/report",
+            },
+            [
+                "--gnn-type",
+                "--hidden-dim",
+                "--num-layers",
+                "--batch-size",
+                "--lr",
+                "--pretrain-epochs",
+                "--finetune-epochs",
+                "--prefetch-factor",
+                "--persistent-workers",
+                "--devices",
+            ],
+            ["--pretrain-time-budget-mins", "--finetune-time-budget-mins", "--report-dir"],
+            {"pretrain_time_budget_mins", "finetune_time_budget_mins", "report_dir"},
+        ),
+        (
+            "grid",
+            {
+                "methods": ["jepa", "contrastive"],
+                "pretrain_batch_sizes": [32, 64],
+                "cache_dir": "/tmp/cache",
+                "wandb_tags": ["ci"],
+            },
+            ["--methods", "--pretrain-batch-sizes"],
+            ["--cache-dir", "--wandb-tags"],
+            {"cache_dir", "wandb_tags"},
+        ),
+    ],
+)
+
+def test_stage_policy_filters_yaml_owned_keys(stage, cfg, present, absent, yaml_hits):
+    stdout, stderr = run_bestcfg(stage, cfg)
+    for flag in present:
+        assert flag in stdout, f"expected {flag} in stdout for {stage}"
+    for flag in absent:
+        assert flag not in stdout, f"expected {flag} to be suppressed for {stage}"
+
+    summary = extract_summary(stderr)
+    assert summary["stage"] == ("bench" if stage == "benchmark" else stage)
+    assert set(yaml_hits).issubset(set(summary["yaml_owned"]))
+
+
+def test_alias_values_promote_to_canonical_keys():
+    cfg = {
+        "batch_size": 96,
+        "epochs": 11,
+        "learning_rate": 7.5e-5,
+    }
+    _, stderr = run_bestcfg("pretrain", cfg)
+    summary = extract_summary(stderr)
+    assert "pretrain_batch_size" in summary["best_config_keys"]
+    assert "pretrain_epochs" in summary["best_config_keys"]
+    assert "lr" in summary["best_config_keys"]
+    assert "batch_size" not in summary["best_config_keys"]
+    assert "epochs" not in summary["best_config_keys"]
+
+    bench_cfg = {
+        "batch_size": 48,
+        "epochs": 6,
+        "learning_rate": 5e-4,
+    }
+    _, bench_stderr = run_bestcfg("bench", bench_cfg)
+    bench_summary = extract_summary(bench_stderr)
+    assert any(
+        key in bench_summary["best_config_keys"]
+        for key in ("finetune_batch_size", "pretrain_batch_size")
+    )
+    assert any(
+        key in bench_summary["best_config_keys"]
+        for key in ("finetune_epochs", "pretrain_epochs")
+    )
+    assert "batch_size" not in bench_summary["best_config_keys"]
+    assert "epochs" not in bench_summary["best_config_keys"]
+
+
+def test_bestcfg_keep_overrides_yaml_policy():
+    cfg = {
+        "mask_ratio": 0.2,
+        "pretrain_batch_size": 32,
+        "cache_dir": "/tmp/cache",
+    }
+    stdout, stderr = run_bestcfg("pretrain", cfg, env={"BESTCFG_KEEP": "cache_dir"})
+    assert "--cache-dir" in stdout
+    summary = extract_summary(stderr)
+    assert "cache_dir" in summary["forced"]
+    assert "cache_dir" not in summary["yaml_owned"]
+
+
+def test_bestcfg_bool_false_emits_zero():
     cfg = {
         "gnn_type": "gine",
         "hidden_dim": 128,
         "num_layers": 2,
-        "lr": 3e-4,
-        "training_method": "contrastive",
-        "pretrain_epochs": 5,
-        "finetune_epochs": 1,
+        "learning_rate": 1e-4,
+        "persistent_workers": False,
+        "add_3d": False,
     }
-    # By default, tox21 should include epochs
-    out_with_epochs = run_bestcfg("tox21", cfg)
-    tokens = out_with_epochs.split()
-    def val(flag):
-        return tokens[tokens.index(flag)+1] if flag in tokens else None
-    # present
-    assert "--pretrain-epochs" in tokens
-    assert "--finetune-epochs" in tokens
-    # correct values
-    assert val("--pretrain-epochs") == "5"
-    assert val("--finetune-epochs") == "1"
+    stdout, _ = run_bestcfg("finetune", cfg)
+    tokens = stdout.split()
+    assert "--persistent-workers" in tokens
+    pw_index = tokens.index("--persistent-workers")
+    assert tokens[pw_index + 1] == "0"
+    assert "--add-3d" in tokens
+    add3d_index = tokens.index("--add-3d")
+    assert tokens[add3d_index + 1] == "0"
 
-    # Skip behavior
-    out_skipped = run_bestcfg("tox21", cfg, env={"BESTCFG_SKIP": "pretrain_epochs, finetune_epochs"})
-    toks2 = out_skipped.split()
-    assert "--pretrain-epochs" not in toks2
-    assert "--finetune-epochs" not in toks2
-    
-    # When BESTCFG_NO_EPOCHS=1, epochs must be stripped but model flags remain
-    out_no_epochs = run_bestcfg("tox21", cfg, env={"BESTCFG_NO_EPOCHS": "1"})
-    assert "--pretrain-epochs" not in out_no_epochs
-    assert "--finetune-epochs" not in out_no_epochs
-    assert "--gnn-type" in out_no_epochs and "gine" in out_no_epochs
-    assert "--hidden-dim" in out_no_epochs and "--num-layers" in out_no_epochs
 
-def test_finetune_stage_emits_epochs_and_honors_no_epochs():
-    cfg = {"finetune_epochs": 3, "gnn_type": "gine", "hidden_dim": 64, "num_layers": 2}
-    out = run_bestcfg("finetune", cfg)
-    toks = out.split()
-    assert "--epochs" in toks
-    assert toks[toks.index("--epochs")+1] == "3"
-    out2 = run_bestcfg("finetune", cfg, env={"BESTCFG_NO_EPOCHS": "1"})
-    assert "--epochs" not in out2.split()
-
-def test_bench_alias_and_bestcfg_skip_lr():
+def test_bestcfg_skip_reflected_in_summary():
     cfg = {
-        "parameters": {
-            "gnn_type": {"value": "gine"},
-            "hidden_dim": {"value": 128},
-            "num_layers": {"value": 2},
-            "learning_rate": {"value": 1e-4},
-        }
+        "gnn_type": "gine",
+        "hidden_dim": 128,
+        "num_layers": 2,
+        "lr": 1e-4,
     }
-    # "benchmark" alias should behave like "bench"
-    out_bench = run_bestcfg("bench", cfg)
-    out_benchmark = run_bestcfg("benchmark", cfg)
-    assert out_bench.strip().split() == out_benchmark.strip().split()
+    stdout, stderr = run_bestcfg("bench", cfg, env={"BESTCFG_SKIP": "lr"})
+    assert "--lr" not in stdout
+    summary = extract_summary(stderr)
+    assert "lr" in summary["skipped"]
 
-    # BESTCFG_SKIP should drop selected keys (use JSON keys, not CLI flags)
-    out_skip_lr = run_bestcfg("bench", cfg, env={"BESTCFG_SKIP": "lr, learning_rate"})
-    assert "--lr" not in out_skip_lr  # dropped
-    # but other model flags remain
-    assert "--gnn-type" in out_skip_lr and "--hidden-dim" in out_skip_lr and "--num-layers" in out_skip_lr
 
-def test_finetune_stage_emits_epochs_and_honors_no_epochs(tmp_path, monkeypatch):
-    cfg = {"finetune_epochs": 3, "gnn_type": "gine", "hidden_dim": 64, "num_layers": 2}
-    out = run_bestcfg("finetune", cfg)
-    toks = out.split()
-    assert "--epochs" in toks and toks[toks.index("--epochs")+1] == "3"
-    out2 = run_bestcfg("finetune", cfg, env={"BESTCFG_NO_EPOCHS": "1"})
-    assert "--epochs" not in out2.split()
+def test_bestcfg_no_epochs_respected_for_tox21():
+    cfg = {
+        "gnn_type": "gine",
+        "hidden_dim": 128,
+        "num_layers": 2,
+        "pretrain_epochs": 5,
+        "finetune_epochs": 2,
+    }
+    stdout, stderr = run_bestcfg("tox21", cfg, env={"BESTCFG_NO_EPOCHS": "1"})
+    assert "--pretrain-epochs" not in stdout
+    assert "--finetune-epochs" not in stdout
+    summary = extract_summary(stderr)
+    assert set(["pretrain_epochs", "finetune_epochs"]).issubset(set(summary["skipped"]))
+

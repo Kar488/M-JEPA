@@ -4,7 +4,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from itertools import islice
 import math
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple, Union
 
 from utils.wandb_filters import silence_pydantic_field_warnings
 
@@ -490,11 +490,37 @@ def _format_metric(value: Optional[float]) -> str:
     return f"{value:.4f}"
 
 
+class GatheredMetric(NamedTuple):
+    jepa_mean: Optional[float]
+    contrastive_mean: Optional[float]
+    jepa_raw: int
+    jepa_valid: int
+    contrastive_raw: int
+    contrastive_valid: int
+
+
+def _summarise_metric_entries(entries: Iterable[Any]) -> Tuple[Optional[float], int, int]:
+    raw: List[float] = []
+    valid: List[float] = []
+    for value in entries:
+        if value is None:
+            continue
+        try:
+            cast = float(value)
+        except (TypeError, ValueError):
+            continue
+        raw.append(cast)
+        if not math.isnan(cast):
+            valid.append(cast)
+    mean = _safe_mean(valid) if valid else None
+    return mean, len(raw), len(valid)
+
+
 def _gather_metric_value(
     metric_key: str,
     contrib: Tuple[str, Optional[str], Optional[Any]],
     store: MetricStore,
-) -> Optional[Tuple[Optional[float], Optional[float]]]:
+) -> Optional[GatheredMetric]:
     pair_vals, pair_seed, _ = store
     kind, pid, seed = contrib
 
@@ -504,31 +530,34 @@ def _gather_metric_value(
     if kind == "seed":
         seeds = pair_seed.get(metric_key, {}).get(pid, {})
         mm = seeds.get(seed)
-        if not mm or "jepa" not in mm or "contrastive" not in mm:
+        if not mm:
             return None
-        jv = _safe_mean(mm["jepa"])
-        cv = _safe_mean(mm["contrastive"])
-        return jv, cv
+        j_mean, j_raw, j_valid = _summarise_metric_entries(mm.get("jepa", ()))
+        c_mean, c_raw, c_valid = _summarise_metric_entries(mm.get("contrastive", ()))
+        if j_raw == 0 and c_raw == 0:
+            return None
+        return GatheredMetric(j_mean, c_mean, j_raw, j_valid, c_raw, c_valid)
 
     if kind == "pair":
         methods = pair_vals.get(metric_key, {}).get(pid, {})
-        jv = _safe_mean(methods.get("jepa", ()))
-        cv = _safe_mean(methods.get("contrastive", ()))
-        if jv is None or cv is None:
+        j_mean, j_raw, j_valid = _summarise_metric_entries(methods.get("jepa", ()))
+        c_mean, c_raw, c_valid = _summarise_metric_entries(methods.get("contrastive", ()))
+        if j_raw == 0 and c_raw == 0:
             return None
-        return jv, cv
+        return GatheredMetric(j_mean, c_mean, j_raw, j_valid, c_raw, c_valid)
 
     if kind == "global":
         methods = pair_vals.get(metric_key, {})
-        j_all, c_all = [], []
+        j_entries: List[Any] = []
+        c_entries: List[Any] = []
         for method_vals in methods.values():
-            j_all.extend(method_vals.get("jepa", ()))
-            c_all.extend(method_vals.get("contrastive", ()))
-        jv = _safe_mean(j_all)
-        cv = _safe_mean(c_all)
-        if jv is None or cv is None:
+            j_entries.extend(method_vals.get("jepa", ()))
+            c_entries.extend(method_vals.get("contrastive", ()))
+        j_mean, j_raw, j_valid = _summarise_metric_entries(j_entries)
+        c_mean, c_raw, c_valid = _summarise_metric_entries(c_entries)
+        if j_raw == 0 and c_raw == 0:
             return None
-        return jv, cv
+        return GatheredMetric(j_mean, c_mean, j_raw, j_valid, c_raw, c_valid)
 
     return None
 
@@ -1025,24 +1054,49 @@ def main():
 
     tie_metric_key = TASK_TIEBREAKER.get(task)
     tie_metric_used = False
+    tie_metric_attempted = False
     tie_metric_values = {"jepa": None, "contrastive": None}
+    tie_metric_counts = {
+        "jepa": {"raw": 0, "valid": 0},
+        "contrastive": {"raw": 0, "valid": 0},
+    }
+    tie_metric_reasons: List[str] = []
 
     if primary_tie and tie_metric_key:
         tie_vals = {"jepa": [], "contrastive": []}
         for contrib in contributions:
-            values = _gather_metric_value(tie_metric_key, contrib, metric_store)
-            if not values:
+            gathered = _gather_metric_value(tie_metric_key, contrib, metric_store)
+            if not gathered:
                 continue
-            jv, cv = values
+            tie_metric_attempted = True
+            (
+                jv,
+                cv,
+                j_raw,
+                j_valid,
+                c_raw,
+                c_valid,
+            ) = gathered
+            tie_metric_counts["jepa"]["raw"] += j_raw
+            tie_metric_counts["jepa"]["valid"] += j_valid
+            tie_metric_counts["contrastive"]["raw"] += c_raw
+            tie_metric_counts["contrastive"]["valid"] += c_valid
             if jv is not None:
                 tie_vals["jepa"].append(jv)
             if cv is not None:
                 tie_vals["contrastive"].append(cv)
+
+        tie_metric_attempted = tie_metric_attempted or any(
+            info["raw"] > 0 for info in tie_metric_counts.values()
+        )
         tie_metric_values = {
             "jepa": _safe_mean(tie_vals["jepa"]),
             "contrastive": _safe_mean(tie_vals["contrastive"]),
         }
-        if tie_metric_values["jepa"] is not None and tie_metric_values["contrastive"] is not None:
+        if (
+            tie_metric_values["jepa"] is not None
+            and tie_metric_values["contrastive"] is not None
+        ):
             tie_metric_used = True
             if tie_metric_key == "r2":
                 if tie_metric_values["contrastive"] > tie_metric_values["jepa"]:
@@ -1067,12 +1121,36 @@ def main():
                 flush=True,
             )
         else:
-            print(
-                "[paired-effect] tie-breaker {label} unavailable; retaining primary winner".format(
-                    label=METRIC_INFO[tie_metric_key]["label"]
-                ),
-                flush=True,
-            )
+            tie_label = METRIC_INFO[tie_metric_key]["label"]
+            parts: List[str] = []
+            for method in ("jepa", "contrastive"):
+                counts = tie_metric_counts[method]
+                raw = counts["raw"]
+                valid = counts["valid"]
+                if raw == 0:
+                    parts.append(f"{method} missing {tie_label}")
+                elif valid == 0:
+                    parts.append(f"{method} produced only NaNs ({raw} value(s))")
+                elif valid < raw:
+                    parts.append(
+                        f"{method} filtered {raw - valid} non-finite value(s)"
+                    )
+            tie_metric_reasons = parts
+            if parts:
+                detail = "; ".join(parts)
+                print(
+                    "[paired-effect] tie-breaker {label} unavailable ({detail}); retaining primary winner".format(
+                        label=tie_label, detail=detail
+                    ),
+                    flush=True,
+                )
+            else:
+                print(
+                    "[paired-effect] tie-breaker {label} unavailable; retaining primary winner".format(
+                        label=tie_label
+                    ),
+                    flush=True,
+                )
 
     decision_source = (
         f"tie-breaker({tie_metric_key})"
@@ -1101,6 +1179,7 @@ def main():
         "aggregate": args.aggregate,
         "decision_source": decision_source,
         "tie_breaker_used": tie_metric_used,
+        "tie_breaker_attempted": tie_metric_attempted,
     }
     payload["primary_metric"] = {
         "canonical": primary_key,
@@ -1121,6 +1200,20 @@ def main():
             "contrastive": tie_metric_values["contrastive"],
             "used": tie_metric_used,
         }
+        tie_info["attempted"] = tie_metric_attempted
+        tie_info["available"] = bool(
+            tie_metric_values["jepa"] is not None
+            and tie_metric_values["contrastive"] is not None
+        )
+        tie_info["counts"] = {
+            method: {
+                "raw": int(counts["raw"]),
+                "valid": int(counts["valid"]),
+            }
+            for method, counts in tie_metric_counts.items()
+        }
+        if tie_metric_reasons:
+            tie_info["unavailable_reasons"] = tie_metric_reasons
         payload["tiebreaker_metric"] = tie_info
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:

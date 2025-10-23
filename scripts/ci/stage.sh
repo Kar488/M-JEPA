@@ -1052,6 +1052,7 @@ build_stage_args() {
 
   build_argv_from_yaml "$section"
   expand_array_vars ARGV
+  prune_empty_args ARGV
   #echo "ARGV after expansion: ${ARGV[@]}"
 
   # Best (from grid) → append last so it overrides YAML
@@ -1059,6 +1060,7 @@ build_stage_args() {
   if (( ! skip_best )); then
     mapfile -t BEST < <(best_config_args "$section")
     expand_array_vars BEST
+    prune_empty_args BEST
   fi
 
   local -a COMBINED=( "${ARGV[@]}" "${BEST[@]}" )
@@ -1124,6 +1126,8 @@ build_stage_args() {
       ((i++))
     done
   fi
+
+  prune_empty_args OUT
 
   if [ "$s" = "report" ]; then
     local -a FILTERED=()

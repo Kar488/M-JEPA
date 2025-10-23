@@ -273,11 +273,30 @@ class GraphDataset:
             adj_blocks.append(adj_i)
             sizes.append(n_i)
 
-        batch_x = (
-            torch.cat(node_features, dim=0)
-            if node_features
-            else torch.zeros((0, self.graphs[0].x.shape[1]), dtype=torch.float32)
-        )
+        if node_features:
+            feat_dims = {int(x_i.size(1)) for x_i in node_features}
+            if len(feat_dims) > 1:
+                max_feat_dim = max(feat_dims)
+                logger.warning(
+                    "Non-uniform node feature dims %s encountered; padding to %d",
+                    sorted(feat_dims),
+                    max_feat_dim,
+                )
+                padded_features: List[torch.Tensor] = []
+                for idx, x_i in zip(indices, node_features):
+                    feat_dim = int(x_i.size(1))
+                    if feat_dim < max_feat_dim:
+                        pad = torch.zeros(
+                            (x_i.size(0), max_feat_dim - feat_dim),
+                            dtype=x_i.dtype,
+                            device=x_i.device,
+                        )
+                        x_i = torch.cat([x_i, pad], dim=1)
+                    padded_features.append(x_i)
+                node_features = padded_features
+            batch_x = torch.cat(node_features, dim=0)
+        else:
+            batch_x = torch.zeros((0, self.graphs[0].x.shape[1]), dtype=torch.float32)
         batch_adj = (
             torch.block_diag(*adj_blocks)
             if adj_blocks
@@ -581,6 +600,7 @@ class GraphDataset:
         add_3d: bool = False,
         random_seed: Optional[int] = None,
         n_rows: Optional[int] = None,
+        num_workers: Optional[int] = 0,
     ) -> "GraphDataset":
         cache_path = None
         if cache_dir and n_rows is None:
@@ -598,7 +618,7 @@ class GraphDataset:
         if n_rows is not None:
             df = df.head(int(n_rows))
         smiles = df[smiles_col].astype(str).tolist()
-        labels = (
+        labels_raw = (
             df[label_col].to_numpy()
             if (label_col and label_col in df.columns)
             else None
@@ -606,13 +626,41 @@ class GraphDataset:
 
         graphs: List[GraphData] = []
         smiles_out: List[str] = []
-        for sm in smiles:
-            try:
-                g = cls.smiles_to_graph(sm, add_3d=add_3d, random_seed=random_seed)
+        valid_indices: List[int] = []
+
+        cls_module = cls.__module__
+        cls_qualname = cls.__qualname__
+
+        worker_budget = _resolve_worker_count(num_workers if num_workers is not None else 0)
+        if worker_budget > 0:
+            with ProcessPoolExecutor(max_workers=worker_budget) as ex:
+                iterator = ex.map(
+                    _safe_smiles_to_graph,
+                    smiles,
+                    repeat(add_3d),
+                    repeat(random_seed),
+                    repeat(cls_module),
+                    repeat(cls_qualname),
+                )
+                for idx, g_state in enumerate(iterator):
+                    if g_state is not None:
+                        graphs.append(_graph_from_state(g_state))
+                        smiles_out.append(smiles[idx])
+                        valid_indices.append(idx)
+        else:
+            for idx, sm in enumerate(smiles):
+                try:
+                    g = cls.smiles_to_graph(sm, add_3d=add_3d, random_seed=random_seed)
+                except Exception:
+                    continue
                 graphs.append(g)
                 smiles_out.append(sm)
-            except Exception:
-                continue
+                valid_indices.append(idx)
+
+        labels = None
+        if labels_raw is not None:
+            labels_array = np.asarray(labels_raw)
+            labels = labels_array[valid_indices]
 
         if cache_path:
             with open(cache_path, "wb") as f:

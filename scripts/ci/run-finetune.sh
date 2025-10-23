@@ -59,6 +59,59 @@ if [[ -f "$MET_ENV_FILE" ]]; then
   fi
 fi
 
+# When the gate result is unavailable the reroute logic should no-op.
+# Ensure the flag carries an explicit "unknown" marker instead of
+# inheriting the "false" default from parameter expansion.
+if [[ -z "${MET_BENCHMARK_BASELINE+x}" ]]; then
+  export MET_BENCHMARK_BASELINE="unknown"
+else
+  # Treat blank or whitespace-only values as unknown to avoid false negatives.
+  baseline_trimmed="${MET_BENCHMARK_BASELINE//[[:space:]]/}"
+  if [[ -z "$baseline_trimmed" ]]; then
+    export MET_BENCHMARK_BASELINE="unknown"
+  else
+    baseline_lower="${baseline_trimmed,,}"
+    case "$baseline_lower" in
+      true|false)
+        export MET_BENCHMARK_BASELINE="$baseline_lower"
+        ;;
+      *)
+        export MET_BENCHMARK_BASELINE="unknown"
+        ;;
+    esac
+  fi
+fi
+
+baseline_flag="${MET_BENCHMARK_BASELINE:-false}"
+baseline_flag_lc="${baseline_flag,,}"
+if [[ "$baseline_flag_lc" == "false" ]]; then
+  : "${FINETUNE_LABELED_DIR:=${APP_DIR}/data/tox21/data.csv}"
+  if [[ -z "${FINETUNE_LABEL_COL:-}" ]]; then
+    if [[ -n "${TOX21_FINE_TUNE_TASK:-}" ]]; then
+      FINETUNE_LABEL_COL="$TOX21_FINE_TUNE_TASK"
+    else
+      FINETUNE_LABEL_COL="NR-AR"
+    fi
+  fi
+  : "${FINETUNE_TASK_TYPE:=classification}"
+  : "${FINETUNE_METRIC:=val_auc}"
+  : "${FINETUNE_USE_SCAFFOLD:=true}"
+  : "${FINETUNE_SEED_0:=11}"
+  : "${FINETUNE_SEED_1:=29}"
+  : "${FINETUNE_SEED_2:=37}"
+  : "${FINETUNE_DATASET_OVERRIDE_REASON:=tox21_gate_failure}"
+
+  export FINETUNE_LABELED_DIR
+  export FINETUNE_LABEL_COL
+  export FINETUNE_TASK_TYPE
+  export FINETUNE_METRIC
+  export FINETUNE_USE_SCAFFOLD
+  export FINETUNE_SEED_0 FINETUNE_SEED_1 FINETUNE_SEED_2
+  export FINETUNE_DATASET_OVERRIDE_REASON
+
+  echo "[finetune] Baseline gate unmet; redirecting fine-tune to Tox21 task '${FINETUNE_LABEL_COL}'" >&2
+fi
+
 # fix: ensure fine-tune emits stage outputs for downstream evaluation
 export STAGE_OUTPUTS_DIR="${FINETUNE_DIR}/stage-outputs"
 mkdir -p "$STAGE_OUTPUTS_DIR"

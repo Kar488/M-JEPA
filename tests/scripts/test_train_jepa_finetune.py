@@ -105,6 +105,7 @@ def test_cmd_finetune_aggregates_metrics(tmp_path, monkeypatch):
 
     def maybe_init_wandb_stub(*args, **kwargs):
         calls["maybe_init_wandb"] += 1
+        calls["config"] = kwargs.get("config")
         return DummyWB()
 
     monkeypatch.setattr(tj, "maybe_init_wandb", maybe_init_wandb_stub)
@@ -123,12 +124,24 @@ def test_cmd_finetune_aggregates_metrics(tmp_path, monkeypatch):
     monkeypatch.setattr(tj.torch, "load", lambda *a, **k: {"encoder": {}}, raising=True)
 
     args = make_args(tmp_path, seeds=[0, 1, 2])
+    args.use_wandb = True
+    args.num_workers = 4
+    args.pin_memory = False
+    args.persistent_workers = False
+    args.prefetch_factor = 8
+    args.bf16 = True
     tj.cmd_finetune(args)
 
     assert calls["load_directory_dataset"] == 1
     assert calls["build_encoder"] == 3
     assert calls["train_linear_head"] == 3
     assert calls["maybe_init_wandb"] == 1
+    config = calls["config"]
+    assert config["hidden_dim"] == args.hidden_dim
+    assert config["num_layers"] == args.num_layers
+    assert config["persistent_workers"] is False
+    assert config["prefetch_factor"] == 8
+    assert config["bf16"] is True
 
     metrics_list = captured_metrics["list"]
     assert [m["acc"] for m in metrics_list] == metric_values
