@@ -860,14 +860,40 @@ def _log_assets_to_wandb(
     project: str,
     tables: Sequence[Tuple[str, pd.DataFrame, Optional[str]]],
     figures: Sequence[Tuple[str, Any, Optional[str]]],
+    *,
+    existing_assets: Optional[Mapping[str, _LoggedAsset]] = None,
+    refresh: bool = True,
 ) -> List[_LoggedAsset]:
-    if not tables and not figures:
-        return []
+    cached_assets: Mapping[str, _LoggedAsset] = {}
+    if existing_assets and not refresh:
+        cached_assets = existing_assets
+
+    reused: List[_LoggedAsset] = []
+    tables_to_log: List[Tuple[str, pd.DataFrame, Optional[str]]] = []
+    figures_to_log: List[Tuple[str, Any, Optional[str]]] = []
+
+    for table_name, df, caption in tables:
+        asset = cached_assets.get(table_name)
+        if asset and asset.kind == "table":
+            reused.append(asset)
+            continue
+        tables_to_log.append((table_name, df, caption))
+
+    for fig_name, fig, caption in figures:
+        asset = cached_assets.get(fig_name)
+        if asset and asset.kind == "image":
+            reused.append(asset)
+            continue
+        figures_to_log.append((fig_name, fig, caption))
+
+    if not tables_to_log and not figures_to_log:
+        return reused
+
     try:
         import wandb
     except Exception as exc:  # pragma: no cover - wandb optional
         LOGGER.warning("Unable to log %s assets because wandb is unavailable: %s", section, exc)
-        return []
+        return reused
 
     run_name = f"report-{_normalise_section(section)}-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
     run = wandb.init(
@@ -882,13 +908,13 @@ def _log_assets_to_wandb(
 
     if run is None:  # pragma: no cover - defensive guard when wandb returns None
         LOGGER.warning("wandb.init returned None for section %s", section)
-        return []
+        return reused
 
     run_path = "/".join(run.path) if hasattr(run, "path") else run.id
     logged: List[_LoggedAsset] = []
     try:
-        for table_name, df, caption in tables:
-            if df is None or df.empty:
+        for table_name, df, caption in tables_to_log:
+            if df is None or getattr(df, "empty", True):
                 continue
             table = wandb.Table(dataframe=df)
             run.log({table_name: table})
@@ -902,7 +928,7 @@ def _log_assets_to_wandb(
                     caption=caption,
                 )
             )
-        for fig_name, fig, caption in figures:
+        for fig_name, fig, caption in figures_to_log:
             if fig is None:
                 continue
             image = wandb.Image(fig)
@@ -921,7 +947,7 @@ def _log_assets_to_wandb(
                 fig.clf()
     finally:
         run.finish()
-    return logged
+    return reused + logged
 
 
 def _build_overview_assets(
@@ -930,7 +956,13 @@ def _build_overview_assets(
     configs: Sequence[str],
     entity: Optional[str],
     project: str,
+    existing_assets: Mapping[str, _LoggedAsset],
+    refresh: bool,
 ) -> List[_LoggedAsset]:
+    if not runs:
+        if not refresh and existing_assets:
+            return list(existing_assets.values())
+        return []
     metric_keys = list(metrics)[: min(len(metrics), 20)]
     overview_table = runs_to_table(runs, metric_keys)
     aggregated = aggregate_metrics(runs, metric_keys)
@@ -951,7 +983,15 @@ def _build_overview_assets(
     if not config_table.empty:
         tables.append(("config_snapshot", config_table, "Selected configuration parameters"))
 
-    return _log_assets_to_wandb("Overview", entity, project, tables, [])
+    return _log_assets_to_wandb(
+        "Overview",
+        entity,
+        project,
+        tables,
+        [],
+        existing_assets=existing_assets,
+        refresh=refresh,
+    )
 
 
 def _build_sweep_assets(
@@ -960,8 +1000,12 @@ def _build_sweep_assets(
     configs: Sequence[str],
     entity: Optional[str],
     project: str,
+    existing_assets: Mapping[str, _LoggedAsset],
+    refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        if not refresh and existing_assets:
+            return list(existing_assets.values())
         return []
     if plots_pretrain is None:
         LOGGER.debug("Pretraining plotting helpers unavailable; skipping sweep figures")
@@ -987,7 +1031,15 @@ def _build_sweep_assets(
             fig = plots_pretrain.plot_metric_curves(histories, metric, label=metric)
             figures.append((f"sweep_curve_{metric}", fig, f"Sweep trajectories for {metric}"))
 
-    return _log_assets_to_wandb("Sweeps & Ablations", entity, project, tables, figures)
+    return _log_assets_to_wandb(
+        "Sweeps & Ablations",
+        entity,
+        project,
+        tables,
+        figures,
+        existing_assets=existing_assets,
+        refresh=refresh,
+    )
 
 
 def _build_pretraining_assets(
@@ -995,11 +1047,17 @@ def _build_pretraining_assets(
     metrics: Sequence[str],
     entity: Optional[str],
     project: str,
+    existing_assets: Mapping[str, _LoggedAsset],
+    refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        if not refresh and existing_assets:
+            return list(existing_assets.values())
         return []
     if plots_pretrain is None:
         LOGGER.debug("Pretraining plotting helpers unavailable; skipping diagnostics")
+        if not refresh and existing_assets:
+            return list(existing_assets.values())
         return []
     histories = [run.history for run in runs if run.history is not None]
     figures: List[Tuple[str, Any, Optional[str]]] = []
@@ -1027,7 +1085,13 @@ def _build_pretraining_assets(
         figures.append(("ema_drift", fig, "EMA drift over time"))
 
     return _log_assets_to_wandb(
-        "Pretraining Diagnostics", entity, project, [], figures
+        "Pretraining Diagnostics",
+        entity,
+        project,
+        [],
+        figures,
+        existing_assets=existing_assets,
+        refresh=refresh,
     )
 
 
@@ -1035,11 +1099,17 @@ def _build_representation_assets(
     runs: Sequence[RunRecord],
     entity: Optional[str],
     project: str,
+    existing_assets: Mapping[str, _LoggedAsset],
+    refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        if not refresh and existing_assets:
+            return list(existing_assets.values())
         return []
     if plots_repr is None:
         LOGGER.debug("Representation plotting helpers unavailable")
+        if not refresh and existing_assets:
+            return list(existing_assets.values())
         return []
     figures: List[Tuple[str, Any, Optional[str]]] = []
     tables: List[Tuple[str, pd.DataFrame, Optional[str]]] = []
@@ -1084,15 +1154,27 @@ def _build_representation_assets(
             )
         except Exception as exc:  # pragma: no cover - depends on optional deps
             LOGGER.debug("Failed to render embedding for run %s: %s", run.run_id, exc)
-    return _log_assets_to_wandb("Representation", entity, project, tables, figures)
+    return _log_assets_to_wandb(
+        "Representation",
+        entity,
+        project,
+        tables,
+        figures,
+        existing_assets=existing_assets,
+        refresh=refresh,
+    )
 
 
 def _build_regression_assets(
     runs: Sequence[RunRecord],
     entity: Optional[str],
     project: str,
+    existing_assets: Mapping[str, _LoggedAsset],
+    refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        if not refresh and existing_assets:
+            return list(existing_assets.values())
         return []
     tables: List[Tuple[str, pd.DataFrame, Optional[str]]] = []
     figures: List[Tuple[str, Any, Optional[str]]] = []
@@ -1140,15 +1222,27 @@ def _build_regression_assets(
             )
         )
 
-    return _log_assets_to_wandb("Finetuning — Regression", entity, project, tables, figures)
+    return _log_assets_to_wandb(
+        "Finetuning — Regression",
+        entity,
+        project,
+        tables,
+        figures,
+        existing_assets=existing_assets,
+        refresh=refresh,
+    )
 
 
 def _build_classification_assets(
     runs: Sequence[RunRecord],
     entity: Optional[str],
     project: str,
+    existing_assets: Mapping[str, _LoggedAsset],
+    refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        if not refresh and existing_assets:
+            return list(existing_assets.values())
         return []
     tables: List[Tuple[str, pd.DataFrame, Optional[str]]] = []
     figures: List[Tuple[str, Any, Optional[str]]] = []
@@ -1193,15 +1287,27 @@ def _build_classification_assets(
         except Exception as exc:
             LOGGER.debug("Classification metric plotting failed: %s", exc)
 
-    return _log_assets_to_wandb("Finetuning — Classification", entity, project, tables, figures)
+    return _log_assets_to_wandb(
+        "Finetuning — Classification",
+        entity,
+        project,
+        tables,
+        figures,
+        existing_assets=existing_assets,
+        refresh=refresh,
+    )
 
 
 def _build_tox21_assets(
     runs: Sequence[RunRecord],
     entity: Optional[str],
     project: str,
+    existing_assets: Mapping[str, _LoggedAsset],
+    refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        if not refresh and existing_assets:
+            return list(existing_assets.values())
         return []
     tables: List[Tuple[str, pd.DataFrame, Optional[str]]] = []
     figures: List[Tuple[str, Any, Optional[str]]] = []
@@ -1264,15 +1370,27 @@ def _build_tox21_assets(
                 )
             )
 
-    return _log_assets_to_wandb("Tox21 Utility", entity, project, tables, figures)
+    return _log_assets_to_wandb(
+        "Tox21 Utility",
+        entity,
+        project,
+        tables,
+        figures,
+        existing_assets=existing_assets,
+        refresh=refresh,
+    )
 
 
 def _build_method_comparison_assets(
     runs: Sequence[RunRecord],
     entity: Optional[str],
     project: str,
+    existing_assets: Mapping[str, _LoggedAsset],
+    refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        if not refresh and existing_assets:
+            return list(existing_assets.values())
         return []
     metrics = _select_metric_keys(
         [key for run in runs for key in run.summary.keys()],
@@ -1311,15 +1429,27 @@ def _build_method_comparison_assets(
             figures.append(("comparison_radar", fig_radar, "Method comparison radar chart"))
     except Exception as exc:
         LOGGER.debug("Comparison radar plotting helper unavailable: %s", exc)
-    return _log_assets_to_wandb("Method Comparison", entity, project, tables, figures)
+    return _log_assets_to_wandb(
+        "Method Comparison",
+        entity,
+        project,
+        tables,
+        figures,
+        existing_assets=existing_assets,
+        refresh=refresh,
+    )
 
 
 def _build_interpretability_assets(
     runs: Sequence[RunRecord],
     entity: Optional[str],
     project: str,
+    existing_assets: Mapping[str, _LoggedAsset],
+    refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        if not refresh and existing_assets:
+            return list(existing_assets.values())
         return []
     tables: List[Tuple[str, pd.DataFrame, Optional[str]]] = []
     metrics = _collect_summary_sequences(runs, ("attention", "interpret", "saliency", "umap"))
@@ -1328,15 +1458,27 @@ def _build_interpretability_assets(
             {"metric": list(metrics.keys()), "values": [";".join(map(str, v)) for v in metrics.values()]}
         )
         tables.append(("interpretability_metrics", df, "Interpretability diagnostics"))
-    return _log_assets_to_wandb("Interpretability", entity, project, tables, [])
+    return _log_assets_to_wandb(
+        "Interpretability",
+        entity,
+        project,
+        tables,
+        [],
+        existing_assets=existing_assets,
+        refresh=refresh,
+    )
 
 
 def _build_robustness_assets(
     runs: Sequence[RunRecord],
     entity: Optional[str],
     project: str,
+    existing_assets: Mapping[str, _LoggedAsset],
+    refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        if not refresh and existing_assets:
+            return list(existing_assets.values())
         return []
     metrics = _collect_summary_sequences(runs, ("robust", "variance", "stability", "seed"))
     tables: List[Tuple[str, pd.DataFrame, Optional[str]]] = []
@@ -1348,7 +1490,15 @@ def _build_robustness_assets(
             }
         )
         tables.append(("robustness_metrics", df, "Robustness indicators"))
-    return _log_assets_to_wandb("Robustness & Reproducibility", entity, project, tables, [])
+    return _log_assets_to_wandb(
+        "Robustness & Reproducibility",
+        entity,
+        project,
+        tables,
+        [],
+        existing_assets=existing_assets,
+        refresh=refresh,
+    )
 
 
 def _build_section_assets(
@@ -1358,53 +1508,84 @@ def _build_section_assets(
     configs: Sequence[str],
     entity: Optional[str],
     project: str,
+    existing_assets: Mapping[str, _LoggedAsset],
+    refresh: bool,
 ) -> List[_LoggedAsset]:
     if section == "Overview":
-        return _build_overview_assets(runs, metrics, configs, entity, project)
+        return _build_overview_assets(
+            runs, metrics, configs, entity, project, existing_assets, refresh
+        )
     if section == "Sweeps & Ablations":
-        return _build_sweep_assets(runs, metrics, configs, entity, project)
+        return _build_sweep_assets(
+            runs, metrics, configs, entity, project, existing_assets, refresh
+        )
     if section == "Pretraining Diagnostics":
-        return _build_pretraining_assets(runs, metrics, entity, project)
+        return _build_pretraining_assets(
+            runs, metrics, entity, project, existing_assets, refresh
+        )
     if section == "Representation":
-        return _build_representation_assets(runs, entity, project)
+        return _build_representation_assets(
+            runs, entity, project, existing_assets, refresh
+        )
     if section == "Finetuning — Regression":
-        return _build_regression_assets(runs, entity, project)
+        return _build_regression_assets(
+            runs, entity, project, existing_assets, refresh
+        )
     if section == "Finetuning — Classification":
-        return _build_classification_assets(runs, entity, project)
+        return _build_classification_assets(
+            runs, entity, project, existing_assets, refresh
+        )
     if section == "Tox21 Utility":
-        return _build_tox21_assets(runs, entity, project)
+        return _build_tox21_assets(
+            runs, entity, project, existing_assets, refresh
+        )
     if section == "Method Comparison":
-        return _build_method_comparison_assets(runs, entity, project)
+        return _build_method_comparison_assets(
+            runs, entity, project, existing_assets, refresh
+        )
     if section == "Interpretability":
-        return _build_interpretability_assets(runs, entity, project)
+        return _build_interpretability_assets(
+            runs, entity, project, existing_assets, refresh
+        )
     if section == "Robustness & Reproducibility":
-        return _build_robustness_assets(runs, entity, project)
+        return _build_robustness_assets(
+            runs, entity, project, existing_assets, refresh
+        )
     return []
 
 
 
 def _ensure_schema(
-    root: Path, max_runs: int, schema_path: Optional[Path]
+    root: Path,
+    max_runs: int,
+    schema_path: Optional[Path],
+    *,
+    refresh: bool,
 ) -> discover_schema.Schema:
     default_path = root / "reports" / discover_schema.SCHEMA_FILENAME
     target_path = schema_path or default_path
-    try:
-        schema = discover_schema.load_schema_file(target_path)
-        LOGGER.info("[ci][info] Loaded cached schema from %s", target_path)
-        return schema
-    except FileNotFoundError:
-        LOGGER.info("[ci][info] Schema missing at %s; running discovery", target_path)
-    except json.JSONDecodeError as exc:
-        LOGGER.warning(
-            "[ci][warn] Failed to parse schema at %s (%s); regenerating",
-            target_path,
-            exc,
-        )
-    except Exception as exc:
-        LOGGER.warning(
-            "[ci][warn] Unexpected error loading schema at %s: %s; regenerating",
-            target_path,
-            exc,
+    if not refresh:
+        try:
+            schema = discover_schema.load_schema_file(target_path)
+            LOGGER.info("[ci][info] Loaded cached schema from %s", target_path)
+            return schema
+        except FileNotFoundError:
+            LOGGER.info("[ci][info] Schema missing at %s; running discovery", target_path)
+        except json.JSONDecodeError as exc:
+            LOGGER.warning(
+                "[ci][warn] Failed to parse schema at %s (%s); regenerating",
+                target_path,
+                exc,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "[ci][warn] Unexpected error loading schema at %s: %s; regenerating",
+                target_path,
+                exc,
+            )
+    else:
+        LOGGER.info(
+            "[ci][info] Refresh requested; regenerating schema at %s", target_path
         )
     schema = discover_schema.discover_schema(root, max_runs=max_runs)
     LOGGER.info(
@@ -1437,6 +1618,63 @@ def _write_manifest(manifest: Dict[str, Any], path: Path) -> None:
     path.write_text("\n".join(lines))
 
 
+def _load_manifest(path: Path) -> Dict[str, Dict[str, _LoggedAsset]]:
+    cached: Dict[str, Dict[str, _LoggedAsset]] = {}
+    if not path:
+        return cached
+    try:
+        contents = path.read_text()
+    except FileNotFoundError:
+        return cached
+    except Exception as exc:
+        LOGGER.warning("[ci][warn] Failed to read manifest at %s: %s", path, exc)
+        return cached
+
+    current_section: Optional[str] = None
+    for raw_line in contents.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("## "):
+            current_section = line[3:].strip()
+            cached.setdefault(current_section, {})
+            continue
+        if line.startswith("#"):
+            continue
+        if not line.startswith("- ") or current_section is None:
+            continue
+        entry = line[2:].strip()
+        if entry.startswith("*(no figures yet)*"):
+            continue
+        try:
+            kind_title, remainder = entry.split("(", 1)
+            kind, title = kind_title.split(":", 1)
+        except ValueError:
+            LOGGER.debug("[ci][debug] Skipping unrecognised manifest entry: %s", entry)
+            continue
+        run_segment, _, caption_segment = remainder.partition(")")
+        run_path, _, key = run_segment.partition("::")
+        kind = kind.strip()
+        title = title.strip()
+        run_path = run_path.strip()
+        key = key.strip()
+        caption = caption_segment.strip()
+        if caption.startswith("–"):
+            caption = caption[1:].strip()
+        if not kind or not title or not run_path or not key:
+            LOGGER.debug("[ci][debug] Incomplete manifest entry skipped: %s", entry)
+            continue
+        cached.setdefault(current_section, {})[key] = _LoggedAsset(
+            section=current_section,
+            key=key,
+            run_path=run_path,
+            kind=kind,
+            title=title,
+            caption=caption or None,
+        )
+    return cached
+
+
 def build_report(
     entity: Optional[str],
     project: str,
@@ -1456,7 +1694,13 @@ def build_report(
     raising so downstream automation can continue.
     """
     root = Path(__file__).resolve().parents[1]
-    schema = _ensure_schema(root, max_runs=max_runs, schema_path=schema_path)
+    resolved_manifest = manifest_path or root / "reports" / "FIGURE_MANIFEST.md"
+    schema = _ensure_schema(
+        root,
+        max_runs=max_runs,
+        schema_path=schema_path,
+        refresh=refresh,
+    )
 
     capabilities = detect_wandb_capabilities()
     generated_at = datetime.utcnow()
@@ -1510,7 +1754,6 @@ def build_report(
         api = None
 
     if api is None:
-        resolved_manifest = manifest_path or root / "reports" / "FIGURE_MANIFEST.md"
         _write_manifest({section: [] for section in REPORT_SECTIONS}, resolved_manifest)
         LOGGER.warning(
             "W&B API unavailable; generated empty manifest at %s instead of a report.",
@@ -1531,7 +1774,9 @@ def build_report(
     )
 
     filters: Dict[str, Any] = {}
-    resolved_manifest = manifest_path or root / "reports" / "FIGURE_MANIFEST.md"
+    cached_assets_by_section: Dict[str, Dict[str, _LoggedAsset]] = (
+        _load_manifest(resolved_manifest) if not refresh else {}
+    )
     try:
         fetch_result = fetch_runs(
             entity,
@@ -1581,6 +1826,7 @@ def build_report(
 
     for section in REPORT_SECTIONS:
         section_specific_runs = section_runs.get(section, [])
+        existing_assets = cached_assets_by_section.get(section, {})
         assets = _build_section_assets(
             section,
             section_specific_runs,
@@ -1588,6 +1834,8 @@ def build_report(
             flattened_configs,
             entity,
             project,
+            existing_assets,
+            refresh,
         )
         for asset in assets:
             manifest[section].append(asset.manifest_entry)

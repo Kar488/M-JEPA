@@ -4,6 +4,8 @@ import argparse
 import hashlib
 import json
 import logging
+import json
+import logging
 import math
 import os
 import sys
