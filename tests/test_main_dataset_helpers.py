@@ -122,6 +122,23 @@ def test_graphdataset_interface():
     assert callable(GraphDataset.from_directory)
 
 
+def test_graphdataset_normalises_feature_dims():
+    g0 = GraphData(
+        x=np.ones((3, 7), dtype=np.float32),
+        edge_index=np.zeros((2, 0), dtype=np.int64),
+    )
+    g1 = GraphData(
+        x=np.ones((2, 5), dtype=np.float32),
+        edge_index=np.zeros((2, 0), dtype=np.int64),
+    )
+
+    dataset = GraphDataset([g0, g1])
+
+    assert dataset.graphs[0].x.shape[1] == 7
+    assert dataset.graphs[1].x.shape[1] == 7
+    assert np.all(dataset.graphs[1].x[:, 5:] == 0)
+
+
 def test_edge_dim_or_none():
     g0 = GraphData(
         x=np.ones((1, 1), dtype=np.float32),
