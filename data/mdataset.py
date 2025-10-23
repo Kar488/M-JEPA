@@ -273,11 +273,30 @@ class GraphDataset:
             adj_blocks.append(adj_i)
             sizes.append(n_i)
 
-        batch_x = (
-            torch.cat(node_features, dim=0)
-            if node_features
-            else torch.zeros((0, self.graphs[0].x.shape[1]), dtype=torch.float32)
-        )
+        if node_features:
+            feat_dims = {int(x_i.size(1)) for x_i in node_features}
+            if len(feat_dims) > 1:
+                max_feat_dim = max(feat_dims)
+                logger.warning(
+                    "Non-uniform node feature dims %s encountered; padding to %d",
+                    sorted(feat_dims),
+                    max_feat_dim,
+                )
+                padded_features: List[torch.Tensor] = []
+                for idx, x_i in zip(indices, node_features):
+                    feat_dim = int(x_i.size(1))
+                    if feat_dim < max_feat_dim:
+                        pad = torch.zeros(
+                            (x_i.size(0), max_feat_dim - feat_dim),
+                            dtype=x_i.dtype,
+                            device=x_i.device,
+                        )
+                        x_i = torch.cat([x_i, pad], dim=1)
+                    padded_features.append(x_i)
+                node_features = padded_features
+            batch_x = torch.cat(node_features, dim=0)
+        else:
+            batch_x = torch.zeros((0, self.graphs[0].x.shape[1]), dtype=torch.float32)
         batch_adj = (
             torch.block_diag(*adj_blocks)
             if adj_blocks
