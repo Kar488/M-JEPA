@@ -4,10 +4,35 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from typing import Optional
+
 from data.mdataset import GraphData
 from models.base import EncoderBase
 from utils.graph_ops import _pool_graph_emb, _to_tensor
 from utils.scatter import scatter_sum
+
+
+def _edge_attr_or_default(
+    edge_attr: Optional[torch.Tensor],
+    num_edges: int,
+    expected_dim: Optional[int],
+    dtype: torch.dtype,
+    device: torch.device,
+) -> torch.Tensor:
+    if expected_dim is not None and expected_dim < 0:
+        raise ValueError("expected_dim must be non-negative")
+
+    if edge_attr is None:
+        width = expected_dim if expected_dim is not None else 0
+        return torch.zeros((num_edges, width), dtype=dtype, device=device)
+
+    edge_attr = _to_tensor(edge_attr, dtype=dtype, device=device)
+    if expected_dim is not None and edge_attr.size(-1) != expected_dim:
+        raise ValueError(
+            "edge_attr has unexpected feature dimension: "
+            f"expected {expected_dim}, got {edge_attr.size(-1)}"
+        )
+    return edge_attr
 
 
 class EdgeMPNNLayer(nn.Module):
@@ -69,6 +94,7 @@ class EdgeGNNEncoder(EncoderBase):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
         self.out_dim = int(hidden_dim)
+        self.edge_dim = int(edge_dim)
         self.proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList(
             [
@@ -85,16 +111,17 @@ class EdgeGNNEncoder(EncoderBase):
 
 
     def encode_graph(self, g: GraphData, device: torch.device) -> torch.Tensor:
-        x = _to_tensor(g.x, device=device)      
+        x = _to_tensor(g.x, device=device)
         e = _to_tensor(g.edge_index, dtype=torch.long, device=device)  # [2, E]
-        edge_attr = getattr(g, "edge_attr", None)
-        if edge_attr is None:
-            # No edge features → use a zero-width matrix [E, 0]
-            a = torch.zeros((e.size(1), 0), dtype=x.dtype, device=device)
-        else:
-            a = _to_tensor(edge_attr, dtype=x.dtype, device=device)
+        edge_attr = _edge_attr_or_default(
+            getattr(g, "edge_attr", None),
+            e.size(1),
+            self.edge_dim,
+            x.dtype,
+            device,
+        )
         x = self.proj(x)
         for layer in self.layers:
-            x = layer(x, e, a)
+            x = layer(x, e, edge_attr)
         x = self.out_norm(x)
         return _pool_graph_emb(x, g)

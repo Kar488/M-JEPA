@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -11,6 +12,38 @@ from models.base import EncoderBase
 from utils.indexing import gather_nodes
 from utils.pooling import global_mean_pool
 from utils.scatter import scatter_sum
+
+
+def _edge_attr_or_default(
+    edge_attr: Optional[torch.Tensor],
+    num_edges: int,
+    expected_dim: Optional[int],
+    dtype: torch.dtype,
+    device: torch.device,
+) -> torch.Tensor:
+    """Return ``edge_attr`` as a tensor with a well-defined feature width.
+
+    Some MoleculeNet datasets omit bond features even when models expect them.
+    Previously we produced a zero-width matrix which later triggered shape
+    mismatches inside ``nn.Linear`` layers.  Instead, materialise the requested
+    number of features so downstream layers always receive the configured
+    ``edge_dim`` (typically padded with zeros when data is missing).
+    """
+
+    if expected_dim is not None and expected_dim < 0:
+        raise ValueError("expected_dim must be non-negative")
+
+    if edge_attr is None:
+        width = expected_dim if expected_dim is not None else 0
+        return torch.zeros((num_edges, width), dtype=dtype, device=device)
+
+    edge_attr = torch.as_tensor(edge_attr, dtype=dtype, device=device)
+    if expected_dim is not None and edge_attr.size(-1) != expected_dim:
+        raise ValueError(
+            "edge_attr has unexpected feature dimension: "
+            f"expected {expected_dim}, got {edge_attr.size(-1)}"
+        )
+    return edge_attr
 
 
 class GraphSAGELayer(nn.Module):
@@ -238,6 +271,7 @@ class GINELayer(nn.Module):
 class GINE(EncoderBase):
     def __init__(self, input_dim: int, edge_dim: int, hidden_dim: int, num_layers: int = 3, dropout: float = 0.1):
         super().__init__()
+        self.edge_dim = int(edge_dim)
         self.proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList(
             [GINELayer(hidden_dim, edge_dim, dropout=dropout) for _ in range(num_layers)]
@@ -247,11 +281,7 @@ class GINE(EncoderBase):
     def _encode_nodes(self, g: GraphData, device: torch.device) -> torch.Tensor:
         x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
         e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)
-        a = getattr(g, "edge_attr", None)
-        if a is None:
-            a = torch.zeros((e.size(1), 0), dtype=x.dtype, device=device)
-        else:
-            a = torch.as_tensor(a, dtype=x.dtype, device=device)
+        a = _edge_attr_or_default(getattr(g, "edge_attr", None), e.size(1), self.edge_dim, x.dtype, device)
         x = self.proj(x)
         for layer in self.layers:
             x = layer(x, e, a)
@@ -309,6 +339,7 @@ class DMPNNLayer(nn.Module):
 class DMPNN(EncoderBase):
     def __init__(self, input_dim: int, edge_dim: int, hidden_dim: int, num_layers: int = 3, dropout: float = 0.1):
         super().__init__()
+        self.edge_dim = int(edge_dim)
         self.proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList(
             [DMPNNLayer(hidden_dim, edge_dim, hidden_dim, dropout=dropout) for _ in range(num_layers)]
@@ -318,11 +349,7 @@ class DMPNN(EncoderBase):
     def _encode_nodes(self, g: GraphData, device: torch.device) -> torch.Tensor:
         x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
         e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)
-        a = getattr(g, "edge_attr", None)
-        if a is None:
-            a = torch.zeros((e.size(1), 0), dtype=x.dtype, device=device)
-        else:
-            a = torch.as_tensor(a, dtype=x.dtype, device=device)
+        a = _edge_attr_or_default(getattr(g, "edge_attr", None), e.size(1), self.edge_dim, x.dtype, device)
         x = self.proj(x)
         for layer in self.layers:
             x = layer(x, e, a)
@@ -369,6 +396,7 @@ class AttnReadout(nn.Module):
 class AttentiveFPEncoder(EncoderBase):
     def __init__(self, input_dim: int, edge_dim: int, hidden_dim: int, num_layers: int = 3, dropout: float = 0.1):
         super().__init__()
+        self.edge_dim = int(edge_dim)
         self.proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList(
             [DMPNNLayer(hidden_dim, edge_dim, hidden_dim, dropout=dropout) for _ in range(num_layers)]
@@ -379,11 +407,7 @@ class AttentiveFPEncoder(EncoderBase):
     def _encode_nodes(self, g: GraphData, device: torch.device) -> torch.Tensor:
         x = torch.as_tensor(g.x, dtype=torch.float32, device=device)
         e = torch.as_tensor(g.edge_index, dtype=torch.long, device=device)
-        a = getattr(g, "edge_attr", None)
-        if a is None:
-            a = torch.zeros((e.size(1), 0), dtype=x.dtype, device=device)
-        else:
-            a = torch.as_tensor(a, dtype=x.dtype, device=device)
+        a = _edge_attr_or_default(getattr(g, "edge_attr", None), e.size(1), self.edge_dim, x.dtype, device)
         x = self.proj(x)
         for layer in self.layers:
             x = layer(x, e, a)
