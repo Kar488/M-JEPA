@@ -212,13 +212,65 @@ class GraphDataset:
         if self.labels is not None:
             if self.labels.ndim != 1 or self.labels.shape[0] != len(self.graphs):
                 raise ValueError("labels must be 1D and the same length as graphs")
-            
+
+        self._normalise_feature_dims()
+
         self.smiles = smiles
         logger.debug(
             "Initialized GraphDataset with %d graphs%s",
             len(graphs),
             " and labels" if labels is not None else "",
         )
+
+    def _normalise_feature_dims(self) -> None:
+        """Ensure all graphs expose the same node feature dimensionality."""
+
+        if not self.graphs:
+            return
+
+        feature_dims: List[int] = []
+        max_dim = 0
+        for graph in self.graphs:
+            x = getattr(graph, "x", None)
+            if x is None:
+                continue
+            try:
+                width = int(np.asarray(x).shape[1])
+            except Exception:
+                continue
+            feature_dims.append(width)
+            if width > max_dim:
+                max_dim = width
+
+        unique_dims = sorted({dim for dim in feature_dims if dim > 0})
+        if max_dim <= 0 or len(unique_dims) <= 1:
+            return
+
+        logger.warning(
+            "Normalising non-uniform node feature dims %s by padding to %d",
+            unique_dims,
+            max_dim,
+        )
+
+        for graph in self.graphs:
+            x = getattr(graph, "x", None)
+            if x is None:
+                continue
+            arr = np.asarray(x)
+            if arr.ndim != 2:
+                continue
+            width = int(arr.shape[1])
+            if width == max_dim:
+                if not isinstance(x, np.ndarray):
+                    graph.x = arr.astype(np.float32, copy=False)
+                continue
+            if width <= 0 or width > max_dim:
+                continue
+
+            pad_width = max_dim - width
+            pad = np.zeros((arr.shape[0], pad_width), dtype=arr.dtype)
+            padded = np.concatenate([arr, pad], axis=1)
+            graph.x = padded.astype(np.float32, copy=False)
 
     def __len__(self) -> int:
         return len(self.graphs)
