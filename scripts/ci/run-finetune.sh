@@ -70,7 +70,15 @@ else
   if [[ -z "$baseline_trimmed" ]]; then
     export MET_BENCHMARK_BASELINE="unknown"
   else
-    export MET_BENCHMARK_BASELINE
+    baseline_lower="${baseline_trimmed,,}"
+    case "$baseline_lower" in
+      true|false)
+        export MET_BENCHMARK_BASELINE="$baseline_lower"
+        ;;
+      *)
+        export MET_BENCHMARK_BASELINE="unknown"
+        ;;
+    esac
   fi
 fi
 
