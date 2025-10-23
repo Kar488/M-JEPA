@@ -581,6 +581,7 @@ class GraphDataset:
         add_3d: bool = False,
         random_seed: Optional[int] = None,
         n_rows: Optional[int] = None,
+        num_workers: Optional[int] = 0,
     ) -> "GraphDataset":
         cache_path = None
         if cache_dir and n_rows is None:
@@ -598,7 +599,7 @@ class GraphDataset:
         if n_rows is not None:
             df = df.head(int(n_rows))
         smiles = df[smiles_col].astype(str).tolist()
-        labels = (
+        labels_raw = (
             df[label_col].to_numpy()
             if (label_col and label_col in df.columns)
             else None
@@ -606,13 +607,41 @@ class GraphDataset:
 
         graphs: List[GraphData] = []
         smiles_out: List[str] = []
-        for sm in smiles:
-            try:
-                g = cls.smiles_to_graph(sm, add_3d=add_3d, random_seed=random_seed)
+        valid_indices: List[int] = []
+
+        cls_module = cls.__module__
+        cls_qualname = cls.__qualname__
+
+        worker_budget = _resolve_worker_count(num_workers if num_workers is not None else 0)
+        if worker_budget > 0:
+            with ProcessPoolExecutor(max_workers=worker_budget) as ex:
+                iterator = ex.map(
+                    _safe_smiles_to_graph,
+                    smiles,
+                    repeat(add_3d),
+                    repeat(random_seed),
+                    repeat(cls_module),
+                    repeat(cls_qualname),
+                )
+                for idx, g_state in enumerate(iterator):
+                    if g_state is not None:
+                        graphs.append(_graph_from_state(g_state))
+                        smiles_out.append(smiles[idx])
+                        valid_indices.append(idx)
+        else:
+            for idx, sm in enumerate(smiles):
+                try:
+                    g = cls.smiles_to_graph(sm, add_3d=add_3d, random_seed=random_seed)
+                except Exception:
+                    continue
                 graphs.append(g)
                 smiles_out.append(sm)
-            except Exception:
-                continue
+                valid_indices.append(idx)
+
+        labels = None
+        if labels_raw is not None:
+            labels_array = np.asarray(labels_raw)
+            labels = labels_array[valid_indices]
 
         if cache_path:
             with open(cache_path, "wb") as f:
