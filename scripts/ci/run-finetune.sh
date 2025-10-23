@@ -87,6 +87,19 @@ if [[ "$baseline_flag_lc" == "false" ]]; then
   export FINETUNE_DATASET_OVERRIDE_REASON
 
   echo "[finetune] Baseline gate unmet; redirecting fine-tune to Tox21 task '${FINETUNE_LABEL_COL}'" >&2
+# When the gate result is unavailable the reroute logic should no-op.
+# Ensure the flag carries an explicit "unknown" marker instead of
+# inheriting the "false" default from parameter expansion.
+if [[ -z "${MET_BENCHMARK_BASELINE+x}" ]]; then
+  export MET_BENCHMARK_BASELINE="unknown"
+else
+  # Treat blank or whitespace-only values as unknown to avoid false negatives.
+  baseline_trimmed="${MET_BENCHMARK_BASELINE//[[:space:]]/}"
+  if [[ -z "$baseline_trimmed" ]]; then
+    export MET_BENCHMARK_BASELINE="unknown"
+  else
+    export MET_BENCHMARK_BASELINE
+  fi
 fi
 
 # fix: ensure fine-tune emits stage outputs for downstream evaluation
