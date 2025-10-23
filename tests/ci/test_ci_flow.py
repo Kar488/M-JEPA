@@ -187,3 +187,67 @@ def test_tox21_uses_resolved_python():
     assert "python - \"$MANIFEST_PATH\"" not in script
     assert "python - <<'PY'" not in script
     assert '"${python_cmd[@]}" - "$MANIFEST_PATH"' in script
+
+
+def test_finetune_met_benchmark_flag_handles_missing_gate(tmp_path):
+    experiments_root = tmp_path / "experiments"
+    experiments_root.mkdir()
+
+    shim_path = tmp_path / "finetune_stage_shim.sh"
+    shim_path.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+stage="$1"
+if [[ "$stage" == "finetune" ]]; then
+  mkdir -p "$FINETUNE_DIR/stage-outputs"
+  env | sort >"$TMP_ENV_CAPTURE"
+fi
+""",
+        encoding="utf-8",
+    )
+    shim_path.chmod(0o755)
+
+    pretrain_root = experiments_root / "pretrain-demo"
+    (pretrain_root / "pretrain").mkdir(parents=True)
+    (pretrain_root / "artifacts").mkdir(parents=True)
+    (pretrain_root / "pretrain" / "encoder.pt").write_text("stub", encoding="utf-8")
+    (pretrain_root / "artifacts" / "encoder_manifest.json").write_text(
+        json.dumps({"paths": {"encoder": "encoder.pt"}}),
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "EXPERIMENTS_ROOT": str(experiments_root),
+            "EXP_ID": "finetune-demo",
+            "PRETRAIN_EXP_ID": "pretrain-demo",
+            "MJEPACI_STAGE_SHIM": str(shim_path),
+            "WANDB_API_KEY": "",
+        }
+    )
+
+    capture_one = tmp_path / "env_missing.txt"
+    env["TMP_ENV_CAPTURE"] = str(capture_one)
+    subprocess.run(
+        ["bash", "scripts/ci/run-finetune.sh"],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    capture_text = capture_one.read_text(encoding="utf-8")
+    assert "MET_BENCHMARK_BASELINE=unknown" in capture_text
+
+    met_env = experiments_root / "finetune-demo" / "met_benchmark.env"
+    met_env.write_text("MET_BENCHMARK_BASELINE=false\n", encoding="utf-8")
+
+    capture_two = tmp_path / "env_failed.txt"
+    env["TMP_ENV_CAPTURE"] = str(capture_two)
+    subprocess.run(
+        ["bash", "scripts/ci/run-finetune.sh"],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    capture_text = capture_two.read_text(encoding="utf-8")
+    assert "MET_BENCHMARK_BASELINE=false" in capture_text
