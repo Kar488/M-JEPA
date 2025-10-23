@@ -32,6 +32,21 @@ logger = logging.getLogger(__name__)
 
 _GNN_TYPES_REQUIRING_3D = {"schnet3d", "schnet"}
 
+_TOX21_TASKS = {
+    "NR-AR",
+    "NR-AR-LBD",
+    "NR-AhR",
+    "NR-Aromatase",
+    "NR-ER",
+    "NR-ER-LBD",
+    "NR-PPAR-gamma",
+    "SR-ARE",
+    "SR-ATAD5",
+    "SR-HSE",
+    "SR-MMP",
+    "SR-p53",
+}
+
 
 def _stage_outputs_dir() -> Optional[Path]:
     stage_dir = os.getenv("STAGE_OUTPUTS_DIR")
@@ -295,6 +310,8 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             "persistent_workers": getattr(args, "persistent_workers", None),
             "prefetch_factor": getattr(args, "prefetch_factor", None),
             "bf16": bool(getattr(args, "bf16", False)),
+            "use_scaffold": bool(getattr(args, "use_scaffold", False)),
+            "dataset_override_reason": os.getenv("FINETUNE_DATASET_OVERRIDE_REASON"),
         },
     )
     log_effective_gnn(args, logger, wb)
@@ -328,6 +345,45 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         logger.exception("Failed to load labelled dataset")
         wb.log({"phase": "data_load", "status": "error"})
         sys.exit(1)
+
+    dataset_size = len(labeled)
+    dataset_override_reason = (os.getenv("FINETUNE_DATASET_OVERRIDE_REASON", "") or "").strip()
+    if dataset_override_reason:
+        logger.info("[finetune] dataset override reason=%s", dataset_override_reason)
+    logger.info(
+        "[finetune] dataset path=%s label_col=%s task=%s samples=%d",
+        getattr(args, "labeled_dir", "<unset>"),
+        getattr(args, "label_col", "<unset>"),
+        getattr(args, "task_type", "<unset>"),
+        dataset_size,
+    )
+
+    if wb is not None:
+        try:
+            wb.config.update({"dataset_size": dataset_size}, allow_val_change=True)
+        except Exception:
+            try:
+                wb.config.update({"dataset_size": dataset_size})
+            except Exception:
+                pass
+
+    scaffold_requested = bool(getattr(args, "_use_scaffold_provided", False))
+    use_scaffold_flag = bool(getattr(args, "use_scaffold", False))
+    labeled_lower = str(getattr(args, "labeled_dir", "") or "").lower()
+    label_col_name = str(getattr(args, "label_col", "") or "")
+    detected_tox21 = "tox21" in labeled_lower or label_col_name in _TOX21_TASKS
+    task_type_norm = str(getattr(args, "task_type", "") or "").strip().lower()
+    auto_scaffold = False
+    if (
+        not use_scaffold_flag
+        and not scaffold_requested
+        and detected_tox21
+        and task_type_norm == "classification"
+    ):
+        use_scaffold_flag = True
+        auto_scaffold = True
+        setattr(args, "use_scaffold", True)
+        logger.info("[finetune] enabling scaffold split for Tox21 fine-tune dataset")
 
     input_dim = labeled.graphs[0].x.shape[1]
     edge_dim = (
@@ -749,6 +805,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     device=device,
                     patience=args.patience,
                     devices=args.devices,
+                    use_scaffold=use_scaffold_flag,
                     head=head,
                     optimizer=optimizer,
                     scheduler=scheduler,
@@ -1111,6 +1168,25 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         }
         if export_hash:
             stage_payload["encoder_finetuned"]["hash"] = export_hash
+
+    try:
+        seed_list_summary = [int(s) for s in seeds]
+    except Exception:
+        seed_list_summary = list(seeds)
+
+    dataset_summary: Dict[str, Any] = {
+        "path": os.path.abspath(getattr(args, "labeled_dir", "")) if getattr(args, "labeled_dir", None) else getattr(args, "labeled_dir", None),
+        "label_col": getattr(args, "label_col", None),
+        "task_type": getattr(args, "task_type", None),
+        "size": int(dataset_size),
+        "use_scaffold": bool(use_scaffold_flag),
+        "auto_scaffold": bool(auto_scaffold),
+        "detected_tox21": bool(detected_tox21),
+        "metric": metric_name,
+        "override_reason": dataset_override_reason or None,
+    }
+    stage_payload["dataset"] = dataset_summary
+    stage_payload["seed_list"] = seed_list_summary
     _record_finetune_stage_outputs(stage_payload)
 
 

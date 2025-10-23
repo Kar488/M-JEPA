@@ -58,17 +58,22 @@ pretrain:
 
 finetune:
   <<: *common
-  labeled_dir: ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
+  labeled_dir: "${FINETUNE_LABELED_DIR:-${APP_DIR}/data/katielinkmoleculenet_benchmark/train}"
   encoder: ${PRETRAIN_DIR}/encoder.pt
-  task_type: regression
-  label_col: "measured log solubility in mols per litre"
+  task_type: "${FINETUNE_TASK_TYPE:-regression}"
+  label_col: "${FINETUNE_LABEL_COL:-measured log solubility in mols per litre}"
   ckpt_dir: ${FINETUNE_DIR}
   save_every: 1
   finetune_epochs: ${FINETUNE_EPOCHS:-18}    # maps to --epochs for "finetune"
-  metric: val_rmse
+  metric: "${FINETUNE_METRIC:-val_rmse}"
   patience: 15
   max_finetune_batches: 0
   no_freeze_encoder: true  # let Vast reruns update encoder weights once the Tox21 gate fails
+  use_scaffold: ${FINETUNE_USE_SCAFFOLD:-false}
+  seeds:
+    - ${FINETUNE_SEED_0:-0}
+    - ${FINETUNE_SEED_1:-1}
+    - ${FINETUNE_SEED_2:-2}
   use_wandb: true
 
 bench:

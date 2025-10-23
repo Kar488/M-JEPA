@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import logging
 import json
 import logging
@@ -17,6 +19,21 @@ try:  # pragma: no cover - optional relative import depending on entry point
     from ..bench import BenchmarkRule, resolve_metric_threshold
 except ImportError:  # pragma: no cover - fallback when executed as a script
     from scripts.bench import BenchmarkRule, resolve_metric_threshold
+
+try:  # pragma: no cover - optional dependency when experiments package missing
+    from experiments.case_study import run_tox21_case_study
+except Exception:  # pragma: no cover - allow tests to patch in stub
+    run_tox21_case_study = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency in lightweight environments
+    from utils.device import resolve_device
+    from utils.logging import maybe_init_wandb
+except Exception:  # pragma: no cover - allow tests to inject substitutes
+    def resolve_device(device: str | os.PathLike[str] | None) -> str:
+        return str(device or "cpu")
+
+    def maybe_init_wandb(*args: Any, **kwargs: Any) -> Any:  # type: ignore[assignment]
+        return None
 
 
 logger = logging.getLogger(__name__)
@@ -136,16 +153,19 @@ def _load_best_config_overrides(args: argparse.Namespace) -> Tuple[Dict[str, Any
 def _schema_cache_dir(base: Optional[str], add_3d: Optional[bool], hidden_dim: Optional[int]) -> Optional[str]:
     if not base:
         return base
-    bits: List[str] = []
+    schema_parts: List[str] = []
     if add_3d is not None:
-        bits.append(f"3d{int(add_3d)}")
+        schema_parts.append(f"3d{int(add_3d)}")
     if hidden_dim is not None:
-        bits.append(f"hd{int(hidden_dim)}")
-    if not bits:
+        schema_parts.append(f"hd{int(hidden_dim)}")
+    if not schema_parts:
         return base
-    suffix = "_".join(bits)
+    fingerprint = "|".join(schema_parts)
+    digest = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:8]
+    suffix = "_".join([*schema_parts, f"h{digest}"])
+    legacy_suffix = "_".join(schema_parts)
     path = Path(base).expanduser()
-    if path.name.endswith(suffix):
+    if path.name.endswith(suffix) or path.name.endswith(legacy_suffix):
         return str(path)
     schema_path = path.with_name(f"{path.name}_{suffix}")
     return str(schema_path)
@@ -233,8 +253,6 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         sys.exit(5)
 
     import csv
-    import json
-    import os
 
     triage_pct = getattr(args, "triage_pct", 0.10)
     calibrate = not getattr(args, "no_calibrate", False)
@@ -294,10 +312,12 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     target_payload = {"target_baseline_roc_auc": float(target_baseline)}
 
     cache_dir = getattr(args, "cache_dir", None)
+    add_3d_flag = bool(getattr(args, "add_3d", False))
+    hidden_dim_val = _coerce_int_like(getattr(args, "hidden_dim", None))
     schema_cache_dir = _schema_cache_dir(
         cache_dir,
-        bool(getattr(args, "add_3d", False)),
-        _coerce_int_like(getattr(args, "hidden_dim", None)),
+        add_3d_flag,
+        hidden_dim_val,
     )
     if schema_cache_dir and schema_cache_dir != cache_dir:
         try:
@@ -309,12 +329,21 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         else:
             args.cache_dir = schema_cache_dir
             cache_dir = schema_cache_dir
+    schema_hash = None
     if cache_dir:
+        schema_parts: List[str] = []
+        schema_parts.append(f"3d{int(add_3d_flag)}")
+        if hidden_dim_val is not None:
+            schema_parts.append(f"hd{int(hidden_dim_val)}")
+        if schema_parts:
+            fingerprint = "|".join(schema_parts)
+            schema_hash = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:8]
         logger.info(
-            "[cache] selected_cache=%s (add_3d=%s, hidden_dim=%s)",
+            "[cache] selected_cache=%s (add_3d=%s, hidden_dim=%s, schema_hash=%s)",
             cache_dir,
-            bool(getattr(args, "add_3d", False)),
-            getattr(args, "hidden_dim", None),
+            add_3d_flag,
+            hidden_dim_val,
+            schema_hash if schema_hash is not None else "<none>",
         )
 
     report_dir = (

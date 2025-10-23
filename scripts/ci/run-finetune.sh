@@ -59,6 +59,34 @@ if [[ -f "$MET_ENV_FILE" ]]; then
   fi
 fi
 
+baseline_flag="${MET_BENCHMARK_BASELINE:-false}"
+baseline_flag_lc="${baseline_flag,,}"
+if [[ "$baseline_flag_lc" == "false" ]]; then
+  : "${FINETUNE_LABELED_DIR:=${APP_DIR}/data/tox21/data.csv}"
+  if [[ -z "${FINETUNE_LABEL_COL:-}" ]]; then
+    if [[ -n "${TOX21_FINE_TUNE_TASK:-}" ]]; then
+      FINETUNE_LABEL_COL="$TOX21_FINE_TUNE_TASK"
+    else
+      FINETUNE_LABEL_COL="NR-AR"
+    fi
+  fi
+  : "${FINETUNE_TASK_TYPE:=classification}"
+  : "${FINETUNE_METRIC:=val_auc}"
+  : "${FINETUNE_USE_SCAFFOLD:=true}"
+  : "${FINETUNE_SEED_0:=11}"
+  : "${FINETUNE_SEED_1:=29}"
+  : "${FINETUNE_SEED_2:=37}"
+  : "${FINETUNE_DATASET_OVERRIDE_REASON:=tox21_gate_failure}"
+
+  export FINETUNE_LABELED_DIR
+  export FINETUNE_LABEL_COL
+  export FINETUNE_TASK_TYPE
+  export FINETUNE_METRIC
+  export FINETUNE_USE_SCAFFOLD
+  export FINETUNE_SEED_0 FINETUNE_SEED_1 FINETUNE_SEED_2
+  export FINETUNE_DATASET_OVERRIDE_REASON
+
+  echo "[finetune] Baseline gate unmet; redirecting fine-tune to Tox21 task '${FINETUNE_LABEL_COL}'" >&2
 # When the gate result is unavailable the reroute logic should no-op.
 # Ensure the flag carries an explicit "unknown" marker instead of
 # inheriting the "false" default from parameter expansion.

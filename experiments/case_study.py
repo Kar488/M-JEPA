@@ -9,6 +9,7 @@ baseline.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import logging
@@ -981,6 +982,7 @@ def run_tox21_case_study(
     cache_dir_path: Optional[Path] = None
     dataset_cache_path: Optional[Path] = None
     dataset_cache_hit = False
+    schema_digest: Optional[str] = None
     if cache_dir:
         try:
             cache_dir_path = Path(cache_dir).expanduser()
@@ -1002,7 +1004,13 @@ def run_tox21_case_study(
         csv_stem = Path(csv_path).stem or "dataset"
         task_part = str(task_name or dataset_name or "task")
         hidden_key = f"hd{int(hidden_dim)}" if hidden_dim is not None else "hdunk"
-        cache_name = f"tox21_{csv_stem}_{task_part}_3d{int(effective_add_3d)}_{hidden_key}.pkl"
+        schema_parts = [f"3d{int(effective_add_3d)}", hidden_key]
+        fingerprint = "|".join(schema_parts)
+        schema_digest = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:8]
+        cache_name = (
+            f"tox21_{csv_stem}_{task_part}_"
+            f"{'_'.join(schema_parts)}_h{schema_digest}.pkl"
+        )
         dataset_cache_path = cache_dir_path / cache_name
         if dataset_cache_path.exists():
             try:
@@ -1047,17 +1055,19 @@ def run_tox21_case_study(
 
     if dataset_cache_path is not None:
         logger.info(
-            "[cache] selected_cache=%s (hit=%s add_3d=%s hidden_dim=%s)",
+            "[cache] selected_cache=%s (hit=%s add_3d=%s hidden_dim=%s schema_hash=%s)",
             dataset_cache_path,
             "yes" if dataset_cache_hit else "no",
             bool(effective_add_3d),
             hidden_dim if hidden_dim is not None else "<unset>",
+            schema_digest if schema_digest is not None else "<unknown>",
         )
         diagnostics["cache"] = {
             "path": str(dataset_cache_path),
             "hit": bool(dataset_cache_hit),
             "add_3d": bool(effective_add_3d),
             "hidden_dim": int(hidden_dim) if hidden_dim is not None else None,
+            "schema_hash": schema_digest,
         }
         if ci_diag:
             _ci_log(
@@ -1066,6 +1076,7 @@ def run_tox21_case_study(
                 hit=bool(dataset_cache_hit),
                 add_3d=bool(effective_add_3d),
                 hidden_dim=int(hidden_dim) if hidden_dim is not None else None,
+                schema_hash=schema_digest,
             )
 
     if ci_diag:
