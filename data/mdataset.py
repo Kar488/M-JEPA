@@ -44,12 +44,13 @@ EDGE_BASE_DIM = 7
 EDGE_GEOM_DIM = 10
 EDGE_FLAG_DIM = 1
 EDGE_TOTAL_DIM = EDGE_BASE_DIM + EDGE_FLAG_DIM + EDGE_GEOM_DIM
+GRAPH_CACHE_VERSION = "edgeflex_v2_50k"
 GRAPH_SCHEMA_VERSION = "flex_v1"
 
 
 def _cache_schema_suffix(add_3d: bool) -> str:
     edge_dim = EDGE_TOTAL_DIM if add_3d else EDGE_BASE_DIM
-    return f"3d{int(add_3d)}_e{edge_dim}_{GRAPH_SCHEMA_VERSION}"
+    return f"{GRAPH_CACHE_VERSION}_3d{int(add_3d)}_e{edge_dim}_{GRAPH_SCHEMA_VERSION}"
 
 
 def _resolve_worker_count(num_workers: int) -> int:
@@ -274,6 +275,7 @@ class GraphDataset:
         self.smiles = smiles
 
         self._normalise_feature_dims()
+        self._normalise_edge_dims()
 
         self._schema_stats = self._compute_schema_stats()
         self._validate_schema_stats(self._schema_stats)
@@ -338,6 +340,77 @@ class GraphDataset:
             pad = np.zeros((arr.shape[0], pad_width), dtype=arr.dtype)
             padded = np.concatenate([arr, pad], axis=1)
             graph.x = padded.astype(np.float32, copy=False)
+
+    def _normalise_edge_dims(self) -> None:
+        """Pad or truncate edge attributes so all graphs share a common width."""
+
+        if not self.graphs:
+            return
+
+        edge_dims: List[int] = []
+        arrays: List[Tuple[GraphData, np.ndarray]] = []
+
+        for graph in self.graphs:
+            edge_attr = getattr(graph, "edge_attr", None)
+            if edge_attr is None:
+                continue
+            try:
+                if torch is not None and torch.is_tensor(edge_attr):  # type: ignore[truthy-function]
+                    arr = edge_attr.detach().cpu().numpy()
+                else:
+                    arr = np.asarray(edge_attr)
+            except Exception:
+                continue
+
+            if arr.ndim == 1:
+                arr = arr.reshape(-1, 1)
+            if arr.ndim != 2 or arr.size == 0:
+                continue
+
+            arrays.append((graph, arr))
+            edge_dims.append(int(arr.shape[1]))
+
+        if not edge_dims:
+            return
+
+        max_dim = max(edge_dims)
+        target_dim = max_dim
+        if max_dim not in {EDGE_BASE_DIM, EDGE_TOTAL_DIM}:
+            if max_dim < EDGE_BASE_DIM:
+                target_dim = EDGE_BASE_DIM
+            elif EDGE_BASE_DIM < max_dim <= EDGE_TOTAL_DIM:
+                target_dim = EDGE_TOTAL_DIM
+            else:
+                logger.warning(
+                    "Edge attributes wider than expected (max=%d); truncating to %d",
+                    max_dim,
+                    EDGE_TOTAL_DIM,
+                )
+                target_dim = EDGE_TOTAL_DIM
+
+        adjusted = False
+        for graph, arr in arrays:
+            width = int(arr.shape[1])
+            new_arr = arr
+            if width > target_dim:
+                new_arr = arr[:, :target_dim]
+                adjusted = True
+            elif width < target_dim:
+                pad = np.zeros((arr.shape[0], target_dim - width), dtype=arr.dtype)
+                new_arr = np.concatenate([arr, pad], axis=1)
+                adjusted = True
+
+            if new_arr.dtype != np.float32:
+                new_arr = new_arr.astype(np.float32, copy=False)
+
+            graph.edge_attr = new_arr
+
+        if adjusted:
+            logger.warning(
+                "Normalised edge attribute dimensions to %d (original unique widths: %s)",
+                target_dim,
+                sorted(set(edge_dims)),
+            )
 
     def _compute_schema_stats(self) -> Dict[str, Any]:
         """Collect dimensionality statistics for nodes and edges."""
@@ -562,6 +635,7 @@ class GraphDataset:
         return {
             "node_dim": int(self.node_dim),
             "edge_dim": int(self.edge_dim),
+            "cache_version": GRAPH_CACHE_VERSION,
             "schema_token": self.schema_token,
             "version": GRAPH_SCHEMA_VERSION,
             "num_graphs": len(self.graphs),
@@ -575,6 +649,11 @@ class GraphDataset:
     ) -> None:
         if not schema_meta:
             raise ValueError(f"Cache {source} missing schema metadata")
+        cache_version = schema_meta.get("cache_version")
+        if cache_version != GRAPH_CACHE_VERSION:
+            raise ValueError(
+                f"Cache {source} cache version {cache_version} != {GRAPH_CACHE_VERSION}"
+            )
         version = schema_meta.get("version")
         if version != GRAPH_SCHEMA_VERSION:
             raise ValueError(

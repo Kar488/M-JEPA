@@ -24,7 +24,13 @@ sys.modules.setdefault("data.scaffold_split", dummy_scaffold)
 
 # import GraphDataset and GraphData
 from data import GraphDataset  # noqa: E402
-from data.mdataset import _fallback_graph_from_string  # noqa: E402
+from data.mdataset import (
+    EDGE_BASE_DIM,
+    EDGE_TOTAL_DIM,
+    GRAPH_CACHE_VERSION,
+    GraphData,
+    _fallback_graph_from_string,
+)  # noqa: E402
 from training.supervised import stratified_split  # noqa: E402
 
 
@@ -33,6 +39,61 @@ def _make_synthetic_dataset():
     labels = [0, 1]
     ds = GraphDataset.from_smiles_list(smiles, labels=labels, add_3d=False)
     return ds
+
+
+def test_graphdataset_normalises_missing_edge_flags():
+    edge_index = np.array([[0, 1], [1, 0]], dtype=np.int64)
+    incomplete = GraphData(
+        x=np.zeros((2, 1), dtype=np.float32),
+        edge_index=edge_index,
+        edge_attr=np.ones((2, EDGE_TOTAL_DIM - 1), dtype=np.float32),
+    )
+    reference = GraphData(
+        x=np.zeros((2, 1), dtype=np.float32),
+        edge_index=edge_index,
+        edge_attr=np.arange(2 * EDGE_TOTAL_DIM, dtype=np.float32).reshape(
+            2, EDGE_TOTAL_DIM
+        ),
+    )
+
+    dataset = GraphDataset([incomplete, reference])
+
+    assert dataset.edge_dim == EDGE_TOTAL_DIM
+    assert incomplete.edge_attr.shape == (2, EDGE_TOTAL_DIM)
+    # The padded column should be zeros, preserving original features.
+    assert np.allclose(incomplete.edge_attr[:, :-1], 1.0)
+    assert np.allclose(incomplete.edge_attr[:, -1], 0.0)
+
+
+def test_graphdataset_pads_small_edge_attrs_to_base_width():
+    edge_index = np.array([[0, 1, 1], [1, 0, 0]], dtype=np.int64)
+    raw_attr = np.full((3, EDGE_BASE_DIM - 2), 2.0, dtype=np.float64)
+    graph = GraphData(
+        x=np.zeros((2, 1), dtype=np.float32),
+        edge_index=edge_index,
+        edge_attr=raw_attr,
+    )
+
+    dataset = GraphDataset([graph])
+
+    assert dataset.edge_dim == EDGE_BASE_DIM
+    assert graph.edge_attr.shape == (3, EDGE_BASE_DIM)
+    assert graph.edge_attr.dtype == np.float32
+    assert np.allclose(graph.edge_attr[:, : raw_attr.shape[1]], 2.0)
+    assert np.allclose(graph.edge_attr[:, raw_attr.shape[1] :], 0.0)
+
+
+def test_schema_metadata_tracks_cache_version():
+    dataset = _make_synthetic_dataset()
+
+    meta = dataset.schema_metadata
+    assert meta["cache_version"] == GRAPH_CACHE_VERSION
+
+    legacy_meta = {k: v for k, v in meta.items() if k != "cache_version"}
+    with pytest.raises(ValueError) as excinfo:
+        dataset.validate_cached_schema(legacy_meta, source="legacy.pkl")
+
+    assert "cache version" in str(excinfo.value)
 
 
 def test_smiles_to_graph_add_3d_provides_pos():
