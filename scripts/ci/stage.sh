@@ -742,7 +742,7 @@ run_phase2_recheck_stage() {
   : "${PHASE2_DIRECTION:=min}"
   : "${PHASE2_UNLABELED_DIR:=$APP_DIR/data/ZINC-canonicalized}"
   : "${PHASE2_LABELED_DIR:=$APP_DIR/data/katielinkmoleculenet_benchmark/train}"
-  : "${PHASE2_RECHECK_WALL_MINS:=120}"
+  : "${PHASE2_RECHECK_WALL_MINS:=300}"
   : "${PHASE2_SEED_WALL_MINS:=}"
   : "${PHASE2_RECHECK_GRACE_SECS:=120}"
 
@@ -779,11 +779,11 @@ run_phase2_recheck_stage() {
   rm -f "$sentinel"
   rm -f "$incomplete"
 
-  local wall_mins_raw="${PHASE2_RECHECK_WALL_MINS:-120}"
+  local wall_mins_raw="${PHASE2_RECHECK_WALL_MINS:-300}"
   local wall_mins="$wall_mins_raw"
   if ! [[ "$wall_mins" =~ ^[0-9]+$ ]] || [[ "$wall_mins" -le 0 ]]; then
-    echo "[$step][warn] invalid PHASE2_RECHECK_WALL_MINS=${wall_mins_raw}; defaulting to 120" >&2
-    wall_mins=120
+    echo "[$step][warn] invalid PHASE2_RECHECK_WALL_MINS=${wall_mins_raw}; defaulting to 300" >&2
+    wall_mins=300
   fi
   local soft=$(( wall_mins * 60 ))
 
@@ -859,10 +859,9 @@ run_phase2_recheck_stage() {
   if [[ $rc -eq 0 ]]; then
     :
   elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
-    echo "[$step] graceful stop (rc=$rc); letting outputs flush." >&2
-    mark_graceful_stop "$step"
+    echo "[$step][fatal] recheck timed out after ${wall_mins} minutes (rc=$rc); aborting." >&2
     restore_env_var LOG_DIR "$prev_log_dir"
-    return 0
+    return "$rc"
   else
     restore_env_var LOG_DIR "$prev_log_dir"
     return "$rc"
