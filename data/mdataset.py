@@ -44,11 +44,12 @@ EDGE_BASE_DIM = 7
 EDGE_GEOM_DIM = 10
 EDGE_FLAG_DIM = 1
 EDGE_TOTAL_DIM = EDGE_BASE_DIM + EDGE_FLAG_DIM + EDGE_GEOM_DIM
-GRAPH_SCHEMA_VERSION = "n4_e18_v1"
+GRAPH_SCHEMA_VERSION = "flex_v1"
 
 
 def _cache_schema_suffix(add_3d: bool) -> str:
-    return f"3d{int(add_3d)}_e{EDGE_TOTAL_DIM}_{GRAPH_SCHEMA_VERSION}"
+    edge_dim = EDGE_TOTAL_DIM if add_3d else EDGE_BASE_DIM
+    return f"3d{int(add_3d)}_e{edge_dim}_{GRAPH_SCHEMA_VERSION}"
 
 
 def _resolve_worker_count(num_workers: int) -> int:
@@ -438,10 +439,15 @@ class GraphDataset:
                 + ", ".join(sample_msgs)
             )
 
-        if edge_dims and edge_dims[0] not in (0, EDGE_TOTAL_DIM):
-            raise ValueError(
-                f"Unexpected edge_dim {edge_dims[0]} (expected {EDGE_TOTAL_DIM})."
-            )
+        if edge_dims:
+            allowed_dims = {0, EDGE_BASE_DIM, EDGE_TOTAL_DIM}
+            invalid = [dim for dim in edge_dims if dim not in allowed_dims]
+            if invalid:
+                raise ValueError(
+                    "Unexpected edge_dim values: "
+                    + ", ".join(str(dim) for dim in sorted(set(invalid)))
+                    + f" (allowed: {sorted(allowed_dims)})"
+                )
 
     def __len__(self) -> int:
         return len(self.graphs)
@@ -702,30 +708,33 @@ class GraphDataset:
                     )
                     base_arr = np.concatenate([base_arr, pad], axis=1)
 
-                flag = np.full(
-                    (base_arr.shape[0], 1), 1.0 if has_3d else 0.0, dtype=np.float32
-                )
-                geom = np.zeros(
-                    (base_arr.shape[0], EDGE_GEOM_DIM), dtype=np.float32
-                )
-                if has_3d and E.shape[1] > 0:
-                    try:
-                        geom = _append_geom_edge_attr(mol, E, None)
-                    except Exception:
-                        geom = np.zeros(
-                            (base_arr.shape[0], EDGE_GEOM_DIM), dtype=np.float32
-                        )
-                if geom.ndim == 1 and base_arr.shape[0] > 0:
-                    geom = geom.reshape(base_arr.shape[0], EDGE_GEOM_DIM)
-                if geom.shape[0] != base_arr.shape[0]:
-                    gpad = np.zeros(
+                if not add_3d:
+                    EA = base_arr
+                else:
+                    flag = np.full(
+                        (base_arr.shape[0], 1), 1.0 if has_3d else 0.0, dtype=np.float32
+                    )
+                    geom = np.zeros(
                         (base_arr.shape[0], EDGE_GEOM_DIM), dtype=np.float32
                     )
-                    if geom.shape[0] > 0:
-                        m = min(base_arr.shape[0], geom.shape[0])
-                        gpad[:m] = geom[:m]
-                    geom = gpad
-                EA = np.concatenate([base_arr, flag, geom], axis=1)
+                    if has_3d and E.shape[1] > 0:
+                        try:
+                            geom = _append_geom_edge_attr(mol, E, None)
+                        except Exception:
+                            geom = np.zeros(
+                                (base_arr.shape[0], EDGE_GEOM_DIM), dtype=np.float32
+                            )
+                    if geom.ndim == 1 and base_arr.shape[0] > 0:
+                        geom = geom.reshape(base_arr.shape[0], EDGE_GEOM_DIM)
+                    if geom.shape[0] != base_arr.shape[0]:
+                        gpad = np.zeros(
+                            (base_arr.shape[0], EDGE_GEOM_DIM), dtype=np.float32
+                        )
+                        if geom.shape[0] > 0:
+                            m = min(base_arr.shape[0], geom.shape[0])
+                            gpad[:m] = geom[:m]
+                        geom = gpad
+                    EA = np.concatenate([base_arr, flag, geom], axis=1)
 
             return GraphData(x=X, edge_index=E, edge_attr=EA, pos=coords)
 
