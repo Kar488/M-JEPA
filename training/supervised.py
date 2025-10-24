@@ -1174,9 +1174,42 @@ def train_linear_head(
 
     embedding_cache: Dict[int, torch.Tensor] = {}
 
-    def _handle_pin_memory_failure(err: BaseException) -> bool:
-        nonlocal pin_memory_enabled, train_loader, val_loader, test_loader, num_workers, persistent_workers
+    def _rebuild_loaders_after_failure(
+        *,
+        disable_pin_memory: bool = False,
+        drop_workers: bool = False,
+        disable_cache: bool = True,
+    ) -> bool:
+        """Tear down existing loaders and rebuild them with safer settings."""
 
+        nonlocal (
+            pin_memory_enabled,
+            train_loader,
+            val_loader,
+            test_loader,
+            num_workers,
+            persistent_workers,
+            prefetch_factor,
+        )
+
+        previous_loaders = (train_loader, val_loader, test_loader)
+
+        if disable_pin_memory:
+            pin_memory_enabled = False
+
+        if disable_cache:
+            cache_state["enabled"] = False
+            embedding_cache.clear()
+
+        if drop_workers:
+            num_workers = 0
+            persistent_workers = False
+            prefetch_factor = None
+
+        train_loader, val_loader, test_loader = _rebuild_loaders(previous_loaders)
+        return True
+
+    def _handle_pin_memory_failure(err: BaseException) -> bool:
         if not pin_memory_enabled and num_workers == 0:
             return False
 
@@ -1186,29 +1219,37 @@ def train_linear_head(
             err,
         )
 
-        previous_loaders = (train_loader, val_loader, test_loader)
+        return _rebuild_loaders_after_failure(
+            disable_pin_memory=True,
+            drop_workers=True,
+        )
 
-        pin_memory_enabled = False
-        cache_state["enabled"] = False
-        num_workers = 0
-        persistent_workers = False
-        embedding_cache.clear()
-        train_loader, val_loader, test_loader = _rebuild_loaders(previous_loaders)
-        return True
+    def _handle_fd_exhaustion_failure(err: BaseException) -> bool:
+        logger.warning(
+            "DataLoader hit file-descriptor limits (%s). "
+            "Rebuilding loaders with a single-process, non-pinned configuration.",
+            err,
+        )
+
+        return _rebuild_loaders_after_failure(
+            disable_pin_memory=True,
+            drop_workers=True,
+        )
 
     def _should_retry_loader_error(err: BaseException) -> bool:
         msg = str(err).lower()
-        triggers = (
+        pin_triggers = (
             "pin memory",
             "pin_memory",
             "pin memory thread",
             "pin_memory thread",
-            "too many open files",
-            "errno 24",
-            "ancdata",
         )
-        if any(trigger in msg for trigger in triggers):
+        if any(trigger in msg for trigger in pin_triggers):
             return _handle_pin_memory_failure(err)
+
+        fd_triggers = ("too many open files", "errno 24", "ancdata")
+        if any(trigger in msg for trigger in fd_triggers):
+            return _handle_fd_exhaustion_failure(err)
         return False
 
     def _grad_context():
