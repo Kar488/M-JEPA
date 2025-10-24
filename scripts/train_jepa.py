@@ -1142,7 +1142,18 @@ def build_parser() -> argparse.ArgumentParser:
     # Tox21 case study
     tox = sub.add_parser("tox21", help="Run the Tox21 case study experiment")
     tox.add_argument("--csv", required=True, help="Path to the Tox21 CSV containing SMILES and labels");
-    tox.add_argument("--task", required=True, help="Name of the toxicity column to predict");
+    tox.add_argument(
+        "--task",
+        required=False,
+        default=None,
+        help="Name of the toxicity column to predict (deprecated when --tasks is used)",
+    );
+    tox.add_argument(
+        "--tasks",
+        nargs="+",
+        default=None,
+        help="List of toxicity columns to evaluate (defaults to all Tox21 assays when omitted)",
+    );
     tox.add_argument("--dataset", type=str, default="tox21", help="Dataset name for threshold lookup");
     case_cfg = CONFIG.get("case_study", {});
     tox.add_argument("--pretrain-epochs", type=int, default=case_cfg.get("pretrain_epochs", 5), help="JEPA pretrain epochs for case study"); 

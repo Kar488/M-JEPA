@@ -268,6 +268,7 @@ elapsed="${SECONDS}"
 stage_file="${TOX21_DIR}/stage-outputs/tox21_${SOURCE}.json"
 "${python_cmd[@]}" - <<'PY' "$stage_file" "$SOURCE" "$env_file" "$elapsed"
 import json, os, sys
+
 stage_path, source, env_path, elapsed = sys.argv[1:5]
 data = {}
 if os.path.exists(env_path):
@@ -291,10 +292,21 @@ def _coerce_bool(val):
         return "true" if val else "false"
     return None
 
+tasks_block = {}
+if isinstance(payload, dict):
+    tasks_block = payload.get("tasks") or {}
+
+def _first_task_value(key):
+    if isinstance(tasks_block, dict):
+        for info in tasks_block.values():
+            if isinstance(info, dict) and key in info:
+                return info.get(key)
+    return None
+
 met_flag = payload.get("met_benchmark")
 if met_flag is None:
-    met_flag = payload.get("met_benchmark_selected")
-selected_path = payload.get("selected_path")
+    met_flag = payload.get("tox21_gate_passed")
+selected_path = _first_task_value("selected_path")
 
 if source == "pretrain_frozen":
     if met_flag is not None:
@@ -326,7 +338,7 @@ def _resolve_batches(name):
 
 encoder_path = diagnostics.get("encoder_checkpoint") if isinstance(diagnostics, dict) else None
 if not encoder_path:
-    encoder_path = payload.get("selected_path") if isinstance(payload, dict) else None
+    encoder_path = _first_task_value("stage_path")
 tasks = diagnostics.get("task_count") if isinstance(diagnostics, dict) else None
 try:
     tasks = int(tasks) if tasks is not None else None

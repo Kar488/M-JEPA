@@ -91,7 +91,19 @@ bench:
 tox21:
   <<: *common
   csv: ${APP_DIR}/data/tox21/data.csv
-  task: NR-AR
+  tasks:
+    - NR-AR
+    - NR-AR-LBD
+    - NR-AhR
+    - NR-Aromatase
+    - NR-ER
+    - NR-ER-LBD
+    - NR-PPAR-gamma
+    - SR-ARE
+    - SR-ATAD5
+    - SR-HSE
+    - SR-MMP
+    - SR-p53
   dataset: tox21
   tox21_dir: ${TOX21_DIR}
   pretrain_epochs: ${PRETRAIN_EPOCHS:-70}   # maps to --pretrain-epochs for "tox21"

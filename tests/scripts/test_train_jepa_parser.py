@@ -118,6 +118,7 @@ def test_tox21_parser_defaults_and_handler(tmp_path):
     assert args.func is cmd_tox21
     assert args.csv == str(tmp_path / "tox.csv")
     assert args.task == "NR-AR"
+    assert args.tasks is None
     assert args.dataset == "tox21"
     case_cfg = CONFIG["case_study"]
     assert args.pretrain_epochs == case_cfg["pretrain_epochs"]
@@ -161,6 +162,21 @@ def test_model_shape_flags_track_provided_state(tmp_path):
     assert args.hidden_dim == 192
     assert args.num_layers == 4
     assert args.gnn_type == "gin"
+
+
+def test_tox21_parser_accepts_multiple_tasks(tmp_path):
+    parser = build_parser()
+    args = parser.parse_args([
+        "tox21",
+        "--csv",
+        str(tmp_path / "tox.csv"),
+        "--tasks",
+        "NR-AR",
+        "NR-ER",
+    ])
+    assert args.func is cmd_tox21
+    assert args.task is None
+    assert args.tasks == ["NR-AR", "NR-ER"]
 
 
 def test_grid_search_parser_defaults_and_handler(tmp_path):
