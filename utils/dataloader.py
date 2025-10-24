@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import NamedTuple, Optional, Tuple
 
 import logging
 import math
@@ -111,20 +111,37 @@ def ensure_file_system_sharing_strategy() -> None:
         pass
 
 
-def ensure_open_file_limit(min_soft_limit: int = 4096) -> None:
-    """Best-effort bump of ``RLIMIT_NOFILE`` so dataloaders stay healthy."""
+class FDBudget(NamedTuple):
+    """Summary of the current file-descriptor budget."""
+
+    ok: bool
+    soft_limit: Optional[int]
+    hard_limit: Optional[int]
+    open_files: Optional[int]
+    available: Optional[int]
+
+
+def ensure_open_file_limit(min_soft_limit: int = 4096) -> Tuple[Optional[int], Optional[int]]:
+    """Best-effort bump of ``RLIMIT_NOFILE`` so dataloaders stay healthy.
+
+    Returns the effective ``(soft_limit, hard_limit)`` after attempting to
+    increase the resource limits.  When the ``resource`` module is unavailable
+    or the limits cannot be queried the function falls back to ``(None, None)``.
+    """
 
     if resource is None:  # pragma: no cover - platform dependent
-        return
+        return None, None
 
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     except (OSError, ValueError):  # pragma: no cover - depends on runtime
-        return
+        return None, None
+
+    final_soft, final_hard = soft, hard
 
     desired = max(int(min_soft_limit), soft)
     if desired <= soft:
-        return
+        return final_soft, final_hard
 
     target_hard = hard if hard >= desired else desired
     try:
@@ -136,25 +153,72 @@ def ensure_open_file_limit(min_soft_limit: int = 4096) -> None:
             hard,
             target_hard,
         )
-        return
+        final_soft, final_hard = desired, target_hard
+        return final_soft, final_hard
     except (OSError, ValueError):
         pass
 
     fallback_soft = min(max(desired, soft), hard)
     if fallback_soft <= soft:
-        return
+        return final_soft, final_hard
     try:
         resource.setrlimit(resource.RLIMIT_NOFILE, (fallback_soft, hard))
         logger.debug(
             "Raised RLIMIT_NOFILE soft limit to hard limit %d after initial attempt failed",
             fallback_soft,
         )
+        final_soft, final_hard = fallback_soft, hard
     except (OSError, ValueError):  # pragma: no cover - depends on runtime
         logger.debug(
             "Unable to raise RLIMIT_NOFILE beyond current soft limit %d despite request for %d",
             soft,
             desired,
         )
+    return final_soft, final_hard
+
+
+def check_fd_budget(required_handles: int) -> FDBudget:
+    """Estimate whether ``required_handles`` extra FDs fit within the budget."""
+
+    required = max(0, int(required_handles))
+
+    soft_limit: Optional[int] = None
+    hard_limit: Optional[int] = None
+    if resource is not None:  # pragma: no branch - fast path
+        try:
+            soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+        except (OSError, ValueError):  # pragma: no cover - platform dependent
+            soft_limit = hard_limit = None
+
+    open_files: Optional[int] = None
+    fd_path = "/proc/self/fd"
+    if os.path.isdir(fd_path):
+        try:
+            open_files = len(os.listdir(fd_path))
+        except OSError:  # pragma: no cover - depends on runtime
+            open_files = None
+
+    available: Optional[int]
+    if soft_limit is None:
+        available = None
+    else:
+        baseline = open_files or 0
+        available = max(0, soft_limit - baseline)
+
+    if available is not None:
+        ok = available >= required
+    elif soft_limit is not None:
+        ok = soft_limit >= required
+    else:
+        ok = True
+
+    return FDBudget(
+        ok=ok,
+        soft_limit=soft_limit,
+        hard_limit=hard_limit,
+        open_files=open_files,
+        available=available,
+    )
 
 
 def _auto_worker_budget(max_auto_workers: Optional[int] = None) -> int:

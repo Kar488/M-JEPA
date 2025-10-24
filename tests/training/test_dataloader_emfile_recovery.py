@@ -11,7 +11,7 @@ from training.unsupervised import (
     _is_too_many_open_files,
 )
 from utils import dataloader as dataloader_utils
-from utils.dataloader import ensure_open_file_limit
+from utils.dataloader import check_fd_budget, ensure_open_file_limit
 
 
 def _make_nested_emfile() -> RuntimeError:
@@ -74,9 +74,11 @@ def test_ensure_open_file_limit_raises_soft_cap(monkeypatch):
 
     monkeypatch.setattr(dataloader_utils, "resource", stub, raising=False)
 
-    ensure_open_file_limit(4096)
+    soft, hard = ensure_open_file_limit(4096)
 
     assert calls[-1] == (4096, 8192)
+    assert soft == 4096
+    assert hard == 8192
 
 
 def test_ensure_open_file_limit_falls_back_to_hard_limit(monkeypatch):
@@ -97,6 +99,52 @@ def test_ensure_open_file_limit_falls_back_to_hard_limit(monkeypatch):
 
     monkeypatch.setattr(dataloader_utils, "resource", stub, raising=False)
 
-    ensure_open_file_limit(4096)
+    soft, hard = ensure_open_file_limit(4096)
 
     assert calls[-1] == (2048, 2048)
+    assert soft == 2048
+    assert hard == 2048
+
+
+def test_check_fd_budget_reports_available(monkeypatch):
+    pytest.importorskip("resource")
+
+    stub_resource = types.SimpleNamespace(
+        RLIMIT_NOFILE=7,
+        getrlimit=lambda limit: (8192, 16384),
+    )
+    monkeypatch.setattr(dataloader_utils, "resource", stub_resource, raising=False)
+    monkeypatch.setattr(dataloader_utils.os.path, "isdir", lambda _: True)
+    monkeypatch.setattr(
+        dataloader_utils.os,
+        "listdir",
+        lambda _: [str(i) for i in range(1024)],
+    )
+
+    budget = check_fd_budget(512)
+
+    assert budget.ok
+    assert budget.soft_limit == 8192
+    assert budget.available == 8192 - 1024
+    assert budget.open_files == 1024
+
+
+def test_check_fd_budget_detects_shortfall(monkeypatch):
+    pytest.importorskip("resource")
+
+    stub_resource = types.SimpleNamespace(
+        RLIMIT_NOFILE=7,
+        getrlimit=lambda limit: (2048, 4096),
+    )
+    monkeypatch.setattr(dataloader_utils, "resource", stub_resource, raising=False)
+    monkeypatch.setattr(dataloader_utils.os.path, "isdir", lambda _: True)
+    monkeypatch.setattr(
+        dataloader_utils.os,
+        "listdir",
+        lambda _: ["fd"] * 1536,
+    )
+
+    budget = check_fd_budget(1024)
+
+    assert not budget.ok
+    assert budget.available == 512

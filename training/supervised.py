@@ -34,6 +34,7 @@ from utils.metrics import compute_classification_metrics, compute_regression_met
 from utils.graph_ops import _encode_graph
 from utils.dataloader import (
     autotune_worker_pool,
+    check_fd_budget,
     ensure_file_system_sharing_strategy,
     ensure_open_file_limit,
 )
@@ -911,6 +912,93 @@ def train_linear_head(
     best_val_snapshot: Dict[str, float] = {}
 
     cache_state = {"enabled": bool(cache_graph_embeddings)}
+
+    def _estimate_fd_handles(workers: int, prefetch: int, loader_count: int) -> int:
+        base = 512 + 64 * loader_count
+        if cache_state["enabled"]:
+            base += 256 * loader_count
+        if loader_count <= 0 or workers <= 0:
+            return base
+        return base + 128 * loader_count * max(workers, 1) * max(prefetch, 1)
+
+    active_loader_count = sum(
+        1
+        for split_size in (len(train_idx_rank), len(val_idx), len(test_idx))
+        if split_size > 0
+    )
+    current_workers = max(0, int(num_workers))
+    if current_workers > 0:
+        effective_prefetch = (
+            max(1, int(prefetch_factor))
+            if isinstance(prefetch_factor, (int, float))
+            else 2
+        )
+    else:
+        effective_prefetch = 0
+
+    if active_loader_count > 0:
+        required_handles = _estimate_fd_handles(
+            current_workers, effective_prefetch, active_loader_count
+        )
+        fd_budget = check_fd_budget(required_handles)
+        available = fd_budget.available
+
+        if not fd_budget.ok and available is not None:
+            best_workers = current_workers
+            best_prefetch = effective_prefetch
+
+            def _handles_for(workers: int, prefetch: int) -> int:
+                return _estimate_fd_handles(workers, prefetch, active_loader_count)
+
+            found = False
+            for workers_candidate in range(current_workers, -1, -1):
+                if workers_candidate <= 0:
+                    prefetch_candidates = [0]
+                else:
+                    prefetch_candidates = list(range(effective_prefetch, 0, -1))
+                for prefetch_candidate in prefetch_candidates:
+                    handles_needed = _handles_for(workers_candidate, prefetch_candidate)
+                    if handles_needed <= available:
+                        best_workers = workers_candidate
+                        best_prefetch = prefetch_candidate
+                        found = True
+                        break
+                if found:
+                    break
+
+            original_prefetch = prefetch_factor
+            if best_workers <= 0:
+                new_prefetch: Optional[int] = None
+            else:
+                new_prefetch = max(1, best_prefetch)
+
+            def _prefetch_changed() -> bool:
+                if best_workers <= 0:
+                    return original_prefetch is not None
+                if isinstance(original_prefetch, (int, float)):
+                    return int(original_prefetch) != new_prefetch
+                return new_prefetch != effective_prefetch
+
+            if best_workers != current_workers or _prefetch_changed():
+                logger.warning(
+                    "[finetune] Limited file-descriptor budget (required=%d, available=%s, soft_limit=%s, open_files=%s); "
+                    "reducing num_workers from %d to %d and prefetch_factor from %s to %s.",
+                    required_handles,
+                    available,
+                    fd_budget.soft_limit,
+                    fd_budget.open_files,
+                    current_workers,
+                    best_workers,
+                    "None" if original_prefetch is None else int(original_prefetch),
+                    "None" if best_workers <= 0 else new_prefetch,
+                )
+
+                num_workers = best_workers
+                if num_workers <= 0:
+                    persistent_workers = False
+                    prefetch_factor = None
+                else:
+                    prefetch_factor = new_prefetch
 
     def _effective_worker_count(split_size: int) -> int:
         if num_workers <= 0:
