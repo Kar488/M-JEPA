@@ -5,6 +5,7 @@ import logging
 import os
 import pickle
 from concurrent.futures import ProcessPoolExecutor
+import hashlib
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import repeat
@@ -38,6 +39,16 @@ import pandas as pd
 from ._graph_pickle import register_graph_class, rebuild_graph_data
 
 logger = logging.getLogger(__name__)
+
+EDGE_BASE_DIM = 7
+EDGE_GEOM_DIM = 10
+EDGE_FLAG_DIM = 1
+EDGE_TOTAL_DIM = EDGE_BASE_DIM + EDGE_FLAG_DIM + EDGE_GEOM_DIM
+GRAPH_SCHEMA_VERSION = "n4_e18_v1"
+
+
+def _cache_schema_suffix(add_3d: bool) -> str:
+    return f"3d{int(add_3d)}_e{EDGE_TOTAL_DIM}_{GRAPH_SCHEMA_VERSION}"
 
 
 def _resolve_worker_count(num_workers: int) -> int:
@@ -85,6 +96,52 @@ def _graph_from_state(state: GraphDataState) -> "GraphData":
         edge_attr=state.get("edge_attr"),
         pos=state.get("pos"),
     )
+
+
+def _coerce_cache_payload(payload: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(payload, dict):
+        if "graphs" in payload:
+            return payload
+        # legacy caches stored as {"graphs": [...], "labels": ...}
+        graphs = payload.get("graphs")
+        if graphs is not None:
+            return {"graphs": graphs, "labels": payload.get("labels"), "schema": payload.get("schema")}
+    if isinstance(payload, tuple) and len(payload) == 2:
+        graphs, labels = payload
+        return {"graphs": graphs, "labels": labels, "schema": None}
+    return None
+
+
+def _load_graph_cache(path: str) -> Optional[Dict[str, Any]]:
+    try:
+        with open(path, "rb") as fh:
+            payload = pickle.load(fh)
+    except Exception as exc:
+        logger.warning("Failed to load graph cache %s: %s", path, exc)
+        return None
+    coerced = _coerce_cache_payload(payload)
+    if coerced is None:
+        logger.warning("Graph cache %s has unexpected format; ignoring", path)
+    return coerced
+
+
+def _write_graph_cache(path: str, dataset: "GraphDataset") -> None:
+    payload = {
+        "graphs": dataset.graphs,
+        "labels": dataset.labels,
+        "schema": dataset.schema_metadata,
+    }
+    try:
+        with open(path, "wb") as fh:
+            pickle.dump(payload, fh)
+    except Exception as exc:
+        logger.warning("Failed to write graph cache %s: %s", path, exc)
+    else:
+        logger.info(
+            "Wrote graph cache to %s (schema=%s)",
+            path,
+            payload["schema"].get("schema_token") if payload.get("schema") else "<none>",
+        )
 
 
 @dataclass
@@ -213,13 +270,22 @@ class GraphDataset:
             if self.labels.ndim != 1 or self.labels.shape[0] != len(self.graphs):
                 raise ValueError("labels must be 1D and the same length as graphs")
 
+        self.smiles = smiles
+
         self._normalise_feature_dims()
 
-        self.smiles = smiles
+        self._schema_stats = self._compute_schema_stats()
+        self._validate_schema_stats(self._schema_stats)
+        self.node_dim = int(self._schema_stats.get("node_dim", 0))
+        self.edge_dim = int(self._schema_stats.get("edge_dim", 0))
+        self.schema_token = self._schema_stats.get("schema_token")
         logger.debug(
-            "Initialized GraphDataset with %d graphs%s",
+            "Initialized GraphDataset with %d graphs%s (node_dim=%s edge_dim=%s has_3d=%d)",
             len(graphs),
             " and labels" if labels is not None else "",
+            self.node_dim,
+            self.edge_dim,
+            int(self._schema_stats.get("graphs_with_3d", 0)),
         )
 
     def _normalise_feature_dims(self) -> None:
@@ -271,6 +337,111 @@ class GraphDataset:
             pad = np.zeros((arr.shape[0], pad_width), dtype=arr.dtype)
             padded = np.concatenate([arr, pad], axis=1)
             graph.x = padded.astype(np.float32, copy=False)
+
+    def _compute_schema_stats(self) -> Dict[str, Any]:
+        """Collect dimensionality statistics for nodes and edges."""
+
+        node_dims: List[int] = []
+        edge_dims: List[int] = []
+        node_examples: Dict[int, int] = {}
+        edge_examples: Dict[int, int] = {}
+        graphs_with_3d = 0
+        edges_with_attr = 0
+        edges_with_3d = 0
+
+        for idx, graph in enumerate(self.graphs):
+            x = getattr(graph, "x", None)
+            node_dim = 0
+            if x is not None:
+                try:
+                    node_dim = int(np.asarray(x).shape[1])
+                except Exception:
+                    node_dim = 0
+            node_dims.append(node_dim)
+            if node_dim > 0 and node_dim not in node_examples:
+                node_examples[node_dim] = idx
+
+            edge_attr = getattr(graph, "edge_attr", None)
+            arr = None
+            edge_dim = 0
+            if edge_attr is not None:
+                arr = np.asarray(edge_attr)
+                if arr.ndim == 1:
+                    arr = arr.reshape(-1, 1)
+                if arr.ndim == 2 and arr.size > 0:
+                    edge_dim = int(arr.shape[1])
+            edge_dims.append(edge_dim)
+            if edge_dim > 0 and edge_dim not in edge_examples:
+                edge_examples[edge_dim] = idx
+
+            if arr is not None and arr.ndim == 2 and arr.size > 0:
+                edges_with_attr += int(arr.shape[0])
+                flag_idx = EDGE_BASE_DIM
+                if arr.shape[1] > flag_idx:
+                    has_flag = bool(np.any(arr[:, flag_idx] > 0.5))
+                    graphs_with_3d += int(has_flag)
+                    edges_with_3d += int(np.count_nonzero(arr[:, flag_idx] > 0.5))
+
+        node_dim = max((d for d in node_dims if d > 0), default=0)
+        edge_dim = max((d for d in edge_dims if d > 0), default=0)
+
+        schema_parts = [f"n{node_dim}", f"e{edge_dim}", GRAPH_SCHEMA_VERSION]
+        token = "_".join(schema_parts)
+
+        return {
+            "node_dim": node_dim,
+            "edge_dim": edge_dim,
+            "node_dims": node_dims,
+            "edge_dims": edge_dims,
+            "node_examples": node_examples,
+            "edge_examples": edge_examples,
+            "graphs_with_3d": graphs_with_3d,
+            "edges_with_attr": edges_with_attr,
+            "edges_with_3d": edges_with_3d,
+            "schema_token": token,
+            "version": GRAPH_SCHEMA_VERSION,
+        }
+
+    def _validate_schema_stats(self, stats: Dict[str, Any]) -> None:
+        """Raise descriptive errors when node/edge dims disagree."""
+
+        node_dims = sorted({d for d in stats.get("node_dims", []) if d > 0})
+        edge_dims = sorted({d for d in stats.get("edge_dims", []) if d > 0})
+
+        if len(node_dims) > 1:
+            samples = stats.get("node_examples", {})
+            sample_msgs = []
+            for dim in node_dims:
+                idx = samples.get(dim)
+                label = None
+                if idx is not None and self.smiles is not None and idx < len(self.smiles):
+                    label = self.smiles[idx]
+                entry = f"{dim} (idx={idx}" + (f" smiles={label}" if label else "") + ")"
+                sample_msgs.append(entry)
+            raise ValueError(
+                "Node feature dimension mismatch detected: "
+                + ", ".join(sample_msgs)
+            )
+
+        if len(edge_dims) > 1:
+            samples = stats.get("edge_examples", {})
+            sample_msgs = []
+            for dim in edge_dims:
+                idx = samples.get(dim)
+                label = None
+                if idx is not None and self.smiles is not None and idx < len(self.smiles):
+                    label = self.smiles[idx]
+                entry = f"{dim} (idx={idx}" + (f" smiles={label}" if label else "") + ")"
+                sample_msgs.append(entry)
+            raise ValueError(
+                "Edge feature dimension mismatch detected: "
+                + ", ".join(sample_msgs)
+            )
+
+        if edge_dims and edge_dims[0] not in (0, EDGE_TOTAL_DIM):
+            raise ValueError(
+                f"Unexpected edge_dim {edge_dims[0]} (expected {EDGE_TOTAL_DIM})."
+            )
 
     def __len__(self) -> int:
         return len(self.graphs)
@@ -380,6 +551,41 @@ class GraphDataset:
 
         return batch_x, batch_adj, batch_ptr, batch_labels
 
+    @property
+    def schema_metadata(self) -> Dict[str, Any]:
+        return {
+            "node_dim": int(self.node_dim),
+            "edge_dim": int(self.edge_dim),
+            "schema_token": self.schema_token,
+            "version": GRAPH_SCHEMA_VERSION,
+            "num_graphs": len(self.graphs),
+            "graphs_with_3d": self._schema_stats.get("graphs_with_3d", 0),
+            "edges_with_attr": self._schema_stats.get("edges_with_attr", 0),
+            "edges_with_3d": self._schema_stats.get("edges_with_3d", 0),
+        }
+
+    def validate_cached_schema(
+        self, schema_meta: Optional[Dict[str, Any]], *, source: str = "<cache>"
+    ) -> None:
+        if not schema_meta:
+            raise ValueError(f"Cache {source} missing schema metadata")
+        version = schema_meta.get("version")
+        if version != GRAPH_SCHEMA_VERSION:
+            raise ValueError(
+                f"Cache {source} schema version {version} != {GRAPH_SCHEMA_VERSION}"
+            )
+        cached_node = int(schema_meta.get("node_dim", -1))
+        cached_edge = int(schema_meta.get("edge_dim", -1))
+        mismatches: List[str] = []
+        if cached_node != int(self.node_dim):
+            mismatches.append(f"node_dim cached={cached_node} actual={self.node_dim}")
+        if cached_edge != int(self.edge_dim):
+            mismatches.append(f"edge_dim cached={cached_edge} actual={self.edge_dim}")
+        if mismatches:
+            raise ValueError(
+                f"Cache {source} schema mismatch: " + "; ".join(mismatches)
+            )
+
     # ---------- Core featurisation ---------- #
     @staticmethod
     def smiles_to_graph(
@@ -440,39 +646,22 @@ class GraphDataset:
             )
 
             coords = None
+            has_3d = False
             if add_3d and mol.GetNumAtoms() > 0:
-                try:
-                    params = AllChem.ETKDGv3()
-                    if random_seed is not None:
-                        params.randomSeed = int(random_seed)
-                    # returns 0 on success; -1 on failure
-                    rc = AllChem.EmbedMolecule(mol, params)
-                    if rc == 0:
-                        # geometry optimization is best-effort; failure is fine
-                        try:
-                            AllChem.UFFOptimizeMolecule(mol, maxIters=200)
-                        except Exception:
-                            pass
-                        conf = mol.GetConformer()
-                        coords = np.array(
-                            [
-                                list(conf.GetAtomPosition(i))
-                                for i in range(mol.GetNumAtoms())
-                            ],
-                            dtype=np.float32,
-                        )
-                        # append (x,y,z)
-                        if coords.shape[0] == X.shape[0]:
-                            X = np.concatenate([X, coords], axis=1)
-                except Exception:
-                    logger.debug("3D embedding failed for %s", smiles)
+                coords, _ = _generate_conformer_coords(
+                    mol,
+                    smiles=smiles,
+                    random_seed=random_seed,
+                )
+                if coords is not None and coords.shape[0] == X.shape[0]:
+                    X = np.concatenate([X, coords], axis=1)
+                    has_3d = True
+                else:
                     coords = None
-                if coords is None:
-                    raise ValueError("3D embedding failed")
 
             # Edges + attrs
             edges: list[tuple[int, int]] = []
-            eattr: list[list[float]] = []
+            base_attrs: list[list[float]] = []
             for b in mol.GetBonds():
                 i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
                 btype = b.GetBondType()
@@ -492,24 +681,51 @@ class GraphDataset:
                 feat = onehot + [conj, ring, length]
                 # undirected → add both directions
                 edges.append((i, j))
-                eattr.append(feat)
+                base_attrs.append(feat)
                 edges.append((j, i))
-                eattr.append(feat)
+                base_attrs.append(feat)
 
             E = (
                 np.array(edges, dtype=np.int64).T
                 if edges
                 else np.zeros((2, 0), dtype=np.int64)
             )
-            EA = np.asarray(eattr, dtype=np.float32) if eattr else None
+            EA = None
+            if base_attrs:
+                base_arr = np.asarray(base_attrs, dtype=np.float32)
+                if base_arr.ndim == 1:
+                    base_arr = base_arr.reshape(-1, EDGE_BASE_DIM)
+                if base_arr.shape[1] < EDGE_BASE_DIM:
+                    pad = np.zeros(
+                        (base_arr.shape[0], EDGE_BASE_DIM - base_arr.shape[1]),
+                        dtype=base_arr.dtype,
+                    )
+                    base_arr = np.concatenate([base_arr, pad], axis=1)
 
-            # optional geometric edge features
-            if add_3d and E.shape[1] > 0:
-                try:
-                    EA = _append_geom_edge_attr(mol, E, EA)
-                except Exception:
-                    # if augmentation fails, keep existing EA (may be None)
-                    pass
+                flag = np.full(
+                    (base_arr.shape[0], 1), 1.0 if has_3d else 0.0, dtype=np.float32
+                )
+                geom = np.zeros(
+                    (base_arr.shape[0], EDGE_GEOM_DIM), dtype=np.float32
+                )
+                if has_3d and E.shape[1] > 0:
+                    try:
+                        geom = _append_geom_edge_attr(mol, E, None)
+                    except Exception:
+                        geom = np.zeros(
+                            (base_arr.shape[0], EDGE_GEOM_DIM), dtype=np.float32
+                        )
+                if geom.ndim == 1 and base_arr.shape[0] > 0:
+                    geom = geom.reshape(base_arr.shape[0], EDGE_GEOM_DIM)
+                if geom.shape[0] != base_arr.shape[0]:
+                    gpad = np.zeros(
+                        (base_arr.shape[0], EDGE_GEOM_DIM), dtype=np.float32
+                    )
+                    if geom.shape[0] > 0:
+                        m = min(base_arr.shape[0], geom.shape[0])
+                        gpad[:m] = geom[:m]
+                    geom = gpad
+                EA = np.concatenate([base_arr, flag, geom], axis=1)
 
             return GraphData(x=X, edge_index=E, edge_attr=EA, pos=coords)
 
@@ -572,13 +788,28 @@ class GraphDataset:
         if cache_dir and n_rows is None:
             os.makedirs(cache_dir, exist_ok=True)
             cache_name = os.path.splitext(os.path.basename(filepath))[0]
-            cache_name = f"{cache_name}_3d{int(add_3d)}.pkl"  # clear old caches if needed
+            cache_name = f"{cache_name}_{_cache_schema_suffix(add_3d)}.pkl"
             cache_path = os.path.join(cache_dir, cache_name)
             if os.path.exists(cache_path):
                 logger.info("Loading graphs from cache %s", cache_path)
-                with open(cache_path, "rb") as f:
-                    graphs, labels = pickle.load(f)
-                return cls(graphs, labels, None)
+                payload = _load_graph_cache(cache_path)
+                if payload is not None:
+                    try:
+                        ds_cached = cls(
+                            payload.get("graphs", []),
+                            payload.get("labels"),
+                            None,
+                        )
+                        ds_cached.validate_cached_schema(
+                            payload.get("schema"), source=cache_path
+                        )
+                        return ds_cached
+                    except Exception as exc:
+                        logger.warning(
+                            "Cached dataset %s invalid (%s); rebuilding",
+                            cache_path,
+                            exc,
+                        )
 
         cols = [smiles_col] + ([label_col] if label_col else [])
         df = pd.read_parquet(filepath, columns=cols) 
@@ -641,12 +872,11 @@ class GraphDataset:
                 if g.x.shape[1] < min_dim:
                     pad = np.zeros((g.x.shape[0], min_dim - g.x.shape[1]), dtype=g.x.dtype)
                     g.x = np.concatenate([g.x, pad], axis=1)
+        dataset = cls(graphs, labels, smiles_out)
         if cache_path:
-            with open(cache_path, "wb") as f:
-                pickle.dump((graphs, labels), f)
-            logger.info("Wrote graph cache to %s", cache_path)
+            _write_graph_cache(cache_path, dataset)
 
-        return cls(graphs, labels, smiles_out)
+        return dataset
 
     @classmethod
     def from_csv(
@@ -665,13 +895,28 @@ class GraphDataset:
         if cache_dir and n_rows is None:
             os.makedirs(cache_dir, exist_ok=True)
             cache_name = os.path.splitext(os.path.basename(filepath))[0]
-            cache_name = f"{cache_name}_3d{int(add_3d)}.pkl"  # clear old caches if needed
+            cache_name = f"{cache_name}_{_cache_schema_suffix(add_3d)}.pkl"
             cache_path = os.path.join(cache_dir, cache_name)
             if os.path.exists(cache_path):
                 logger.info("Loading graphs from cache %s", cache_path)
-                with open(cache_path, "rb") as f:
-                    graphs, labels = pickle.load(f)
-                return cls(graphs, labels, None)
+                payload = _load_graph_cache(cache_path)
+                if payload is not None:
+                    try:
+                        ds_cached = cls(
+                            payload.get("graphs", []),
+                            payload.get("labels"),
+                            None,
+                        )
+                        ds_cached.validate_cached_schema(
+                            payload.get("schema"), source=cache_path
+                        )
+                        return ds_cached
+                    except Exception as exc:
+                        logger.warning(
+                            "Cached dataset %s invalid (%s); rebuilding",
+                            cache_path,
+                            exc,
+                        )
 
         df = pd.read_csv(filepath, sep=sep)
         if n_rows is not None:
@@ -721,12 +966,11 @@ class GraphDataset:
             labels_array = np.asarray(labels_raw)
             labels = labels_array[valid_indices]
 
+        dataset = cls(graphs, labels, smiles_out)
         if cache_path:
-            with open(cache_path, "wb") as f:
-                pickle.dump((graphs, labels), f)
-            logger.info("Wrote graph cache to %s", cache_path)
+            _write_graph_cache(cache_path, dataset)
 
-        return cls(graphs, labels, smiles_out)
+        return dataset
 
     @classmethod
     def from_directory(
@@ -775,7 +1019,8 @@ class GraphDataset:
                             None
                             if cache_dir is None
                             else os.path.join(
-                                cache_dir, f"{os.path.splitext(fname)[0]}_3d{int(add_3d)}"
+                                cache_dir,
+                                f"{os.path.splitext(fname)[0]}_{_cache_schema_suffix(add_3d)}",
                             )
                         )
                     ),
@@ -796,7 +1041,8 @@ class GraphDataset:
                             None
                             if cache_dir is None
                             else os.path.join(
-                                cache_dir, f"{os.path.splitext(fname)[0]}_3d{int(add_3d)}"
+                                cache_dir,
+                                f"{os.path.splitext(fname)[0]}_{_cache_schema_suffix(add_3d)}",
                             )
                         )
                     ),
@@ -826,18 +1072,103 @@ class GraphDataset:
 # ------------------ Geometry helpers (angles/dihedrals) ------------------ #
 
 
+def _stable_smiles_seed(smiles: str) -> int:
+    digest = hashlib.sha1(smiles.encode("utf-8")).hexdigest()
+    return int(digest[:8], 16)
+
+
+def _generate_conformer_coords(
+    mol: "Chem.Mol",
+    *,
+    smiles: str,
+    random_seed: Optional[int],
+    max_attempts: int = 4,
+) -> Tuple[Optional[np.ndarray], bool]:
+    if mol.GetNumAtoms() == 0:
+        return None, False
+
+    seeds: List[int] = []
+    if random_seed is not None:
+        seeds.append(int(random_seed))
+    else:
+        seeds.append(_stable_smiles_seed(smiles))
+    seeds.extend([seeds[0] + 97, seeds[0] + 193, 0xF00D])
+
+    attempts = 0
+    for seed in seeds:
+        if attempts >= max_attempts:
+            break
+        attempts += 1
+        try:
+            mol.RemoveAllConformers()
+        except Exception:
+            pass
+        params = AllChem.ETKDGv3()
+        params.useSmallRingTorsions = True
+        params.randomSeed = int(seed) & 0xFFFFFFFF
+        try:
+            rc = AllChem.EmbedMolecule(mol, params)
+        except Exception:
+            rc = -1
+        if rc != 0:
+            continue
+        optimised = False
+        try:
+            if AllChem.MMFFHasAllMoleculeParams(mol):
+                AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
+                optimised = True
+        except Exception:
+            optimised = False
+        if not optimised:
+            try:
+                AllChem.UFFOptimizeMolecule(mol, maxIters=200)
+            except Exception:
+                pass
+        try:
+            conf = mol.GetConformer()
+        except Exception:
+            continue
+        coords = np.array(
+            [list(conf.GetAtomPosition(i)) for i in range(mol.GetNumAtoms())],
+            dtype=np.float32,
+        )
+        if coords.shape[0] == mol.GetNumAtoms():
+            return coords, True
+
+    try:
+        mol.RemoveAllConformers()
+    except Exception:
+        pass
+    return None, False
+
+
 def _embed_single_conformer(mol: Chem.Mol, max_attempts: int = 2) -> bool:
     if mol.GetNumConformers() > 0:
         return True
-    p = AllChem.ETKDGv3()
-    p.useSmallRingTorsions = True
-    p.randomSeed = 0xF00D
-    for _ in range(max_attempts):
-        if AllChem.EmbedMolecule(mol, p) == 0:
-            try:
-                AllChem.UFFOptimizeMolecule(mol, maxIters=50)
-            except Exception:
-                pass
+    base_seed = 0xF00D
+    for attempt in range(max_attempts):
+        seed = base_seed + attempt * 97
+        try:
+            mol.RemoveAllConformers()
+        except Exception:
+            pass
+        params = AllChem.ETKDGv3()
+        params.useSmallRingTorsions = True
+        params.randomSeed = int(seed) & 0xFFFFFFFF
+        try:
+            rc = AllChem.EmbedMolecule(mol, params)
+        except Exception:
+            rc = -1
+        if rc != 0:
+            continue
+        try:
+            if AllChem.MMFFHasAllMoleculeParams(mol):
+                AllChem.MMFFOptimizeMolecule(mol, maxIters=100)
+            else:
+                AllChem.UFFOptimizeMolecule(mol, maxIters=100)
+        except Exception:
+            pass
+        if mol.GetNumConformers() > 0:
             return True
     return False
 
