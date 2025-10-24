@@ -47,6 +47,9 @@ _TOX21_TASKS = {
     "SR-p53",
 }
 
+stage_config: Dict[str, Any] = {}
+soft_timeout_exit_code = int(os.environ.get("LINEAR_HEAD_SOFT_TIMEOUT_EXIT", "86"))
+
 
 def _stage_outputs_dir() -> Optional[Path]:
     stage_dir = os.getenv("STAGE_OUTPUTS_DIR")
@@ -487,6 +490,9 @@ def cmd_finetune(args: argparse.Namespace) -> None:
 
     save_every = max(1, int(getattr(args, "save_every", 1)))
 
+    budget_abort = False
+    min_headroom = None
+
     for seed in seeds:
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -821,11 +827,46 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     early_stop_metric=getattr(args, "metric", "val_loss"),
                     cache_graph_embeddings=cache_embeddings,
                     enable_batch_autoscale=enable_batch_autoscale,
+                    stage_config=stage_config,
                 )
 
                 train_batches = float(metrics.get("train/batches", 0.0) or 0.0)
                 epoch_batches = float(metrics.get("train/epoch_batches", train_batches) or train_batches)
                 loader_batches = float(metrics.get("train/loader_batches", 0.0) or 0.0)
+
+                headroom_val = metrics.get("time/headroom_secs")
+                headroom_float = None
+                if headroom_val is not None:
+                    try:
+                        headroom_float = float(headroom_val)
+                        if min_headroom is None or headroom_float < min_headroom:
+                            min_headroom = headroom_float
+                    except Exception:
+                        headroom_float = None
+
+                exhausted_flag = 0.0
+                raw_exhausted = metrics.get("time/budget_exhausted")
+                try:
+                    exhausted_flag = float(raw_exhausted or 0.0)
+                except Exception:
+                    exhausted_flag = 0.0
+
+                if exhausted_flag > 0.0:
+                    budget_abort = True
+                    remaining_display = headroom_float if headroom_float is not None else float("nan")
+                    logger.warning(
+                        "[finetune] seed=%d epoch=%d stopping early: wall-clock headroom %.1fs below safety margin.",
+                        seed,
+                        epoch,
+                        remaining_display,
+                    )
+                    if wb is not None:
+                        try:
+                            wb.log({"phase": f"finetune_{seed}", "status": "budget_abort"})
+                        except Exception:
+                            pass
+                    break
+
                 if epoch == start_epoch and loader_batches > 0:
                     logger.info(
                         "[finetune] seed=%d train loader reports %d batches per epoch (max_finetune_batches=%d)",
@@ -949,6 +990,9 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                             os.path.join(seed_dir, f"ft_epoch_{epoch+1}.pt"),
                             **save_payload,
                         )
+
+            if budget_abort:
+                break
 
             # Fallback: if no best was recorded, promote last snapshot to best + head.pt
             if not wrote_best:
@@ -1148,6 +1192,19 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             for seed in seeds
         },
     }
+    if stage_config:
+        try:
+            stage_payload["stage_config"] = dict(stage_config)
+        except Exception:
+            stage_payload["stage_config"] = stage_config
+    if budget_abort:
+        stage_payload["time_budget_exhausted"] = True
+        if min_headroom is not None:
+            try:
+                stage_payload["time_budget_headroom_secs"] = float(min_headroom)
+            except Exception:
+                pass
+        stage_payload["time_budget_exit_code"] = int(soft_timeout_exit_code)
     if seed_baseline_hash:
         stage_payload["baseline_encoder_hashes"] = {
             str(k): v for k, v in seed_baseline_hash.items() if v
@@ -1188,6 +1245,17 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     stage_payload["dataset"] = dataset_summary
     stage_payload["seed_list"] = seed_list_summary
     _record_finetune_stage_outputs(stage_payload)
+
+    if budget_abort:
+        remaining_msg = (
+            f"{min_headroom:.1f}s" if isinstance(min_headroom, (int, float)) else "unknown"
+        )
+        logger.error(
+            "[finetune] exiting with code %d after wall-clock headroom dropped below safety margin (remaining=%s).",
+            soft_timeout_exit_code,
+            remaining_msg,
+        )
+        sys.exit(int(soft_timeout_exit_code))
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
