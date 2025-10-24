@@ -1265,6 +1265,7 @@ best_config_args() {
   local bestcfg_policy_default="${__ci_dir}/bestcfg_policy.yml"
   local bestcfg_policy_env="${BESTCFG_POLICY:-$bestcfg_policy_default}"
   BESTCFG_POLICY="$bestcfg_policy_env" "$py" - "$cfg" "$stage" <<'PY'
+import argparse
 import json
 import os
 import sys
@@ -1708,6 +1709,50 @@ for key in list(cfg.keys()):
     if key in keep:
         forced_keep.append(key)
 
+_app_dir = os.environ.get("APP_DIR")
+if _app_dir and _app_dir not in sys.path:
+    sys.path.insert(0, _app_dir)
+elif policy_path not in (None, "<unset>"):
+    try:
+        _policy_root = Path(policy_path).resolve().parents[2]
+    except Exception:  # pragma: no cover - defensive fallback
+        _policy_root = None
+    if _policy_root is not None:
+        _candidate_dir = str(_policy_root)
+        if _candidate_dir not in sys.path:
+            sys.path.insert(0, _candidate_dir)
+
+_subcmd_alias = {
+    "bench": "benchmark",
+    "benchmark": "benchmark",
+    "grid": "grid-search",
+    "grid_search": "grid-search",
+}
+
+_parser_sub = None
+try:
+    from scripts import train_jepa as _train_jepa
+
+    _parser = _train_jepa.build_parser()
+    _subparsers_action = next(
+        action for action in _parser._actions if isinstance(action, argparse._SubParsersAction)
+    )
+    _sub_name = _subcmd_alias.get(stage, stage)
+    _parser_sub = _subparsers_action.choices.get(_sub_name)
+except Exception as exc:  # pragma: no cover - fallback when parser import fails
+    _parser_sub = None
+    print(
+        f"[bestcfg][warn] parser introspection unavailable for stage '{stage}': {exc}",
+        file=sys.stderr,
+    )
+
+_flag_actions = {}
+if _parser_sub is not None:
+    for _action in _parser_sub._actions:
+        for _opt in getattr(_action, "option_strings", ()):  # pragma: no branch - tiny loop
+            if _opt.startswith("--"):
+                _flag_actions[_opt] = _action
+
 mapping = maps.get(stage, {})
 seen_flags = set()
 for key, flag in mapping.items():
@@ -1716,13 +1761,25 @@ for key, flag in mapping.items():
     if flag in seen_flags:
         continue
     val = cfg[key]
+    seen_flags.add(flag)
     if isinstance(val, bool):
-        print(flag)
-        seen_flags.add(flag)
-        print("1" if val else "0")
+        action = _flag_actions.get(flag)
+        accepts_value = True
+        if action is not None:
+            accepts_value = getattr(action, "nargs", None) not in (0,)
+        else:
+            # Conservative fallback: treat flags as store_true to avoid stray values
+            accepts_value = False
+
+        if accepts_value:
+            print(flag)
+            print("1" if val else "0")
+        elif val:
+            print(flag)
+        # When a store_true flag is False we intentionally emit nothing so the
+        # CLI keeps its default behaviour.
     else:
         print(flag)
-        seen_flags.add(flag)
         print(val)
 
 summary = {
