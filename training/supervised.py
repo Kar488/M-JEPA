@@ -1182,15 +1182,8 @@ def train_linear_head(
     ) -> bool:
         """Tear down existing loaders and rebuild them with safer settings."""
 
-        nonlocal (
-            pin_memory_enabled,
-            train_loader,
-            val_loader,
-            test_loader,
-            num_workers,
-            persistent_workers,
-            prefetch_factor,
-        )
+        nonlocal pin_memory_enabled, train_loader, val_loader, test_loader
+        nonlocal num_workers, persistent_workers, prefetch_factor
 
         previous_loaders = (train_loader, val_loader, test_loader)
 
