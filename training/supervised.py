@@ -30,6 +30,7 @@ from data.mdataset import GraphDataset
 from data.scaffold_split import scaffold_split_indices
 from models.encoder import GNNEncoder
 from utils.early_stopping import EarlyStopping
+from utils.dataset import SupportsTeardown
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.graph_ops import _encode_graph
 from utils.dataloader import (
@@ -1100,6 +1101,18 @@ def train_linear_head(
                     shutdown_workers()
                 except Exception:
                     logger.debug("Failed to shutdown DataLoader workers cleanly", exc_info=True)
+
+        dataset = getattr(loader, "dataset", None)
+        close_fn = None
+        if isinstance(dataset, SupportsTeardown):
+            close_fn = getattr(dataset, "close", None)
+        elif dataset is not None:
+            close_fn = getattr(dataset, "shutdown", None)
+        if callable(close_fn):
+            try:
+                close_fn()
+            except Exception:
+                logger.warning("Failed to close dataset during DataLoader shutdown", exc_info=True)
 
     def _rebuild_loaders(
         existing: Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]
