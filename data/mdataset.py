@@ -278,7 +278,14 @@ class GraphDataset:
     def __getitem__(self, idx):
         g = self.graphs[idx]
         return (g, self.labels[idx]) if self.labels is not None else g
-    
+
+    def close(self) -> None:
+        """Release cached graph data and labels to help free memory."""
+
+        self.graphs.clear()
+        self.labels = None
+        self.smiles = None
+
     def get_batch(
         self, indices: List[int]
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]: # type: ignore

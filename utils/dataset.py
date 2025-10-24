@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Optional, Protocol, runtime_checkable
 
 try:  # pragma: no cover - optional dependency
     from data.mdataset import GraphDataset  # type: ignore
@@ -9,6 +9,14 @@ try:  # pragma: no cover - optional dependency
 except Exception as e:  # pragma: no cover - import-time failure path
     GraphDataset = None  # type: ignore[assignment]
     _GRAPH_DATASET_IMPORT_ERROR = e
+
+
+@runtime_checkable
+class SupportsTeardown(Protocol):
+    """Protocol for datasets exposing an explicit resource teardown hook."""
+
+    def close(self) -> None:
+        """Release any cached readers, file handles or large buffers."""
 
 
 def _ensure_graphdataset() -> "GraphDataset":  # type: ignore

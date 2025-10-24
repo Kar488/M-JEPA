@@ -109,6 +109,7 @@ from utils.dataloader import (
     ensure_file_system_sharing_strategy,
     ensure_open_file_limit,
 )
+from utils.dataset import SupportsTeardown
 from utils.graph_ops import _encode_graph, _pool_graph_emb
 from utils.logging import maybe_init_wandb
 logger = logging.getLogger(__name__)
@@ -1071,6 +1072,34 @@ def _build_graph_dataloader(
     return DataLoader(data_source, **loader_kwargs)
 
 
+def _shutdown_loader(loader: Optional[DataLoader]) -> None:
+    """Attempt to cleanly tear down a DataLoader and its backing dataset."""
+
+    if loader is None:
+        return
+
+    iterator = getattr(loader, "_iterator", None)
+    if iterator is not None:
+        shutdown_workers = getattr(iterator, "_shutdown_workers", None)
+        if callable(shutdown_workers):
+            try:
+                shutdown_workers()
+            except Exception:
+                logger.debug("Failed to shutdown DataLoader workers cleanly", exc_info=True)
+
+    dataset = getattr(loader, "dataset", None)
+    close_fn = None
+    if isinstance(dataset, SupportsTeardown):
+        close_fn = getattr(dataset, "close", None)
+    elif dataset is not None:
+        close_fn = getattr(dataset, "shutdown", None)
+    if callable(close_fn):
+        try:
+            close_fn()
+        except Exception:
+            logger.warning("Failed to close dataset during DataLoader shutdown", exc_info=True)
+
+
 def _is_pin_memory_failure(exc: BaseException) -> bool:
     """Return ``True`` when ``exc`` came from the pin-memory worker."""
 
@@ -1738,6 +1767,8 @@ def train_jepa(
                             )
                         continue
                 raise
+            finally:
+                _shutdown_loader(dataloader)
             break
 
         pin_memory_enabled = loader_pin_memory
@@ -2244,6 +2275,8 @@ def train_contrastive(
                             )
                         continue
                 raise
+            finally:
+                _shutdown_loader(dataloader)
             break
 
         pin_memory_enabled = loader_pin_memory

@@ -89,6 +89,11 @@ class ParquetGraphDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int) -> Data:  # pragma: no cover - trivial
         return self.graphs[idx]
 
+    def close(self) -> None:
+        """Release references to loaded graphs to free memory early."""
+
+        self.graphs.clear()
+
 
 def _split_files(root: Path, split: str) -> List[Path]:
     """Find all the files that belong to one data split.
