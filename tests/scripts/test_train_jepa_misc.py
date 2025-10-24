@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 
 import pandas as pd
@@ -352,6 +353,17 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
     assert config["gnn_type"] == "edge_mpnn"
     assert config["persistent_workers"] is False
     assert config["prefetch_factor"] == 5
+    assert config["tasks"] == ["NR-AR"]
+    assert config["task_count"] == 1
+
+    summary_path = tmp_path / "reports" / "tox21_summary.json"
+    assert summary_path.is_file()
+    summary_payload = json.loads(summary_path.read_text())
+    assert summary_payload["overall_gate_passed"] in {True, False}
+    assert list(summary_payload["tasks"].keys()) == ["NR-AR"]
+
+    manifest_path = tmp_path / "reports" / "run_manifest.json"
+    assert manifest_path.is_file()
 
 
 def test_cmd_tox21_failure(tmp_path,monkeypatch):

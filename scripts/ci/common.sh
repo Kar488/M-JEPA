@@ -1102,7 +1102,7 @@ def emit(k, v):
             "gnn_types","ema_decays","add_3d_options","pretrain_batch_sizes",
             "finetune_batch_sizes","pretrain_epochs_options","finetune_epochs_options",
             "learning_rates","seeds","aug_rotate_options","aug_mask_angle_options",
-            "aug_dihedral_options","temperatures"
+            "aug_dihedral_options","temperatures","tasks"
         }
         if k in multi:
             print(key)
