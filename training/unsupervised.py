@@ -105,6 +105,7 @@ from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.ddp import DistributedSamplerList, cleanup, init_distributed, is_main_process
 from utils.dataloader import (
     autotune_worker_pool,
+    check_fd_budget,
     ensure_file_system_sharing_strategy,
     ensure_open_file_limit,
 )
@@ -1251,6 +1252,87 @@ def train_jepa(
         prefetch_budget = max(prefetch_budget, 2)
     min_fd_budget = max(4096, 1024 + 128 * max(worker_count, 1) * max(prefetch_budget, 1))
     ensure_open_file_limit(min_fd_budget)
+
+    loader_count = 1 if dataset_size > 0 else 0
+
+    def _estimate_fd_handles(workers: int, prefetch: int) -> int:
+        base = 512 + 64 * loader_count
+        if loader_count <= 0 or workers <= 0:
+            return base
+        return base + 128 * loader_count * max(workers, 1) * max(prefetch, 1)
+
+    current_workers = max(0, int(num_workers))
+    if current_workers > 0:
+        effective_prefetch = (
+            max(1, int(prefetch_factor))
+            if isinstance(prefetch_factor, (int, float))
+            else 2
+        )
+    else:
+        effective_prefetch = 0
+
+    if loader_count > 0:
+        required_handles = _estimate_fd_handles(current_workers, effective_prefetch)
+        fd_budget = check_fd_budget(required_handles)
+        available = fd_budget.available
+
+        if not fd_budget.ok and available is not None:
+            best_workers = current_workers
+            best_prefetch = effective_prefetch
+
+            def _handles_for(workers: int, prefetch: int) -> int:
+                return _estimate_fd_handles(workers, prefetch)
+
+            found = False
+            for workers_candidate in range(current_workers, -1, -1):
+                if workers_candidate <= 0:
+                    prefetch_candidates = [0]
+                else:
+                    prefetch_candidates = list(range(effective_prefetch, 0, -1))
+                for prefetch_candidate in prefetch_candidates:
+                    handles_needed = _handles_for(workers_candidate, prefetch_candidate)
+                    if handles_needed <= available:
+                        best_workers = workers_candidate
+                        best_prefetch = prefetch_candidate
+                        found = True
+                        break
+                if found:
+                    break
+
+            original_prefetch = prefetch_factor
+            if best_workers <= 0:
+                new_prefetch: Optional[int] = None
+            else:
+                new_prefetch = max(1, best_prefetch)
+
+            def _prefetch_changed() -> bool:
+                if best_workers <= 0:
+                    return original_prefetch is not None
+                if isinstance(original_prefetch, (int, float)):
+                    return int(original_prefetch) != new_prefetch
+                return new_prefetch != effective_prefetch
+
+            if best_workers != current_workers or _prefetch_changed():
+                logger.warning(
+                    "[pretrain] Limited file-descriptor budget (required=%d, available=%s, soft_limit=%s, open_files=%s); "
+                    "reducing num_workers from %d to %d and prefetch_factor from %s to %s.",
+                    required_handles,
+                    available,
+                    fd_budget.soft_limit,
+                    fd_budget.open_files,
+                    current_workers,
+                    best_workers,
+                    "None" if original_prefetch is None else int(original_prefetch),
+                    "None" if best_workers <= 0 else new_prefetch,
+                )
+
+                num_workers = best_workers
+                if num_workers <= 0:
+                    persistent_workers = False
+                    prefetch_factor = None
+                else:
+                    prefetch_factor = new_prefetch
+
     active_persistent_workers = bool(num_workers) and persistent_workers
     steps_per_epoch = max(1, math.ceil(len(dataset.graphs) / batch_size))
     total_steps = epochs * steps_per_epoch
@@ -1775,6 +1857,93 @@ def train_contrastive(
     )
     if num_workers > 0:
         ensure_file_system_sharing_strategy()
+    worker_count = int(num_workers) if num_workers else 0
+    prefetch_budget = int(prefetch_factor) if isinstance(prefetch_factor, (int, float)) else 0
+    if worker_count > 0:
+        prefetch_budget = max(prefetch_budget, 2)
+    min_fd_budget = max(4096, 1024 + 128 * max(worker_count, 1) * max(prefetch_budget, 1))
+    ensure_open_file_limit(min_fd_budget)
+
+    loader_count = 1 if dataset_size > 0 else 0
+
+    def _estimate_fd_handles(workers: int, prefetch: int) -> int:
+        base = 512 + 64 * loader_count
+        if loader_count <= 0 or workers <= 0:
+            return base
+        return base + 128 * loader_count * max(workers, 1) * max(prefetch, 1)
+
+    current_workers = max(0, int(num_workers))
+    if current_workers > 0:
+        effective_prefetch = (
+            max(1, int(prefetch_factor))
+            if isinstance(prefetch_factor, (int, float))
+            else 2
+        )
+    else:
+        effective_prefetch = 0
+
+    if loader_count > 0:
+        required_handles = _estimate_fd_handles(current_workers, effective_prefetch)
+        fd_budget = check_fd_budget(required_handles)
+        available = fd_budget.available
+
+        if not fd_budget.ok and available is not None:
+            best_workers = current_workers
+            best_prefetch = effective_prefetch
+
+            def _handles_for(workers: int, prefetch: int) -> int:
+                return _estimate_fd_handles(workers, prefetch)
+
+            found = False
+            for workers_candidate in range(current_workers, -1, -1):
+                if workers_candidate <= 0:
+                    prefetch_candidates = [0]
+                else:
+                    prefetch_candidates = list(range(effective_prefetch, 0, -1))
+                for prefetch_candidate in prefetch_candidates:
+                    handles_needed = _handles_for(workers_candidate, prefetch_candidate)
+                    if handles_needed <= available:
+                        best_workers = workers_candidate
+                        best_prefetch = prefetch_candidate
+                        found = True
+                        break
+                if found:
+                    break
+
+            original_prefetch = prefetch_factor
+            if best_workers <= 0:
+                new_prefetch: Optional[int] = None
+            else:
+                new_prefetch = max(1, best_prefetch)
+
+            def _prefetch_changed() -> bool:
+                if best_workers <= 0:
+                    return original_prefetch is not None
+                if isinstance(original_prefetch, (int, float)):
+                    return int(original_prefetch) != new_prefetch
+                return new_prefetch != effective_prefetch
+
+            if best_workers != current_workers or _prefetch_changed():
+                logger.warning(
+                    "[contrastive] Limited file-descriptor budget (required=%d, available=%s, soft_limit=%s, open_files=%s); "
+                    "reducing num_workers from %d to %d and prefetch_factor from %s to %s.",
+                    required_handles,
+                    available,
+                    fd_budget.soft_limit,
+                    fd_budget.open_files,
+                    current_workers,
+                    best_workers,
+                    "None" if original_prefetch is None else int(original_prefetch),
+                    "None" if best_workers <= 0 else new_prefetch,
+                )
+
+                num_workers = best_workers
+                if num_workers <= 0:
+                    persistent_workers = False
+                    prefetch_factor = None
+                else:
+                    prefetch_factor = new_prefetch
+
     active_persistent_workers = bool(num_workers) and persistent_workers
     if distributed:
         encoder = nn.parallel.DistributedDataParallel(
