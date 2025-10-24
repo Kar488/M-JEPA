@@ -1051,12 +1051,72 @@ def train_linear_head(
                 loader_kwargs["multiprocessing_context"] = spawn_ctx
         return DataLoader(list(indices), **loader_kwargs)
 
-    def _refresh_loaders() -> Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]:
+    train_loader: Optional[DataLoader] = None
+    val_loader: Optional[DataLoader] = None
+    test_loader: Optional[DataLoader] = None
+
+    def _remove_loader_iterator(loader: Optional[DataLoader]) -> None:
+        if loader is None:
+            return
+        if hasattr(loader, "_iterator"):
+            try:
+                delattr(loader, "_iterator")
+            except Exception:
+                logger.debug("Unable to delete DataLoader iterator state", exc_info=True)
+
+    def _reset_mp_loader_iters(loaders: Iterable[Optional[DataLoader]]) -> None:
+        dataloader_mod = getattr(torch.utils.data, "dataloader", None)
+        mp_iter_cls = (
+            getattr(dataloader_mod, "_MultiProcessingDataLoaderIter", None)
+            if dataloader_mod is not None
+            else None
+        )
+        reset_fn = getattr(mp_iter_cls, "_reset", None) if mp_iter_cls is not None else None
+        if not callable(reset_fn):
+            return
+        for loader in loaders:
+            if loader is None:
+                continue
+            try:
+                reset_fn(loader)
+            except TypeError:
+                try:
+                    reset_fn(loader, False)
+                except Exception:
+                    logger.debug("Failed to reset DataLoader workers", exc_info=True)
+            except Exception:
+                logger.debug("Failed to reset DataLoader workers", exc_info=True)
+
+    def _shutdown_loader(loader: Optional[DataLoader]) -> None:
+        """Close worker pools associated with a DataLoader, if any."""
+        if loader is None:
+            return
+
+        iterator = getattr(loader, "_iterator", None)
+        if iterator is not None:
+            shutdown_workers = getattr(iterator, "_shutdown_workers", None)
+            if callable(shutdown_workers):
+                try:
+                    shutdown_workers()
+                except Exception:
+                    logger.debug("Failed to shutdown DataLoader workers cleanly", exc_info=True)
+
+    def _rebuild_loaders(
+        existing: Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]
+    ) -> Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]:
+        for loader in existing:
+            _shutdown_loader(loader)
+        for loader in existing:
+            _remove_loader_iterator(loader)
+        _reset_mp_loader_iters(existing)
         return (
             _build_loader(train_idx_rank, shuffle=True),
             _build_loader(val_idx, shuffle=False),
             _build_loader(test_idx, shuffle=False),
         )
+
+    def _refresh_loaders() -> Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]:
+        return _rebuild_loaders((train_loader, val_loader, test_loader))
 
     train_loader, val_loader, test_loader = _refresh_loaders()
     planned_train_batches = 0
@@ -1101,25 +1161,6 @@ def train_linear_head(
 
     embedding_cache: Dict[int, torch.Tensor] = {}
 
-    def _shutdown_loader(loader: Optional[DataLoader]) -> None:
-        """Close worker pools associated with a DataLoader, if any."""
-        if loader is None:
-            return
-
-        iterator = getattr(loader, "_iterator", None)
-        if iterator is not None:
-            shutdown_workers = getattr(iterator, "_shutdown_workers", None)
-            if callable(shutdown_workers):
-                try:
-                    shutdown_workers()
-                except Exception:
-                    logger.debug("Failed to shutdown DataLoader workers cleanly", exc_info=True)
-
-        try:
-            setattr(loader, "_iterator", None)
-        except Exception:
-            logger.debug("Unable to reset DataLoader iterator state", exc_info=True)
-
     def _handle_pin_memory_failure(err: BaseException) -> bool:
         nonlocal pin_memory_enabled, train_loader, val_loader, test_loader, num_workers, persistent_workers
 
@@ -1132,20 +1173,14 @@ def train_linear_head(
             err,
         )
 
-        _shutdown_loader(train_loader)
-        _shutdown_loader(val_loader)
-        _shutdown_loader(test_loader)
-
-        train_loader = None
-        val_loader = None
-        test_loader = None
+        previous_loaders = (train_loader, val_loader, test_loader)
 
         pin_memory_enabled = False
         cache_state["enabled"] = False
         num_workers = 0
         persistent_workers = False
         embedding_cache.clear()
-        train_loader, val_loader, test_loader = _refresh_loaders()
+        train_loader, val_loader, test_loader = _rebuild_loaders(previous_loaders)
         return True
 
     def _should_retry_loader_error(err: BaseException) -> bool:
