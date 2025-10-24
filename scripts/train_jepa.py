@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import sys
 import time
@@ -244,9 +245,13 @@ except Exception:
     train_contrastive = None  # type: ignore[assignment]
 
 try:
-    from training.supervised import train_linear_head  # type: ignore[assignment]
+    from training.supervised import (  # type: ignore[assignment]
+        train_linear_head,
+        set_stage_config as _set_linear_stage_config,
+    )
 except Exception:
     train_linear_head = None  # type: ignore[assignment]
+    _set_linear_stage_config = None
 
 try:
     from experiments.case_study import run_tox21_case_study  # type: ignore[assignment]
@@ -396,6 +401,90 @@ def load_config(config_path: str) -> dict:
 
 # Load defaults eagerly.  These are used as defaults for CLI arguments.
 CONFIG = load_config(Path(__file__).with_name("default.yaml"))
+SOFT_TIMEOUT_EXIT_CODE = int(os.environ.get("LINEAR_HEAD_SOFT_TIMEOUT_EXIT", "86"))
+
+
+def _coerce_stage_seconds(raw: Any) -> Optional[float]:
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, (int, float)):
+            value = float(raw)
+        else:
+            text = str(raw).strip()
+            if not text:
+                return None
+            multiplier = 1.0
+            lowered = text.lower()
+            if lowered.endswith("m") and lowered[:-1]:
+                multiplier = 60.0
+                lowered = lowered[:-1]
+            elif lowered.endswith("s"):
+                lowered = lowered[:-1]
+            value = float(lowered)
+            value *= multiplier
+    except Exception:
+        return None
+    if value <= 0 or not math.isfinite(value):
+        return None
+    return value
+
+
+def _collect_stage_config() -> Dict[str, Any]:
+    env = os.environ
+
+    def _first_seconds(*names: str) -> Optional[float]:
+        for name in names:
+            raw = env.get(name)
+            if raw is None or str(raw).strip() == "":
+                continue
+            value = _coerce_stage_seconds(raw)
+            if value is not None:
+                return value
+        return None
+
+    cfg: Dict[str, Any] = {}
+
+    timeout_secs = _first_seconds("STAGE_TIMEOUT_SECS", "STAGE_WALL_SECS", "ORCHESTRATOR_TIMEOUT_SECS")
+    if timeout_secs is None:
+        timeout_mins = _first_seconds("STAGE_TIMEOUT_MINS", "HARD_WALL_MINS")
+        if timeout_mins is not None:
+            timeout_secs = timeout_mins * 60.0
+    if timeout_secs is not None:
+        cfg["timeout_secs"] = timeout_secs
+
+    grace_secs = _first_seconds("STAGE_GRACE_SECS", "ORCHESTRATOR_GRACE_SECS", "KILL_AFTER_SECS")
+    if grace_secs is not None:
+        cfg["grace_secs"] = grace_secs
+
+    heartbeat_secs = _first_seconds("STAGE_HEARTBEAT_SECS", "ORCHESTRATOR_HEARTBEAT_SECS", "PIPELINE_HEARTBEAT_SECS")
+    if heartbeat_secs is not None:
+        cfg["heartbeat_secs"] = heartbeat_secs
+
+    heartbeat_path = next(
+        (env.get(name) for name in ("STAGE_HEARTBEAT_PATH", "PIPELINE_HEARTBEAT_PATH") if env.get(name)),
+        None,
+    )
+    if heartbeat_path:
+        cfg["heartbeat_path"] = heartbeat_path
+
+    hard_wall_mins = env.get("HARD_WALL_MINS")
+    if hard_wall_mins is not None and str(hard_wall_mins).strip() != "":
+        try:
+            cfg["hard_wall_mins"] = float(hard_wall_mins)
+        except Exception:
+            pass
+
+    return cfg
+
+
+STAGE_CONFIG = _collect_stage_config()
+if _set_linear_stage_config is not None:
+    try:
+        _set_linear_stage_config(STAGE_CONFIG)
+    except Exception:
+        logger.debug("Failed to propagate stage config to training.supervised", exc_info=True)
+
 _aug_raw = CONFIG.get("pretrain", {}).get("augmentations", {}) or {}
 _aug_raw = {
     # accept either style from YAML
@@ -654,6 +743,8 @@ class CommandContext:
     iter_augmentation_options: Any
     AugmentationConfig: Any
     build_linear_head: Any
+    stage_config: Dict[str, Any]
+    soft_timeout_exit_code: int
 
 
 CMD_CONTEXT = CommandContext(
@@ -685,6 +776,8 @@ CMD_CONTEXT = CommandContext(
     iter_augmentation_options=iter_augmentation_options,
     AugmentationConfig=AugmentationConfig,
     build_linear_head=build_linear_head,
+    stage_config=STAGE_CONFIG,
+    soft_timeout_exit_code=SOFT_TIMEOUT_EXIT_CODE,
 )
 
 # ---------------------------------------------------------------------------

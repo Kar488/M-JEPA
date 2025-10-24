@@ -15,7 +15,7 @@ import math
 import random
 import time as _time
 from types import SimpleNamespace
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -42,7 +42,40 @@ from utils.dataloader import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["stratified_split", "train_linear_head"]
+__all__ = ["stratified_split", "train_linear_head", "set_stage_config", "get_stage_config"]
+
+
+_STAGE_CONFIG: Dict[str, Any] = {}
+
+
+def set_stage_config(config: Optional[Dict[str, Any]]) -> None:
+    """Register orchestrator-provided stage configuration for wall-clock guards."""
+
+    global _STAGE_CONFIG
+
+    if not config:
+        _STAGE_CONFIG = {}
+        return
+
+    sanitized: Dict[str, Any] = {}
+    for key, value in config.items():
+        if value is None or isinstance(value, (int, float, str, bool)):
+            sanitized[key] = value
+            continue
+        try:
+            sanitized[key] = float(value)
+        except Exception:
+            try:
+                sanitized[key] = str(value)
+            except Exception:
+                continue
+    _STAGE_CONFIG = sanitized
+
+
+def get_stage_config() -> Dict[str, Any]:
+    """Return a shallow copy of the active stage configuration."""
+
+    return dict(_STAGE_CONFIG)
 
 
 def _resolve_cuda_spawn_context(device_type: str):
@@ -711,6 +744,17 @@ def train_linear_head(
 
     distributed = devices > 1 and init_distributed()
     device_t = torch.device(device)
+
+    stage_config_local = unused.pop("stage_config", None)
+    if stage_config_local is None:
+        stage_config_local = get_stage_config()
+    else:
+        try:
+            merged = get_stage_config()
+            merged.update(dict(stage_config_local))
+            stage_config_local = merged
+        except Exception:
+            stage_config_local = get_stage_config()
     # unify to encoder's device in case 'device' arg and model diverge
     enc_param = next(encoder.parameters(), None)
     if enc_param is not None:
@@ -1159,8 +1203,145 @@ def train_linear_head(
 
     _start_wall = _time.perf_counter()
 
+    def _coerce_positive_seconds(raw: Any) -> Optional[float]:
+        if raw is None:
+            return None
+        try:
+            if isinstance(raw, (int, float)):
+                value = float(raw)
+            else:
+                text = str(raw).strip()
+                if not text:
+                    return None
+                multiplier = 1.0
+                lowered = text.lower()
+                if lowered.endswith("m") and lowered[:-1].strip().replace(".", "", 1).lstrip("-+").isdigit():
+                    multiplier = 60.0
+                    text = lowered[:-1]
+                elif lowered.endswith("s"):
+                    text = lowered[:-1]
+                value = float(text)
+                value *= multiplier
+        except Exception:
+            return None
+        if not math.isfinite(value) or value <= 0:
+            return None
+        return value
+
+    def _cfg_seconds(*names: str) -> Optional[float]:
+        for name in names:
+            if name not in stage_config_local:
+                continue
+            raw_value = stage_config_local.get(name)
+            value = _coerce_positive_seconds(raw_value)
+            if value is None:
+                continue
+            lowered = name.lower()
+            if lowered.endswith("mins") or lowered.endswith("minutes") or lowered.endswith("_min"):
+                value *= 60.0
+            return value
+        return None
+
+    _explicit_budget_secs = float(time_budget_mins) * 60.0 if time_budget_mins and time_budget_mins > 0 else None
+    _stage_budget_override = _cfg_seconds("time_budget_secs", "budget_secs", "stage_budget_secs")
+    _orchestrator_timeout = _cfg_seconds("timeout_secs", "soft_timeout_secs", "wall_clock_secs", "orchestrator_timeout_secs")
+
+    _effective_budget_secs = _explicit_budget_secs
+    for candidate in (_stage_budget_override, _orchestrator_timeout):
+        if candidate is None:
+            continue
+        if _effective_budget_secs is None or candidate < _effective_budget_secs:
+            _effective_budget_secs = candidate
+
+    _heartbeat_secs = _cfg_seconds("heartbeat_secs", "heartbeat_interval_secs", "orchestrator_heartbeat_secs")
+    _grace_secs = _cfg_seconds("grace_secs", "grace_period_secs", "kill_after_secs", "grace_seconds")
+
+    _log_interval_secs = _cfg_seconds("headroom_log_interval_secs")
+    if _log_interval_secs is None:
+        base_interval = _heartbeat_secs if _heartbeat_secs is not None else 0.0
+        _log_interval_secs = max(60.0, base_interval if base_interval > 0 else 60.0)
+    else:
+        _log_interval_secs = max(1.0, _log_interval_secs)
+
+    _safety_margin_secs = _cfg_seconds("safety_margin_secs", "budget_safety_margin_secs")
+    if _safety_margin_secs is None:
+        margin_candidates = [
+            candidate
+            for candidate in (
+                (_heartbeat_secs * 2.0) if _heartbeat_secs is not None else None,
+                _grace_secs,
+                (_effective_budget_secs * 0.05) if _effective_budget_secs is not None else None,
+                120.0,
+            )
+            if candidate is not None and candidate > 0
+        ]
+        _safety_margin_secs = max(margin_candidates) if margin_candidates else 120.0
+
+    if _effective_budget_secs is not None and _safety_margin_secs >= _effective_budget_secs:
+        _safety_margin_secs = max(min(_effective_budget_secs * 0.5, _effective_budget_secs - 1.0), 0.0)
+
+    _budget_remaining_secs: Optional[float] = None
+    _headroom_triggered = False
+    _headroom_log_bucket: Optional[int] = None
+
+    if _effective_budget_secs is not None:
+        def _fmt(value: Optional[float]) -> str:
+            return f"{value:.1f}s" if value is not None else "unset"
+
+        logger.info(
+            "[finetune] wall-clock budget configured: effective=%s (time_budget=%s, stage_override=%s, orchestrator=%s)"
+            " safety_margin=%s heartbeat=%s log_interval=%s",
+            _fmt(_effective_budget_secs),
+            _fmt(_explicit_budget_secs),
+            _fmt(_stage_budget_override),
+            _fmt(_orchestrator_timeout),
+            _fmt(_safety_margin_secs),
+            _fmt(_heartbeat_secs),
+            _fmt(_log_interval_secs),
+        )
+        if _log_interval_secs > 0:
+            _headroom_log_bucket = int(math.ceil(_effective_budget_secs / _log_interval_secs))
+
+    def _log_headroom(remaining: float) -> None:
+        nonlocal _headroom_log_bucket
+        if _effective_budget_secs is None or _log_interval_secs <= 0:
+            return
+        remaining = max(0.0, remaining)
+        bucket = int(max(0, math.floor(remaining / _log_interval_secs)))
+        if _headroom_log_bucket is None or bucket < _headroom_log_bucket:
+            logger.info(
+                "[finetune] remaining wall-clock headroom %.1fs (effective %.1fs, safety margin %.1fs)",
+                remaining,
+                _effective_budget_secs,
+                _safety_margin_secs,
+            )
+            _headroom_log_bucket = bucket
+
     def _time_left() -> bool:
-        return (time_budget_mins <= 0) or ((_time.perf_counter() - _start_wall) < time_budget_mins * 60)
+        nonlocal _budget_remaining_secs, _headroom_triggered
+        if _effective_budget_secs is None:
+            return True
+        elapsed = _time.perf_counter() - _start_wall
+        remaining = _effective_budget_secs - elapsed
+        _budget_remaining_secs = remaining
+        if remaining <= 0:
+            logger.info(
+                "[finetune] time budget exhausted (elapsed=%.1fs, budget=%.1fs); stopping linear-head training.",
+                elapsed,
+                _effective_budget_secs,
+            )
+            _headroom_triggered = True
+            return False
+        _log_headroom(remaining)
+        if remaining <= _safety_margin_secs:
+            logger.warning(
+                "[finetune] remaining headroom %.1fs below safety margin %.1fs; stopping early to flush outputs.",
+                remaining,
+                _safety_margin_secs,
+            )
+            _headroom_triggered = True
+            return False
+        return True
 
     import contextlib
     use_amp = bf16 and device_t.type == "cuda"
@@ -1565,6 +1746,12 @@ def train_linear_head(
         metrics["train/batches"] = float(total_batches_done)
         metrics["train/loader_batches"] = float(planned_train_batches)
         metrics["train/epoch_batches"] = float(last_epoch_batches)
+
+    if _effective_budget_secs is not None:
+        metrics.setdefault("time/budget_secs", float(_effective_budget_secs))
+        if _budget_remaining_secs is not None:
+            metrics.setdefault("time/headroom_secs", max(float(_budget_remaining_secs), 0.0))
+        metrics.setdefault("time/budget_exhausted", float(1.0 if _headroom_triggered else 0.0))
 
     if distributed:
         cleanup()

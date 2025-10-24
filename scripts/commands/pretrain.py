@@ -21,6 +21,8 @@ except Exception:  # pragma: no cover - helper optional in minimal installs
 
 from . import log_effective_gnn
 
+stage_config: Dict[str, Any] = {}
+
 
 def _safe_float(value: Any) -> Optional[float]:
     try:
@@ -724,6 +726,11 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 stage_payload["contrastive_checkpoint"] = os.path.abspath(cont_path)
             if manifest_metric is not None:
                 stage_payload["validation_metric"] = manifest_metric
+            if stage_config:
+                try:
+                    stage_payload["stage_config"] = dict(stage_config)
+                except Exception:
+                    stage_payload["stage_config"] = stage_config
             _record_stage_outputs(stage_payload)
         except Exception:
             logger.exception("Failed to update encoder manifest")

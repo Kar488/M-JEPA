@@ -11,6 +11,8 @@ source "$(dirname "$0")/stage.sh"
 
 ci_print_env_diag
 
+: "${LINEAR_HEAD_SOFT_TIMEOUT_EXIT:=86}"
+
 if [[ -n "${BESTCFG_SKIP:-}" ]]; then
   BESTCFG_SKIP="${BESTCFG_SKIP} max_pretrain_batches max_finetune_batches"
 else
@@ -117,6 +119,13 @@ export STAGE_OUTPUTS_DIR="${FINETUNE_DIR}/stage-outputs"
 mkdir -p "$STAGE_OUTPUTS_DIR"
 
 #ensure the parm matches train_jepa_ci.yml
-run_stage finetune
+if ! run_stage finetune; then
+  rc=$?
+  if [[ $rc -eq ${LINEAR_HEAD_SOFT_TIMEOUT_EXIT:-86} ]]; then
+    echo "::warning::[finetune] linear-head training exited early after exhausting wall-clock headroom (rc=${rc})." >&2
+    echo "[finetune] Marking stage as retryable. Rerun scripts/ci/run-finetune.sh once additional time budget is available." >&2
+  fi
+  exit "$rc"
+fi
 
 unset BESTCFG_NO_EPOCHS                     # avoid leaking to other stages
