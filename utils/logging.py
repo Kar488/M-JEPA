@@ -64,6 +64,7 @@ def maybe_init_wandb(
     tags: Optional[Sequence[str]] = None,
     api_key: Optional[str] = None,
     *,
+    entity: Optional[str] = None,         # optional
     group: Optional[str] = None,          # optional
     job_type: Optional[str] = None,       # optional
     settings: Optional["wandb.Settings"] = None,  # optional passthrough
@@ -122,6 +123,7 @@ def maybe_init_wandb(
         if not initialise_run:
             return wandb
         if run is None:
+            entity_kw = entity if entity is not None else env.get("WANDB_ENTITY")
             kw = dict(
                 id   = env.get("WANDB_RUN_ID"),         # same id reused across stages
                 resume   = env.get("WANDB_RESUME", "allow"),# allow/auto/never/… (allow is safe)
@@ -131,7 +133,7 @@ def maybe_init_wandb(
                 dir  = env.get("WANDB_DIR"),             # e.g., /data/mjepa/wandb
                 mode     = env.get("WANDB_MODE"),            # online/offline/disabled
                 project  = env.get("WANDB_PROJECT", project),
-                entity   = env.get("WANDB_ENTITY"),
+                entity   = entity_kw,
                 config=config or {},
                 tags=list(tags) if tags else None,
                 reinit=True,
