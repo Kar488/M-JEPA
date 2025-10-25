@@ -196,7 +196,7 @@ def test_static_artifact_run_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeRun:
         def __init__(self) -> None:
             self.logged: list[Any] = []
-            self.entity = "entity"
+            self.entity = "explicit-entity"
             self.project = "project"
 
         def log_artifact(self, artifact: Any) -> Any:
@@ -231,10 +231,13 @@ def test_static_artifact_run_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
 
     fake_wandb = FakeWandb()
 
+    recorded_entities: list[Any] = []
+
     def fake_maybe_init(
         enable: bool,
         *,
         project: str,
+        entity: Any = None,
         tags: Any | None = None,
         job_type: str | None = None,
         config: dict[str, Any] | None = None,
@@ -245,6 +248,7 @@ def test_static_artifact_run_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
         if initialise_run and fake_wandb.run is None:
             fake_wandb.run = FakeRun()
             fake_wandb.started += 1
+        recorded_entities.append(entity)
         return fake_wandb
 
     monkeypatch.setattr(build, "maybe_init_wandb", fake_maybe_init)
@@ -252,7 +256,7 @@ def test_static_artifact_run_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
 
     url = build._upload_static_report_artifact(  # pylint: disable=protected-access
         api=types.SimpleNamespace(),
-        entity=None,
+        entity="explicit-entity",
         project="project",
         assets_by_section=assets,
         base_url="https://wandb.test",
@@ -264,6 +268,7 @@ def test_static_artifact_run_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     assert fake_wandb.started == 1
     assert fake_wandb.finished == 1
     assert fake_wandb.run is None
+    assert recorded_entities == ["explicit-entity", "explicit-entity"]
 
 
 def test_ensure_schema_refresh_forces_regeneration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

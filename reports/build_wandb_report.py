@@ -568,6 +568,7 @@ def _log_static_report_artifact_via_run(
     wandb_module = maybe_init_wandb(
         True,
         project=project,
+        entity=entity,
         tags=tags,
         job_type="report-static",
         config=config,
@@ -583,6 +584,7 @@ def _log_static_report_artifact_via_run(
     wandb_module = maybe_init_wandb(
         True,
         project=project,
+        entity=entity,
         tags=tags,
         job_type="report-static",
         config=config,

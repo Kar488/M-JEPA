@@ -18,16 +18,19 @@ def test_maybe_init_wandb_login_called(monkeypatch):
         calls['login'] = key
 
     def init(*args, **kwargs):
-        calls['init'] = True
+        calls['init'] = kwargs
 
     fake = types.SimpleNamespace(login=login, init=init)
     monkeypatch.setitem(sys.modules, 'wandb', fake)
 
-    result = maybe_init_wandb(True, api_key='token')
+    monkeypatch.setenv('WANDB_ENTITY', 'env-entity')
+
+    result = maybe_init_wandb(True, api_key='token', entity='explicit-entity')
 
     assert result is fake
     assert calls['login'] == 'token'
-    assert calls['init'] is True
+    assert 'init' in calls
+    assert calls['init']['entity'] == 'explicit-entity'
 
 def test_maybe_init_wandb_real():
     api_key = os.getenv("WANDB_API_KEY")
