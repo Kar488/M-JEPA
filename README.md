@@ -126,6 +126,10 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
         (e.g. outputs/encoder.pt) and is loaded directly in the finetune, benchmark and case‑study commands.
         Those later stages don’t rebuild the encoder; they just attach a linear head or evaluate the already‑trained model.
         Because of that, you don’t need to pass the same flags again to finetune, benchmark or tox21. The current workflow does exactly this:
+      - The Tox21 case study separates the JEPA pretraining learning rate from the downstream probe. Use
+        `--pretrain-lr` to tune pretraining without perturbing the linear head. When running with
+        `--evaluation-mode fine_tuned` the command automatically enables full encoder fine-tuning when no
+        checkpoint is supplied.
       - CI stages share a canonical pretrain experiment id recorded in ``/data/mjepa/experiments/pretrain_state.json``.
         Downstream phases (fine‑tune, tox21, reporting) read that file to discover the encoder checkpoint, manifest, and
         ``tox21_gate.env`` so artifact collection does not rely on timestamp guesses.

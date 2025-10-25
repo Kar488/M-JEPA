@@ -1161,6 +1161,13 @@ def build_parser() -> argparse.ArgumentParser:
     tox.add_argument("--tox21-dir", dest="tox21_dir", type=str, required=False, default=None, help="Directory of Tox21 outputs"); 
     tox.add_argument("--learning-rate", dest="lr", type=float, default=1e-3)
     tox.add_argument(
+        "--pretrain-lr",
+        dest="pretrain_lr",
+        type=float,
+        default=case_cfg.get("pretrain_lr", 1e-4),
+        help="Learning rate used during the JEPA pretraining phase of the case study",
+    )
+    tox.add_argument(
         "--head-lr",
         dest="head_lr",
         type=float,

@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 import os
+import random
 import shutil
 import sys
 from pathlib import Path
@@ -25,8 +26,10 @@ from . import log_effective_gnn
 torch.multiprocessing.set_sharing_strategy("file_system")
 
 from data.mdataset import GraphData
+from data.scaffold_split import scaffold_split_indices
 from utils.graph_ops import _encode_graph
 from utils.pooling import global_mean_pool
+from training.supervised import stratified_split
 
 logger = logging.getLogger(__name__)
 
@@ -399,6 +402,65 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     autoscale_env = str(os.getenv("BATCH_AUTOSCALE", "1")).strip().lower()
     enable_batch_autoscale = autoscale_env not in {"0", "false", "no", "off"}
 
+    def _prepare_split_for_seed(seed_value: int) -> Dict[str, List[int]]:
+        if dataset_size <= 0:
+            return {}
+
+        total = dataset_size
+        indices = list(range(total))
+
+        smiles_attr = getattr(labeled, "smiles", None)
+        if use_scaffold_flag and smiles_attr is not None:
+            try:
+                train_idx_np, val_idx_np, test_idx_np = scaffold_split_indices(
+                    list(smiles_attr), seed=seed_value
+                )
+                return {
+                    "train_indices": train_idx_np.astype(int).tolist(),
+                    "val_indices": val_idx_np.astype(int).tolist(),
+                    "test_indices": test_idx_np.astype(int).tolist(),
+                }
+            except Exception:
+                logger.debug(
+                    "Scaffold split unavailable for seed %d; falling back to stratified/random split.",
+                    seed_value,
+                    exc_info=True,
+                )
+
+        labels_attr = getattr(labeled, "labels", None)
+        if task_type_norm == "classification" and labels_attr is not None:
+            labels_arr = np.asarray(labels_attr)
+            if labels_arr.ndim > 1:
+                if labels_arr.shape[1] == 1:
+                    labels_arr = labels_arr[:, 0]
+                else:
+                    labels_arr = None
+            if labels_arr is not None and labels_arr.ndim == 1 and labels_arr.size == total:
+                state = random.getstate()
+                try:
+                    random.seed(seed_value)
+                    train_idx, val_idx, test_idx = stratified_split(
+                        indices, labels_arr, train_frac=0.8, val_frac=0.1
+                    )
+                finally:
+                    random.setstate(state)
+                return {
+                    "train_indices": list(train_idx),
+                    "val_indices": list(val_idx),
+                    "test_indices": list(test_idx),
+                }
+
+        rng = np.random.RandomState(seed_value)
+        shuffled = indices[:]
+        rng.shuffle(shuffled)
+        train_end = int(0.8 * total)
+        val_end = int(0.9 * total)
+        return {
+            "train_indices": shuffled[:train_end],
+            "val_indices": shuffled[train_end:val_end],
+            "test_indices": shuffled[val_end:],
+        }
+
     encoder_cfg_template = {
         "gnn_type": args.gnn_type,
         "hidden_dim": int(args.hidden_dim) if args.hidden_dim is not None else None,
@@ -496,10 +558,24 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     for seed in seeds:
         torch.manual_seed(seed)
         np.random.seed(seed)
+        random.seed(seed)
         try:
             torch.cuda.manual_seed_all(seed)  # okay if no CUDA; harmless on CPU
         except Exception:
             pass
+
+        split_indices = _prepare_split_for_seed(seed)
+        train_split = tuple(split_indices.get("train_indices", []))
+        val_split = tuple(split_indices.get("val_indices", []))
+        test_split = tuple(split_indices.get("test_indices", []))
+        if split_indices:
+            logger.info(
+                "[finetune] seed=%d using fixed dataset split (train=%d val=%d test=%d)",
+                seed,
+                len(train_split),
+                len(val_split),
+                len(test_split),
+            )
 
         encoder = build_encoder(
             gnn_type=args.gnn_type,
@@ -836,6 +912,9 @@ def cmd_finetune(args: argparse.Namespace) -> None:
                     cache_graph_embeddings=cache_embeddings,
                     enable_batch_autoscale=enable_batch_autoscale,
                     stage_config=stage_config,
+                    train_indices=train_split,
+                    val_indices=val_split,
+                    test_indices=test_split,
                 )
 
                 train_batches = float(metrics.get("train/batches", 0.0) or 0.0)
