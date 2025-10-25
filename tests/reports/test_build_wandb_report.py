@@ -271,6 +271,93 @@ def test_static_artifact_run_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     assert recorded_entities == ["explicit-entity", "explicit-entity"]
 
 
+def test_static_artifact_resets_mismatched_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeRun:
+        def __init__(self, tracker: "FakeWandb", entity: str) -> None:
+            self._tracker = tracker
+            self.logged: list[Any] = []
+            self.entity = entity
+            self.project = "project"
+
+        def log_artifact(self, artifact: Any) -> Any:
+            artifact.url = "https://wandb.test/run-artifact"
+            self.logged.append(artifact)
+            self._tracker.logged_entities.append(self.entity)
+            return artifact
+
+    class FakeArtifact:
+        def __init__(self, name: str, *, type: str, description: str, metadata: dict[str, Any]) -> None:  # noqa: A002
+            self.name = name
+            self.type = type
+            self.description = description
+            self.metadata = metadata
+            self.files: list[tuple[str, str]] = []
+            self.url: Optional[str] = None
+
+        def add_file(self, path: str, name: Optional[str] = None) -> None:
+            self.files.append((path, name or Path(path).name))
+
+    class FakeWandb:
+        def __init__(self) -> None:
+            self.run: Optional[FakeRun] = None
+            self.started = 0
+            self.finished = 0
+            self.logged_entities: list[str] = []
+
+        def spawn_run(self, entity: str) -> FakeRun:
+            return FakeRun(self, entity)
+
+        def Artifact(self, name: str, *, type: str, description: str, metadata: dict[str, Any]) -> FakeArtifact:  # noqa: A003
+            return FakeArtifact(name, type=type, description=description, metadata=metadata)
+
+        def finish(self) -> None:
+            self.finished += 1
+            self.run = None
+
+    fake_wandb = FakeWandb()
+    fake_wandb.run = fake_wandb.spawn_run("previous-entity")
+
+    recorded_entities: list[Any] = []
+
+    def fake_maybe_init(
+        enable: bool,
+        *,
+        project: str,
+        entity: Any = None,
+        tags: Any | None = None,
+        job_type: str | None = None,
+        config: dict[str, Any] | None = None,
+        initialise_run: bool = True,
+        **_: Any,
+    ) -> Any:
+        assert enable is True
+        if initialise_run and fake_wandb.run is None:
+            fake_wandb.run = fake_wandb.spawn_run(str(entity))
+            fake_wandb.started += 1
+        recorded_entities.append(entity)
+        return fake_wandb
+
+    monkeypatch.setattr(build, "maybe_init_wandb", fake_maybe_init)
+    assets = _empty_assets()
+
+    url = build._upload_static_report_artifact(  # pylint: disable=protected-access
+        api=types.SimpleNamespace(),
+        entity="explicit-entity",
+        project="project",
+        assets_by_section=assets,
+        base_url="https://wandb.test",
+        generated_at=datetime.utcnow(),
+        partial_fetch=False,
+    )
+
+    assert url == "https://wandb.test/run-artifact"
+    assert fake_wandb.started == 1
+    assert fake_wandb.finished == 2
+    assert fake_wandb.run is None
+    assert fake_wandb.logged_entities == ["explicit-entity"]
+    assert recorded_entities == ["explicit-entity", "explicit-entity"]
+
+
 def test_ensure_schema_refresh_forces_regeneration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: list[str] = []
 

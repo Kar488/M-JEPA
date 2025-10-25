@@ -580,6 +580,21 @@ def _log_static_report_artifact_via_run(
         return None
 
     preexisting_run = getattr(wandb_module, "run", None)
+    requested_entity = entity
+
+    if (
+        preexisting_run is not None
+        and requested_entity is not None
+        and getattr(preexisting_run, "entity", None) not in (None, requested_entity)
+    ):
+        LOGGER.warning(
+            "Existing W&B run (entity=%s) does not match requested entity %s; "
+            "starting a dedicated run for static report upload",
+            getattr(preexisting_run, "entity", None),
+            requested_entity,
+        )
+        _finish_wandb_run_safely(wandb_module)
+        preexisting_run = None
 
     wandb_module = maybe_init_wandb(
         True,
@@ -599,6 +614,19 @@ def _log_static_report_artifact_via_run(
 
     if run is None:
         LOGGER.error("W&B run unavailable for static report artifact upload")
+        return None
+
+    if (
+        requested_entity is not None
+        and getattr(run, "entity", None) not in (None, requested_entity)
+    ):
+        LOGGER.error(
+            "W&B run entity %s does not match requested entity %s for static report upload",
+            getattr(run, "entity", None),
+            requested_entity,
+        )
+        if started_new_run:
+            _finish_wandb_run_safely(wandb_module)
         return None
 
     try:
