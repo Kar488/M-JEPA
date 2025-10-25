@@ -6,7 +6,7 @@ import sys
 import types
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 fake_pandas = types.ModuleType("pandas")
 fake_pandas.DataFrame = lambda *args, **kwargs: None
@@ -190,6 +190,80 @@ def test_publish_report_uses_static_artifact(monkeypatch: pytest.MonkeyPatch) ->
 
     assert url == "https://wandb.test/artifact"
     assert called == {"artifact": 1}
+
+
+def test_static_artifact_run_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeRun:
+        def __init__(self) -> None:
+            self.logged: list[Any] = []
+            self.entity = "entity"
+            self.project = "project"
+
+        def log_artifact(self, artifact: Any) -> Any:
+            artifact.url = "https://wandb.test/run-artifact"
+            self.logged.append(artifact)
+            return artifact
+
+    class FakeArtifact:
+        def __init__(self, name: str, *, type: str, description: str, metadata: dict[str, Any]) -> None:  # noqa: A002
+            self.name = name
+            self.type = type
+            self.description = description
+            self.metadata = metadata
+            self.files: list[tuple[str, str]] = []
+            self.url: Optional[str] = None
+
+        def add_file(self, path: str, name: Optional[str] = None) -> None:
+            self.files.append((path, name or Path(path).name))
+
+    class FakeWandb:
+        def __init__(self) -> None:
+            self.run: Optional[FakeRun] = None
+            self.started = 0
+            self.finished = 0
+
+        def Artifact(self, name: str, *, type: str, description: str, metadata: dict[str, Any]) -> FakeArtifact:  # noqa: A003
+            return FakeArtifact(name, type=type, description=description, metadata=metadata)
+
+        def finish(self) -> None:
+            self.finished += 1
+            self.run = None
+
+    fake_wandb = FakeWandb()
+
+    def fake_maybe_init(
+        enable: bool,
+        *,
+        project: str,
+        tags: Any | None = None,
+        job_type: str | None = None,
+        config: dict[str, Any] | None = None,
+        initialise_run: bool = True,
+        **_: Any,
+    ) -> Any:
+        assert enable is True
+        if initialise_run and fake_wandb.run is None:
+            fake_wandb.run = FakeRun()
+            fake_wandb.started += 1
+        return fake_wandb
+
+    monkeypatch.setattr(build, "maybe_init_wandb", fake_maybe_init)
+    assets = _empty_assets()
+
+    url = build._upload_static_report_artifact(  # pylint: disable=protected-access
+        api=types.SimpleNamespace(),
+        entity=None,
+        project="project",
+        assets_by_section=assets,
+        base_url="https://wandb.test",
+        generated_at=datetime.utcnow(),
+        partial_fetch=False,
+    )
+
+    assert url == "https://wandb.test/run-artifact"
+    assert fake_wandb.started == 1
+    assert fake_wandb.finished == 1
+    assert fake_wandb.run is None
 
 
 def test_ensure_schema_refresh_forces_regeneration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
