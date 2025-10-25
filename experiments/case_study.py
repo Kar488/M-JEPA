@@ -522,25 +522,74 @@ def _load_encoder_strict(
     return summary
 
 
-def _load_manifest_config(manifest_path: Optional[str]) -> Dict[str, Any]:
+def _load_manifest_payload(manifest_path: Optional[str]) -> Dict[str, Any]:
     if not manifest_path:
         return {}
     try:
-        import json
-
         with open(manifest_path, "r", encoding="utf-8") as fh:
             payload = json.load(fh)
-        hyper = payload.get("hyperparameters") if isinstance(payload, dict) else None
-        manifest_cfg = hyper.copy() if isinstance(hyper, dict) else {}
-        if isinstance(payload, dict):
-            featurizer_cfg = payload.get("featurizer")
-            if isinstance(featurizer_cfg, dict):
-                for key, value in featurizer_cfg.items():
-                    manifest_cfg.setdefault(key, value)
-        return manifest_cfg
     except Exception:
         logger.warning("Failed to read encoder manifest from %s", manifest_path, exc_info=True)
         return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _manifest_payload_to_config(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    hyper = payload.get("hyperparameters")
+    manifest_cfg = dict(hyper) if isinstance(hyper, Mapping) else {}
+    featurizer_cfg = payload.get("featurizer")
+    if isinstance(featurizer_cfg, Mapping):
+        for key, value in featurizer_cfg.items():
+            manifest_cfg.setdefault(key, value)
+    return manifest_cfg
+
+
+def _load_manifest_config(manifest_path: Optional[str]) -> Dict[str, Any]:
+    payload = _load_manifest_payload(manifest_path)
+    return _manifest_payload_to_config(payload)
+
+
+def _resolve_manifest_baseline(
+    payload: Mapping[str, Any]
+) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    if not isinstance(payload, Mapping):
+        return None, None, None, None
+
+    baseline_hash: Optional[str] = None
+    hash_source: Optional[str] = None
+    hashes = payload.get("hashes")
+    if isinstance(hashes, Mapping):
+        candidate = hashes.get("encoder")
+        if isinstance(candidate, str) and candidate:
+            baseline_hash = candidate
+            hash_source = "manifest.hashes.encoder"
+
+    if baseline_hash is None:
+        manifest_hash = payload.get("encoder_hash")
+        if isinstance(manifest_hash, str) and manifest_hash:
+            baseline_hash = manifest_hash
+            hash_source = "manifest.encoder_hash"
+
+    baseline_path: Optional[str] = None
+    path_source: Optional[str] = None
+    paths = payload.get("paths")
+    if isinstance(paths, Mapping):
+        for key in ("encoder", "encoder_symlink", "checkpoint", "encoder_checkpoint"):
+            candidate = paths.get(key)
+            if isinstance(candidate, str) and candidate:
+                baseline_path = candidate
+                path_source = f"manifest.paths.{key}"
+                break
+
+    if baseline_path is None:
+        candidate = payload.get("encoder_checkpoint")
+        if isinstance(candidate, str) and candidate:
+            baseline_path = candidate
+            path_source = "manifest.encoder_checkpoint"
+
+    return baseline_hash, hash_source, baseline_path, path_source
 
 
 def _extract_state_config(state: Optional[dict]) -> Dict[str, Any]:
@@ -1192,7 +1241,48 @@ def run_tox21_case_study(
     except Exception:
         edge_dim = 0
 
-    manifest_cfg = _load_manifest_config(encoder_manifest)
+    manifest_payload = _load_manifest_payload(encoder_manifest)
+    manifest_cfg = _manifest_payload_to_config(manifest_payload)
+
+    baseline_hash: Optional[str] = None
+    baseline_hash_source: Optional[str] = None
+    baseline_path: Optional[str] = None
+    baseline_path_source: Optional[str] = None
+    if manifest_payload:
+        (
+            manifest_hash,
+            manifest_hash_source,
+            manifest_path_candidate,
+            manifest_path_source,
+        ) = _resolve_manifest_baseline(manifest_payload)
+        if manifest_hash:
+            baseline_hash = str(manifest_hash)
+            baseline_hash_source = manifest_hash_source
+        if manifest_path_candidate:
+            baseline_path = str(manifest_path_candidate)
+            baseline_path_source = manifest_path_source
+
+    if baseline_path is None:
+        env_candidate = os.getenv("PRETRAIN_ENCODER_PATH")
+        if env_candidate:
+            baseline_path = env_candidate
+            baseline_path_source = "env.PRETRAIN_ENCODER_PATH"
+
+    if baseline_path is None:
+        pretrain_dir_env = os.getenv("PRETRAIN_DIR")
+        if pretrain_dir_env:
+            baseline_path = os.path.join(pretrain_dir_env, "encoder.pt")
+            baseline_path_source = "env.PRETRAIN_DIR"
+
+    if baseline_path:
+        candidate_path = str(baseline_path)
+        if encoder_manifest and not os.path.isabs(candidate_path):
+            manifest_dir = os.path.dirname(os.path.abspath(encoder_manifest))
+            candidate_path = os.path.abspath(os.path.join(manifest_dir, candidate_path))
+        else:
+            candidate_path = os.path.abspath(candidate_path)
+        baseline_path = candidate_path
+
     state_cfg: Dict[str, Any] = {}
     enc_state: Optional[Dict[str, Any]] = None
     loaded_head_state: Optional[Dict[str, Any]] = None
@@ -1212,6 +1302,38 @@ def run_tox21_case_study(
             loaded_head_state = state.get("head")
         else:
             enc_state = state
+
+    if (
+        baseline_hash is None
+        and baseline_path
+        and safe_load_checkpoint is not None
+        and extract_encoder_hash is not None
+    ):
+        try:
+            baseline_state, _ = safe_load_checkpoint(
+                primary=baseline_path,
+                ckpt_dir=None,
+                default_name=os.path.basename(baseline_path) or "encoder.pt",
+                map_location=device,
+                allow_missing=False,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to load baseline encoder checkpoint from %s to compute hash.",
+                baseline_path,
+                exc_info=True,
+            )
+        else:
+            try:
+                baseline_candidate = extract_encoder_hash(baseline_state)
+            except Exception:
+                baseline_candidate = None
+            if baseline_candidate is not None:
+                baseline_hash = baseline_candidate
+                baseline_hash_source = f"{baseline_path_source or 'checkpoint'}.hash"
+
+    if baseline_hash is not None and isinstance(baseline_hash, bytes):
+        baseline_hash = baseline_hash.decode("utf-8", errors="ignore")
 
     def _maybe_int_value(value: Any) -> Optional[int]:
         if value is None:
@@ -1487,18 +1609,16 @@ def run_tox21_case_study(
 
     encoder_load_info: Dict[str, Any] = {}
     encoder_hash: Optional[str] = None
-    baseline_hash: Optional[str] = None
-    if encoder_checkpoint:
-        baseline_hash = None
-        if isinstance(state, Mapping):
-            baseline_hash = extract_encoder_hash(state) if extract_encoder_hash else None
-        if baseline_hash is None and isinstance(manifest_cfg, dict):
-            hashes_block = manifest_cfg.get("hashes") if isinstance(manifest_cfg.get("hashes"), dict) else {}
-            if isinstance(hashes_block, dict):
-                baseline_hash = hashes_block.get("encoder")
-            if baseline_hash is None:
-                manifest_hash = manifest_cfg.get("encoder_hash")
-                baseline_hash = manifest_hash if isinstance(manifest_hash, str) else None
+
+    if baseline_path or baseline_hash:
+        baseline_path_display = baseline_path or "<unset>"
+        logger.info(
+            "[tox21] baseline_hash_source=%s baseline_hash=%s baseline_path_source=%s baseline_path=%s",
+            baseline_hash_source or "<unknown>",
+            baseline_hash or "<unknown>",
+            baseline_path_source or "<unknown>",
+            baseline_path_display,
+        )
     allow_shape_requested: Optional[bool] = allow_shape_coercion
     allow_shape_effective = bool(allow_shape_coercion) if allow_shape_coercion is not None else False
     auto_shape_retry = False
@@ -1541,20 +1661,22 @@ def run_tox21_case_study(
             else:
                 raise
         encoder_hash = encoder_load_info.get("hash") if isinstance(encoder_load_info, dict) else None
+        source_label = (
+            str(encoder_source_override)
+            if encoder_source_override is not None
+            else encoder_source
+        )
         logger.info(
-            "[encoder_hash]=%s source=tox21_load path=%s baseline=%s",
+            "[tox21] eval_checkpoint_source=%s eval_checkpoint_hash=%s eval_checkpoint_path=%s",
+            source_label,
             encoder_hash or "<unknown>",
             os.path.abspath(encoder_checkpoint),
-            baseline_hash or "<unknown>",
         )
     elif encoder_checkpoint and not enc_state:
         logger.warning(
             "Encoder checkpoint %s contained no weights; using random initialisation",
             encoder_checkpoint,
         )
-
-    if baseline_hash is not None and isinstance(baseline_hash, bytes):
-        baseline_hash = baseline_hash.decode("utf-8", errors="ignore")
 
     fine_tuned_modes = {"frozen_finetuned", "end_to_end"}
     if (
@@ -1576,6 +1698,9 @@ def run_tox21_case_study(
     diagnostics["encoder_load"] = encoder_load_info
     diagnostics["encoder_hash"] = encoder_hash
     diagnostics["baseline_encoder_hash"] = baseline_hash
+    diagnostics["baseline_hash_source"] = baseline_hash_source
+    diagnostics["baseline_checkpoint"] = baseline_path
+    diagnostics["baseline_path_source"] = baseline_path_source
     diagnostics["allow_shape_coercion_requested"] = (
         None if allow_shape_requested is None else bool(allow_shape_requested)
     )

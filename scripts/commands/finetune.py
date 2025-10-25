@@ -684,6 +684,14 @@ def cmd_finetune(args: argparse.Namespace) -> None:
 
         _maybe_to(head, device)
 
+        loss_name = "BCEWithLogitsLoss" if args.task_type == "classification" else "MSELoss"
+        logger.info(
+            "[finetune] task_type=%s head=%s loss=%s",
+            args.task_type,
+            type(head).__name__,
+            loss_name,
+        )
+
         # Optimizer & scheduler
         encoder_params = [
             p for p in _iter_trainable_params(encoder) if getattr(p, "requires_grad", False)
