@@ -25,6 +25,11 @@ Mission Control
   ``pretrain``, ``finetune``, ``evaluate``, ``benchmark`` and ``tox21``. Each
   stage reuses the shared helpers in ``training/`` and ``experiments/`` so the
   whole pipeline can run from one script.
+  - The ``tox21`` subcommand accepts ``--pretrain-lr`` to decouple the JEPA
+    pretraining learning rate from the downstream probe. When you request
+    ``--evaluation-mode fine_tuned`` without supplying a checkpoint, the
+    command now enables full encoder fine-tuning automatically so the
+    evaluation reflects the updated backbone.
 
 ``scripts/commands/``
   Modular commands that mirror the subcommands above. They are reused by the

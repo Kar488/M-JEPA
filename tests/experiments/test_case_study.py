@@ -225,6 +225,43 @@ def test_case_study_trains_head_when_missing(tmp_path, monkeypatch, caplog):
     assert any("head_trained=yes" in message for message in caplog.messages)
 
 
+def test_case_study_end_to_end_without_checkpoint_enables_full_finetune(monkeypatch):
+    unsup = types.ModuleType("training.unsupervised")
+    unsup.train_jepa = lambda *a, **k: {}
+    monkeypatch.setitem(sys.modules, "training.unsupervised", unsup)
+
+    sup_module = types.ModuleType("training.supervised")
+    sup_module.train_linear_head = lambda *a, **k: {}
+    monkeypatch.setitem(sys.modules, "training.supervised", sup_module)
+
+    import importlib
+
+    case_study = importlib.import_module("experiments.case_study")
+
+    calls: dict[str, object] = {}
+
+    def fake_train_linear_head(*, dataset, encoder, freeze_encoder, encoder_lr, **kwargs):
+        calls["freeze_encoder"] = freeze_encoder
+        calls["encoder_lr"] = encoder_lr
+        head = torch.nn.Linear(getattr(encoder, "hidden_dim", 32), 1)
+        return {"head": head, "train/batches": 4.0}
+
+    monkeypatch.setattr(case_study, "train_linear_head", fake_train_linear_head)
+
+    result = case_study.run_tox21_case_study(
+        csv_path="samples/tox21_mini.csv",
+        task_name="NR-AR",
+        finetune_epochs=2,
+        evaluation_mode="fine_tuned",
+    )
+
+    assert calls.get("freeze_encoder") is False
+    assert calls.get("encoder_lr") is not None
+    assert isinstance(result.diagnostics, dict)
+    assert result.diagnostics.get("auto_full_finetune") is True
+    assert result.diagnostics.get("full_finetune") is True
+
+
 def test_case_study_frozen_finetuned_trains_linear_probe(monkeypatch, caplog):
     import experiments.case_study as case_study
 

@@ -268,6 +268,7 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
             {
                 k: kwargs[k]
                 for k in (
+                    "pretrain_lr",
                     "num_workers",
                     "pin_memory",
                     "persistent_workers",
@@ -307,6 +308,7 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         dataset="tox21",
         pretrain_epochs=1,
         finetune_epochs=1,
+        pretrain_lr=5e-4,
         triage_pct=0.10,
         tox21_dir=str(tmp_path / "reports"),
         device="cpu",
@@ -338,6 +340,7 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
     assert any(log.get("benchmark_metric") == "roc_auc" for log in logs)
 
     assert captures == {
+        "pretrain_lr": 5e-4,
         "num_workers": 4,
         "pin_memory": False,
         "persistent_workers": False,
@@ -351,6 +354,7 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
     assert config["hidden_dim"] == 256
     assert config["num_layers"] == 3
     assert config["gnn_type"] == "edge_mpnn"
+    assert config["pretrain_lr"] == 5e-4
     assert config["persistent_workers"] is False
     assert config["prefetch_factor"] == 5
     assert config["tasks"] == ["NR-AR"]
@@ -389,6 +393,7 @@ def test_cmd_tox21_failure(tmp_path,monkeypatch):
         dataset="tox21",
         pretrain_epochs=1,
         finetune_epochs=1,
+        pretrain_lr=1e-4,
         triage_pct=0.10,
         tox21_dir=str(tmp_path / "reports"),
         device="cpu",

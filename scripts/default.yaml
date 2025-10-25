@@ -78,6 +78,7 @@ case_study:
   pretrain_epochs: 5    # Number of JEPA pretrain epochs for the case study
   finetune_epochs: 20    # Epochs for training a regression head in the case study
   num_top_exclude: 10    # Number of top toxic molecules to exclude when ranking
+  pretrain_lr: 0.0001
   full_finetune: false
   unfreeze_top_layers: 0
   tox21_head_batch_size: 256

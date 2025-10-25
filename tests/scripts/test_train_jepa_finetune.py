@@ -56,6 +56,93 @@ class DummyDataset:
         return 1
 
 
+def test_cmd_finetune_reuses_split_across_epochs(tmp_path, monkeypatch):
+    import scripts.commands.finetune as ft
+
+    class Graph:
+        def __init__(self):
+            self.x = np.zeros((4, 3))
+            self.edge_attr = None
+
+    class Dataset:
+        def __init__(self, n=12):
+            self.graphs = [Graph() for _ in range(n)]
+            self.labels = np.array([0, 1] * (n // 2), dtype=float)
+            self.smiles = [f"SMI{i}" for i in range(n)]
+
+        def __len__(self):
+            return len(self.graphs)
+
+    dataset = Dataset(12)
+
+    def load_dataset_stub(*_args, **_kwargs):
+        return dataset
+
+    monkeypatch.setattr(tj, "load_directory_dataset", load_dataset_stub, raising=False)
+    monkeypatch.setattr(ft, "load_directory_dataset", load_dataset_stub, raising=False)
+
+    class SimpleEncoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(3, 4)
+
+    monkeypatch.setattr(tj, "build_encoder", lambda **_: SimpleEncoder(), raising=False)
+    monkeypatch.setattr(ft, "build_encoder", lambda **_: SimpleEncoder(), raising=False)
+
+    class DummyWB:
+        def log(self, *_args, **_kwargs):
+            pass
+
+        def finish(self):
+            pass
+
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: DummyWB(), raising=False)
+    monkeypatch.setattr(ft, "maybe_init_wandb", lambda *a, **k: DummyWB(), raising=False)
+
+    split_records = []
+
+    class DummyHead(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(4, 1)
+
+    def train_linear_head_stub(**kwargs):
+        split_records.append(
+            (
+                tuple(kwargs.get("train_indices") or ()),
+                tuple(kwargs.get("val_indices") or ()),
+                tuple(kwargs.get("test_indices") or ()),
+            )
+        )
+        return {
+            "val_auc": 0.5,
+            "head": DummyHead(),
+            "train/batches": 1.0,
+            "train/epoch_batches": 1.0,
+        }
+
+    monkeypatch.setattr(tj, "train_linear_head", train_linear_head_stub, raising=False)
+    monkeypatch.setattr(ft, "train_linear_head", train_linear_head_stub, raising=False)
+
+    args = make_args(tmp_path, seeds=[0])
+    args.epochs = 3
+    args.batch_size = 2
+    args.metric = "val_auc"
+    args.use_wandb = False
+    args.use_scaffold = False
+    args.ckpt_dir = str(tmp_path / "ckpts_split")
+    args.encoder = ""
+
+    tj.cmd_finetune(args)
+
+    assert len(split_records) == args.epochs
+    first_split = split_records[0]
+    assert all(record == first_split for record in split_records)
+    train_idx, val_idx, test_idx = first_split
+    assert train_idx, "expected non-empty train split"
+    assert val_idx or test_idx, "expected validation/test indices to be set"
+
+
 def test_cmd_finetune_aggregates_metrics(tmp_path, monkeypatch):
     calls = {
         "load_directory_dataset": 0,

@@ -938,6 +938,7 @@ def run_tox21_case_study(
     pretrain_epochs: int = 5,
     finetune_epochs: int = 20,
     lr: float = 1e-3,
+    pretrain_lr: Optional[float] = None,
     head_lr: Optional[float] = None,
     encoder_lr: Optional[float] = None,
     weight_decay: Optional[float] = None,
@@ -1021,6 +1022,19 @@ def run_tox21_case_study(
         )
 
     set_seed(seed)
+
+    try:
+        pretrain_lr_value = (
+            float(pretrain_lr) if pretrain_lr is not None else 1e-4
+        )
+    except Exception:
+        logger.warning(
+            "Failed to parse pretrain_lr=%s; defaulting to 1e-4",
+            pretrain_lr,
+            exc_info=True,
+        )
+        pretrain_lr_value = 1e-4
+    diagnostics["pretrain_lr"] = float(pretrain_lr_value)
 
     GraphDatasetCls = _load_real_graphdataset()
     gnn_type_lower = (gnn_type or "").lower()
@@ -1573,13 +1587,28 @@ def run_tox21_case_study(
         )
         normalized_mode = "pretrain_frozen"
         display_mode = "pretrain_frozen"
-    if normalized_mode in {"frozen_finetuned", "end_to_end"} and not encoder_checkpoint:
+    auto_full_finetune = False
+    if normalized_mode == "end_to_end" and not encoder_checkpoint and not full_finetune:
+        logger.info(
+            "No encoder checkpoint supplied for end_to_end evaluation; enabling full fine-tuning."
+        )
+        full_finetune = True
+        auto_full_finetune = True
+
+    if (
+        normalized_mode in {"frozen_finetuned", "end_to_end"}
+        and not encoder_checkpoint
+        and not full_finetune
+    ):
         logger.warning(
             "evaluation_mode '%s' requires a checkpoint; falling back to pretrain_frozen.",
             normalized_mode,
         )
         normalized_mode = "pretrain_frozen"
         display_mode = "pretrain_frozen"
+
+    diagnostics["auto_full_finetune"] = bool(auto_full_finetune)
+    diagnostics["full_finetune"] = bool(full_finetune)
 
     head_from_checkpoint = isinstance(loaded_head_state, dict) and bool(loaded_head_state)
     train_head_missing = normalized_mode == "end_to_end" and not head_from_checkpoint
@@ -1773,7 +1802,7 @@ def run_tox21_case_study(
             batch_size=64,
             mask_ratio=mask_ratio,
             contiguous=contiguous,
-            lr=lr,
+            lr=pretrain_lr_value,
             device=device,
             reg_lambda=1e-4,
             num_workers=num_workers,
@@ -1808,6 +1837,16 @@ def run_tox21_case_study(
         encoder_lr_value = None
     if full_finetune and encoder_lr_value is None:
         encoder_lr_value = 3e-4
+
+    encoder_lr_display = (
+        f"{float(encoder_lr_value):.2e}" if encoder_lr_value is not None else "<unset>"
+    )
+    logger.info(
+        "[tox21] learning rates: pretrain=%.2e head=%.2e encoder=%s",
+        float(pretrain_lr_value),
+        float(head_lr_value),
+        encoder_lr_display,
+    )
 
     weight_decay_value: Optional[float] = None
     if weight_decay is not None:
