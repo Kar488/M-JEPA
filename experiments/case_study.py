@@ -1588,6 +1588,7 @@ def run_tox21_case_study(
         normalized_mode = "pretrain_frozen"
         display_mode = "pretrain_frozen"
     auto_full_finetune = False
+    auto_pretrain = False
     if normalized_mode == "end_to_end" and not encoder_checkpoint and not full_finetune:
         logger.info(
             "No encoder checkpoint supplied for end_to_end evaluation; enabling full fine-tuning."
@@ -1606,9 +1607,6 @@ def run_tox21_case_study(
         )
         normalized_mode = "pretrain_frozen"
         display_mode = "pretrain_frozen"
-
-    diagnostics["auto_full_finetune"] = bool(auto_full_finetune)
-    diagnostics["full_finetune"] = bool(full_finetune)
 
     head_from_checkpoint = isinstance(loaded_head_state, dict) and bool(loaded_head_state)
     train_head_missing = normalized_mode == "end_to_end" and not head_from_checkpoint
@@ -1648,6 +1646,13 @@ def run_tox21_case_study(
     random_head_used = False
 
     should_pretrain = normalized_mode == "pretrain_frozen" and not encoder_checkpoint
+    if normalized_mode == "end_to_end" and not encoder_checkpoint:
+        should_pretrain = True
+        auto_pretrain = True
+        if not auto_full_finetune:
+            logger.info(
+                "No encoder checkpoint supplied for end_to_end evaluation; running JEPA pretraining before fine-tuning.",
+            )
     encoder_source = normalized_mode
     eval_name = normalized_mode
 
@@ -1739,6 +1744,9 @@ def run_tox21_case_study(
             encoder_hash,
         )
 
+    diagnostics["auto_full_finetune"] = bool(auto_full_finetune)
+    diagnostics["auto_pretrain"] = bool(auto_pretrain)
+    diagnostics["full_finetune"] = bool(full_finetune)
     diagnostics["encoder_load"] = encoder_load_info
     diagnostics["encoder_hash"] = encoder_hash
     diagnostics["baseline_encoder_hash"] = baseline_hash
