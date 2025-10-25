@@ -111,7 +111,7 @@ if [[ "$baseline_flag_lc" == "false" ]]; then
   export FINETUNE_SEED_0 FINETUNE_SEED_1 FINETUNE_SEED_2
   export FINETUNE_DATASET_OVERRIDE_REASON
 
-  echo "[finetune] Baseline gate unmet; redirecting fine-tune to Tox21 task '${FINETUNE_LABEL_COL}'" >&2
+  echo "[finetune] Baseline gate unmet; redirecting fine-tune to Tox21 task '${FINETUNE_LABEL_COL}' (task_type=${FINETUNE_TASK_TYPE} metric=${FINETUNE_METRIC})" >&2
 fi
 
 # fix: ensure fine-tune emits stage outputs for downstream evaluation
