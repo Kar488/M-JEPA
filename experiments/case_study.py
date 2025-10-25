@@ -1285,6 +1285,7 @@ def run_tox21_case_study(
 
     state_cfg: Dict[str, Any] = {}
     enc_state: Optional[Dict[str, Any]] = None
+    encoder_checkpoint_state: Optional[Any] = None
     loaded_head_state: Optional[Dict[str, Any]] = None
     if encoder_checkpoint:
         if safe_load_checkpoint is None:
@@ -1296,6 +1297,7 @@ def run_tox21_case_study(
             map_location=device,
             allow_missing=False,
         )
+        encoder_checkpoint_state = state
         state_cfg = _extract_state_config(state)
         if isinstance(state, dict):
             enc_state = state.get("encoder", state)
@@ -1331,6 +1333,19 @@ def run_tox21_case_study(
             if baseline_candidate is not None:
                 baseline_hash = baseline_candidate
                 baseline_hash_source = f"{baseline_path_source or 'checkpoint'}.hash"
+
+    if (
+        baseline_hash is None
+        and encoder_checkpoint_state is not None
+        and extract_encoder_hash is not None
+    ):
+        try:
+            baseline_candidate = extract_encoder_hash(encoder_checkpoint_state)
+        except Exception:
+            baseline_candidate = None
+        if baseline_candidate is not None:
+            baseline_hash = baseline_candidate
+            baseline_hash_source = "encoder_checkpoint.hash"
 
     if baseline_hash is not None and isinstance(baseline_hash, bytes):
         baseline_hash = baseline_hash.decode("utf-8", errors="ignore")
