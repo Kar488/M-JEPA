@@ -46,6 +46,7 @@ from .wandb_utils import (
     normalise_tag,
     runs_to_table,
 )
+from utils.logging import DummyWandb, maybe_init_wandb
 
 SOFT_FAIL_ENV_VAR = "WANDB_SOFT_FAIL"
 
@@ -542,6 +543,125 @@ def _render_static_markdown(
     return "\n".join(lines).strip() + "\n"
 
 
+def _finish_wandb_run_safely(wandb_module: Any) -> None:
+    finish = getattr(wandb_module, "finish", None)
+    if callable(finish):
+        try:
+            finish()
+        except Exception as exc:  # pragma: no cover - external API dependent
+            LOGGER.debug("Finishing W&B run raised an exception: %s", exc)
+
+
+def _log_static_report_artifact_via_run(
+    *,
+    file_path: Path,
+    file_name: str,
+    artifact_name: str,
+    entity: Optional[str],
+    project: str,
+    base_url: str,
+    partial_fetch: bool,
+) -> Optional[str]:
+    tags = ("reports", "static", "auto")
+    config = {"report_partial": partial_fetch}
+
+    wandb_module = maybe_init_wandb(
+        True,
+        project=project,
+        tags=tags,
+        job_type="report-static",
+        config=config,
+        initialise_run=False,
+    )
+
+    if isinstance(wandb_module, DummyWandb):
+        LOGGER.error("W&B is not available to log the static report artifact")
+        return None
+
+    preexisting_run = getattr(wandb_module, "run", None)
+
+    wandb_module = maybe_init_wandb(
+        True,
+        project=project,
+        tags=tags,
+        job_type="report-static",
+        config=config,
+    )
+
+    if isinstance(wandb_module, DummyWandb):
+        LOGGER.error("W&B initialisation returned a dummy client; cannot upload artifact")
+        return None
+
+    run = getattr(wandb_module, "run", None)
+    started_new_run = preexisting_run is None and run is not None
+
+    if run is None:
+        LOGGER.error("W&B run unavailable for static report artifact upload")
+        return None
+
+    try:
+        artifact = wandb_module.Artifact(  # type: ignore[attr-defined]
+            artifact_name,
+            type="report-static",
+            description="Static fallback report for M-JEPA",
+            metadata={"partial": partial_fetch},
+        )
+    except Exception as exc:  # pragma: no cover - external API dependent
+        LOGGER.error("Failed to construct W&B artifact via run upload: %s", exc)
+        if started_new_run:
+            _finish_wandb_run_safely(wandb_module)
+        return None
+
+    try:
+        artifact.add_file(str(file_path), name=file_name)
+    except Exception as exc:  # pragma: no cover - external API dependent
+        LOGGER.error("Failed to attach static report contents to artifact: %s", exc)
+        if started_new_run:
+            _finish_wandb_run_safely(wandb_module)
+        return None
+
+    try:
+        logged_artifact = run.log_artifact(artifact)
+    except Exception as exc:  # pragma: no cover - external API dependent
+        LOGGER.error("Failed to log static report artifact via W&B run: %s", exc)
+        if started_new_run:
+            _finish_wandb_run_safely(wandb_module)
+        return None
+
+    artifact_obj = getattr(logged_artifact, "artifact", None) or logged_artifact or artifact
+
+    wait = getattr(artifact_obj, "wait", None)
+    if callable(wait):
+        try:
+            wait()
+        except Exception as exc:  # pragma: no cover - external API dependent
+            LOGGER.debug("W&B artifact wait() raised an exception: %s", exc)
+
+    artifact_url = (
+        getattr(artifact_obj, "url", None)
+        or getattr(artifact_obj, "versioned_url", None)
+        or getattr(artifact_obj, "download_url", None)
+    )
+
+    resolved_entity = entity or getattr(run, "entity", None)
+    resolved_project = project or getattr(run, "project", None)
+
+    if not artifact_url and resolved_project:
+        if resolved_entity:
+            artifact_url = (
+                f"{base_url.rstrip('/')}/{resolved_entity}/{resolved_project}/artifacts/report-static/{artifact_name}"
+            )
+        else:
+            artifact_url = (
+                f"{base_url.rstrip('/')}/{resolved_project}/artifacts/report-static/{artifact_name}"
+            )
+
+    if started_new_run:
+        _finish_wandb_run_safely(wandb_module)
+
+    return artifact_url
+
+
 def _upload_static_report_artifact(
     api: Any,
     entity: Optional[str],
@@ -602,6 +722,17 @@ def _upload_static_report_artifact(
                 artifact = None
 
         if artifact is None:
+            run_artifact_url = _log_static_report_artifact_via_run(
+                file_path=file_path,
+                file_name=file_name,
+                artifact_name=artifact_name,
+                entity=entity,
+                project=project,
+                base_url=base_url,
+                partial_fetch=partial_fetch,
+            )
+            if run_artifact_url:
+                return run_artifact_url
             LOGGER.error("Unable to create W&B artifact for static report fallback")
             return None
 
