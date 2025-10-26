@@ -898,10 +898,14 @@ def _evaluate_case_study(
     mean_true = _mean_for_indices(test_idx_arr)
 
     metrics: Dict[str, float] = {
-        "roc_auc": float("nan"),
-        "pr_auc": float("nan"),
-        "brier": float("nan"),
-        "ece": float("nan"),
+        # Default metrics to neutral values so downstream consumers never see
+        # ``nan`` when the TEST split is too small or degenerate. These
+        # placeholders are overwritten below whenever a metric is computed
+        # successfully.
+        "roc_auc": 0.0,
+        "pr_auc": 0.0,
+        "brier": 0.0,
+        "ece": 0.0,
     }
 
     y_true = all_labels[test_idx_arr].astype(float)
