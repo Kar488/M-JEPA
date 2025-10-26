@@ -29,6 +29,27 @@ mkdir -p "$(dirname "$GITHUB_ENV")"
 export GITHUB_ENV
 
 SOURCE="${TOX21_EVALUATION_MODE:-${TOX21_ENCODER_SOURCE:-pretrain_frozen}}"
+# When the orchestrator finishes a non-frozen fine-tune it leaves
+# ``FROZEN=0`` in the environment and drops the exported checkpoints into
+# ``$FINETUNE_DIR``.  Historically the Tox21 stage still defaulted to the
+# ``pretrain_frozen`` evaluation path in that situation, forcing the
+# downstream case study to retrain a probe over a frozen backbone.  This
+# produced the random-baseline metrics observed in recent runs.  Detect the
+# fine-tuned lineage and automatically upgrade the mode to ``end_to_end``
+# so the evaluation reuses the freshly tuned encoder unless the user has
+# explicitly requested a different mode.
+if [[ "$SOURCE" == "pretrain_frozen" ]]; then
+  if [[ -z "${TOX21_EVALUATION_MODE:-}" && -z "${TOX21_ENCODER_SOURCE:-}" ]]; then
+    if [[ "${FROZEN:-1}" != "1" ]]; then
+      if [[ -n "${FINETUNE_DIR:-}" ]]; then
+        if [[ -f "${FINETUNE_DIR}/encoder_ft.pt" || -f "${FINETUNE_DIR}/seed_0/ft_best.pt" ]]; then
+          echo "[tox21] auto-detected fine-tuned encoder; switching evaluation mode to end_to_end" >&2
+          SOURCE="end_to_end"
+        fi
+      fi
+    fi
+  fi
+fi
 MANIFEST_DEFAULT="${PRETRAIN_MANIFEST:-${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json}"
 MANIFEST_PATH="${TOX21_ENCODER_MANIFEST:-$MANIFEST_DEFAULT}"
 
