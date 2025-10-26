@@ -732,8 +732,8 @@ def _evaluate_case_study(
         if arr.shape[-1] == 0:
             return arr.reshape(-1)
         if arr.shape[-1] == 1:
-            return arr[:, 0]
-        return arr[:, -1]
+            return arr[..., 0]
+        return arr[..., -1]
 
     def _select_calibration_features(arr: np.ndarray) -> np.ndarray:
         if arr.ndim == 0:
@@ -745,9 +745,9 @@ def _evaluate_case_study(
         if arr.shape[-1] == 1:
             return arr.astype(float)
         if arr.shape[-1] == 2:
-            diff = arr[:, 1] - arr[:, 0]
+            diff = arr[..., 1] - arr[..., 0]
             return diff.reshape(-1, 1)
-        return arr[:, [-1]]
+        return arr[..., [-1]]
 
     val_logits_np = val_logits.cpu().numpy() if val_logits.numel() else np.zeros((0, 1))
     test_logits_np = test_logits.cpu().numpy() if test_logits.numel() else np.zeros((0, 1))
