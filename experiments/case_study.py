@@ -224,8 +224,11 @@ def _load_real_graphdataset():
 
     return module.GraphDataset
 
-from utils.graph_ops import _ensure_edge_attr_np_or_torch as ensure_edge_attr
-from utils.graph_ops import _encode_graph_flex
+from utils.graph_ops import (
+    _ensure_edge_attr_np_or_torch as ensure_edge_attr,
+    _encode_graph_flex,
+    _pool_graph_emb,
+)
 try:
     from utils.bond_feats import attach_bond_features_from_smiles
 except Exception:  # pragma: no cover - optional dependency
@@ -637,8 +640,23 @@ def _predict_logits_probs_in_chunks(
                 graph = dataset.graphs[idx]
                 graph = ensure_edge_attr(graph, edge_dim, device=device)
                 node_emb = _encode_graph_flex(encoder, graph, device_t)
+                if isinstance(node_emb, tuple):
+                    node_emb = node_emb[0]
+                if not isinstance(node_emb, torch.Tensor):
+                    node_emb = torch.as_tensor(node_emb, dtype=torch.float32, device=device_t)
+                else:
+                    node_emb = node_emb.to(device_t)
                 node_emb = torch.nan_to_num(node_emb, nan=0.0, posinf=0.0, neginf=0.0)
-                graph_embs.append(node_emb.mean(0, keepdim=True))
+                graph_emb = _pool_graph_emb(node_emb, graph)
+                if not isinstance(graph_emb, torch.Tensor):
+                    graph_emb = torch.as_tensor(graph_emb, dtype=torch.float32, device=device_t)
+                else:
+                    graph_emb = graph_emb.to(device_t)
+                if graph_emb.ndim == 0:
+                    graph_emb = graph_emb.reshape(1, 1)
+                elif graph_emb.ndim == 1:
+                    graph_emb = graph_emb.unsqueeze(0)
+                graph_embs.append(graph_emb)
             if not graph_embs:
                 continue
             batch = torch.cat(graph_embs, dim=0).to(device_t)
@@ -725,29 +743,38 @@ def _evaluate_case_study(
     )
 
     def _select_positive_probabilities(arr: np.ndarray) -> np.ndarray:
+        arr = np.asarray(arr)
         if arr.ndim == 0:
             return arr.reshape(1)
         if arr.ndim == 1:
             return arr
-        if arr.shape[-1] == 0:
-            return arr.reshape(-1)
-        if arr.shape[-1] == 1:
-            return arr[:, 0]
-        return arr[:, -1]
+        class_dim = int(arr.shape[-1]) if arr.shape else 0
+        leading = int(np.prod(arr.shape[:-1])) if arr.ndim > 1 else arr.size
+        if class_dim <= 0:
+            dtype = arr.dtype if arr.dtype != np.dtype("O") else float
+            return np.zeros((leading,), dtype=dtype)
+        flat = arr.reshape(leading, class_dim)
+        if class_dim == 1:
+            return flat[:, 0]
+        return flat[:, -1]
 
     def _select_calibration_features(arr: np.ndarray) -> np.ndarray:
+        arr = np.asarray(arr)
         if arr.ndim == 0:
             return arr.reshape(1, 1)
         if arr.ndim == 1:
             return arr.reshape(-1, 1)
-        if arr.shape[-1] == 0:
-            return arr.reshape(-1, 1)
-        if arr.shape[-1] == 1:
-            return arr.astype(float)
-        if arr.shape[-1] == 2:
-            diff = arr[:, 1] - arr[:, 0]
+        class_dim = int(arr.shape[-1]) if arr.shape else 0
+        leading = int(np.prod(arr.shape[:-1])) if arr.ndim > 1 else arr.size
+        if class_dim <= 0:
+            return np.zeros((leading, 1), dtype=float)
+        flat = arr.reshape(leading, class_dim)
+        if class_dim == 1:
+            return flat.astype(float)
+        if class_dim == 2:
+            diff = flat[:, 1] - flat[:, 0]
             return diff.reshape(-1, 1)
-        return arr[:, [-1]]
+        return flat[:, [-1]]
 
     val_logits_np = val_logits.cpu().numpy() if val_logits.numel() else np.zeros((0, 1))
     test_logits_np = test_logits.cpu().numpy() if test_logits.numel() else np.zeros((0, 1))

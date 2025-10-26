@@ -136,6 +136,58 @@ def test_evaluate_case_study_handles_resize_failure(monkeypatch):
     assert metrics["roc_auc"] == pytest.approx(0.5)
 
 
+def test_evaluate_case_study_accepts_single_task_multilogit(monkeypatch):
+    import experiments.case_study as case_study
+
+    dataset = types.SimpleNamespace(
+        graphs=[types.SimpleNamespace(), types.SimpleNamespace(), types.SimpleNamespace()]
+    )
+    labels = np.array([0.0, 1.0, 0.0])
+
+    def fake_predict(
+        dataset,
+        indices,
+        encoder,
+        head,
+        device,
+        edge_dim,
+        batch_size=256,
+        diag_hook=None,
+    ):
+        if len(indices) == 2:
+            logits = torch.tensor(
+                [[[0.2, -0.1]], [[-0.3, 0.4]]], dtype=torch.float32
+            )  # (batch, 1, 2)
+        else:
+            logits = torch.tensor([[[0.1, -0.2]]], dtype=torch.float32)
+        probs = torch.softmax(logits, dim=-1)
+        return logits, probs
+
+    monkeypatch.setattr(case_study, "_predict_logits_probs_in_chunks", fake_predict)
+
+    mean_true, mean_rand, mean_pred, baselines, metrics, calibrator = case_study._evaluate_case_study(
+        dataset=dataset,
+        encoder=None,
+        head=None,
+        all_labels=labels,
+        train_idx=[0],
+        val_idx=[0, 1],
+        test_idx=[2],
+        triage_pct=0.1,
+        calibrate=False,
+        device="cpu",
+        edge_dim=0,
+        seed=0,
+        baseline_embeddings=None,
+    )
+
+    assert mean_true == pytest.approx(0.0)
+    assert baselines == {}
+    assert metrics["roc_auc"] == pytest.approx(0.0)
+    assert calibrator["feature_dim"] == 1
+    assert calibrator["enabled"] is False
+
+
 def test_evaluate_case_study_handles_empty_predictions(monkeypatch):
     import experiments.case_study as case_study
 
