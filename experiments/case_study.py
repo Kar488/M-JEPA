@@ -789,7 +789,9 @@ def _evaluate_case_study(
         "enabled": bool(calibrate),
         "fit_split": "val",
     }
-    calibrator_info["feature_dim"] = int(val_logits_feat.shape[1]) if val_logits_feat.ndim == 2 else 1
+    feature_dim = int(val_logits_feat.shape[1]) if val_logits_feat.ndim == 2 else 1
+    if calibrate or (val_logits_np.ndim >= 2 and val_logits_np.shape[-1] > 1):
+        calibrator_info["feature_dim"] = feature_dim
     calibrated_probs = test_probs_np
     if calibrate:
         calibrator_info["status"] = "skipped"
@@ -871,7 +873,19 @@ def _evaluate_case_study(
     if order.size > 0:
         mask_pred[order] = False
     remaining_pred = test_idx_arr[mask_pred]
-    mean_pred = float(np.mean(all_labels[remaining_pred])) if remaining_pred.size else 0.0
+
+    def _mean_for_indices(indices: np.ndarray) -> float:
+        if indices.size == 0:
+            return 0.0
+        values = np.asarray(all_labels[indices], dtype=float)
+        if values.size == 0:
+            return 0.0
+        finite_mask = np.isfinite(values)
+        if not np.any(finite_mask):
+            return float("nan")
+        return float(values[finite_mask].mean())
+
+    mean_pred = _mean_for_indices(remaining_pred)
 
     rng = np.random.default_rng(seed)
     rand_choice = rng.choice(test_idx_arr, size=k, replace=False) if k > 0 else np.array([], dtype=int)
@@ -879,9 +893,9 @@ def _evaluate_case_study(
     if rand_choice.size > 0:
         mask_rand[np.isin(test_idx_arr, rand_choice)] = False
     remaining_rand = test_idx_arr[mask_rand]
-    mean_rand = float(np.mean(all_labels[remaining_rand])) if remaining_rand.size else 0.0
+    mean_rand = _mean_for_indices(remaining_rand)
 
-    mean_true = float(np.mean(all_labels[test_idx_arr])) if test_idx_arr.size else 0.0
+    mean_true = _mean_for_indices(test_idx_arr)
 
     metrics: Dict[str, float] = {
         "roc_auc": float("nan"),
@@ -976,7 +990,7 @@ def _evaluate_case_study(
                 if top.size > 0:
                     mask[top] = False
                 remain = test_idx_arr[mask]
-                baseline_means[name] = float(np.mean(all_labels[remain])) if remain.size else 0.0
+                baseline_means[name] = _mean_for_indices(remain)
 
     return mean_true, mean_rand, mean_pred, baseline_means, metrics, calibrator_info
 
