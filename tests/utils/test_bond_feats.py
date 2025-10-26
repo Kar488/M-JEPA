@@ -51,7 +51,7 @@ def test_attach_respects_target_edge_dim_and_sets_flag(monkeypatch):
         target_edge_dim=18,
     )
     assert out.edge_attr.shape == (2, 18)
-    # Column 13 (0-based) stores the has_3d flag when padding to 18 dims
-    assert np.allclose(out.edge_attr[:, 13], 1.0)
-    # Remaining padded columns stay zero by default
-    assert np.allclose(out.edge_attr[:, 14:], 0.0)
+    # Column 7 (0-based) stores the has_3d flag when padding to 18 dims
+    assert np.allclose(out.edge_attr[:, 7], 1.0)
+    # Geometry section (columns 8 onwards) stays zero by default
+    assert np.allclose(out.edge_attr[:, 8:], 0.0)

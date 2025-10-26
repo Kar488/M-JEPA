@@ -2,6 +2,11 @@
 from rdkit import Chem
 import numpy as np
 
+try:  # Align padding layout with dataset expectations when available
+    from data.mdataset import EDGE_BASE_DIM as _EDGE_BASE_DIM  # type: ignore
+except Exception:  # pragma: no cover - fallback when dataset module unavailable
+    _EDGE_BASE_DIM = 7
+
 _BOND_TYPES = [
     Chem.BondType.SINGLE, Chem.BondType.DOUBLE,
     Chem.BondType.TRIPLE, Chem.BondType.AROMATIC,
@@ -60,13 +65,28 @@ def _finalise_edge_attr(
         return feats[:, :target_dim].astype(np.float32, copy=False)
 
     # target_dim > base_dim – pad with zeros and optionally set the 3-D flag.
+    feats32 = feats.astype(np.float32, copy=False)
     padded = np.zeros((feats.shape[0], target_dim), dtype=np.float32)
-    padded[:, :base_dim] = feats.astype(np.float32, copy=False)
 
-    flag_idx = base_dim
-    if flag_idx < target_dim:
+    # Copy the base RDKit features but keep the flag slot at EDGE_BASE_DIM free.
+    pre_flag_dim = min(base_dim, target_dim, _EDGE_BASE_DIM)
+    if pre_flag_dim > 0:
+        padded[:, :pre_flag_dim] = feats32[:, :pre_flag_dim]
+
+    flag_idx = None
+    if target_dim > _EDGE_BASE_DIM:
+        flag_idx = min(_EDGE_BASE_DIM, target_dim - 1)
         flag_value = float(_infer_has_3d(graph) if has_3d is None else has_3d)
         padded[:, flag_idx] = flag_value
+
+    # If no geometry section is expected (target_dim <= EDGE_BASE_DIM + 1),
+    # reuse any remaining columns for the extra RDKit stereo features.
+    if flag_idx is None or target_dim <= _EDGE_BASE_DIM + 1:
+        start = pre_flag_dim if flag_idx is None else flag_idx + 1
+        if start < target_dim and base_dim > pre_flag_dim:
+            take = min(base_dim - pre_flag_dim, target_dim - start)
+            if take > 0:
+                padded[:, start : start + take] = feats32[:, pre_flag_dim : pre_flag_dim + take]
 
     return padded
 
