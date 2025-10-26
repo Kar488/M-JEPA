@@ -182,6 +182,104 @@ def test_evaluate_case_study_handles_empty_predictions(monkeypatch):
     assert metrics["ece"] == pytest.approx(0.5)
 
 
+def test_evaluate_case_study_multitask_two_logits(monkeypatch):
+    dataset = types.SimpleNamespace(graphs=[types.SimpleNamespace() for _ in range(3)])
+    labels = np.array([0.0, 1.0, 0.0])
+
+    training_pkg = types.ModuleType("training")
+    unsup = types.ModuleType("training.unsupervised")
+    unsup.train_jepa = lambda *args, **kwargs: {}
+
+    sup = types.ModuleType("training.supervised")
+
+    def _train_linear_head(**_kwargs):
+        return {"head": torch.nn.Linear(1, 1)}
+
+    sup.train_linear_head = _train_linear_head
+
+    monkeypatch.setitem(sys.modules, "training", training_pkg)
+    monkeypatch.setitem(sys.modules, "training.unsupervised", unsup)
+    monkeypatch.setitem(sys.modules, "training.supervised", sup)
+
+    import experiments.case_study as case_study
+
+    val_logits = torch.tensor(
+        [[[0.0, 1.0], [1.0, 3.0], [2.0, 5.0]]],
+        dtype=torch.float32,
+    )
+    val_probs = torch.tensor(
+        [[[0.4, 0.6], [0.3, 0.7], [0.2, 0.8]]],
+        dtype=torch.float32,
+    )
+    test_logits = torch.tensor(
+        [[[0.0, 0.5], [0.5, 2.0], [1.0, 3.5]]],
+        dtype=torch.float32,
+    )
+    test_probs = torch.tensor(
+        [[[0.45, 0.55], [0.35, 0.65], [0.25, 0.75]]],
+        dtype=torch.float32,
+    )
+
+    outputs = [(val_logits, val_probs), (test_logits, test_probs)]
+
+    def fake_predict(*args, **kwargs):
+        try:
+            logits, probs = outputs.pop(0)
+        except IndexError:  # pragma: no cover - defensive fallback
+            logits = torch.empty((0, 2))
+            probs = torch.empty((0, 2))
+        return logits, probs
+
+    monkeypatch.setattr(case_study, "_predict_logits_probs_in_chunks", fake_predict)
+
+    class DummyLR:
+        fit_args: dict[str, np.ndarray] = {}
+        predict_args: dict[str, np.ndarray] = {}
+
+        def __init__(self, *args, **kwargs):
+            self.coef_ = np.zeros((1, 1))
+            self.intercept_ = np.zeros(1)
+
+        def fit(self, X, y):
+            DummyLR.fit_args = {"X": X.copy(), "y": y.copy()}
+            self.coef_ = np.ones((1, X.shape[1]))
+            self.intercept_ = np.zeros(1)
+            return self
+
+        def predict_proba(self, X):
+            DummyLR.predict_args = {"X": X.copy()}
+            probs = np.full((X.shape[0], 2), 0.2, dtype=float)
+            probs[:, 1] = 0.8
+            probs[:, 0] = 0.2
+            return probs
+
+    monkeypatch.setattr(case_study, "LogisticRegression", DummyLR)
+
+    mean_true, mean_rand, mean_pred, baselines, metrics, calibrator = case_study._evaluate_case_study(
+        dataset=dataset,
+        encoder=None,
+        head=None,
+        all_labels=labels,
+        train_idx=[0],
+        val_idx=[0, 1, 2],
+        test_idx=[0, 1, 2],
+        triage_pct=0.0,
+        calibrate=True,
+        device="cpu",
+        edge_dim=0,
+        seed=0,
+        baseline_embeddings=None,
+    )
+
+    assert calibrator["feature_dim"] == 1
+    assert calibrator["status"] == "fitted"
+    assert calibrator["type"] == "platt"
+    assert np.allclose(DummyLR.fit_args["X"].reshape(-1), np.array([1.0, 2.0, 3.0]))
+    assert np.array_equal(DummyLR.fit_args["y"], np.array([0, 1, 0]))
+    assert np.allclose(DummyLR.predict_args["X"].reshape(-1), np.array([0.5, 1.5, 2.5]))
+    assert baselines == {}
+
+
 def test_case_study_trains_head_when_missing(tmp_path, monkeypatch, caplog):
     import experiments.case_study as case_study
 
