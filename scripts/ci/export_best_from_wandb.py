@@ -12,7 +12,7 @@ Notes:
 - This script does NOT create a sweep; Step #3 will create/use WANDB_SWEEP_ID2.
 """
 
-import argparse, json, math, os, time
+import argparse, csv, json, math, os, time
 from collections.abc import Mapping
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
@@ -237,6 +237,16 @@ def _merge_missing(dst: Dict[str, Any], src: Mapping[str, Any]) -> None:
         dst[key] = value
 
 
+def _qualify_sweep_id(raw: str, entity: str, project: str) -> str:
+    token = (raw or "").strip()
+    if not token:
+        return token
+    if "/" in token:
+        return token
+    base = f"{entity}/{project}" if entity else project
+    return f"{base}/{token}" if base else token
+
+
 def _extract_summary(run: Any) -> Dict[str, Any]:
     """Collect the most complete summary mapping exposed by the run."""
 
@@ -297,6 +307,112 @@ def metric(run, name: str, default=None):
         config = _coerce_mapping(getattr(run, "config", {}) or {})
         v = _lookup_nested(config, name)
     return v if v is not None else default
+
+
+def _coerce_to_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        token = value.strip()
+        if not token:
+            return None
+        try:
+            return float(token)
+        except Exception:
+            return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+RMSE_KEYS: Tuple[str, ...] = (
+    "val_rmse",
+    "validation.rmse",
+    "metrics/val_rmse",
+)
+
+R2_KEYS: Tuple[str, ...] = (
+    "val_r2",
+    "validation.r2",
+    "metrics/val_r2",
+)
+
+
+def _resolve_metric_value(run: Any, candidates: Sequence[str]) -> Optional[float]:
+    for key in candidates:
+        value = metric(run, key)
+        coerced = _coerce_to_float(value)
+        if coerced is not None:
+            return coerced
+    return None
+
+
+def _serialise_config_value(value: Any) -> Any:
+    if isinstance(value, (list, tuple, set, frozenset, dict)):
+        try:
+            return json.dumps(value, sort_keys=True)
+        except Exception:
+            try:
+                return json.dumps(_unwrap_config_value(value), sort_keys=True)
+            except Exception:
+                return str(value)
+    return value
+
+
+def _build_run_record(run: Any, sweep_id: str) -> Dict[str, Any]:
+    config = _sanitize_run_config(getattr(run, "config", {}) or {})
+    record: Dict[str, Any] = {
+        "sweep_id": sweep_id,
+        "run_id": getattr(run, "id", ""),
+        "run_name": getattr(run, "name", ""),
+        "state": getattr(run, "state", ""),
+    }
+    method = config.get("training_method")
+    if isinstance(method, str):
+        record["training_method"] = method
+    else:
+        summary_method = metric(run, "training_method")
+        if isinstance(summary_method, str):
+            record["training_method"] = summary_method
+
+    rmse_val = _resolve_metric_value(run, RMSE_KEYS)
+    if rmse_val is not None:
+        record["metric_rmse"] = rmse_val
+    r2_val = _resolve_metric_value(run, R2_KEYS)
+    if r2_val is not None:
+        record["metric_r2"] = r2_val
+
+    for key, value in config.items():
+        record[f"config.{key}"] = _serialise_config_value(value)
+
+    return record
+
+
+def _write_records_csv(path: str, records: Sequence[Dict[str, Any]]) -> int:
+    if not path or not records:
+        return 0
+
+    directory = os.path.dirname(os.path.abspath(path))
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+
+    fieldnames: List[str] = sorted({key for rec in records for key in rec.keys()})
+    if not fieldnames:
+        return 0
+
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for rec in records:
+            row = {field: rec.get(field, "") for field in fieldnames}
+            writer.writerow(row)
+
+    return len(records)
 
 def detect_task(runs) -> str:
     have_auc = any(metric(r, "val_auc") is not None for r in runs)
@@ -745,6 +861,29 @@ def main():
     ap.add_argument("--phase2_yaml", "--phase2-yaml", dest="phase2_yaml",
                     default=os.path.join(GRID_DIR, "grid_sweep_phase2.yaml"),
                     help="Emit/overwrite Phase-2 sweep YAML here (default: $GRID_DIR/grid_sweep_phase2.yaml)")
+    ap.add_argument(
+        "--metrics-csv",
+        dest="metrics_csv",
+        default=os.path.join(GRID_DIR, "phase1_runs.csv"),
+        help="Export per-run hyperparameters and metrics to this CSV (default: $GRID_DIR/phase1_runs.csv)",
+    )
+    ap.add_argument(
+        "--winner-csv",
+        dest="winner_csv",
+        default=os.path.join(GRID_DIR, "phase2_winner_config.csv"),
+        help="Export the selected Phase-2 seed configuration to this CSV",
+    )
+    ap.add_argument(
+        "--include-sweep",
+        dest="include_sweeps",
+        action="append",
+        default=None,
+        help=(
+            "Additional sweep identifiers to include when exporting the per-run "
+            "CSV (repeatable). Accepts either bare sweep IDs or fully qualified "
+            "entity/project/id paths."
+        ),
+    )
     # phase-2 data roots (externalizable via CI YAML/env)
     ap.add_argument("--phase2_unlabeled_dir", "--phase2-unlabeled-dir",
                     dest="phase2_unlabeled_dir",
@@ -794,6 +933,54 @@ def main():
     if not runs:
         raise RuntimeError(f"No runs found in sweep {sweep_id}")
 
+    include_sweeps_raw = args.include_sweeps or []
+    include_sweeps: List[str] = []
+    for raw in include_sweeps_raw:
+        qualified = _qualify_sweep_id(raw, ENTITY, PROJECT)
+        if qualified and qualified not in include_sweeps:
+            include_sweeps.append(qualified)
+    if sweep_id not in include_sweeps:
+        include_sweeps.append(sweep_id)
+
+    per_sweep_runs: Dict[str, List[Any]] = {sweep_id: runs}
+    for extra_sweep in include_sweeps:
+        if extra_sweep in per_sweep_runs:
+            continue
+        try:
+            per_sweep_runs[extra_sweep] = list(api.sweep(extra_sweep).runs)
+        except Exception as exc:  # pragma: no cover - network/API variability
+            print(
+                f"[export_best][warn] failed to load sweep {extra_sweep}: {exc}",
+                flush=True,
+            )
+            continue
+
+    metrics_records: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, str]] = set()
+    for sweep_key, sweep_runs in per_sweep_runs.items():
+        for run in sweep_runs:
+            run_id = getattr(run, "id", None)
+            dedup_key = (sweep_key, run_id or "")
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            try:
+                metrics_records.append(_build_run_record(run, sweep_key))
+            except Exception as exc:  # pragma: no cover - defensive guard
+                print(
+                    f"[export_best][warn] failed to serialise run {run_id} from {sweep_key}: {exc}",
+                    flush=True,
+                )
+                continue
+
+    if args.metrics_csv and metrics_records:
+        rows_written = _write_records_csv(args.metrics_csv, metrics_records)
+        print(
+            f"[export_best] wrote Phase-1 sweep metrics to {args.metrics_csv} "
+            f"({rows_written} rows)",
+            flush=True,
+        )
+
     # Task + metric plan
     task = args.task if args.task != "auto" else detect_task(runs)
     primary, maximize = pick_primary_metric(runs, task, args)
@@ -829,6 +1016,14 @@ def main():
         f"[export_best] Wrote best config to {args.out}: "
         f"{json.dumps(summary, sort_keys=True)}"
     )
+
+    if args.winner_csv:
+        winner_rows = _write_records_csv(args.winner_csv, [_build_run_record(best, sweep_id)])
+        if winner_rows:
+            print(
+                f"[export_best] wrote Phase-2 winner metrics to {args.winner_csv}",
+                flush=True,
+            )
 
     # Optionally derive narrowed Phase-2 ranges and write YAML for Step #3
     if args.emit_bounds:
