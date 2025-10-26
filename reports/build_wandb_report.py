@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import inspect
+import io
 import json
 import logging
 import os
@@ -104,6 +106,22 @@ SECTION_KEYWORDS: Mapping[str, Sequence[str]] = {
 }
 
 
+def _section_has_plot_helpers(section: str) -> bool:
+    mapping = {
+        "Overview": False,
+        "Sweeps & Ablations": plots_pretrain is not None,
+        "Pretraining Diagnostics": plots_pretrain is not None,
+        "Representation": plots_repr is not None,
+        "Finetuning — Regression": plots_regression is not None,
+        "Finetuning — Classification": plots_classification is not None,
+        "Tox21 Utility": plots_tox21 is not None,
+        "Method Comparison": plots_compare is not None,
+        "Interpretability": False,
+        "Robustness & Reproducibility": False,
+    }
+    return bool(mapping.get(section, False))
+
+
 @dataclass
 class _LoggedAsset:
     """Metadata describing a figure or table logged to W&B."""
@@ -114,6 +132,7 @@ class _LoggedAsset:
     kind: str
     title: str
     caption: Optional[str] = None
+    static_markdown: Optional[str] = None
 
     @property
     def manifest_entry(self) -> str:
@@ -185,6 +204,10 @@ def _render_markdown_section(
             lines.append(line)
             if asset.caption:
                 lines.append(f"  - {asset.caption}")
+            if asset.static_markdown:
+                lines.append("")
+                lines.extend(asset.static_markdown.splitlines())
+                lines.append("")
     return "\n".join(lines)
 
 
@@ -205,6 +228,55 @@ def _build_header_block(
         )
     text = "\n".join(lines)
     return _build_markdown_block(blocks_module, text)
+
+
+def _dataframe_to_markdown(df: Any, *, max_rows: int = 20) -> Optional[str]:
+    if df is None:
+        return None
+    candidate = df
+    if hasattr(df, "head"):
+        try:
+            candidate = df.head(max_rows)
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.debug("Failed to call head() on dataframe candidate: %s", exc)
+            candidate = df
+    if hasattr(candidate, "to_markdown"):
+        try:
+            return candidate.to_markdown(index=False)  # type: ignore[attr-defined]
+        except Exception as exc:  # pragma: no cover - optional dependency
+            LOGGER.debug("to_markdown failed, falling back to string representation: %s", exc)
+    text: Optional[str] = None
+    if hasattr(candidate, "to_string"):
+        try:
+            text = candidate.to_string(index=False)  # type: ignore[attr-defined]
+        except TypeError:
+            try:
+                text = candidate.to_string()  # type: ignore[attr-defined]
+            except Exception as exc:  # pragma: no cover - defensive
+                LOGGER.debug("to_string() failed: %s", exc)
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.debug("to_string() failed: %s", exc)
+    if text is None:
+        try:
+            text = str(candidate)
+        except Exception:  # pragma: no cover - defensive
+            return None
+    return "```\n" + text + "\n```"
+
+
+def _figure_to_markdown(fig: Any, title: str) -> Optional[str]:
+    if fig is None or not hasattr(fig, "savefig"):
+        return None
+    buffer = io.BytesIO()
+    try:
+        fig.savefig(buffer, format="png", bbox_inches="tight")
+    except Exception as exc:  # pragma: no cover - plotting backend dependent
+        LOGGER.debug("Failed to serialise figure %s to PNG: %s", title, exc)
+        return None
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    if not encoded:
+        return None
+    return f"![{title}](data:image/png;base64,{encoded})"
 
 
 def _instantiate_report(
@@ -1032,17 +1104,25 @@ def _log_assets_to_wandb(
     reused: List[_LoggedAsset] = []
     tables_to_log: List[Tuple[str, pd.DataFrame, Optional[str]]] = []
     figures_to_log: List[Tuple[str, Any, Optional[str]]] = []
+    table_static: Dict[str, Optional[str]] = {}
+    figure_static: Dict[str, Optional[str]] = {}
 
     for table_name, df, caption in tables:
+        static_markdown = _dataframe_to_markdown(df)
+        table_static[table_name] = static_markdown
         asset = cached_assets.get(table_name)
         if asset and asset.kind == "table":
+            asset.static_markdown = static_markdown
             reused.append(asset)
             continue
         tables_to_log.append((table_name, df, caption))
 
     for fig_name, fig, caption in figures:
+        static_markdown = _figure_to_markdown(fig, fig_name)
+        figure_static[fig_name] = static_markdown
         asset = cached_assets.get(fig_name)
         if asset and asset.kind == "image":
+            asset.static_markdown = static_markdown
             reused.append(asset)
             continue
         figures_to_log.append((fig_name, fig, caption))
@@ -1087,6 +1167,7 @@ def _log_assets_to_wandb(
                     kind="table",
                     title=table_name,
                     caption=caption,
+                    static_markdown=table_static.get(table_name),
                 )
             )
         for fig_name, fig, caption in figures_to_log:
@@ -1102,6 +1183,7 @@ def _log_assets_to_wandb(
                     kind="image",
                     title=fig_name,
                     caption=caption,
+                    static_markdown=figure_static.get(fig_name),
                 )
             )
             with contextlib.suppress(Exception):
@@ -1121,6 +1203,7 @@ def _build_overview_assets(
     refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        LOGGER.info("[report_section] Overview skipped: no runs matched section filter")
         if not refresh and existing_assets:
             return list(existing_assets.values())
         return []
@@ -1144,6 +1227,11 @@ def _build_overview_assets(
     if not config_table.empty:
         tables.append(("config_snapshot", config_table, "Selected configuration parameters"))
 
+    if not tables:
+        LOGGER.info(
+            "[report_section] Overview produced no tabular assets (missing metrics/config keys)"
+        )
+
     return _log_assets_to_wandb(
         "Overview",
         entity,
@@ -1165,11 +1253,14 @@ def _build_sweep_assets(
     refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        LOGGER.info("[report_section] Sweeps & Ablations skipped: no runs matched section filter")
         if not refresh and existing_assets:
             return list(existing_assets.values())
         return []
     if plots_pretrain is None:
-        LOGGER.debug("Pretraining plotting helpers unavailable; skipping sweep figures")
+        LOGGER.info(
+            "[report_section] Sweeps & Ablations plotting helpers unavailable; using tables only"
+        )
         figures: List[Tuple[str, Any, Optional[str]]] = []
     else:
         figures = []
@@ -1192,6 +1283,19 @@ def _build_sweep_assets(
             fig = plots_pretrain.plot_metric_curves(histories, metric, label=metric)
             figures.append((f"sweep_curve_{metric}", fig, f"Sweep trajectories for {metric}"))
 
+    if not tables and not figures:
+        reason_parts = []
+        if not metric_keys:
+            reason_parts.append("no metrics matched selection keywords")
+        if plots_pretrain is None:
+            reason_parts.append("plotting helpers unavailable")
+        if not reason_parts:
+            reason_parts.append("no sweep artefacts constructed")
+        LOGGER.info(
+            "[report_section] Sweeps & Ablations produced no assets: %s",
+            "; ".join(reason_parts),
+        )
+
     return _log_assets_to_wandb(
         "Sweeps & Ablations",
         entity,
@@ -1212,11 +1316,41 @@ def _build_pretraining_assets(
     refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        LOGGER.info(
+            "[report_section] Pretraining Diagnostics skipped: no runs matched section filter"
+        )
         if not refresh and existing_assets:
             return list(existing_assets.values())
         return []
     if plots_pretrain is None:
-        LOGGER.debug("Pretraining plotting helpers unavailable; skipping diagnostics")
+        LOGGER.info(
+            "[report_section] Pretraining Diagnostics plotting helpers unavailable; generating metric tables"
+        )
+        metric_keys = _select_metric_keys(metrics, ("loss", "ema", "contrast", "variance"))
+        tables: List[Tuple[str, pd.DataFrame, Optional[str]]] = []
+        if metric_keys:
+            summary = runs_to_table(runs, metric_keys)
+            if not summary.empty:
+                tables.append(
+                    (
+                        "pretraining_metrics",
+                        summary,
+                        "Pretraining metrics for available runs",
+                    )
+                )
+        if tables:
+            return _log_assets_to_wandb(
+                "Pretraining Diagnostics",
+                entity,
+                project,
+                tables,
+                [],
+                existing_assets=existing_assets,
+                refresh=refresh,
+            )
+        LOGGER.info(
+            "[report_section] Pretraining Diagnostics fallback produced no assets (metrics missing)"
+        )
         if not refresh and existing_assets:
             return list(existing_assets.values())
         return []
@@ -1245,6 +1379,11 @@ def _build_pretraining_assets(
         fig = plots_pretrain.plot_ema_drift(steps, ema)
         figures.append(("ema_drift", fig, "EMA drift over time"))
 
+    if not figures:
+        LOGGER.info(
+            "[report_section] Pretraining Diagnostics produced no figures (missing histories/metrics)"
+        )
+
     return _log_assets_to_wandb(
         "Pretraining Diagnostics",
         entity,
@@ -1264,11 +1403,42 @@ def _build_representation_assets(
     refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        LOGGER.info("[report_section] Representation skipped: no runs matched section filter")
         if not refresh and existing_assets:
             return list(existing_assets.values())
         return []
     if plots_repr is None:
-        LOGGER.debug("Representation plotting helpers unavailable")
+        LOGGER.info(
+            "[report_section] Representation plotting helpers unavailable; generating embedding summaries"
+        )
+        metrics = _collect_summary_sequences(runs, ("embedding", "repr", "latent"))
+        tables: List[Tuple[str, pd.DataFrame, Optional[str]]] = []
+        if metrics:
+            tables.append(
+                (
+                    "representation_metrics",
+                    pd.DataFrame(
+                        {
+                            "metric": list(metrics.keys()),
+                            "values": [";".join(map(str, values)) for values in metrics.values()],
+                        }
+                    ),
+                    "Embedding-related summary metrics",
+                )
+            )
+        if tables:
+            return _log_assets_to_wandb(
+                "Representation",
+                entity,
+                project,
+                tables,
+                [],
+                existing_assets=existing_assets,
+                refresh=refresh,
+            )
+        LOGGER.info(
+            "[report_section] Representation fallback produced no assets (embedding summaries missing)"
+        )
         if not refresh and existing_assets:
             return list(existing_assets.values())
         return []
@@ -1315,6 +1485,10 @@ def _build_representation_assets(
             )
         except Exception as exc:  # pragma: no cover - depends on optional deps
             LOGGER.debug("Failed to render embedding for run %s: %s", run.run_id, exc)
+    if not tables and not figures:
+        LOGGER.info(
+            "[report_section] Representation produced no assets (unable to derive embeddings/metadata)"
+        )
     return _log_assets_to_wandb(
         "Representation",
         entity,
@@ -1334,6 +1508,9 @@ def _build_regression_assets(
     refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        LOGGER.info(
+            "[report_section] Finetuning — Regression skipped: no runs matched section filter"
+        )
         if not refresh and existing_assets:
             return list(existing_assets.values())
         return []
@@ -1383,6 +1560,19 @@ def _build_regression_assets(
             )
         )
 
+    if not tables and not figures:
+        reasons = []
+        if not metric_keys:
+            reasons.append("no regression metrics found")
+        if pair is None:
+            reasons.append("prediction targets unavailable")
+        if plots_regression is None:
+            reasons.append("plotting helpers unavailable")
+        LOGGER.info(
+            "[report_section] Finetuning — Regression produced no assets: %s",
+            "; ".join(reasons) or "no regression artefacts constructed",
+        )
+
     return _log_assets_to_wandb(
         "Finetuning — Regression",
         entity,
@@ -1402,6 +1592,9 @@ def _build_classification_assets(
     refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        LOGGER.info(
+            "[report_section] Finetuning — Classification skipped: no runs matched section filter"
+        )
         if not refresh and existing_assets:
             return list(existing_assets.values())
         return []
@@ -1448,6 +1641,19 @@ def _build_classification_assets(
         except Exception as exc:
             LOGGER.debug("Classification metric plotting failed: %s", exc)
 
+    if not tables and not figures:
+        reasons = []
+        if not metric_keys:
+            reasons.append("no classification metrics found")
+        if pair is None:
+            reasons.append("prediction scores unavailable")
+        if plots_classification is None:
+            reasons.append("plotting helpers unavailable")
+        LOGGER.info(
+            "[report_section] Finetuning — Classification produced no assets: %s",
+            "; ".join(reasons) or "no classification artefacts constructed",
+        )
+
     return _log_assets_to_wandb(
         "Finetuning — Classification",
         entity,
@@ -1467,13 +1673,14 @@ def _build_tox21_assets(
     refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        LOGGER.info("[report_section] Tox21 Utility skipped: no runs matched section filter")
         if not refresh and existing_assets:
             return list(existing_assets.values())
         return []
     tables: List[Tuple[str, pd.DataFrame, Optional[str]]] = []
     figures: List[Tuple[str, Any, Optional[str]]] = []
     if plots_tox21 is None:
-        LOGGER.debug("Tox21 plotting helpers unavailable; only tables will be logged")
+        LOGGER.info("[report_section] Tox21 Utility plotting helpers unavailable; tables only")
 
     metric_keys = _select_metric_keys(
         [key for run in runs for key in run.summary.keys()],
@@ -1531,6 +1738,17 @@ def _build_tox21_assets(
                 )
             )
 
+    if not tables and not figures:
+        reasons = []
+        if plots_tox21 is None:
+            reasons.append("plotting helpers unavailable")
+        if not metric_keys:
+            reasons.append("no tox21 metrics found")
+        LOGGER.info(
+            "[report_section] Tox21 Utility produced no assets: %s",
+            "; ".join(reasons) or "no tox21 artefacts constructed",
+        )
+
     return _log_assets_to_wandb(
         "Tox21 Utility",
         entity,
@@ -1550,6 +1768,7 @@ def _build_method_comparison_assets(
     refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        LOGGER.info("[report_section] Method Comparison skipped: no runs matched section filter")
         if not refresh and existing_assets:
             return list(existing_assets.values())
         return []
@@ -1559,6 +1778,9 @@ def _build_method_comparison_assets(
     )
     summary = runs_to_table(runs, metrics)
     if summary.empty:
+        LOGGER.info(
+            "[report_section] Method Comparison produced no assets: summary table empty"
+        )
         return []
     figures: List[Tuple[str, Any, Optional[str]]] = []
     tables = [("method_comparison", summary, "Method comparison metrics")]
@@ -1609,6 +1831,7 @@ def _build_interpretability_assets(
     refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        LOGGER.info("[report_section] Interpretability skipped: no runs matched section filter")
         if not refresh and existing_assets:
             return list(existing_assets.values())
         return []
@@ -1619,6 +1842,10 @@ def _build_interpretability_assets(
             {"metric": list(metrics.keys()), "values": [";".join(map(str, v)) for v in metrics.values()]}
         )
         tables.append(("interpretability_metrics", df, "Interpretability diagnostics"))
+    if not tables:
+        LOGGER.info(
+            "[report_section] Interpretability produced no assets (no interpretability metrics detected)"
+        )
     return _log_assets_to_wandb(
         "Interpretability",
         entity,
@@ -1638,6 +1865,7 @@ def _build_robustness_assets(
     refresh: bool,
 ) -> List[_LoggedAsset]:
     if not runs:
+        LOGGER.info("[report_section] Robustness & Reproducibility skipped: no runs matched section filter")
         if not refresh and existing_assets:
             return list(existing_assets.values())
         return []
@@ -1651,6 +1879,10 @@ def _build_robustness_assets(
             }
         )
         tables.append(("robustness_metrics", df, "Robustness indicators"))
+    if not tables:
+        LOGGER.info(
+            "[report_section] Robustness & Reproducibility produced no assets (no robustness metrics detected)"
+        )
     return _log_assets_to_wandb(
         "Robustness & Reproducibility",
         entity,
@@ -1867,6 +2099,16 @@ def build_report(
     generated_at = datetime.utcnow()
     base_url = _resolve_base_url()
 
+    LOGGER.info(
+        "[report_discovery] plotting_modules classification=%s regression=%s pretrain=%s representation=%s tox21=%s compare=%s",
+        bool(plots_classification),
+        bool(plots_regression),
+        bool(plots_pretrain),
+        bool(plots_repr),
+        bool(plots_tox21),
+        bool(plots_compare),
+    )
+
     resolved_per_page = 75
     if per_page is not None:
         if per_page < 1:
@@ -1988,6 +2230,20 @@ def build_report(
     for section in REPORT_SECTIONS:
         section_specific_runs = section_runs.get(section, [])
         existing_assets = cached_assets_by_section.get(section, {})
+        metric_sample = sorted(
+            {
+                str(key)
+                for run in section_specific_runs
+                for key in getattr(run, "summary", {}).keys()
+            }
+        )[:5]
+        LOGGER.info(
+            "[report_discovery] section=%s runs=%d plots_available=%s sample_metrics=%s",
+            section,
+            len(section_specific_runs),
+            _section_has_plot_helpers(section),
+            metric_sample,
+        )
         assets = _build_section_assets(
             section,
             section_specific_runs,

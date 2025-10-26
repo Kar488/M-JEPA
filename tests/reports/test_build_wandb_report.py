@@ -451,3 +451,75 @@ def test_log_assets_reuses_cached_assets(monkeypatch: pytest.MonkeyPatch) -> Non
     )
 
     assert result == [reused]
+
+
+def test_log_assets_generate_static_markdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyFrame:
+        empty = False
+
+        def head(self, *_: Any, **__: Any) -> "DummyFrame":
+            return self
+
+        def to_markdown(self, index: bool = False) -> str:  # noqa: ARG002 - signature compatibility
+            return "| metric |\n| --- |\n| value |"
+
+    class DummyFigure:
+        def __init__(self) -> None:
+            self.cleared = False
+
+        def savefig(self, buffer: Any, *, format: str, bbox_inches: str) -> None:  # noqa: ARG002
+            buffer.write(b"image-bytes")
+
+        def clf(self) -> None:
+            self.cleared = True
+
+    class DummyRun:
+        def __init__(self) -> None:
+            self.logged: list[dict[str, Any]] = []
+            self.path = ("entity", "project", "run")
+
+        def log(self, payload: dict[str, Any]) -> None:
+            self.logged.append(payload)
+
+        def finish(self) -> None:
+            return None
+
+    class DummyWandb:
+        def __init__(self) -> None:
+            self.started = 0
+
+        def init(self, **_: Any) -> DummyRun:
+            self.started += 1
+            return DummyRun()
+
+        class Table:  # pragma: no cover - simple stub
+            def __init__(self, dataframe: Any) -> None:
+                self.dataframe = dataframe
+
+        class Image:  # pragma: no cover - simple stub
+            def __init__(self, figure: Any) -> None:
+                self.figure = figure
+
+    dummy_wandb = DummyWandb()
+    monkeypatch.setitem(sys.modules, "wandb", dummy_wandb)
+
+    tables = [("overview_metrics", DummyFrame(), "Overview metrics")]
+    figures = [("overview_plot", DummyFigure(), "Overview figure")]
+
+    assets = build._log_assets_to_wandb(
+        "Overview",
+        entity="entity",
+        project="project",
+        tables=tables,
+        figures=figures,
+        existing_assets={},
+        refresh=True,
+    )
+
+    table_asset = next(asset for asset in assets if asset.kind == "table")
+    figure_asset = next(asset for asset in assets if asset.kind == "image")
+
+    assert "| metric |" in (table_asset.static_markdown or "")
+    assert figure_asset.static_markdown and figure_asset.static_markdown.startswith(
+        "![overview_plot](data:image/png;base64,"
+    )
