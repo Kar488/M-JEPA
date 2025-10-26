@@ -30,6 +30,8 @@ import torch
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 
+from data.mdataset import EDGE_BASE_DIM, EDGE_TOTAL_DIM
+
 try:
     from rdkit import Chem
     from rdkit.Chem.Scaffolds import MurckoScaffold
@@ -1163,6 +1165,8 @@ def run_tox21_case_study(
     diagnostics["add_3d_requested"] = requested_add_3d
     diagnostics["add_3d_effective"] = effective_add_3d
 
+    target_edge_dim = EDGE_TOTAL_DIM if effective_add_3d else EDGE_BASE_DIM
+
     for i, graph in enumerate(dataset.graphs):
         smi = getattr(graph, "smiles", None) or (
             getattr(dataset, "smiles", None)[i] if hasattr(dataset, "smiles") else None
@@ -1172,7 +1176,11 @@ def run_tox21_case_study(
         graph.smiles = smi
         edge_attr = getattr(graph, "edge_attr", None)
         if edge_attr is None or getattr(edge_attr, "shape", (0, 0))[1] == 0:
-            attach_bond_features_from_smiles(graph, smi)
+            attach_bond_features_from_smiles(
+                graph,
+                smi,
+                target_edge_dim=target_edge_dim,
+            )
 
     all_labels = dataset.labels.astype(float)
     num_total = len(dataset)
