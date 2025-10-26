@@ -243,6 +243,13 @@ def test_export_best_nonempty_json(monkeypatch, tmp_path):
     assert payload["hidden_dim"] == 384
     assert payload["num_layers"] == 4
 
+    metrics_path = grid_dir / "phase1_runs.csv"
+    winner_path = grid_dir / "phase2_winner_config.csv"
+    assert metrics_path.is_file()
+    assert winner_path.is_file()
+    header = metrics_path.read_text().splitlines()[0]
+    assert "config.training_method" in header
+
 
 def test_phase2_yaml_and_best_paths(monkeypatch, tmp_path):
     app_dir = tmp_path
@@ -314,6 +321,11 @@ def test_phase2_yaml_and_best_paths(monkeypatch, tmp_path):
     phase2 = yaml.safe_load(phase2_path.read_text())
     assert phase2["parameters"]["training_method"]["value"] == "contrastive"
     assert phase2_path.is_file()
+
+    metrics_path = grid_dir / "phase1_runs.csv"
+    winner_path = grid_dir / "phase2_winner_config.csv"
+    assert metrics_path.is_file()
+    assert winner_path.is_file()
 
 
 def test_export_best_errors_on_empty_sweep(monkeypatch, tmp_path):

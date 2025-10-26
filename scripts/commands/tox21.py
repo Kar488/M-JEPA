@@ -5,8 +5,6 @@ import csv
 import hashlib
 import json
 import logging
-import json
-import logging
 import math
 import os
 import sys
@@ -943,12 +941,73 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 "auc_summary": stage_info.get("auc_summary"),
             }
 
+        def _sanitize_mode_slug(mode: str) -> str:
+            return "".join(
+                ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in mode
+            )
+
+        aggregate_csv_path: Optional[str] = None
+        aggregate_rows: List[Dict[str, str]] = []
+        for task_name, task_csv in aggregated_csv_paths.items():
+            if not task_csv or not os.path.isfile(task_csv):
+                continue
+            try:
+                with open(task_csv, "r", newline="", encoding="utf-8") as handle:
+                    reader = csv.reader(handle)
+                    next(reader, None)
+                    for row in reader:
+                        if len(row) < 3:
+                            continue
+                        aggregate_rows.append(
+                            {
+                                "task": str(task_name),
+                                "evaluation": str(row[0]),
+                                "metric": str(row[1]),
+                                "value": str(row[2]),
+                            }
+                        )
+            except Exception:
+                logger.debug("Failed to read per-task CSV %s", task_csv, exc_info=True)
+                continue
+
+        if aggregate_rows:
+            mode_slug = _sanitize_mode_slug(eval_mode)
+            aggregate_csv_path = os.path.join(
+                report_dir, f"tox21_{mode_slug}_metrics.csv"
+            )
+            with open(aggregate_csv_path, "w", newline="", encoding="utf-8") as agg_handle:
+                writer = csv.DictWriter(
+                    agg_handle,
+                    fieldnames=["task", "evaluation", "metric", "value"],
+                )
+                writer.writeheader()
+                writer.writerows(aggregate_rows)
+            logger.info(
+                "Wrote aggregated Tox21 metrics CSV to %s (%d rows)",
+                aggregate_csv_path,
+                len(aggregate_rows),
+            )
+            _wandb_log_safe(
+                wb,
+                {
+                    "tox21_aggregated_csv": aggregate_csv_path,
+                    "evaluation_mode": eval_mode,
+                    "task_count": len(tasks_to_run),
+                },
+            )
+        else:
+            logger.info(
+                "No per-task Tox21 CSV files found; skipping aggregated metrics export"
+            )
+
         aggregated_stage["summary_files"] = {
             "json": aggregated_json_paths,
             "csv": aggregated_csv_paths,
             "calibrator": aggregated_calibrator_paths,
             "manifest": aggregated_manifest_paths,
         }
+        if aggregate_csv_path:
+            aggregated_stage["summary_files"]["aggregate_csv"] = aggregate_csv_path
 
         aggregated_stage_path = os.path.join(stage_dir, f"tox21_{stage_name}.json")
         with open(aggregated_stage_path, "w", encoding="utf-8") as fh:
@@ -983,6 +1042,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 for task in tasks_to_run
             },
         }
+        if aggregate_csv_path:
+            aggregate_manifest["aggregate_csv"] = aggregate_csv_path
         with open(manifest_path, "w", encoding="utf-8") as manifest_file:
             json.dump(aggregate_manifest, manifest_file, indent=2, sort_keys=True)
             manifest_file.write("\n")

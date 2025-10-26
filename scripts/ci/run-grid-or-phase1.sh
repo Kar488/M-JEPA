@@ -361,6 +361,10 @@ PY
         --task "$TASK_FROM_PE" \
         --phase2-method bayes \
         --emit-bounds \
+        --metrics-csv "${GRID_DIR:-$APP_DIR/grid}/phase1_runs.csv" \
+        --winner-csv "${GRID_DIR:-$APP_DIR/grid}/phase2_winner_config.csv" \
+        --include-sweep "${WANDB_ENTITY}/${WANDB_PROJECT}/${JEPA_ID}" \
+        --include-sweep "${WANDB_ENTITY}/${WANDB_PROJECT}/${CONTRAST_ID}" \
         --out "$TMP_BEST" \
         --phase2-yaml "$TMP_PHASE2" \
         --phase2-unlabeled-dir "${PHASE2_UNLABELED_DIR:-$APP_DIR/data/ZINC-canonicalized}" \
