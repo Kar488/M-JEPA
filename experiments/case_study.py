@@ -724,33 +724,58 @@ def _evaluate_case_study(
         diag_hook=_make_batch_hook("test"),
     )
 
-    val_logits_np = val_logits.cpu().numpy().reshape(-1, 1) if val_logits.numel() else np.zeros((0, 1))
-    test_logits_np = test_logits.cpu().numpy().reshape(-1, 1) if test_logits.numel() else np.zeros((0, 1))
+    def _select_positive_probabilities(arr: np.ndarray) -> np.ndarray:
+        if arr.ndim == 0:
+            return arr.reshape(1)
+        if arr.ndim == 1:
+            return arr
+        if arr.shape[-1] == 0:
+            return arr.reshape(-1)
+        if arr.shape[-1] == 1:
+            return arr[:, 0]
+        return arr[:, -1]
 
-    val_probs_np = val_probs.cpu().numpy()
-    test_probs_np = test_probs.cpu().numpy()
-    if val_probs_np.ndim > 1:
-        val_probs_np = val_probs_np[:, 0]
-    if test_probs_np.ndim > 1:
-        test_probs_np = test_probs_np[:, 0]
+    def _select_calibration_features(arr: np.ndarray) -> np.ndarray:
+        if arr.ndim == 0:
+            return arr.reshape(1, 1)
+        if arr.ndim == 1:
+            return arr.reshape(-1, 1)
+        if arr.shape[-1] == 0:
+            return arr.reshape(-1, 1)
+        if arr.shape[-1] == 1:
+            return arr.astype(float)
+        if arr.shape[-1] == 2:
+            diff = arr[:, 1] - arr[:, 0]
+            return diff.reshape(-1, 1)
+        return arr[:, [-1]]
+
+    val_logits_np = val_logits.cpu().numpy() if val_logits.numel() else np.zeros((0, 1))
+    test_logits_np = test_logits.cpu().numpy() if test_logits.numel() else np.zeros((0, 1))
+
+    val_logits_feat = _select_calibration_features(val_logits_np)
+    test_logits_feat = _select_calibration_features(test_logits_np)
+
+    val_probs_np = _select_positive_probabilities(val_probs.cpu().numpy())
+    test_probs_np = _select_positive_probabilities(test_probs.cpu().numpy())
 
     calibrator_info: Dict[str, Any] = {
         "enabled": bool(calibrate),
         "fit_split": "val",
     }
+    calibrator_info["feature_dim"] = int(val_logits_feat.shape[1]) if val_logits_feat.ndim == 2 else 1
     calibrated_probs = test_probs_np
     if calibrate:
         calibrator_info["status"] = "skipped"
         try:
             val_y = all_labels[val_idx_arr].astype(float)
-            mask = (~np.isnan(val_y)) & np.isfinite(val_logits_np[:, 0])
+            mask = (~np.isnan(val_y)) & np.isfinite(val_logits_feat[:, 0])
             yv = val_y[mask].astype(int)
-            Xv = np.nan_to_num(val_logits_np[mask], nan=0.0, posinf=1e6, neginf=-1e6)
+            Xv = np.nan_to_num(val_logits_feat[mask], nan=0.0, posinf=1e6, neginf=-1e6)
             calibrator_info["n_candidates"] = int(mask.sum())
             if yv.size > 1 and np.unique(yv).size > 1:
                 platt = LogisticRegression(solver="lbfgs", max_iter=1000, class_weight="balanced")
                 platt.fit(Xv, yv)
-                Xt = np.nan_to_num(test_logits_np, nan=0.0, posinf=1e6, neginf=-1e6)
+                Xt = np.nan_to_num(test_logits_feat, nan=0.0, posinf=1e6, neginf=-1e6)
                 calibrated_probs = platt.predict_proba(Xt)[:, 1]
                 calibrator_info.update(
                     {
@@ -808,7 +833,10 @@ def _evaluate_case_study(
             )
             calibrated_probs = np.zeros(expected_len, dtype=float)
 
-    k = max(1, int(triage_pct * test_idx_arr.size))
+    if triage_pct <= 0:
+        k = 0
+    else:
+        k = max(1, int(triage_pct * test_idx_arr.size))
     k = min(k, test_idx_arr.size) if test_idx_arr.size else 0
 
     order = np.argsort(-calibrated_probs)[:k] if k > 0 else np.array([], dtype=int)
