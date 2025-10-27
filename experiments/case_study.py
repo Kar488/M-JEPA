@@ -232,8 +232,13 @@ from utils.graph_ops import (
 try:
     from utils.bond_feats import attach_bond_features_from_smiles
 except Exception:  # pragma: no cover - optional dependency
-    def attach_bond_features_from_smiles(graph, smiles):
-        """Fallback when RDKit bond featurisation is unavailable."""
+    def attach_bond_features_from_smiles(graph, smiles, *_, **__):
+        """Fallback when RDKit bond featurisation is unavailable.
+
+        The ``*_, **__`` placeholders mirror the real helper's signature so the
+        RDKit-free path accepts optional keyword arguments such as
+        ``target_edge_dim`` without raising ``TypeError``.
+        """
         return graph
 
 
@@ -898,14 +903,14 @@ def _evaluate_case_study(
     mean_true = _mean_for_indices(test_idx_arr)
 
     metrics: Dict[str, float] = {
-        # Default metrics to neutral values so downstream consumers never see
-        # ``nan`` when the TEST split is too small or degenerate. These
+        # Default metrics to NaN so reporting utilities can drop degenerate
+        # evaluations instead of treating them as real scores. These
         # placeholders are overwritten below whenever a metric is computed
         # successfully.
-        "roc_auc": 0.0,
-        "pr_auc": 0.0,
-        "brier": 0.0,
-        "ece": 0.0,
+        "roc_auc": float("nan"),
+        "pr_auc": float("nan"),
+        "brier": float("nan"),
+        "ece": float("nan"),
     }
 
     y_true = all_labels[test_idx_arr].astype(float)

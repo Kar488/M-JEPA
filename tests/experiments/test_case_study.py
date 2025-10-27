@@ -183,7 +183,7 @@ def test_evaluate_case_study_accepts_single_task_multilogit(monkeypatch):
 
     assert mean_true == pytest.approx(0.0)
     assert baselines == {}
-    assert metrics["roc_auc"] == pytest.approx(0.0)
+    assert np.isnan(metrics["roc_auc"])
     assert calibrator["feature_dim"] == 1
     assert calibrator["enabled"] is False
 
