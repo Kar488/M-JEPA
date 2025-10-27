@@ -102,6 +102,54 @@ def test_smiles_to_graph_add_3d_provides_pos():
     assert g.pos.shape[1] == 3
 
 
+def test_smiles_to_graph_add_3d_fills_missing_coords(monkeypatch):
+    if not RDKit_AVAILABLE:
+        pytest.skip("RDKit not installed")
+
+    calls: list[tuple] = []
+
+    def _always_fail(*args, **kwargs):
+        calls.append((args, kwargs))
+        return None, "failed"
+
+    monkeypatch.setattr(
+        "data.mdataset._generate_conformer_coords",
+        _always_fail,
+    )
+
+    g = GraphDataset.smiles_to_graph("CCO", add_3d=True, random_seed=0)
+
+    assert calls, "expected conformer generator to be invoked"
+    assert g.pos is not None
+    assert g.pos.shape == (g.x.shape[0], 3)
+    assert np.allclose(g.pos, 0.0)
+
+
+def test_graphdataset_backfills_missing_pos_when_any_present():
+    edge_index = np.zeros((2, 0), dtype=np.int64)
+    pos = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float64)
+
+    with_pos = GraphData(
+        x=np.zeros((2, 1), dtype=np.float32),
+        edge_index=edge_index,
+        pos=pos,
+    )
+    missing_pos = GraphData(
+        x=np.zeros((3, 1), dtype=np.float32),
+        edge_index=edge_index,
+    )
+
+    dataset = GraphDataset([with_pos, missing_pos])
+
+    assert dataset.graphs[0].pos is not None
+    assert dataset.graphs[0].pos.dtype == np.float32
+    assert np.allclose(dataset.graphs[0].pos, pos.astype(np.float32))
+
+    assert dataset.graphs[1].pos is not None
+    assert dataset.graphs[1].pos.shape == (3, 3)
+    assert np.allclose(dataset.graphs[1].pos, 0.0)
+
+
 def test_fallback_graph_adds_pos_when_requested():
     word = "fallback"
     g = _fallback_graph_from_string(word, add_pos=True)
