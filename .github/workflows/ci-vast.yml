@@ -597,8 +597,16 @@ jobs:
         run: |
           set -euo pipefail
           value=false
-          gate_file="tox21_baseline_outputs/tox21_gate.env"
-          if [ -f "$gate_file" ]; then
+          gate_file=""
+          for candidate in \
+            "tox21_baseline_outputs/baseline/tox21_gate.env" \
+            "tox21_baseline_outputs/tox21_gate.env"; do
+            if [ -f "$candidate" ]; then
+              gate_file="$candidate"
+              break
+            fi
+          done
+          if [ -n "$gate_file" ]; then
             raw=$(grep -E '^TOX21_MET_GATE=' "$gate_file" | tail -n1 | cut -d'=' -f2-)
             if [ -n "$raw" ]; then
               raw=$(echo "$raw" | tr '[:upper:]' '[:lower:]')
