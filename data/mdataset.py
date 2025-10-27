@@ -276,6 +276,7 @@ class GraphDataset:
 
         self._normalise_feature_dims()
         self._normalise_edge_dims()
+        self._ensure_pos_consistency()
 
         self._schema_stats = self._compute_schema_stats()
         self._validate_schema_stats(self._schema_stats)
@@ -340,6 +341,81 @@ class GraphDataset:
             pad = np.zeros((arr.shape[0], pad_width), dtype=arr.dtype)
             padded = np.concatenate([arr, pad], axis=1)
             graph.x = padded.astype(np.float32, copy=False)
+
+    def _ensure_pos_consistency(self) -> None:
+        """Ensure graphs that expect coordinates expose ``pos`` arrays."""
+
+        if not self.graphs:
+            return
+
+        pos_entries: List[Tuple[GraphData, np.ndarray]] = []
+        max_width = 0
+        any_pos = False
+
+        for graph in self.graphs:
+            pos_field = getattr(graph, "pos", None)
+            if pos_field is None:
+                continue
+
+            try:
+                if torch is not None and torch.is_tensor(pos_field):  # type: ignore[truthy-function]
+                    arr = pos_field.detach().cpu().numpy()
+                else:
+                    arr = np.asarray(pos_field)
+            except Exception:
+                continue
+
+            if arr.ndim == 1:
+                arr = arr.reshape(-1, 1)
+            elif arr.ndim > 2:
+                try:
+                    arr = arr.reshape(arr.shape[0], -1)
+                except Exception:
+                    continue
+
+            if arr.size == 0:
+                continue
+
+            any_pos = True
+            width = int(arr.shape[1]) if arr.ndim == 2 else 0
+            if width > max_width:
+                max_width = width
+            pos_entries.append((graph, arr))
+
+        if not any_pos:
+            return
+
+        target_width = max(3, max_width)
+
+        for graph, arr in pos_entries:
+            width = int(arr.shape[1]) if arr.ndim == 2 else 0
+            adjusted = arr
+            if width > target_width:
+                adjusted = arr[:, :target_width]
+            elif width < target_width:
+                pad = np.zeros((arr.shape[0], target_width - width), dtype=arr.dtype)
+                adjusted = np.concatenate([arr, pad], axis=1)
+
+            if adjusted.dtype != np.float32:
+                adjusted = adjusted.astype(np.float32, copy=False)
+
+            graph.pos = adjusted
+
+        for graph in self.graphs:
+            if getattr(graph, "pos", None) is not None:
+                continue
+
+            try:
+                num_nodes = int(graph.num_nodes())
+            except Exception:
+                x_field = getattr(graph, "x", None)
+                try:
+                    arr = np.asarray(x_field)
+                    num_nodes = int(arr.shape[0]) if arr.ndim >= 1 else 0
+                except Exception:
+                    num_nodes = 0
+
+            graph.pos = np.zeros((num_nodes, target_width), dtype=np.float32)
 
     def _normalise_edge_dims(self) -> None:
         """Pad or truncate edge attributes so all graphs share a common width."""
