@@ -44,6 +44,9 @@ This room builds datasets and augmentation recipes.
   Stores molecule graphs as ``GraphData`` objects and bundles them into
   ``GraphDataset`` collections. It can ingest SMILES strings, numpy arrays,
   or cached pickles and keeps track of node, edge and positional features.
+  Automation prebuilds a 250 K-molecule ZINC cache under ``cache/graphs_250k``
+  so repeated sweeps reuse the same featurised tensors instead of recomputing
+  them from scratch.
 
 ``augment.py``
   Generates alternative molecular views. Recent updates added structured

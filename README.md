@@ -90,11 +90,12 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
    -  The test suite uses small synthetic or bundled samples and does **not**
       require any of the large datasets.
    -  Pass `--cache-dir` to `scripts/train_jepa.py` to store featurised graphs on disk.
-      Grid search enables caching by default under `cache/graphs_50k` unless `--no-cache`
+      Grid search enables caching by default under `cache/graphs_250k` unless `--no-cache`
       is given. Clear the cache when switching featurisation options such as
-      `--add-3d` to avoid stale representations. The dedicated 50 K graph dataset keeps
-      its cached featurisations under `cache/graphs_50k` to avoid clashes with other
-      datasets.
+      `--add-3d` to avoid stale representations. The enlarged 250 K graph dataset keeps
+      its cached featurisations under `cache/graphs_250k` to avoid clashes with other
+      datasets. Remove any lingering `cache/graphs_50k` directories so runs don't
+      accidentally mix the old 50 K features with the new cache.
 
    -  Pipeline usage
       Individual stages of the JEPA workflow can be invoked via subcommands in
@@ -314,12 +315,12 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
 
       # create parent dirs first
       # make sure targets exist and are writable
-      sudo mkdir -p /data/mjepa/{cache/graphs_50k,outputs,logs,wandb}
+      sudo mkdir -p /data/mjepa/{cache/graphs_250k,outputs,logs,wandb}
       sudo chown -R "$USER":"$USER" /data/mjepa
 
       # now re-point them into /data
-      rm -rf cache/graphs_50k  # only if it exists already
-      ln -s /data/mjepa/cache/graphs_50k cache/graphs_50k
+      rm -rf cache/graphs_250k  # only if it exists already
+      ln -s /data/mjepa/cache/graphs_250k cache/graphs_250k
 
       rm -rf outputs
       ln -s /data/mjepa/outputs outputs

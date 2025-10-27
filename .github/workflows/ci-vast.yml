@@ -59,8 +59,8 @@ env:
   HARD_WALL_MINS: 120
   KILL_AFTER_SECS: 120
   GRID_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb' }}
-  CACHE_DIR: /data/mjepa/cache/graphs_50k
-  SWEEP_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).sweep || '/data/mjepa/cache/graphs_50k' }}
+  CACHE_DIR: /data/mjepa/cache/graphs_250k
+  SWEEP_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).sweep || '/data/mjepa/cache/graphs_250k' }}
   EXPERIMENTS_ROOT: /data/mjepa/experiments
   RUN_ID: ${{ github.run_id }}
   EXP_ID: ${{ github.run_id }}

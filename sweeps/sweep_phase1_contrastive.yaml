@@ -53,7 +53,7 @@ parameters:
 
   task_type:            {value: regression}
   label_col:            {value: "measured log solubility in mols per litre"}
-  sample_unlabeled:     {value: 50000}
+  sample_unlabeled:     {value: 250000}
   sample_labeled:       {value: 5000}
 
   gnn_type:             {values: ["gine", "dmpnn", "schnet3d"]}
