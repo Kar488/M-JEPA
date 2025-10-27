@@ -815,7 +815,18 @@ class GraphDataset:
                         geom = gpad
                     EA = np.concatenate([base_arr, flag, geom], axis=1)
 
-            return GraphData(x=X, edge_index=E, edge_attr=EA, pos=coords)
+            pos: Optional[np.ndarray]
+            if add_3d:
+                if coords is None:
+                    width = 3
+                    num_nodes = int(X.shape[0]) if X.ndim == 2 else 0
+                    pos = np.zeros((num_nodes, width), dtype=np.float32)
+                else:
+                    pos = coords
+            else:
+                pos = coords
+
+            return GraphData(x=X, edge_index=E, edge_attr=EA, pos=pos)
 
         except Exception:
             # any unexpected RDKit error → robust fallback
