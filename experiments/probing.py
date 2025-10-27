@@ -55,30 +55,54 @@ def _adj_to_edge_index(adj):
     idx = (t > 0).nonzero(as_tuple=False).t().contiguous()  # [2, E]
     return idx
 
-def _to_pyg(g) -> PyGData:
+def _to_pyg(g, *, edge_attr_dim: Optional[int] = None) -> PyGData:
     """
     Convert your custom GraphData or assorted objects to PyG Data.
     Uses edge_index if present; otherwise derives it from dense adj.
     Carries x, edge_index, edge_attr, y when available.
     """
+    import torch
     if isinstance(g, PyGData):
+        if edge_attr_dim is not None:
+            ea = getattr(g, "edge_attr", None)
+            if ea is None:
+                num_edges = 0
+                edge_index = getattr(g, "edge_index", None)
+                if isinstance(edge_index, torch.Tensor) and edge_index.dim() == 2:
+                    num_edges = int(edge_index.size(1))
+                dtype = torch.float32
+                device = None
+                x_attr = getattr(g, "x", None)
+                if isinstance(x_attr, torch.Tensor):
+                    dtype = x_attr.dtype
+                    device = x_attr.device
+                g.edge_attr = torch.zeros((num_edges, edge_attr_dim), dtype=dtype, device=device)
         return g
 
-    import torch
-    x  = getattr(g, "x", None)
+    x = getattr(g, "x", None)
     ei = getattr(g, "edge_index", None)
     ea = getattr(g, "edge_attr", None)
-    y  = getattr(g, "y", None)
+    y = getattr(g, "y", None)
     pos = getattr(g, "pos", None)
     if ei is None:
         adj = getattr(g, "adj", None)
         if adj is not None:
             ei = _adj_to_edge_index(adj)
 
+    if ea is None and edge_attr_dim is not None:
+        num_edges = 0
+        if ei is not None:
+            ei_arr = torch.as_tensor(ei)
+            if ei_arr.dim() == 2:
+                num_edges = int(ei_arr.shape[1])
+        ea = torch.zeros((num_edges, edge_attr_dim), dtype=torch.float32)
+    else:
+        ea = torch.as_tensor(ea, dtype=torch.float32) if ea is not None else None
+
     return PyGData(
         x=torch.as_tensor(x, dtype=torch.float32) if x is not None else None,
         edge_index=torch.as_tensor(ei, dtype=torch.long) if ei is not None else None,
-        edge_attr=torch.as_tensor(ea, dtype=torch.float32) if ea is not None else None,
+        edge_attr=ea,
         y=(torch.as_tensor(y) if y is not None else None),
         pos=torch.as_tensor(pos, dtype=torch.float32) if pos is not None else None,
     )
@@ -114,11 +138,26 @@ def compute_embeddings(
     else:
         graphs_raw = [dataset]
 
+    edge_attr_dim: Optional[int] = None
+    for g in graphs_raw:
+        ea = getattr(g, "edge_attr", None)
+        if ea is None:
+            continue
+        if torch.is_tensor(ea):
+            if ea.dim() == 2:
+                edge_attr_dim = int(ea.shape[1])
+                break
+            continue
+        arr = np.asarray(ea)
+        if arr.ndim == 2:
+            edge_attr_dim = int(arr.shape[1])
+            break
+
     graphs = []
     for g in graphs_raw:
         if isinstance(g, GraphData):
             g = generate_views(g, structural_ops or [], geometric_ops or [])[0]
-        graphs.append(_to_pyg(g))
+        graphs.append(_to_pyg(g, edge_attr_dim=edge_attr_dim))
     loader = GeoLoader(graphs, batch_size=batch_size, shuffle=False)
 
     outs = []

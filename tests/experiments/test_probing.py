@@ -65,6 +65,23 @@ def test_to_pyg_preserves_pos():
     assert torch.allclose(out.pos, torch.as_tensor(pos))
 
 
+def test_to_pyg_fills_missing_edge_attr():
+    x = np.ones((2, 4), dtype=np.float32)
+    edge_index = np.array([[0, 1], [1, 0]], dtype=np.int64)
+    edge_attr = np.array([[1.0, 0.5], [0.3, 0.2]], dtype=np.float32)
+    with_attr = types.SimpleNamespace(x=x, edge_index=edge_index, edge_attr=edge_attr)
+    without_attr = types.SimpleNamespace(x=x, edge_index=edge_index)
+
+    pyg_with = _to_pyg(with_attr)
+    dim = int(pyg_with.edge_attr.size(1))
+    pyg_without = _to_pyg(without_attr, edge_attr_dim=dim)
+
+    assert isinstance(pyg_without, Data)
+    assert pyg_without.edge_attr is not None
+    assert pyg_without.edge_attr.shape == (edge_index.shape[1], dim)
+    assert torch.allclose(pyg_without.edge_attr, torch.zeros_like(pyg_without.edge_attr))
+
+
 def test_compute_embeddings():
     g1 = Data(x=torch.ones((3, 4)), edge_index=torch.tensor([[0, 1, 2], [1, 2, 0]]))
     g2 = Data(x=torch.zeros((2, 4)), edge_index=torch.tensor([[0, 1], [1, 0]]))
