@@ -565,19 +565,31 @@ jobs:
           VAST_USER: ${{ secrets.VAST_USER }}
           VAST_PORT: ${{ secrets.VAST_PORT }}
 
+      - name: Checkout repository for tox21 baseline artifacts
+        if: always()
+        uses: actions/checkout@v4
+
       - name: Collect tox21 baseline outputs
         if: always()
         env:
           SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+          VAST_USER: ${{ secrets.VAST_USER }}
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
+          EXP_ID: ${{ env.EXP_ID }}
+          PRETRAIN_EXP_ID: ${{ env.PRETRAIN_EXP_ID }}
+          EXP_ROOT: ${{ env.EXP_ROOT }}
+          EXPERIMENTS_ROOT: ${{ env.EXPERIMENTS_ROOT }}
         run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/vast_key
-          chmod 600 ~/.ssh/vast_key
-          mkdir -p tox21_baseline_outputs
-          rsync -avz --chmod=ugo=rwX -e "ssh -i ~/.ssh/vast_key -p ${{ secrets.VAST_PORT }} -o StrictHostKeyChecking=no" \
-            "${{ secrets.VAST_USER }}@${{ secrets.VAST_HOST }}:${{ env.EXP_ROOT }}/tox21_gate.env" tox21_baseline_outputs/ || true
-          rm -f ~/.ssh/vast_key
+          bash "$GITHUB_WORKSPACE/scripts/ci/collect-tox21-artifacts.sh" baseline "$GITHUB_WORKSPACE/tox21_baseline_outputs"
+
+      - name: Upload tox21 baseline artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-tox21-baseline
+          if-no-files-found: warn
+          path: tox21_baseline_outputs
 
       - name: Derive tox21 gate status
         if: always()
@@ -585,8 +597,16 @@ jobs:
         run: |
           set -euo pipefail
           value=false
-          gate_file="tox21_baseline_outputs/tox21_gate.env"
-          if [ -f "$gate_file" ]; then
+          gate_file=""
+          for candidate in \
+            "tox21_baseline_outputs/baseline/tox21_gate.env" \
+            "tox21_baseline_outputs/tox21_gate.env"; do
+            if [ -f "$candidate" ]; then
+              gate_file="$candidate"
+              break
+            fi
+          done
+          if [ -n "$gate_file" ]; then
             raw=$(grep -E '^TOX21_MET_GATE=' "$gate_file" | tail -n1 | cut -d'=' -f2-)
             if [ -n "$raw" ]; then
               raw=$(echo "$raw" | tr '[:upper:]' '[:lower:]')
@@ -731,6 +751,32 @@ jobs:
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1" # use best config without reloading any epochs
           TOX21_ENCODER_SOURCE: fine_tuned
+
+      - name: Checkout repository for tox21 artifacts
+        if: always()
+        uses: actions/checkout@v4
+
+      - name: Collect tox21 evaluation outputs
+        if: always()
+        env:
+          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+          VAST_USER: ${{ secrets.VAST_USER }}
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
+          EXP_ID: ${{ env.EXP_ID }}
+          PRETRAIN_EXP_ID: ${{ env.PRETRAIN_EXP_ID }}
+          EXP_ROOT: ${{ env.EXP_ROOT }}
+          EXPERIMENTS_ROOT: ${{ env.EXPERIMENTS_ROOT }}
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/ci/collect-tox21-artifacts.sh" evaluation "$GITHUB_WORKSPACE/tox21_eval_outputs"
+
+      - name: Upload tox21 evaluation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-tox21-eval
+          if-no-files-found: warn
+          path: tox21_eval_outputs
 
   vast_report:
     name: Generate reports
