@@ -102,6 +102,29 @@ def test_smiles_to_graph_add_3d_provides_pos():
     assert g.pos.shape[1] == 3
 
 
+def test_smiles_to_graph_add_3d_fills_missing_coords(monkeypatch):
+    if not RDKit_AVAILABLE:
+        pytest.skip("RDKit not installed")
+
+    calls: list[tuple] = []
+
+    def _always_fail(*args, **kwargs):
+        calls.append((args, kwargs))
+        return None, "failed"
+
+    monkeypatch.setattr(
+        "data.mdataset._generate_conformer_coords",
+        _always_fail,
+    )
+
+    g = GraphDataset.smiles_to_graph("CCO", add_3d=True, random_seed=0)
+
+    assert calls, "expected conformer generator to be invoked"
+    assert g.pos is not None
+    assert g.pos.shape == (g.x.shape[0], 3)
+    assert np.allclose(g.pos, 0.0)
+
+
 def test_fallback_graph_adds_pos_when_requested():
     word = "fallback"
     g = _fallback_graph_from_string(word, add_pos=True)
