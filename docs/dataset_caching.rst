@@ -24,7 +24,10 @@ The sweep runner can persist pre-built datasets to speed up repeated
 experiments.  The cache key hashed in ``scripts/commands/sweep_run.py`` includes
 ``add_3d`` so a 2-D cache cannot satisfy a 3-D request.  When a miss occurs it
 rebuilds the dataset with the requested flag and stores the new
-result.【F:scripts/commands/sweep_run.py†L260-L399】
+result.【F:scripts/commands/sweep_run.py†L260-L399】  The default ZINC corpus now
+draws 250 K molecules, so caches materialised by automation live under
+``cache/graphs_250k`` to make the size explicit and avoid mixing with older
+50 K runs.
 
 3-D coordinates for SchNet3D
 ----------------------------

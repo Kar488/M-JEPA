@@ -63,7 +63,7 @@ parameters:
   aug_atom_masking: { values: [0, 1] }
   aug_subgraph_removal: { values: [0, 1] }
 
-  sample_unlabeled: { value: 10000 }
+  sample_unlabeled: { value: 250000 }
   sample_labeled: { value: 1000 }
 
 early_terminate:
