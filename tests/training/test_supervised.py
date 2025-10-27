@@ -166,6 +166,42 @@ def test_train_linear_head_regression():
     assert isinstance(metrics["head"], nn.Module)
 
 
+def test_train_linear_head_passes_pos_weight(monkeypatch):
+    np.random.seed(0)
+    torch.manual_seed(0)
+    labels = [0] * 6 + [1] * 6
+    dataset = DummyDataset(labels)
+    enc = DummyEncoder(4)
+
+    captured = {}
+    real_loss_cls = supervised_mod.nn.BCEWithLogitsLoss
+
+    class RecordingLoss(real_loss_cls):
+        def __init__(self, *args, **kwargs):
+            captured["pos_weight"] = kwargs.get("pos_weight")
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(supervised_mod.nn, "BCEWithLogitsLoss", RecordingLoss)
+
+    train_linear_head(
+        dataset,
+        enc,
+        "classification",
+        epochs=1,
+        batch_size=4,
+        lr=0.01,
+        patience=0,
+        device="cpu",
+        pos_weight=torch.tensor([2.5], dtype=torch.float32),
+    )
+
+    assert "pos_weight" in captured
+    assert torch.is_tensor(captured["pos_weight"])
+    assert captured["pos_weight"].shape == (1,)
+    assert captured["pos_weight"].device.type == "cpu"
+    assert captured["pos_weight"].item() == pytest.approx(2.5)
+
+
 def test_train_linear_head_switches_mode_when_metric_missing(monkeypatch):
     np.random.seed(0)
     torch.manual_seed(0)

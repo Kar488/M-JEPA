@@ -688,6 +688,9 @@ def train_linear_head(
     batch_autoscale_min_steps: int = 10,
     batch_autoscale_floor: int = 64,
     unfreeze_top_layers: int = 0,
+    stage_config: Optional[Dict[str, Any]] = None,
+    pos_weight: Optional[Any] = None,
+    class_weight: Optional[Any] = None,
     **unused,
 ) -> Dict[str, float]:
     """Train a linear head on a frozen encoder for classification or regression.
@@ -745,7 +748,9 @@ def train_linear_head(
     distributed = devices > 1 and init_distributed()
     device_t = torch.device(device)
 
-    stage_config_local = unused.pop("stage_config", None)
+    stage_config_local = stage_config
+    if stage_config_local is None and "stage_config" in unused:
+        stage_config_local = unused.pop("stage_config")
     if stage_config_local is None:
         stage_config_local = get_stage_config()
     else:
@@ -902,7 +907,46 @@ def train_linear_head(
         if isinstance(head_module, nn.parallel.DistributedDataParallel)
         else head_module
     )
-    loss_fn = nn.BCEWithLogitsLoss() if task_type == "classification" else nn.MSELoss()
+    if task_type == "classification":
+        pos_weight_tensor: Optional[torch.Tensor] = None
+        if pos_weight is not None:
+            try:
+                pos_weight_tensor = torch.as_tensor(pos_weight, dtype=torch.float32)
+            except Exception:
+                logger.warning("Failed to coerce pos_weight to tensor; ignoring", exc_info=True)
+                pos_weight_tensor = None
+        elif class_weight is not None:
+            neg_weight: Optional[float] = None
+            pos_weight_value: Optional[float] = None
+            if isinstance(class_weight, dict):
+                neg_weight = class_weight.get(0)
+                pos_weight_value = class_weight.get(1)
+            else:
+                try:
+                    weight_tensor = torch.as_tensor(class_weight, dtype=torch.float32)
+                    flat = weight_tensor.flatten()
+                    if flat.numel() >= 2:
+                        neg_weight = float(flat[0].item())
+                        pos_weight_value = float(flat[1].item())
+                except Exception:
+                    logger.warning(
+                        "Failed to coerce class_weight to tensor when deriving pos_weight; ignoring",
+                        exc_info=True,
+                    )
+            if neg_weight not in (None, 0) and pos_weight_value is not None:
+                try:
+                    ratio = float(pos_weight_value) / float(neg_weight)
+                    pos_weight_tensor = torch.tensor([ratio], dtype=torch.float32)
+                except Exception:
+                    logger.warning(
+                        "Failed to derive pos_weight from class_weight; ignoring", exc_info=True
+                    )
+        if pos_weight_tensor is not None:
+            pos_weight_tensor = pos_weight_tensor.to(device_t).reshape(-1)
+        loss_kwargs = {"pos_weight": pos_weight_tensor} if pos_weight_tensor is not None else {}
+        loss_fn = nn.BCEWithLogitsLoss(**loss_kwargs)
+    else:
+        loss_fn = nn.MSELoss()
     optimiser: Optimizer
     if optimizer is not None:
         optimiser = optimizer
