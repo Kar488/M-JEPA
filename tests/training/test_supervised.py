@@ -146,6 +146,39 @@ def test_train_linear_head_classification():
     assert isinstance(metrics["head"], nn.Module)
 
 
+def test_train_linear_head_accepts_two_logit_head():
+    np.random.seed(1)
+    torch.manual_seed(1)
+    labels = [0] * 8 + [1] * 8
+    dataset = DummyDataset(labels)
+    enc = DummyEncoder(4)
+
+    class TwoLogitHead(nn.Module):
+        def __init__(self, in_dim: int):
+            super().__init__()
+            self.linear = nn.Linear(in_dim, 2)
+
+        def forward(self, emb):  # noqa: D401, ARG002 - match signature used in training loop
+            return self.linear(emb)
+
+    head = TwoLogitHead(enc.hidden_dim)
+
+    metrics = train_linear_head(
+        dataset,
+        enc,
+        "classification",
+        epochs=1,
+        batch_size=4,
+        lr=0.01,
+        patience=0,
+        device="cpu",
+        head=head,
+    )
+
+    assert {"roc_auc", "pr_auc", "head"} <= metrics.keys()
+    assert metrics["head"] is head
+
+
 def test_train_linear_head_regression():
     np.random.seed(0)
     torch.manual_seed(0)

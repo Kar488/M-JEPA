@@ -481,6 +481,38 @@ def _move_batch_to_device(batch, device: torch.device, non_blocking: bool):
     }
     return batch_x, batch_adj, batch_ptr, batch_labels, moved_extras
 
+
+def _ensure_binary_classification_logits(logits: torch.Tensor) -> torch.Tensor:
+    """Reduce head outputs to a single logit per sample for binary tasks.
+
+    ``train_linear_head`` historically expected classification heads to emit a
+    single logit.  Some call-sites now provide two logits (negative/positive)
+    which breaks the ``BCEWithLogitsLoss`` contract.  This helper squeezes
+    singleton channels and, when multiple logits are provided, converts them to
+    an equivalent positive-class logit by comparing the positive logit against
+    the log-sum-exp of the remaining classes.
+    """
+
+    if logits.ndim == 0:
+        return logits.reshape(1)
+    if logits.ndim == 1:
+        return logits
+
+    # ``logits`` has at least two dimensions. Interpret the last dimension as
+    # the class axis and collapse to a single logit.
+    if logits.size(-1) == 1:
+        return logits.squeeze(-1)
+
+    if logits.size(-1) >= 2:
+        pos_logit = logits.select(-1, logits.size(-1) - 1)
+        neg_logsumexp = torch.logsumexp(logits[..., :-1], dim=-1)
+        return pos_logit - neg_logsumexp
+
+    raise ValueError(
+        "Classification head produced an unexpected shape: "
+        f"{tuple(logits.shape)}"
+    )
+
 def _build_graph_view(
     batch_x: torch.Tensor,
     batch_adj: torch.Tensor,
@@ -1613,12 +1645,24 @@ def train_linear_head(
                     graph_emb = graph_emb.to(param.dtype)
 
                 with _amp_context():
-                    preds = head_module(graph_emb).squeeze(1)
+                    raw_preds = head_module(graph_emb)
+
+                if task_type == "classification":
+                    preds = _ensure_binary_classification_logits(raw_preds)
+                else:
+                    preds = raw_preds.squeeze(-1)
 
                 if not torch.isfinite(preds).all():
                     preds = torch.nan_to_num(preds)
 
-                targets = batch_labels.to(dtype=preds.dtype)
+                targets = batch_labels
+                try:
+                    targets = targets.reshape(preds.shape)
+                except RuntimeError as exc:  # pragma: no cover - sanity guard
+                    raise ValueError(
+                        f"Target size {tuple(batch_labels.shape)} must match predictions {tuple(preds.shape)}"
+                    ) from exc
+                targets = targets.to(dtype=preds.dtype)
 
                 with _amp_context():
                     loss = loss_fn(preds.float(), targets.float())
@@ -1655,15 +1699,30 @@ def train_linear_head(
                         graph_emb = graph_emb.to(param.dtype)
 
                     with _amp_context():
-                        preds = head_module(graph_emb).squeeze(1)
+                        raw_preds = head_module(graph_emb)
+
+                    if task_type == "classification":
+                        preds = _ensure_binary_classification_logits(raw_preds)
+                    else:
+                        preds = raw_preds.squeeze(-1)
+
                     preds = torch.nan_to_num(preds)
+
+                    targets = batch_labels
+                    try:
+                        targets = targets.reshape(preds.shape)
+                    except RuntimeError as exc:  # pragma: no cover - sanity guard
+                        raise ValueError(
+                            f"Target size {tuple(batch_labels.shape)} must match predictions {tuple(preds.shape)}"
+                        ) from exc
+
                     val_preds_store.append(
                         preds.detach().to(torch.float32).cpu().numpy()
                     )
                     val_targets_store.append(
-                        batch_labels.detach().to(torch.float32).cpu().numpy()
+                        targets.detach().to(torch.float32).cpu().numpy()
                     )
-                    targets = batch_labels.to(dtype=preds.dtype)
+                    targets = targets.to(dtype=preds.dtype)
                     vloss = loss_fn(preds, targets).item()
                     val_losses.append(vloss)
 
@@ -1764,10 +1823,25 @@ def train_linear_head(
                     graph_emb = graph_emb.to(param.dtype)
 
                 with _amp_context():
-                    preds = head_module(graph_emb).squeeze(1)
+                    raw_preds = head_module(graph_emb)
+
+                if task_type == "classification":
+                    preds = _ensure_binary_classification_logits(raw_preds)
+                else:
+                    preds = raw_preds.squeeze(-1)
+
                 preds = torch.nan_to_num(preds)
+
+                targets = batch_labels
+                try:
+                    targets = targets.reshape(preds.shape)
+                except RuntimeError as exc:  # pragma: no cover - sanity guard
+                    raise ValueError(
+                        f"Target size {tuple(batch_labels.shape)} must match predictions {tuple(preds.shape)}"
+                    ) from exc
+
                 all_preds.append(preds.detach().to(torch.float32).cpu().numpy())
-                all_targets.append(batch_labels.detach().to(torch.float32).cpu().numpy())
+                all_targets.append(targets.detach().to(torch.float32).cpu().numpy())
 
         if all_targets and all_preds:
             y_true = np.concatenate(all_targets)
