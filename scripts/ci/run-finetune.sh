@@ -14,9 +14,9 @@ ci_print_env_diag
 : "${LINEAR_HEAD_SOFT_TIMEOUT_EXIT:=86}"
 
 if [[ -n "${BESTCFG_SKIP:-}" ]]; then
-  BESTCFG_SKIP="${BESTCFG_SKIP} max_pretrain_batches max_finetune_batches"
+  BESTCFG_SKIP="${BESTCFG_SKIP} max_pretrain_batches max_finetune_batches task_type metric"
 else
-  BESTCFG_SKIP="max_pretrain_batches max_finetune_batches"
+  BESTCFG_SKIP="max_pretrain_batches max_finetune_batches task_type metric"
 fi
 export BESTCFG_SKIP
 
@@ -88,13 +88,30 @@ baseline_flag="${MET_BENCHMARK_BASELINE:-false}"
 baseline_flag_lc="${baseline_flag,,}"
 if [[ "$baseline_flag_lc" == "false" ]]; then
   : "${FINETUNE_LABELED_DIR:=${APP_DIR}/data/tox21/data.csv}"
-  if [[ -z "${FINETUNE_LABEL_COL:-}" ]]; then
-    if [[ -n "${TOX21_FINE_TUNE_TASK:-}" ]]; then
-      FINETUNE_LABEL_COL="$TOX21_FINE_TUNE_TASK"
-    else
-      FINETUNE_LABEL_COL="NR-AR"
-    fi
+  default_tasks=(
+    "NR-AR" "NR-AR-LBD" "NR-AhR" "NR-Aromatase"
+    "NR-ER" "NR-ER-LBD" "NR-PPAR-gamma" "SR-ARE"
+    "SR-ATAD5" "SR-HSE" "SR-MMP" "SR-p53"
+  )
+  if [[ -n "${TOX21_FINE_TUNE_TASK:-}" ]]; then
+    default_tasks=("${TOX21_FINE_TUNE_TASK}")
   fi
+  IFS=',' read -r -a explicit_list <<<"${FINETUNE_LABEL_COLS:-}"
+  if [[ ${#explicit_list[@]} -gt 0 ]]; then
+    tasks=("${explicit_list[@]}")
+  else
+    tasks=("${default_tasks[@]}")
+  fi
+  if [[ -n "${FINETUNE_LABEL_COL:-}" ]]; then
+    tasks=("${FINETUNE_LABEL_COL}")
+  fi
+  if [[ ${#tasks[@]} -eq 0 ]]; then
+    tasks=("NR-AR")
+  fi
+  FINETUNE_LABEL_COLS="$(printf '%s,' "${tasks[@]}")"
+  FINETUNE_LABEL_COLS="${FINETUNE_LABEL_COLS%,}"
+  export FINETUNE_LABEL_COLS
+  FINETUNE_LABEL_COL="${tasks[0]}"
   : "${FINETUNE_TASK_TYPE:=classification}"
   : "${FINETUNE_METRIC:=val_auc}"
   : "${FINETUNE_USE_SCAFFOLD:=true}"
@@ -111,7 +128,7 @@ if [[ "$baseline_flag_lc" == "false" ]]; then
   export FINETUNE_SEED_0 FINETUNE_SEED_1 FINETUNE_SEED_2
   export FINETUNE_DATASET_OVERRIDE_REASON
 
-  echo "[finetune] Baseline gate unmet; redirecting fine-tune to Tox21 task '${FINETUNE_LABEL_COL}' (task_type=${FINETUNE_TASK_TYPE} metric=${FINETUNE_METRIC})" >&2
+  echo "[finetune] Baseline gate unmet; redirecting fine-tune to Tox21 tasks: ${FINETUNE_LABEL_COLS} (task_type=${FINETUNE_TASK_TYPE} metric=${FINETUNE_METRIC})" >&2
 fi
 
 # fix: ensure fine-tune emits stage outputs for downstream evaluation

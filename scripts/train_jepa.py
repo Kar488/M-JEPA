@@ -1184,8 +1184,8 @@ def build_parser() -> argparse.ArgumentParser:
     tox.add_argument(
         "--full-finetune",
         dest="full_finetune",
-        action="store_true",
-        default=case_cfg.get("full_finetune", False),
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Enable full encoder fine-tuning on the Tox21 train split",
     )
     tox.add_argument(

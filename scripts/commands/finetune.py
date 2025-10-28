@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import os
@@ -50,6 +51,45 @@ _TOX21_TASKS = {
     "SR-p53",
 }
 
+def _split_label_list(raw: str) -> List[str]:
+    tokens: List[str] = []
+    normalised = raw.replace("\n", ",")
+    for token in normalised.split(","):
+        entry = token.strip()
+        if entry:
+            tokens.append(entry)
+    return tokens
+
+
+def _resolve_label_columns(args: argparse.Namespace) -> List[str]:
+    env_spec = str(os.getenv("FINETUNE_LABEL_COLS", "") or "").strip()
+    candidates = _split_label_list(env_spec) if env_spec else []
+
+    if not candidates:
+        raw_label = getattr(args, "label_col", None)
+        if isinstance(raw_label, str):
+            candidates = _split_label_list(raw_label)
+        elif raw_label:
+            candidates = [str(raw_label)]
+
+    expanded: List[str] = []
+    for item in candidates:
+        lowered = item.strip().lower()
+        if lowered in {"all", "*", "__all__", "tox21"}:
+            expanded.extend(sorted(_TOX21_TASKS))
+        else:
+            expanded.append(item.strip())
+
+    if not expanded:
+        single = getattr(args, "label_col", None)
+        return [single] if single else []
+
+    seen: List[str] = []
+    for entry in expanded:
+        if entry and entry not in seen:
+            seen.append(entry)
+    return seen
+
 stage_config: Dict[str, Any] = {}
 soft_timeout_exit_code = int(os.environ.get("LINEAR_HEAD_SOFT_TIMEOUT_EXIT", "86"))
 
@@ -71,7 +111,12 @@ def _record_finetune_stage_outputs(payload: Dict[str, Any]) -> None:
     if stage_dir is None:
         return
     try:
-        out_path = stage_dir / "finetune.json"
+        suffix = os.getenv("FINETUNE_STAGE_SUFFIX", "").strip()
+        if suffix:
+            filename = f"finetune_{_sanitize_alias(suffix)}.json"
+        else:
+            filename = "finetune.json"
+        out_path = stage_dir / filename
         tmp_path = out_path.with_suffix(".tmp")
         with tmp_path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
@@ -227,8 +272,8 @@ def _configure_encoder_trainability(
     return trainable
 
 
-def cmd_finetune(args: argparse.Namespace) -> None:
-    """Fine‑tune a linear head on labelled data across multiple seeds resume & checkpoints."""
+def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
+    """Fine‑tune a single labelled task and return stage diagnostics."""
     logger.info("Starting finetune with args: %s", args)
 
     from utils.checkpoint import compute_state_dict_hash, load_checkpoint, save_checkpoint
@@ -1331,6 +1376,14 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     }
     stage_payload["dataset"] = dataset_summary
     stage_payload["seed_list"] = seed_list_summary
+    if getattr(args, "ckpt_dir", None):
+        try:
+            stage_payload["stage_path"] = os.path.abspath(str(args.ckpt_dir))
+        except Exception:
+            stage_payload["stage_path"] = str(args.ckpt_dir)
+    if export_path:
+        stage_payload.setdefault("selected_path", export_path)
+    stage_payload.setdefault("task_label", getattr(args, "label_col", None))
     _record_finetune_stage_outputs(stage_payload)
 
     if budget_abort:
@@ -1343,6 +1396,105 @@ def cmd_finetune(args: argparse.Namespace) -> None:
             remaining_msg,
         )
         sys.exit(int(soft_timeout_exit_code))
+
+    return stage_payload
+
+
+def cmd_finetune(args: argparse.Namespace) -> None:
+    label_columns = _resolve_label_columns(args)
+    if len(label_columns) <= 1:
+        if label_columns:
+            setattr(args, "label_col", label_columns[0])
+        _cmd_finetune_single(args)
+        return
+
+    logger.info(
+        "[finetune] multi-assay run over %d tasks: %s",
+        len(label_columns),
+        ", ".join(label_columns),
+    )
+
+    base_ckpt_dir = Path(str(getattr(args, "ckpt_dir", "ckpts/finetune")))
+    base_ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    stage_env = os.getenv("STAGE_OUTPUTS_DIR")
+    base_stage_dir = Path(stage_env) if stage_env else base_ckpt_dir / "stage-outputs"
+
+    aggregated: Dict[str, Dict[str, Any]] = {}
+    primary_label = label_columns[0]
+
+    for label in label_columns:
+        sub_args = copy.deepcopy(args)
+        sub_args.label_col = label
+        safe_label = _sanitize_alias(label)
+        sub_ckpt_dir = base_ckpt_dir / safe_label
+        sub_args.ckpt_dir = str(sub_ckpt_dir)
+        sub_stage_dir = base_stage_dir / safe_label
+        os.environ["FINETUNE_STAGE_SUFFIX"] = safe_label
+        os.environ["STAGE_OUTPUTS_DIR"] = str(sub_stage_dir)
+        sub_stage_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "[finetune] training assay %s (ckpt_dir=%s)",
+            label,
+            sub_args.ckpt_dir,
+        )
+        payload = _cmd_finetune_single(sub_args)
+        aggregated[label] = payload
+
+    if stage_env is not None:
+        os.environ["STAGE_OUTPUTS_DIR"] = stage_env
+    else:
+        os.environ.pop("STAGE_OUTPUTS_DIR", None)
+    os.environ.pop("FINETUNE_STAGE_SUFFIX", None)
+
+    base_stage_dir.mkdir(parents=True, exist_ok=True)
+
+    primary_payload = aggregated.get(primary_label)
+    summary_payload: Dict[str, Any] = {}
+    if isinstance(primary_payload, dict):
+        summary_payload.update(copy.deepcopy(primary_payload))
+    summary_payload["tasks"] = aggregated
+    summary_payload["primary_task"] = primary_label
+    summary_payload["task_order"] = label_columns
+
+    diagnostics = summary_payload.setdefault("diagnostics", {})
+    if not isinstance(diagnostics, dict):
+        diagnostics = {}
+        summary_payload["diagnostics"] = diagnostics
+    diagnostics.setdefault("task_count", len(label_columns))
+    diagnostics.setdefault("task_labels", label_columns)
+
+    if isinstance(primary_payload, dict):
+        canonical_entry = primary_payload.get("encoder_finetuned")
+        if isinstance(canonical_entry, dict):
+            checkpoint = canonical_entry.get("checkpoint")
+            if checkpoint and "encoder_checkpoint" not in diagnostics:
+                diagnostics["encoder_checkpoint"] = checkpoint
+
+    _record_finetune_stage_outputs(summary_payload)
+
+    canonical_entry = None
+    if isinstance(primary_payload, dict):
+        canonical_entry = primary_payload.get("encoder_finetuned")
+    if isinstance(canonical_entry, dict):
+        checkpoint = canonical_entry.get("checkpoint")
+        if checkpoint and os.path.isfile(checkpoint):
+            try:
+                from utils.checkpoint import safe_link_or_copy
+            except Exception:
+                safe_link_or_copy = None  # type: ignore[assignment]
+            target = base_ckpt_dir / "encoder_ft.pt"
+            try:
+                if safe_link_or_copy is not None:
+                    safe_link_or_copy(checkpoint, str(target))
+                else:
+                    shutil.copy2(checkpoint, target)
+            except Exception:
+                logger.debug(
+                    "Failed to mirror encoder_ft.pt from %s", checkpoint, exc_info=True
+                )
+
+    logger.info("[finetune] completed %d Tox21 assays", len(label_columns))
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
