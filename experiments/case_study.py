@@ -1667,8 +1667,9 @@ def run_tox21_case_study(
 
     requested_mode = evaluation_mode
     normalized_mode = requested_mode.lower().replace("-", "_")
+    requested_fine_tuned_alias = normalized_mode == "fine_tuned"
     display_mode = normalized_mode
-    if normalized_mode == "fine_tuned":
+    if requested_fine_tuned_alias:
         normalized_mode = "end_to_end"
         display_mode = "fine_tuned"
     valid_modes = {"pretrain_frozen", "frozen_finetuned", "end_to_end"}
@@ -1682,15 +1683,20 @@ def run_tox21_case_study(
     auto_full_finetune = False
     auto_pretrain = False
     if normalized_mode == "end_to_end" and full_finetune_requested is None:
-        reason = "no explicit full_finetune flag"
-        if not encoder_checkpoint:
-            reason += "; encoder checkpoint not supplied"
-        logger.info(
-            "Enabling full fine-tuning for end_to_end evaluation (%s).",
-            reason,
-        )
-        full_finetune_effective = True
-        auto_full_finetune = True
+        if not requested_fine_tuned_alias or not encoder_checkpoint:
+            reason = "no explicit full_finetune flag"
+            if not encoder_checkpoint:
+                reason += "; encoder checkpoint not supplied"
+            logger.info(
+                "Enabling full fine-tuning for end_to_end evaluation (%s).",
+                reason,
+            )
+            full_finetune_effective = True
+            auto_full_finetune = True
+        else:
+            logger.info(
+                "Fine-tuned checkpoint supplied without explicit full_finetune flag; keeping encoder frozen.",
+            )
 
     if (
         normalized_mode in {"frozen_finetuned", "end_to_end"}
