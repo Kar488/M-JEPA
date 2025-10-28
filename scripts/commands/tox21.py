@@ -371,7 +371,7 @@ def _run_tox21_single_task(
         cli_hidden_dim_provided=getattr(args, "_hidden_dim_provided", True),
         cli_num_layers_provided=getattr(args, "_num_layers_provided", True),
         cli_gnn_type_provided=getattr(args, "_gnn_type_provided", True),
-        full_finetune=bool(getattr(args, "full_finetune", False)),
+        full_finetune=getattr(args, "full_finetune", None),
         unfreeze_top_layers=int(getattr(args, "unfreeze_top_layers", 0) or 0),
         tox21_head_batch_size=int(getattr(args, "tox21_head_batch_size", 256) or 256),
     )

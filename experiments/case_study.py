@@ -1057,7 +1057,7 @@ def run_tox21_case_study(
     cli_hidden_dim_provided: bool = True,
     cli_num_layers_provided: bool = True,
     cli_gnn_type_provided: bool = True,
-    full_finetune: bool = False,
+    full_finetune: Optional[bool] = None,
     unfreeze_top_layers: int = 0,
     tox21_head_batch_size: int = 256,
     cache_dir: Optional[str] = None,
@@ -1081,6 +1081,12 @@ def run_tox21_case_study(
     logger.debug("Loaded %d molecules", len(smiles_list))
 
     diagnostics: Dict[str, Any] = {}
+    full_finetune_requested = full_finetune
+    full_finetune_effective = (
+        bool(full_finetune_requested)
+        if full_finetune_requested is not None
+        else False
+    )
     if ci_diag:
         diagnostics["csv_path"] = os.path.abspath(csv_path)
         diagnostics["encoder_checkpoint"] = (
@@ -1675,17 +1681,21 @@ def run_tox21_case_study(
         display_mode = "pretrain_frozen"
     auto_full_finetune = False
     auto_pretrain = False
-    if normalized_mode == "end_to_end" and not encoder_checkpoint and not full_finetune:
+    if normalized_mode == "end_to_end" and full_finetune_requested is None:
+        reason = "no explicit full_finetune flag"
+        if not encoder_checkpoint:
+            reason += "; encoder checkpoint not supplied"
         logger.info(
-            "No encoder checkpoint supplied for end_to_end evaluation; enabling full fine-tuning."
+            "Enabling full fine-tuning for end_to_end evaluation (%s).",
+            reason,
         )
-        full_finetune = True
+        full_finetune_effective = True
         auto_full_finetune = True
 
     if (
         normalized_mode in {"frozen_finetuned", "end_to_end"}
         and not encoder_checkpoint
-        and not full_finetune
+        and not full_finetune_effective
     ):
         logger.warning(
             "evaluation_mode '%s' requires a checkpoint; falling back to pretrain_frozen.",
@@ -1697,7 +1707,7 @@ def run_tox21_case_study(
     head_from_checkpoint = isinstance(loaded_head_state, dict) and bool(loaded_head_state)
     train_head_missing = normalized_mode == "end_to_end" and not head_from_checkpoint
     train_probe = normalized_mode != "end_to_end" or train_head_missing
-    if full_finetune:
+    if full_finetune_effective:
         train_probe = True
 
     patience_value = finetune_patience
@@ -1713,14 +1723,14 @@ def run_tox21_case_study(
                 )
                 patience_value = None
     if patience_value is None:
-        patience_value = 12 if full_finetune else 10
+        patience_value = 12 if full_finetune_effective else 10
 
     logger.info(
         "Tox21 evaluation configuration: mode=%s head_from_checkpoint=%s train_head=%s full_finetune=%s epochs=%d patience=%s",
         display_mode,
         "yes" if head_from_checkpoint else "no",
         "yes" if train_probe else "no",
-        "yes" if full_finetune else "no",
+        "yes" if full_finetune_effective else "no",
         int(finetune_epochs if train_probe else 0),
         str(patience_value if train_probe else "<skip>"),
     )
@@ -1815,7 +1825,7 @@ def run_tox21_case_study(
 
     fine_tuned_modes = {"frozen_finetuned", "end_to_end"}
     if (
-        (full_finetune or normalized_mode in fine_tuned_modes)
+        (full_finetune_effective or normalized_mode in fine_tuned_modes)
         and encoder_hash
         and baseline_hash
         and str(encoder_hash) == str(baseline_hash)
@@ -1832,7 +1842,8 @@ def run_tox21_case_study(
 
     diagnostics["auto_full_finetune"] = bool(auto_full_finetune)
     diagnostics["auto_pretrain"] = bool(auto_pretrain)
-    diagnostics["full_finetune"] = bool(full_finetune)
+    diagnostics["full_finetune"] = bool(full_finetune_effective)
+    diagnostics["full_finetune_requested"] = full_finetune_requested
     diagnostics["encoder_load"] = encoder_load_info
     diagnostics["encoder_hash"] = encoder_hash
     diagnostics["baseline_encoder_hash"] = baseline_hash
@@ -1861,7 +1872,7 @@ def run_tox21_case_study(
     if encoder_source_override:
         encoder_source = str(encoder_source_override)
         eval_name = str(encoder_source_override)
-    elif full_finetune:
+    elif full_finetune_effective:
         encoder_source = "full_finetune"
         eval_name = "full_finetune"
     if should_pretrain:
@@ -1912,7 +1923,7 @@ def run_tox21_case_study(
             normalized_mode,
         )
 
-    if train_probe and should_pretrain and not full_finetune:
+    if train_probe and should_pretrain and not full_finetune_effective:
         # After optional pretraining we freeze the encoder so that the linear head
         # evaluates the representation quality without further backbone updates.
         _freeze_encoder_params()
@@ -1929,7 +1940,7 @@ def run_tox21_case_study(
     except Exception:
         logger.warning("Failed to parse encoder_lr=%s; treating as unset", encoder_lr, exc_info=True)
         encoder_lr_value = None
-    if full_finetune and encoder_lr_value is None:
+    if full_finetune_effective and encoder_lr_value is None:
         encoder_lr_value = 3e-4
 
     encoder_lr_display = (
@@ -2063,7 +2074,7 @@ def run_tox21_case_study(
             "bf16": bf16_linear,
             "time_budget_mins": finetune_time_budget_mins,
             "use_scaffold": bool(scaffold_split_indices and _HAS_RDKIT),
-            "freeze_encoder": not full_finetune,
+            "freeze_encoder": not full_finetune_effective,
             "head_lr": head_lr_value,
             "encoder_lr": encoder_lr_value,
             "train_indices": train_idx,
@@ -2078,7 +2089,7 @@ def run_tox21_case_study(
         if probe_head is not None:
             linear_kwargs["head"] = probe_head
 
-        if full_finetune:
+        if full_finetune_effective:
             linear_kwargs["early_stop_metric"] = "val_auc"
 
         clf_metrics = train_linear_head(**linear_kwargs)

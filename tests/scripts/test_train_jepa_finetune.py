@@ -1,4 +1,6 @@
 import argparse
+import json
+import os
 
 import numpy as np
 import pytest
@@ -385,6 +387,50 @@ def test_cmd_finetune_data_load_failure_exits(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as ex:
         tj.cmd_finetune(args)
     assert ex.value.code == 1
+
+
+def test_cmd_finetune_runs_multiple_tox21_tasks(tmp_path, monkeypatch):
+    import scripts.commands.finetune as ft
+
+    calls: list[tuple[str, str, str]] = []
+
+    def single_stub(args):
+        suffix = os.environ.get("FINETUNE_STAGE_SUFFIX")
+        calls.append((args.label_col, args.ckpt_dir, suffix))
+        checkpoint = tmp_path / f"{args.label_col}.pt"
+        checkpoint.write_text("stub", encoding="utf-8")
+        payload = {
+            "dataset": {"label_col": args.label_col},
+            "encoder_finetuned": {"checkpoint": str(checkpoint)},
+        }
+        ft._record_finetune_stage_outputs(payload)
+        return payload
+
+    monkeypatch.setattr(ft, "_cmd_finetune_single", single_stub)
+
+    stage_dir = tmp_path / "stage"
+    monkeypatch.setenv("STAGE_OUTPUTS_DIR", str(stage_dir))
+
+    args = argparse.Namespace(
+        label_col="NR-AR,SR-ARE",
+        ckpt_dir=str(tmp_path / "finetune"),
+    )
+
+    tj.cmd_finetune(args)
+
+    assert [entry[0] for entry in calls] == ["NR-AR", "SR-ARE"]
+    assert all(entry[2] for entry in calls)
+
+    summary_path = stage_dir / "finetune.json"
+    assert summary_path.exists()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary.get("primary_task") == "NR-AR"
+    assert set(summary.get("tasks", {}).keys()) == {"NR-AR", "SR-ARE"}
+
+    canonical_ckpt = tmp_path / "finetune" / "encoder_ft.pt"
+    assert canonical_ckpt.exists()
+
+    monkeypatch.delenv("STAGE_OUTPUTS_DIR", raising=False)
 
 
 def test_cmd_finetune_resume_and_best_snapshot(tmp_path, monkeypatch):
