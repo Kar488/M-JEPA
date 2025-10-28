@@ -412,6 +412,53 @@ def test_case_study_end_to_end_without_checkpoint_enables_full_finetune(monkeypa
     assert result.diagnostics.get("full_finetune") is True
 
 
+def test_case_study_end_to_end_with_checkpoint_enables_full_finetune(monkeypatch):
+    unsup = types.ModuleType("training.unsupervised")
+    unsup.train_jepa = lambda *a, **k: {}
+    monkeypatch.setitem(sys.modules, "training.unsupervised", unsup)
+
+    sup_module = types.ModuleType("training.supervised")
+    calls: dict[str, Any] = {}
+
+    def fake_train_linear_head(*, dataset, encoder, freeze_encoder, encoder_lr, **kwargs):
+        calls["freeze_encoder"] = freeze_encoder
+        calls["encoder_lr"] = encoder_lr
+        head = torch.nn.Linear(getattr(encoder, "hidden_dim", 32), 1)
+        return {"head": head, "train/batches": 4.0}
+
+    sup_module.train_linear_head = fake_train_linear_head
+    monkeypatch.setitem(sys.modules, "training.supervised", sup_module)
+
+    import experiments.case_study as case_study
+
+    monkeypatch.setattr(
+        case_study,
+        "safe_load_checkpoint",
+        lambda *args, **kwargs: ({"encoder": {}}, {}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        case_study,
+        "_load_encoder_strict",
+        lambda *args, **kwargs: {"hash": "stub"},
+        raising=False,
+    )
+    monkeypatch.setattr(case_study, "load_state_dict_forgiving", lambda *a, **k: None, raising=False)
+
+    result = case_study.run_tox21_case_study(
+        csv_path="samples/tox21_mini.csv",
+        task_name="NR-AR",
+        finetune_epochs=2,
+        encoder_checkpoint="dummy.pt",
+        evaluation_mode="end_to_end",
+    )
+
+    assert calls.get("freeze_encoder") is False
+    assert calls.get("encoder_lr") is not None
+    assert result.diagnostics.get("auto_full_finetune") is True
+    assert result.diagnostics.get("full_finetune") is True
+
+
 def test_case_study_frozen_finetuned_trains_linear_probe(monkeypatch, caplog):
     import experiments.case_study as case_study
 

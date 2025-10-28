@@ -38,6 +38,7 @@ SOURCE="${TOX21_EVALUATION_MODE:-${TOX21_ENCODER_SOURCE:-pretrain_frozen}}"
 # fine-tuned lineage and automatically upgrade the mode to ``end_to_end``
 # so the evaluation reuses the freshly tuned encoder unless the user has
 # explicitly requested a different mode.
+auto_full_finetune="0"
 if [[ "$SOURCE" == "pretrain_frozen" ]]; then
   if [[ -z "${TOX21_EVALUATION_MODE:-}" && -z "${TOX21_ENCODER_SOURCE:-}" ]]; then
     if [[ "${FROZEN:-1}" != "1" ]]; then
@@ -45,6 +46,7 @@ if [[ "$SOURCE" == "pretrain_frozen" ]]; then
         if [[ -f "${FINETUNE_DIR}/encoder_ft.pt" || -f "${FINETUNE_DIR}/seed_0/ft_best.pt" ]]; then
           echo "[tox21] auto-detected fine-tuned encoder; switching evaluation mode to end_to_end" >&2
           SOURCE="end_to_end"
+          auto_full_finetune="1"
         fi
       fi
     fi
@@ -62,6 +64,21 @@ if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   fi
   export FINETUNE_EPOCHS
   export TOX21_FINETUNE_PATIENCE
+fi
+
+if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
+  full_flag="${TOX21_FULL_FINETUNE:-}"
+  if [[ -z "$full_flag" ]]; then
+    TOX21_FULL_FINETUNE="true"
+    export TOX21_FULL_FINETUNE
+    if [[ "$auto_full_finetune" == "1" ]]; then
+      echo "[tox21] auto-enabling full fine-tuning for end_to_end evaluation" >&2
+    fi
+  else
+    export TOX21_FULL_FINETUNE
+  fi
+elif [[ -n "${TOX21_FULL_FINETUNE:-}" ]]; then
+  export TOX21_FULL_FINETUNE
 fi
 
 echo "[tox21] using pretrain experiment id=${PRETRAIN_EXP_ID}" >&2

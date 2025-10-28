@@ -1128,6 +1128,28 @@ build_stage_args() {
 
   prune_empty_args OUT
 
+  if [ "$s" = "tox21" ]; then
+    local enforce_flag="${TOX21_FULL_FINETUNE:-}"
+    local have_flag=0
+    local token
+    for token in "${OUT[@]}"; do
+      if [[ "$token" == "--full-finetune" || "$token" == "--no-full-finetune" ]]; then
+        have_flag=1
+        break
+      fi
+    done
+    if (( ! have_flag )); then
+      case "${enforce_flag,,}" in
+        1|true|yes|on)
+          OUT+=("--full-finetune")
+          ;;
+        0|false|no|off)
+          OUT+=("--no-full-finetune")
+          ;;
+      esac
+    fi
+  fi
+
   if [ "$s" = "report" ]; then
     local -a FILTERED=()
     local idx=0
