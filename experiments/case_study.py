@@ -122,6 +122,47 @@ except Exception as exc:  # pragma: no cover - fail fast if even the stub is mis
         "train_linear_head and train_jepa are required to run the Tox21 case study"
     ) from exc
 
+_ORIGINAL_TRAIN_LINEAR_HEAD = train_linear_head
+_ORIGINAL_TRAIN_JEPA = train_jepa
+
+
+def _resolve_training_callable(name: str, fallback: Optional[Callable[..., Any]]) -> Callable[..., Any]:
+    """Return a fresh training callable, honouring runtime monkeypatches.
+
+    ``experiments.case_study`` caches references to ``train_linear_head`` and
+    ``train_jepa`` at import time to avoid repeatedly importing the heavy
+    ``training`` package.  Individual tests often replace the corresponding
+    modules inside :mod:`sys.modules` without reloading this file, so we need to
+    re-discover the latest callable when we invoke the helpers.
+    """
+
+    module_name = "training.supervised" if name == "train_linear_head" else "training.unsupervised"
+    module = sys.modules.get(module_name)
+    module_candidate = getattr(module, name, None) if module is not None else None
+
+    if callable(fallback):
+        original = (
+            _ORIGINAL_TRAIN_LINEAR_HEAD if name == "train_linear_head" else _ORIGINAL_TRAIN_JEPA
+        )
+        if fallback is not original:
+            return fallback
+
+    if callable(module_candidate):
+        return module_candidate
+
+    if callable(fallback):
+        return fallback
+
+    raise ImportError(f"{name} is unavailable; ensure training stubs are imported")
+
+
+def _train_linear_head_callable() -> Callable[..., Any]:
+    return _resolve_training_callable("train_linear_head", train_linear_head)
+
+
+def _train_jepa_callable() -> Callable[..., Any]:
+    return _resolve_training_callable("train_jepa", train_jepa)
+
 try:  # pragma: no cover - optional during tests
     from training.supervised import stratified_split as _lib_stratified_split  # type: ignore[import-not-found]
 except Exception:  # pragma: no cover - provide a lightweight fallback
@@ -1892,12 +1933,15 @@ def run_tox21_case_study(
         ema_helper = EMA(encoder, decay=0.99)
         predictor = MLPPredictor(embed_dim=final_hidden_dim, hidden_dim=final_hidden_dim * 2)
 
-        train_fn = train_jepa
+        train_fn = _train_jepa_callable()
         if contrastive:
             try:
                 from training.unsupervised import train_contrastive
 
-                train_fn = train_contrastive
+                if callable(train_contrastive):
+                    train_fn = train_contrastive
+                else:
+                    raise TypeError("train_contrastive is not callable")
             except Exception:
                 logger.warning(
                     "Contrastive pretraining requested but unavailable; falling back to JEPA",
@@ -1987,6 +2031,7 @@ def run_tox21_case_study(
 
     manual_class_weight: Optional[Dict[int, float]] = None
     automatic_class_weight = bool(use_pos_weight)
+    linear_train_fn = _train_linear_head_callable()
     if isinstance(class_weights, str):
         mode = class_weights.strip()
         if not mode:
@@ -2055,9 +2100,9 @@ def run_tox21_case_study(
         n_neg = max(0, n_all - n_pos)
         if n_pos > 0 and n_neg > 0:
             pos_weight = torch.tensor([n_neg / max(1, n_pos)], device=device, dtype=torch.float32)
-            if "pos_weight" in inspect.signature(train_linear_head).parameters:
+            if "pos_weight" in inspect.signature(linear_train_fn).parameters:
                 extra_args["pos_weight"] = pos_weight
-            elif "class_weight" in inspect.signature(train_linear_head).parameters:
+            elif "class_weight" in inspect.signature(linear_train_fn).parameters:
                 extra_args["class_weight"] = {0: 1.0, 1: float(n_neg / max(1, n_pos))}
 
     clf_metrics: Dict[str, Any]
@@ -2098,7 +2143,7 @@ def run_tox21_case_study(
         if full_finetune_effective:
             linear_kwargs["early_stop_metric"] = "val_auc"
 
-        clf_metrics = train_linear_head(**linear_kwargs)
+        clf_metrics = linear_train_fn(**linear_kwargs)
 
         head = clf_metrics.get("head")
         if head is None:
