@@ -192,6 +192,25 @@ def test_publish_report_uses_static_artifact(monkeypatch: pytest.MonkeyPatch) ->
     assert called == {"artifact": 1}
 
 
+def test_infer_sections_uses_run_name() -> None:
+    run = wandb_utils.RunRecord(
+        run_id="1",
+        name="grid-sweep",
+        tags=(),
+        summary={},
+        config={},
+        history=None,
+        group=None,
+        job_type=None,
+        url=None,
+    )
+
+    sections = build._infer_sections_for_run(run, available_tags=())  # pylint: disable=protected-access
+
+    assert "Overview" in sections
+    assert "Sweeps & Ablations" in sections
+
+
 def test_static_artifact_run_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeRun:
         def __init__(self) -> None:

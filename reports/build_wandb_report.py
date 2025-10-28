@@ -965,11 +965,26 @@ def _infer_sections_for_run(
     tags.update(
         tag for tag in available_tags if tag in tags
     )  # normalise known schema tags
+
+    search_fields: List[str] = []
+
     job_type = (run.job_type or "").lower()
+    if job_type:
+        search_fields.append(job_type)
+
+    for candidate in (run.name, run.group):
+        if not candidate:
+            continue
+        lowered = candidate.lower()
+        normalised = normalise_tag(candidate)
+        search_fields.append(lowered)
+        if normalised != lowered:
+            search_fields.append(normalised)
+
     sections: List[str] = ["Overview"]
     for section, keywords in SECTION_KEYWORDS.items():
         for keyword in keywords:
-            if keyword in job_type:
+            if any(keyword in field for field in search_fields):
                 sections.append(section)
                 break
             if any(keyword in tag for tag in tags):
