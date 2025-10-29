@@ -19,6 +19,7 @@ def make_args(
     aug_rotate=False,
     aug_mask_angle=False,
     aug_dihedral=False,
+    devices=1,
 ):
     return argparse.Namespace(
         unlabeled_dir=str(tmp_path),
@@ -36,6 +37,7 @@ def make_args(
         output=str(tmp_path / "encoder.pt"),
         contiguous=False,
         device="cpu",
+        devices=devices,
         aug_rotate=aug_rotate,
         aug_mask_angle=aug_mask_angle,
         aug_dihedral=aug_dihedral,
@@ -110,6 +112,7 @@ def setup_stubs(monkeypatch, calls):
     def train_contrastive_stub(**kwargs):
         calls["train_contrastive"] += 1
         calls["train_contrastive_kwargs"] = kwargs
+        return [0.1]
 
     monkeypatch.setattr(tj, "train_contrastive", train_contrastive_stub)
 
@@ -160,11 +163,37 @@ def test_cmd_pretrain_creates_checkpoint_and_calls_training(tmp_path, monkeypatc
     assert calls["load_directory_dataset"] == 1
     assert calls["train_jepa"] == 1
     assert os.path.exists(args.output)
+    assert calls["train_jepa_kwargs"].get("devices") == args.devices
     assert "random_rotate" not in calls["train_jepa_kwargs"]
     assert "mask_angle" not in calls["train_jepa_kwargs"]
     assert "perturb_dihedral" not in calls["train_jepa_kwargs"]
     assert calls["plot_training_curves"] == 1
     assert os.path.exists(os.path.join(args.plot_dir, "pretrain_loss.png"))
+
+
+def test_cmd_pretrain_forwards_devices_to_contrastive(tmp_path, monkeypatch):
+    calls = {
+        "load_directory_dataset": 0,
+        "build_encoder": 0,
+        "EMA": 0,
+        "MLPPredictor": 0,
+        "train_jepa": 0,
+        "train_contrastive": 0,
+        "maybe_init_wandb": 0,
+        "train_jepa_kwargs": {},
+        "train_contrastive_kwargs": {},
+        "plot_training_curves": 0,
+        "saved_plot": None,
+    }
+    setup_stubs(monkeypatch, calls)
+
+    args = make_args(tmp_path, contrastive=True, devices=3)
+    tj.cmd_pretrain(args)
+
+    assert calls["train_jepa"] == 1
+    assert calls["train_contrastive"] == 1
+    assert calls["train_jepa_kwargs"].get("devices") == 3
+    assert calls["train_contrastive_kwargs"].get("devices") == 3
 
 
 def test_cmd_pretrain_with_contrastive_branch(tmp_path, monkeypatch):

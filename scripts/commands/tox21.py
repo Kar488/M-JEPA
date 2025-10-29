@@ -162,6 +162,34 @@ def _load_best_config_overrides(args: argparse.Namespace) -> Tuple[Dict[str, Any
     add_val = _coerce_bool_like(add_raw)
     if add_val is not None:
         overrides["add_3d"] = add_val
+    devices_raw = _extract_bestcfg_value(raw, "devices")
+    devices_val = _coerce_int_like(devices_raw)
+    if devices_val is not None:
+        overrides["devices"] = devices_val
+    num_workers_raw = _extract_bestcfg_value(raw, "num_workers")
+    num_workers_val = _coerce_int_like(num_workers_raw)
+    if num_workers_val is not None:
+        overrides["num_workers"] = num_workers_val
+    prefetch_raw = _extract_bestcfg_value(raw, "prefetch_factor")
+    prefetch_val = _coerce_int_like(prefetch_raw)
+    if prefetch_val is not None:
+        overrides["prefetch_factor"] = prefetch_val
+    pin_memory_raw = _extract_bestcfg_value(raw, "pin_memory")
+    pin_memory_val = _coerce_bool_like(pin_memory_raw)
+    if pin_memory_val is not None:
+        overrides["pin_memory"] = pin_memory_val
+    persistent_raw = _extract_bestcfg_value(raw, "persistent_workers")
+    persistent_val = _coerce_bool_like(persistent_raw)
+    if persistent_val is not None:
+        overrides["persistent_workers"] = persistent_val
+    bf16_raw = _extract_bestcfg_value(raw, "bf16")
+    bf16_val = _coerce_bool_like(bf16_raw)
+    if bf16_val is not None:
+        overrides["bf16"] = bf16_val
+    bf16_head_raw = _extract_bestcfg_value(raw, "bf16_head")
+    bf16_head_val = _coerce_bool_like(bf16_head_raw)
+    if bf16_head_val is not None:
+        overrides["bf16_head"] = bf16_head_val
     return overrides, path
 
 
@@ -302,6 +330,17 @@ def _run_tox21_single_task(
     if class_weights_arg is None:
         class_weights_arg = "auto"
 
+    devices_val = _coerce_int_like(getattr(args, "devices", None))
+    if devices_val is None:
+        raw_devices = getattr(args, "devices", None)
+        try:
+            devices_val = int(raw_devices) if raw_devices is not None else None
+        except Exception:
+            devices_val = None
+    if devices_val is None:
+        devices_val = 1
+    setattr(args, "devices", devices_val)
+
     allow_shape_flag = getattr(args, "allow_shape_coercion", None)
 
     try:
@@ -350,6 +389,7 @@ def _run_tox21_single_task(
         triage_pct=triage_pct,
         calibrate=calibrate,
         device=resolve_device(getattr(args, "device", "cpu")),
+        devices=devices_val,
         num_workers=getattr(args, "num_workers", -1),
         pin_memory=getattr(args, "pin_memory", True),
         persistent_workers=getattr(args, "persistent_workers", True),
@@ -639,6 +679,7 @@ def _run_tox21_single_task(
             "prefetch_factor": getattr(args, "prefetch_factor", None),
             "pin_memory": getattr(args, "pin_memory", None),
             "persistent_workers": getattr(args, "persistent_workers", None),
+            "devices": getattr(args, "devices", None),
             "bf16": getattr(args, "bf16", None),
             "bf16_head": getattr(args, "bf16_head", None),
             "allow_shape_coercion": bool(allow_shape_effective_val),
@@ -742,6 +783,46 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             inherited.append(f"hidden_dim={desired_hidden}")
         setattr(args, "hidden_dim", desired_hidden)
         setattr(args, "_hidden_dim_provided", True)
+    numeric_override_specs: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+        "devices": ("devices", ("--devices",)),
+        "num_workers": ("num_workers", ("--num-workers", "--num_workers")),
+        "prefetch_factor": ("prefetch_factor", ("--prefetch-factor",)),
+    }
+    for key, (attr, flags) in numeric_override_specs.items():
+        if key not in best_overrides:
+            continue
+        if flags and _flag_was_provided(flags):
+            continue
+        if getattr(args, f"_{attr}_provided", False):
+            continue
+        desired_val = _coerce_int_like(best_overrides.get(key))
+        if desired_val is None:
+            continue
+        current_val = getattr(args, attr, None)
+        if current_val != desired_val:
+            inherited.append(f"{key}={desired_val}")
+            setattr(args, attr, desired_val)
+    bool_override_specs: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+        "persistent_workers": ("persistent_workers", ("--persistent-workers", "--persistent_workers")),
+        "pin_memory": ("pin_memory", ("--pin-memory", "--pin_memory")),
+        "bf16": ("bf16", ("--bf16",)),
+        "bf16_head": ("bf16_head", ("--bf16-head",)),
+    }
+    for key, (attr, flags) in bool_override_specs.items():
+        if key not in best_overrides:
+            continue
+        if flags and _flag_was_provided(flags):
+            continue
+        if getattr(args, f"_{attr}_provided", False):
+            continue
+        desired_bool = _coerce_bool_like(best_overrides.get(key))
+        if desired_bool is None:
+            continue
+        desired_flag = bool(desired_bool)
+        current_val = getattr(args, attr, None)
+        if bool(current_val) != desired_flag or current_val is None:
+            inherited.append(f"{key}={'true' if desired_flag else 'false'}")
+            setattr(args, attr, desired_flag)
     if inherited and best_path is not None:
         logger.info(
             "Inheriting Phase-2 best_config overrides from %s: %s",
@@ -755,6 +836,16 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         raise ValueError("No Tox21 tasks specified or discovered")
     primary_task = tasks_to_run[0]
     setattr(args, "task", primary_task)
+    devices_val = _coerce_int_like(getattr(args, "devices", None))
+    if devices_val is None:
+        raw_devices = getattr(args, "devices", None)
+        try:
+            devices_val = int(raw_devices) if raw_devices is not None else None
+        except Exception:
+            devices_val = None
+    if devices_val is None:
+        devices_val = 1
+    setattr(args, "devices", devices_val)
     eval_mode = str(
         getattr(
             args,
@@ -825,36 +916,43 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     if "target_baseline_roc_auc" not in {str(t) for t in wandb_tags}:
         wandb_tags.append("target_baseline_roc_auc")
 
+    wandb_config: Dict[str, Any] = {
+        "csv": args.csv,
+        "task": primary_task,
+        "tasks": list(tasks_to_run),
+        "task_count": len(tasks_to_run),
+        "dataset": dataset_name,
+        "gnn_type": getattr(args, "gnn_type", None),
+        "hidden_dim": getattr(args, "hidden_dim", None),
+        "num_layers": getattr(args, "num_layers", None),
+        "add_3d": bool(getattr(args, "add_3d", False)),
+        "cache_dir": cache_dir,
+        "pretrain_epochs": getattr(args, "pretrain_epochs", 5),
+        "finetune_epochs": getattr(args, "finetune_epochs", 20),
+        "pretrain_lr": getattr(args, "pretrain_lr", None),
+        "triage_pct": triage_pct,
+        "calibrate": calibrate,
+        "pretrain_time_budget_mins": getattr(args, "pretrain_time_budget_mins", 0),
+        "finetune_time_budget_mins": getattr(args, "finetune_time_budget_mins", 0),
+        "num_workers": getattr(args, "num_workers", None),
+        "prefetch_factor": getattr(args, "prefetch_factor", None),
+        "pin_memory": getattr(args, "pin_memory", None),
+        "persistent_workers": getattr(args, "persistent_workers", None),
+        "bf16": getattr(args, "bf16", None),
+        "devices": devices_val,
+        "full_finetune": bool(getattr(args, "full_finetune", False)),
+        "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
+        "tox21_head_batch_size": int(getattr(args, "tox21_head_batch_size", 256) or 256),
+        "evaluation_mode": eval_mode,
+    }
+    bf16_head_cfg = getattr(args, "bf16_head", None)
+    if bf16_head_cfg is not None:
+        wandb_config["bf16_head"] = bf16_head_cfg
     wb = maybe_init_wandb(
         getattr(args, "use_wandb", False),
         project=getattr(args, "wandb_project", "m-jepa"),
         tags=wandb_tags,
-        config={
-            "csv": args.csv,
-            "task": primary_task,
-            "tasks": list(tasks_to_run),
-            "task_count": len(tasks_to_run),
-            "dataset": dataset_name,
-            "gnn_type": getattr(args, "gnn_type", None),
-            "hidden_dim": getattr(args, "hidden_dim", None),
-            "num_layers": getattr(args, "num_layers", None),
-            "add_3d": bool(getattr(args, "add_3d", False)),
-            "cache_dir": cache_dir,
-            "pretrain_epochs": getattr(args, "pretrain_epochs", 5),
-            "finetune_epochs": getattr(args, "finetune_epochs", 20),
-            "pretrain_lr": getattr(args, "pretrain_lr", None),
-            "triage_pct": triage_pct,
-            "calibrate": calibrate,
-            "pretrain_time_budget_mins": getattr(args, "pretrain_time_budget_mins", 0),
-            "finetune_time_budget_mins": getattr(args, "finetune_time_budget_mins", 0),
-            "num_workers": getattr(args, "num_workers", None),
-            "prefetch_factor": getattr(args, "prefetch_factor", None),
-            "persistent_workers": getattr(args, "persistent_workers", None),
-            "full_finetune": bool(getattr(args, "full_finetune", False)),
-            "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
-            "tox21_head_batch_size": int(getattr(args, "tox21_head_batch_size", 256) or 256),
-            "evaluation_mode": eval_mode,
-        },
+        config=wandb_config,
     )
     log_effective_gnn(args, logger, wb)
 
