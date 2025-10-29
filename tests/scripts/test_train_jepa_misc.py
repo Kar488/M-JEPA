@@ -357,6 +357,8 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
     assert config["pretrain_lr"] == 5e-4
     assert config["persistent_workers"] is False
     assert config["prefetch_factor"] == 5
+    assert config["pin_memory"] is False
+    assert config["bf16"] is True
     assert config["tasks"] == ["NR-AR"]
     assert config["task_count"] == 1
 
@@ -368,6 +370,101 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
 
     manifest_path = tmp_path / "reports" / "run_manifest.json"
     assert manifest_path.is_file()
+
+
+def test_cmd_tox21_inherits_best_config_loader_flags(tmp_path, monkeypatch):
+    best_payload = {
+        "devices": {"value": 2},
+        "num_workers": {"value": 6},
+        "prefetch_factor": {"value": 3},
+        "pin_memory": {"value": 0},
+        "persistent_workers": {"value": 0},
+        "bf16": {"value": 0},
+        "bf16_head": {"value": 1},
+    }
+    best_path = tmp_path / "best.json"
+    best_path.write_text(json.dumps(best_payload))
+
+    captures = {}
+
+    def tox_stub(
+        *,
+        csv_path,
+        task_name,
+        pretrain_epochs,
+        finetune_epochs,
+        triage_pct=0.10,
+        calibrate=True,
+        device="cpu",
+        **kwargs,
+    ):
+        keys = (
+            "num_workers",
+            "pin_memory",
+            "persistent_workers",
+            "prefetch_factor",
+            "bf16",
+            "bf16_head",
+            "devices",
+        )
+        captures.update({k: kwargs[k] for k in keys})
+        return 0.2, 0.1, 0.3, {"baseline": 0.15}
+
+    monkeypatch.setattr(tj, "run_tox21_case_study", tox_stub)
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: None)
+
+    import scripts.commands.tox21 as tox_cmd
+
+    monkeypatch.setattr(tox_cmd.sys, "argv", ["train_jepa.py", "tox21"])
+
+    args = argparse.Namespace(
+        csv=str(tmp_path / "tox.csv"),
+        task="NR-AR",
+        dataset="tox21",
+        pretrain_epochs=1,
+        finetune_epochs=1,
+        pretrain_lr=1e-4,
+        triage_pct=0.10,
+        tox21_dir=str(tmp_path / "reports"),
+        device="cpu",
+        use_wandb=False,
+        wandb_project="test",
+        wandb_tags=[],
+        num_workers=8,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=4,
+        bf16=True,
+        bf16_head=False,
+        devices=1,
+        hidden_dim=128,
+        num_layers=3,
+        gnn_type="edge_mpnn",
+        add_3d=False,
+        best_config_path=str(best_path),
+        pretrain_time_budget_mins=0,
+        finetune_time_budget_mins=0,
+    )
+
+    tj.cmd_tox21(args)
+
+    expected = {
+        "num_workers": 6,
+        "pin_memory": False,
+        "persistent_workers": False,
+        "prefetch_factor": 3,
+        "bf16": False,
+        "bf16_head": True,
+        "devices": 2,
+    }
+    assert {k: captures[k] for k in expected} == expected
+    assert args.num_workers == 6
+    assert args.pin_memory is False
+    assert args.persistent_workers is False
+    assert args.prefetch_factor == 3
+    assert args.bf16 is False
+    assert args.bf16_head is True
+    assert args.devices == 2
 
 
 def test_cmd_tox21_failure(tmp_path,monkeypatch):
