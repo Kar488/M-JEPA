@@ -1394,12 +1394,85 @@ run_with_timeout() {
     mkdir -p "$LOG_DIR" 
     LOG="${LOG_DIR}/${s}.log"
     
+    local -a launch_prefix=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1)
+    local -a entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}")
+    local -a ddp_launcher=()
+    local previous_world="${WORLD_SIZE-}"
+    local previous_master_addr="${MASTER_ADDR-}"
+    local previous_master_port="${MASTER_PORT-}"
+    local ddp_env_modified=0
+
+    if [[ "$s" == "finetune" ]]; then
+      local raw_devices
+      raw_devices="$(getv --devices || true)"
+      if [[ -z "$raw_devices" && -n "${FINETUNE_DEVICES:-}" ]]; then
+        raw_devices="${FINETUNE_DEVICES}"
+      fi
+      if [[ "$raw_devices" =~ ^[0-9]+$ && "$raw_devices" -gt 1 ]]; then
+        local ddp_supported=0
+        if "${launch_prefix[@]}" python - <<'PY' >/dev/null 2>&1; then
+import sys
+try:
+    import torch  # noqa: F401
+    import torch.distributed.run  # noqa: F401
+except Exception:
+    sys.exit(1)
+PY
+          ddp_supported=1
+        fi
+        if (( ! ddp_supported )); then
+          echo "[stage:$s] torch.distributed.run unavailable; falling back to single-process execution" >&2
+        fi
+        if (( ddp_supported )); then
+          local world="${WORLD_SIZE:-}"
+          if [[ -z "$world" || "$world" -le 1 ]]; then
+            local ddp_port="${MASTER_PORT:-}"
+            if [[ -z "$ddp_port" ]]; then
+              # Derive a semi-random port in the high ephemeral range to avoid clashes
+              ddp_port=$(( (RANDOM % 20000) + 15000 ))
+            fi
+            export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+            export MASTER_PORT="$ddp_port"
+            export WORLD_SIZE="$raw_devices"
+            ddp_env_modified=1
+            echo "[stage:$s] enabling torch.distributed.run (nproc_per_node=${raw_devices}, master_port=${MASTER_PORT})" >&2
+          else
+            echo "[stage:$s] WORLD_SIZE=${world}; assuming external launcher configured DDP" >&2
+          fi
+          ddp_launcher=(python -m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${raw_devices}")
+        fi
+      fi
+    fi
+
+    local -a micromamba_cmd=("${launch_prefix[@]}")
+    if (( ${#ddp_launcher[@]} )); then
+      micromamba_cmd+=("${ddp_launcher[@]}" "${entrypoint[@]}")
+    else
+      micromamba_cmd+=(python -u "${entrypoint[@]}")
+    fi
+
     timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
       env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-      "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-      python -u "$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}" \
+      "${micromamba_cmd[@]}" \
       2>&1 | tee "$LOG_DIR/${s}.log"
     rc=${PIPESTATUS[0]}
+    if (( ddp_env_modified )); then
+      if [[ -n "$previous_world" ]]; then
+        export WORLD_SIZE="$previous_world"
+      else
+        unset WORLD_SIZE
+      fi
+      if [[ -n "$previous_master_addr" ]]; then
+        export MASTER_ADDR="$previous_master_addr"
+      else
+        unset MASTER_ADDR
+      fi
+      if [[ -n "$previous_master_port" ]]; then
+        export MASTER_PORT="$previous_master_port"
+      else
+        unset MASTER_PORT
+      fi
+    fi
     # 0   = success
     # 124 = 'timeout' exceeded (we later sent SIGTERM/SIGKILL)
     # 143 = terminated by SIGTERM (128+15)

@@ -1035,12 +1035,14 @@ def train_linear_head(
     cache_state = {"enabled": bool(cache_graph_embeddings)}
 
     def _estimate_fd_handles(workers: int, prefetch: int, loader_count: int) -> int:
-        base = 512 + 64 * loader_count
+        base = 256 + 48 * loader_count
         if cache_state["enabled"]:
-            base += 256 * loader_count
+            base += 96 * loader_count
         if loader_count <= 0 or workers <= 0:
             return base
-        return base + 128 * loader_count * max(workers, 1) * max(prefetch, 1)
+        slots = loader_count * max(workers, 1)
+        prefetch = max(prefetch, 1)
+        return base + slots * (32 + 48 * prefetch)
 
     active_loader_count = sum(
         1
@@ -1072,6 +1074,7 @@ def train_linear_head(
                 return _estimate_fd_handles(workers, prefetch, active_loader_count)
 
             found = False
+            slack = 64
             for workers_candidate in range(current_workers, -1, -1):
                 if workers_candidate <= 0:
                     prefetch_candidates = [0]
@@ -1079,7 +1082,7 @@ def train_linear_head(
                     prefetch_candidates = list(range(effective_prefetch, 0, -1))
                 for prefetch_candidate in prefetch_candidates:
                     handles_needed = _handles_for(workers_candidate, prefetch_candidate)
-                    if handles_needed <= available:
+                    if handles_needed <= available + slack:
                         best_workers = workers_candidate
                         best_prefetch = prefetch_candidate
                         found = True
