@@ -539,7 +539,7 @@ phase2_promote_grid_artifacts_single() {
 
   [[ -n "$chosen" ]] || return 0
 
-  if [[ -f "$dest" && cmp -s "$chosen" "$dest" 2>/dev/null ]]; then
+  if [[ -f "$dest" ]] && cmp -s "$chosen" "$dest" 2>/dev/null; then
     return 0
   fi
 
