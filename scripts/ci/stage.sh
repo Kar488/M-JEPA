@@ -523,19 +523,31 @@ phase2_sync_grid_artifacts() {
 phase2_promote_grid_artifacts_single() {
   local step_label="$1" dest="$2"
   shift 2 || true
-  if [[ -f "$dest" ]]; then
-    return 0
-  fi
   local candidate
+  local chosen=""
+  local chosen_mtime=-1
+
   for candidate in "$@"; do
     [[ -n "$candidate" && -f "$candidate" ]] || continue
-    mkdir -p "$(dirname "$dest")" || return 0
-    if ! cmp -s "$candidate" "$dest" 2>/dev/null; then
-      cp -f "$candidate" "$dest" || continue
-      echo "[${step_label}] promoted $(basename "$candidate") -> ${dest}" >&2
+    local candidate_mtime
+    candidate_mtime=$(stat -c %Y "$candidate" 2>/dev/null) || candidate_mtime=0
+    if [[ -z "$chosen" || $candidate_mtime -gt $chosen_mtime ]]; then
+      chosen="$candidate"
+      chosen_mtime=$candidate_mtime
     fi
-    return 0
   done
+
+  [[ -n "$chosen" ]] || return 0
+
+  if [[ -f "$dest" && cmp -s "$chosen" "$dest" 2>/dev/null ]]; then
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$dest")" || return 0
+
+  if cp -f "$chosen" "$dest"; then
+    echo "[${step_label}] promoted $(basename "$chosen") -> ${dest}" >&2
+  fi
   return 0
 }
 
