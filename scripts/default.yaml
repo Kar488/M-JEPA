@@ -27,7 +27,7 @@ pretrain:
   seeds: [0]            # Random seeds for pretraining
 
 finetune:
-  epochs: 50            # Training epochs for the linear probe
+  epochs: 18            # Training epochs for the linear probe
   patience: 10          # Early stopping patience on validation set
   lr: 1.0e-4            # Learning rate for fine‑tuning the probe
   batch_size: 256       # Batch size for downstream training

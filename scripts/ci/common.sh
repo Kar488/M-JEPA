@@ -1221,6 +1221,13 @@ best_config_args() {
     phase2_hint="${grid_display}/phase2_export/best_grid_config.json"
   fi
 
+  local prefer_phase2=0
+  case "${stage}" in
+    pretrain|finetune|bench|benchmark|tox21)
+      prefer_phase2=1
+      ;;
+  esac
+
   local -a winner_candidates=()
   if [[ -n "${BENCH_WINNER_JSON:-}" ]]; then
     winner_candidates+=("${BENCH_WINNER_JSON}")
@@ -1228,8 +1235,13 @@ best_config_args() {
   local grid_root
   for grid_root in "${grid_roots[@]}"; do
     [[ -n "$grid_root" ]] || continue
-    winner_candidates+=("${grid_root}/best_grid_config.json")
-    winner_candidates+=("${grid_root}/phase2_export/best_grid_config.json")
+    if (( prefer_phase2 )); then
+      winner_candidates+=("${grid_root}/phase2_export/best_grid_config.json")
+      winner_candidates+=("${grid_root}/best_grid_config.json")
+    else
+      winner_candidates+=("${grid_root}/best_grid_config.json")
+      winner_candidates+=("${grid_root}/phase2_export/best_grid_config.json")
+    fi
   done
 
   local cfg="" candidate=""
@@ -1245,12 +1257,18 @@ best_config_args() {
     case "$stage" in
       bench|benchmark)
         echo "[fatal] bench winner not found." >&2
-        echo "checked: ${BENCH_WINNER_JSON:-<unset>}, ${best_hint}, ${phase2_hint}" >&2
+        echo "checked: ${BENCH_WINNER_JSON:-<unset>}, ${phase2_hint}, ${best_hint}" >&2
         echo "hint: set GRID_EXP_ID=${GRID_EXP_ID:-<unset>} or run/export Phase-2" >&2
         return 2
         ;;
       pretrain|finetune|tox21)
-        echo "[fatal] $stage needs winner but missing: ${best_hint}" >&2
+        local primary_hint="${phase2_hint}"
+        if [[ -n "${best_hint}" && "${best_hint}" != "<unset>" ]]; then
+          primary_hint+=" (phase2) and ${best_hint}"
+        else
+          primary_hint+=" (phase2)"
+        fi
+        echo "[fatal] $stage needs winner but missing: ${primary_hint}" >&2
         return 2
         ;;
       *)
@@ -1456,6 +1474,7 @@ model_common = {
     "warmup_steps": "--warmup-steps",
     "temperature": "--temperature",
     "contrastive": "--contrastive",
+    "bf16_head": "--bf16-head",
 }
 
 # 3) Augmentations (JEPA vs. contrastive study toggles)
@@ -1754,6 +1773,33 @@ if _parser_sub is not None:
                 _flag_actions[_opt] = _action
 
 mapping = maps.get(stage, {})
+
+# Flags backed by BoolFlag (accept optional 0/1 values) when parser introspection
+# is unavailable. Grid-search reuses store_true variants for a subset, so keep the
+# per-stage override small to avoid emitting invalid "--flag 0" combinations.
+_value_bool_flags_common = {
+    "--add-3d",
+    "--aug-atom-masking",
+    "--aug-bond-deletion",
+    "--aug-dihedral",
+    "--aug-mask-angle",
+    "--aug-rotate",
+    "--aug-subgraph-removal",
+    "--bf16",
+    "--pin-memory",
+    "--persistent-workers",
+    "--use-wandb",
+    "--use-scaffold",
+}
+_value_bool_flags_by_stage = {
+    "grid": {"--cache-datasets"},
+}
+if stage == "grid":
+    value_bool_flags = set(_value_bool_flags_by_stage.get(stage, set()))
+else:
+    value_bool_flags = set(_value_bool_flags_common)
+    value_bool_flags.update(_value_bool_flags_by_stage.get(stage, set()))
+
 seen_flags = set()
 for key, flag in mapping.items():
     if key not in cfg:
@@ -1764,12 +1810,10 @@ for key, flag in mapping.items():
     seen_flags.add(flag)
     if isinstance(val, bool):
         action = _flag_actions.get(flag)
-        accepts_value = True
         if action is not None:
             accepts_value = getattr(action, "nargs", None) not in (0,)
         else:
-            # Conservative fallback: treat flags as store_true to avoid stray values
-            accepts_value = False
+            accepts_value = flag in value_bool_flags
 
         if accepts_value:
             print(flag)
