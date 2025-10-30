@@ -520,6 +520,46 @@ phase2_sync_grid_artifacts() {
   fi
 }
 
+phase2_promote_grid_artifacts_single() {
+  local step_label="$1" dest="$2"
+  shift 2 || true
+  if [[ -f "$dest" ]]; then
+    return 0
+  fi
+  local candidate
+  for candidate in "$@"; do
+    [[ -n "$candidate" && -f "$candidate" ]] || continue
+    mkdir -p "$(dirname "$dest")" || return 0
+    if ! cmp -s "$candidate" "$dest" 2>/dev/null; then
+      cp -f "$candidate" "$dest" || continue
+      echo "[${step_label}] promoted $(basename "$candidate") -> ${dest}" >&2
+    fi
+    return 0
+  done
+  return 0
+}
+
+phase2_promote_grid_artifacts() {
+  local step_label="${1:-phase2}"
+  local grid_root="${GRID_DIR:-}"
+  [[ -n "$grid_root" ]] || return 0
+  grid_root="${grid_root%/}"
+
+  phase2_promote_grid_artifacts_single "$step_label" \
+    "${grid_root}/best_grid_config.json" \
+    "${grid_root}/phase2_export/best_grid_config.json" \
+    "${grid_root}/phase2_export/stage-outputs/best_grid_config.json" \
+    "${grid_root}/phase2_recheck/stage-outputs/best_grid_config.json" \
+    "${grid_root}/phase2_sweep/stage-outputs/best_grid_config.json"
+
+  phase2_promote_grid_artifacts_single "$step_label" \
+    "${grid_root}/recheck_summary.json" \
+    "${grid_root}/phase2_export/recheck_summary.json" \
+    "${grid_root}/phase2_export/stage-outputs/recheck_summary.json" \
+    "${grid_root}/phase2_recheck/recheck_summary.json" \
+    "${grid_root}/phase2_recheck/stage-outputs/recheck_summary.json"
+}
+
 restore_env_var() {
   local name="$1" previous="$2"
   if [[ -n "$previous" ]]; then
@@ -918,6 +958,7 @@ run_phase2_export_stage() {
 
   phase2_promote_local_grid "$step"
   phase2_sync_grid_artifacts "$step"
+  phase2_promote_grid_artifacts "$step"
 
   local sweep_id_file="${GRID_SOURCE_DIR}/phase2_sweep_id.txt"
   if [[ ! -f "$sweep_id_file" ]]; then
@@ -1485,6 +1526,7 @@ run_stage() {
 
   if [[ "$stage" == "pretrain" && $forced -eq 0 ]]; then
     phase2_sync_grid_artifacts "$stage"
+    phase2_promote_grid_artifacts "$stage"
     local grid_root="${GRID_DIR:-}"
     local sweep_file="${grid_root%/}/phase2_sweep_id.txt"
     local best_json="${grid_root%/}/best_grid_config.json"
