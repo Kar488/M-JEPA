@@ -1,5 +1,7 @@
-import pytest
-import torch
+import os
+import sys
+import types
+
 import utils.ddp as ddp
 
 # @pytest.fixture(autouse=True)
@@ -29,6 +31,7 @@ def test_init_distributed_initializes(monkeypatch):
     state = {"init": False}
 
     ddp.dist.is_initialized = lambda: state["init"]
+    monkeypatch.setattr(ddp.dist, "is_available", lambda: True, raising=False)
 
     def fake_init_process_group(backend, init_method, rank, world_size):
         state["init"] = True
@@ -44,6 +47,63 @@ def test_init_distributed_initializes(monkeypatch):
     assert fake_init_process_group.world_size == 2
 
 
+def test_init_distributed_pins_cuda_visible_devices(monkeypatch):
+    monkeypatch.delenv("DISABLE_DDP", raising=False)
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,5")
+
+    class _FakeCuda:
+        def __init__(self):
+            self.set_calls = []
+
+        def is_available(self):
+            return True
+
+        def device_count(self):
+            return 2
+
+        def set_device(self, idx):
+            self.set_calls.append(idx)
+
+    fake_cuda = _FakeCuda()
+
+    class _FakeDist:
+        def __init__(self):
+            self.initialized = False
+
+        def is_available(self):
+            return True
+
+        def is_initialized(self):
+            return self.initialized
+
+        def init_process_group(self, **_):
+            self.initialized = True
+
+        def get_rank(self):
+            return 0
+
+        def get_world_size(self):
+            return 1
+
+        def destroy_process_group(self):
+            self.initialized = False
+
+        def is_nccl_available(self):
+            return False
+
+    fake_torch = types.SimpleNamespace(cuda=fake_cuda)
+
+    monkeypatch.setattr(ddp, "torch", fake_torch, raising=False)
+    monkeypatch.setattr(ddp, "dist", _FakeDist(), raising=False)
+
+    assert ddp.init_distributed(backend="gloo") is True
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "5"
+    assert fake_cuda.set_calls == [0]
+
+
 def test_get_rank_world_size_default(monkeypatch):
     ddp.dist.is_initialized = lambda: False
     assert ddp.get_rank() == 0
@@ -53,6 +113,20 @@ def test_get_rank_world_size_default(monkeypatch):
 def test_distributed_sampler_list(monkeypatch):
     monkeypatch.setattr(ddp, "get_rank", lambda: 1)
     monkeypatch.setattr(ddp, "get_world_size", lambda: 3)
+    class _FakeNp:
+        def arange(self, n):
+            return list(range(n))
+
+        class random:  # type: ignore[valid-type]
+            @staticmethod
+            def default_rng(seed=None):  # noqa: D401 - simple stub
+                class _Rng:
+                    def shuffle(self, seq):
+                        pass
+
+                return _Rng()
+
+    monkeypatch.setitem(sys.modules, "numpy", _FakeNp())
     data = list(range(10))
     sampler = ddp.DistributedSamplerList(data, shuffle=False)
     assert list(sampler) == data[1::3]
