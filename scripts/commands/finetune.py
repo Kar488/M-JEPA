@@ -126,6 +126,51 @@ def _record_finetune_stage_outputs(payload: Dict[str, Any]) -> None:
         logger.warning("Failed to write finetune stage outputs", exc_info=True)
 
 
+def _namespace_snapshot(ns: argparse.Namespace) -> Dict[str, Any]:
+    snapshot: Dict[str, Any] = {}
+    for key, value in vars(ns).items():
+        if key.startswith("_"):
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            snapshot[key] = value
+        elif isinstance(value, (list, tuple)):
+            filtered = []
+            for item in value:
+                if isinstance(item, (str, int, float, bool)) or item is None:
+                    filtered.append(item)
+            snapshot[key] = filtered
+        elif isinstance(value, dict):
+            filtered_dict: Dict[str, Any] = {}
+            for sub_key, sub_val in value.items():
+                if isinstance(sub_val, (str, int, float, bool)) or sub_val is None:
+                    filtered_dict[sub_key] = sub_val
+            if filtered_dict:
+                snapshot[key] = filtered_dict
+    return snapshot
+
+
+def _write_fanout_manifest(base_dir: Path, entries: List[Dict[str, Any]]) -> Optional[Path]:
+    if not entries:
+        return None
+    try:
+        base_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        logger.debug("Unable to create fan-out directory %s", base_dir, exc_info=True)
+        return None
+
+    manifest_path = base_dir / "fanout_manifest.json"
+    try:
+        tmp_path = manifest_path.with_suffix(".tmp")
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            json.dump({"tasks": entries}, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        tmp_path.replace(manifest_path)
+    except Exception:
+        logger.warning("Failed to write finetune fan-out manifest", exc_info=True)
+        return None
+    return manifest_path
+
+
 def _sanitize_alias(raw: str) -> str:
     safe = [c if c.isalnum() or c in {"-", "_", "."} else "_" for c in raw]
     text = "".join(safe).strip("._")
@@ -1423,6 +1468,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     aggregated: Dict[str, Dict[str, Any]] = {}
     primary_label = label_columns[0]
 
+    fanout_entries: List[Dict[str, Any]] = []
     for label in label_columns:
         sub_args = copy.deepcopy(args)
         sub_args.label_col = label
@@ -1433,6 +1479,26 @@ def cmd_finetune(args: argparse.Namespace) -> None:
         os.environ["FINETUNE_STAGE_SUFFIX"] = safe_label
         os.environ["STAGE_OUTPUTS_DIR"] = str(sub_stage_dir)
         sub_stage_dir.mkdir(parents=True, exist_ok=True)
+        snapshot = _namespace_snapshot(sub_args)
+        snapshot["label_col"] = label
+        snapshot["ckpt_dir"] = str(sub_ckpt_dir)
+        fanout_entries.append(
+            {
+                "label": label,
+                "safe_label": safe_label,
+                "ckpt_dir": str(sub_ckpt_dir),
+                "stage_outputs_dir": str(sub_stage_dir),
+                "devices": getattr(sub_args, "devices", None),
+                "seeds": list(getattr(sub_args, "seeds", []) or []),
+                "env": {
+                    "FINETUNE_LABEL_COL": label,
+                    "FINETUNE_LABEL_COLS": label,
+                    "FINETUNE_STAGE_SUFFIX": safe_label,
+                    "STAGE_OUTPUTS_DIR": str(sub_stage_dir),
+                },
+                "args": snapshot,
+            }
+        )
         logger.info(
             "[finetune] training assay %s (ckpt_dir=%s)",
             label,
@@ -1448,6 +1514,7 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     os.environ.pop("FINETUNE_STAGE_SUFFIX", None)
 
     base_stage_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = _write_fanout_manifest(base_stage_dir, fanout_entries)
 
     primary_payload = aggregated.get(primary_label)
     summary_payload: Dict[str, Any] = {}
@@ -1456,6 +1523,11 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     summary_payload["tasks"] = aggregated
     summary_payload["primary_task"] = primary_label
     summary_payload["task_order"] = label_columns
+    if manifest_path is not None:
+        summary_payload.setdefault("diagnostics", {})
+        diagnostics = summary_payload["diagnostics"]
+        if isinstance(diagnostics, dict):
+            diagnostics.setdefault("fanout_manifest", str(manifest_path))
 
     diagnostics = summary_payload.setdefault("diagnostics", {})
     if not isinstance(diagnostics, dict):
