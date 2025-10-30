@@ -19,9 +19,6 @@ default:
     - smiles_col
     - cache_dir
     - no_cache
-    - num_workers
-    - pin_memory
-    - device
     - out_csv
     - best_config_out
     - ckpt_dir
@@ -57,6 +54,10 @@ default:
     - contrastive
   allow:
     - bf16
+    - device
+    - num_workers
+    - pin_memory
+    - bf16_head
     - ema_decays
     - contiguities
     - add_3d_options
