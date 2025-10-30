@@ -11,6 +11,79 @@ from typing import Iterator, Sequence, TYPE_CHECKING
 logger = logging.getLogger(__name__)
 
 
+def _pin_visible_cuda_device_to_local_rank() -> None:
+    """Restrict ``CUDA_VISIBLE_DEVICES`` to the device assigned to this rank."""
+
+    cuda_mod = getattr(torch, "cuda", None)
+    if cuda_mod is None:
+        return
+
+    is_available = getattr(cuda_mod, "is_available", None)
+    if not callable(is_available) or not is_available():
+        return
+
+    try:
+        local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")))
+        local_world_size = int(
+            os.environ.get(
+                "LOCAL_WORLD_SIZE",
+                os.environ.get("WORLD_SIZE", "1"),
+            )
+        )
+    except ValueError:
+        return
+
+    if local_world_size <= 1:
+        return
+
+    raw_mask = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
+    if raw_mask:
+        devices = [entry.strip() for entry in raw_mask.split(",") if entry.strip()]
+    else:
+        device_count_fn = getattr(cuda_mod, "device_count", None)
+        try:
+            available = int(device_count_fn()) if callable(device_count_fn) else 0
+        except Exception:
+            available = 0
+        devices = [str(i) for i in range(max(0, available))]
+
+    if not devices:
+        return
+
+    if len(devices) < local_world_size:
+        logger.error(
+            "Distributed launch requested %d CUDA devices per node but only %d are visible (%s).",
+            local_world_size,
+            len(devices),
+            raw_mask or "device_count",
+        )
+        raise RuntimeError(
+            "Insufficient CUDA devices for distributed launch. Set CUDA_VISIBLE_DEVICES "
+            "to a comma-separated list with at least LOCAL_WORLD_SIZE entries."
+        )
+
+    if not (0 <= local_rank < local_world_size):
+        logger.warning(
+            "LOCAL_RANK=%s outside expected range [0, %d); skipping CUDA pinning.",
+            local_rank,
+            local_world_size,
+        )
+        return
+
+    selected = devices[local_rank]
+    os.environ["CUDA_VISIBLE_DEVICES"] = selected
+    logger.debug(
+        "Pinned CUDA_VISIBLE_DEVICES to '%s' for LOCAL_RANK=%d", selected, local_rank
+    )
+
+    set_device = getattr(cuda_mod, "set_device", None)
+    if callable(set_device):
+        try:
+            set_device(0)
+        except Exception:
+            logger.debug("Failed to set CUDA device after pinning", exc_info=True)
+
+
 def _find_free_port() -> int:
     """Return an available TCP port on the current host."""
 
@@ -85,6 +158,13 @@ def init_distributed(backend: str | None = None) -> bool:
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     if world_size <= 1:
         return False
+
+    try:
+        _pin_visible_cuda_device_to_local_rank()
+    except RuntimeError:
+        raise
+    except Exception:
+        logger.debug("Unable to pin CUDA devices", exc_info=True)
 
     if not dist.is_available() or dist.is_initialized():
         return dist.is_initialized()
