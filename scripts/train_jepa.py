@@ -44,11 +44,41 @@ try:  # pragma: no cover - exercised only when torch is missing
     import torch  # type: ignore
 except Exception:  # noqa: BLE001 - broad to catch import errors
     class _MissingTorch:
+        """Lightweight ``torch`` shim used when the real package is unavailable."""
+
+        class _MissingCuda:
+            @staticmethod
+            def is_available() -> bool:
+                return False
+
+            @staticmethod
+            def device_count() -> int:
+                return 0
+
+        cuda = _MissingCuda()
+
         def __getattr__(self, name: str) -> None:
             raise ModuleNotFoundError("torch is required for training")
 
     torch = _MissingTorch()  # type: ignore[assignment]
     sys.modules.setdefault("torch", torch)  # ensure subsequent imports see the stub
+
+
+def _torch_cuda_available() -> bool:
+    """Best-effort ``torch.cuda.is_available`` that tolerates missing torch."""
+
+    cuda = getattr(torch, "cuda", None)
+    if cuda is None:
+        return False
+
+    is_available = getattr(cuda, "is_available", None)
+    if not callable(is_available):
+        return False
+
+    try:
+        return bool(is_available())
+    except Exception:
+        return False
 
 import yaml
 
@@ -839,7 +869,7 @@ class CommonArgDefaults:
             batch_size=sec_cfg.get("batch_size", 32),
             lr=sec_cfg.get("lr", 1e-3),
             seeds=None,
-            device="cuda" if torch.cuda.is_available() else "cpu",
+            device="cuda" if _torch_cuda_available() else "cpu",
             prefetch_factor=4,
             pin_memory=True,
             persistent_workers=True,
@@ -1382,7 +1412,12 @@ def build_parser() -> argparse.ArgumentParser:
     grid.add_argument("--finetune-epochs-options", type=int, nargs="+", default=[30], help="Number of epochs for downstream training")
     grid.add_argument("--learning-rates", type=float, nargs="+", default=[1e-4], help="Learning rates to sweep over")
     grid.add_argument("--seeds", type=int, nargs="*", default=None, help="Random seeds for averaging results (overrides config)")
-    grid.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device for training (cuda or cpu)")
+    grid.add_argument(
+        "--device",
+        type=str,
+        default="cuda" if _torch_cuda_available() else "cpu",
+        help="Device for training (cuda or cpu)",
+    )
     grid.add_argument("--out-csv", type=str, default=None, help="Path to output CSV file for grid search results")
     grid.add_argument("--ckpt-dir", type=str, default="outputs/grid_ckpts", help="Directory in which to save intermediate checkpoints during the sweep")
     grid.add_argument("--ckpt-every", type=int, default=25, help="Checkpoint every N epochs during pretraining in the sweep")
