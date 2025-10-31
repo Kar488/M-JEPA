@@ -1409,54 +1409,145 @@ run_with_timeout() {
     LOG="${LOG_DIR}/${s}.log"
     
     local -a launch_prefix=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1)
-    local -a entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${arr[@]}")
     local -a ddp_launcher=()
     local previous_world="${WORLD_SIZE-}"
     local previous_master_addr="${MASTER_ADDR-}"
     local previous_master_port="${MASTER_PORT-}"
     local ddp_env_modified=0
+    local -a entrypoint_args=("${arr[@]}")
+    local -a entrypoint=()
 
-    if [[ "$s" == "finetune" ]]; then
-      local raw_devices
-      raw_devices="$(getv --devices || true)"
-      if [[ -z "$raw_devices" && -n "${FINETUNE_DEVICES:-}" ]]; then
-        raw_devices="${FINETUNE_DEVICES}"
+    local ddp_stage=""
+    case "$s" in
+      finetune|tox21) ddp_stage="$s" ;;
+    esac
+
+    if [[ -n "$ddp_stage" ]]; then
+      local devices_idx=-1
+      local devices_joined=0
+      local requested_devices=""
+      local i=0
+      while (( i < ${#entrypoint_args[@]} )); do
+        local token="${entrypoint_args[$i]}"
+        if [[ "$token" == "--devices" ]]; then
+          devices_idx=$i
+          if (( i + 1 < ${#entrypoint_args[@]} )); then
+            requested_devices="${entrypoint_args[$((i + 1))]}"
+          fi
+          break
+        elif [[ "$token" == --devices=* ]]; then
+          devices_idx=$i
+          devices_joined=1
+          requested_devices="${token#--devices=}"
+          break
+        fi
+        ((i++))
+      done
+
+      if [[ -z "$requested_devices" ]]; then
+        case "$ddp_stage" in
+          finetune)
+            requested_devices="${FINETUNE_DEVICES:-}"
+            ;;
+          tox21)
+            requested_devices="${TOX21_DEVICES:-}"
+            ;;
+        esac
       fi
-      if [[ "$raw_devices" =~ ^[0-9]+$ && "$raw_devices" -gt 1 ]]; then
+
+      if [[ "$requested_devices" =~ ^[0-9]+$ && "$requested_devices" -gt 1 ]]; then
+        local probe_output=""
         local ddp_supported=0
-        if "${launch_prefix[@]}" python - <<'PY' >/dev/null 2>&1; then
+        if probe_output=$("${launch_prefix[@]}" python - <<'PY'
+import os
 import sys
+
 try:
     import torch  # noqa: F401
     import torch.distributed.run  # noqa: F401
 except Exception:
     sys.exit(1)
+
+mask = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
+if mask:
+    devices = [entry.strip() for entry in mask.split(",") if entry.strip()]
+    count = len(devices)
+else:
+    try:
+        cuda = getattr(torch, "cuda", None)
+        if cuda is not None and callable(getattr(cuda, "is_available", None)) and cuda.is_available():
+            count = int(cuda.device_count())
+        else:
+            count = 0
+    except Exception:
+        count = 0
+print(max(count, 0))
 PY
+        ); then
           ddp_supported=1
         fi
-        if (( ! ddp_supported )); then
-          echo "[stage:$s] torch.distributed.run unavailable; falling back to single-process execution" >&2
-        fi
+
+        local effective_devices="$requested_devices"
+        local available_devices=0
         if (( ddp_supported )); then
+          available_devices="${probe_output:-0}"
+          available_devices="${available_devices//$'\r'/}"
+          available_devices="${available_devices//$'\n'/}"
+          available_devices="${available_devices//[[:space:]]/}"
+          if [[ -z "$available_devices" ]]; then
+            available_devices=0
+          fi
+          if (( available_devices <= 0 )); then
+            echo "[stage:$s] no CUDA devices detected; falling back to single-process execution" >&2
+            effective_devices=1
+          elif (( available_devices < effective_devices )); then
+            echo "[stage:$s] requested ${effective_devices} devices but only ${available_devices} visible; clamping" >&2
+            effective_devices=$available_devices
+          fi
+        else
+          echo "[stage:$s] torch.distributed.run unavailable; falling back to single-process execution" >&2
+          effective_devices=1
+        fi
+
+        if (( effective_devices > 1 && ddp_supported )); then
           local world="${WORLD_SIZE:-}"
           if [[ -z "$world" || "$world" -le 1 ]]; then
             local ddp_port="${MASTER_PORT:-}"
             if [[ -z "$ddp_port" ]]; then
-              # Derive a semi-random port in the high ephemeral range to avoid clashes
               ddp_port=$(( (RANDOM % 20000) + 15000 ))
             fi
             export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
             export MASTER_PORT="$ddp_port"
-            export WORLD_SIZE="$raw_devices"
+            export WORLD_SIZE="$effective_devices"
             ddp_env_modified=1
-            echo "[stage:$s] enabling torch.distributed.run (nproc_per_node=${raw_devices}, master_port=${MASTER_PORT})" >&2
+            echo "[stage:$s] enabling torch.distributed.run (nproc_per_node=${effective_devices}, master_port=${MASTER_PORT})" >&2
           else
             echo "[stage:$s] WORLD_SIZE=${world}; assuming external launcher configured DDP" >&2
           fi
-          ddp_launcher=(python -m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${raw_devices}")
+          ddp_launcher=(python -m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
+        else
+          effective_devices=1
+        fi
+
+        if (( effective_devices != ${requested_devices} )); then
+          if (( devices_idx >= 0 )); then
+            if (( devices_joined )); then
+              entrypoint_args[$devices_idx]="--devices=${effective_devices}"
+            else
+              entrypoint_args[$((devices_idx + 1))]="${effective_devices}"
+            fi
+          else
+            entrypoint_args+=("--devices" "${effective_devices}")
+          fi
         fi
       fi
     fi
+
+    if [[ -n "$ddp_stage" ]]; then
+      arr=("${entrypoint_args[@]}")
+    fi
+
+    entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${entrypoint_args[@]}")
 
     local -a micromamba_cmd=("${launch_prefix[@]}")
     if (( ${#ddp_launcher[@]} )); then
