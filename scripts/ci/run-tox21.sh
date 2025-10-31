@@ -212,8 +212,11 @@ PY
 
   resolved_path=""
   resolved_label=""
-  select_encoder_candidate resolved_path resolved_label "${encoder_candidates[@]}"
-  select_status=$?
+  if ! select_encoder_candidate resolved_path resolved_label "${encoder_candidates[@]}"; then
+    select_status=$?
+  else
+    select_status=0
+  fi
 
   TOX21_ENCODER_CHECKPOINT="$resolved_path"
   if [[ -z "${resolved_label:-}" ]]; then
@@ -258,12 +261,15 @@ elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   fi
   resolved_path=""
   resolved_label=""
-  select_encoder_candidate resolved_path resolved_label \
+  if ! select_encoder_candidate resolved_path resolved_label \
     finetune_export "$ft_export_path" \
     explicit_override "$orig_encoder_override" \
     encoder_ft "${FINETUNE_DIR}/encoder_ft.pt" \
-    seed_best "${FINETUNE_DIR}/seed_0/ft_best.pt"
-  select_status=$?
+    seed_best "${FINETUNE_DIR}/seed_0/ft_best.pt"; then
+    select_status=$?
+  else
+    select_status=0
+  fi
   TOX21_ENCODER_CHECKPOINT="$resolved_path"
   encoder_decision_source="$resolved_label"
   if (( select_status )); then
@@ -288,12 +294,15 @@ elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   fi
   resolved_path=""
   resolved_label=""
-  select_encoder_candidate resolved_path resolved_label \
+  if ! select_encoder_candidate resolved_path resolved_label \
     finetune_export "$ft_export_path" \
     explicit_override "$orig_encoder_override" \
     seed_best "${FINETUNE_DIR}/seed_0/ft_best.pt" \
-    encoder_ft "${FINETUNE_DIR}/encoder_ft.pt"
-  select_status=$?
+    encoder_ft "${FINETUNE_DIR}/encoder_ft.pt"; then
+    select_status=$?
+  else
+    select_status=0
+  fi
   TOX21_ENCODER_CHECKPOINT="$resolved_path"
   encoder_decision_source="$resolved_label"
   if (( select_status )); then
