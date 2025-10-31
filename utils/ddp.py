@@ -84,6 +84,26 @@ def _pin_visible_cuda_device_to_local_rank() -> None:
             logger.debug("Failed to set CUDA device after pinning", exc_info=True)
 
 
+def _visible_cuda_device_count() -> int:
+    """Return the number of CUDA devices visible to the current process."""
+
+    mask = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
+    if mask:
+        devices = [entry.strip() for entry in mask.split(",") if entry.strip()]
+        return len(devices)
+
+    cuda_mod = getattr(torch, "cuda", None)
+    if cuda_mod is None:
+        return 0
+
+    device_count_fn = getattr(cuda_mod, "device_count", None)
+    try:
+        available = int(device_count_fn()) if callable(device_count_fn) else 0
+    except Exception:
+        available = 0
+    return max(0, available)
+
+
 def _find_free_port() -> int:
     """Return an available TCP port on the current host."""
 
@@ -155,9 +175,28 @@ def init_distributed(backend: str | None = None) -> bool:
     if os.environ.get("DISABLE_DDP") == "1":
         return False
 
-    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    try:
+        world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    except (TypeError, ValueError):
+        world_size = 1
+    try:
+        local_world_size = int(
+            os.environ.get("LOCAL_WORLD_SIZE", os.environ.get("WORLD_SIZE", "1"))
+        )
+    except (TypeError, ValueError):
+        local_world_size = world_size
     if world_size <= 1:
         return False
+
+    available_devices = _visible_cuda_device_count()
+    if local_world_size > 1 and available_devices < local_world_size:
+        message = (
+            "Insufficient CUDA devices for distributed launch: requested "
+            f"{local_world_size} per node but only {available_devices} visible. "
+            "Reduce --devices or set CUDA_VISIBLE_DEVICES accordingly."
+        )
+        logger.error(message)
+        raise RuntimeError(message)
 
     try:
         _pin_visible_cuda_device_to_local_rank()
