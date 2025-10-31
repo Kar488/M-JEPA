@@ -53,9 +53,17 @@ esac
     )
 
     _run(["bash", "scripts/ci/run-pretrain.sh"], env)
-    _run(["bash", "scripts/ci/run-tox21.sh"], env)
 
     manifest_path = experiments_root / "1759795103" / "artifacts" / "encoder_manifest.json"
+    missing_path = manifest_path.parent / "missing_encoder.pt"
+    manifest_path.write_text(
+        json.dumps({"paths": {"encoder": str(missing_path)}}) + "\n",
+        encoding="utf-8",
+    )
+    assert not missing_path.exists()
+
+    _run(["bash", "scripts/ci/run-tox21.sh"], env)
+
     state_path = experiments_root / "1759795103" / "pretrain_state.json"
     legacy_state = experiments_root / "pretrain_state.json"
 
