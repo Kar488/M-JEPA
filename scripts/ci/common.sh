@@ -653,6 +653,112 @@ if (( _needs_pretrain_state )); then
   fi
 
   expected_manifest="${PRETRAIN_ARTIFACTS_DIR%/}/encoder_manifest.json"
+
+  pretrain_encoder_fallback=""
+  if [[ -n "${PRETRAIN_DIR:-}" && -f "${PRETRAIN_DIR%/}/encoder.pt" ]]; then
+    pretrain_encoder_fallback="${PRETRAIN_DIR%/}/encoder.pt"
+  elif [[ -n "${PRETRAIN_ARTIFACTS_DIR:-}" && -f "${PRETRAIN_ARTIFACTS_DIR%/}/encoder.pt" ]]; then
+    pretrain_encoder_fallback="${PRETRAIN_ARTIFACTS_DIR%/}/encoder.pt"
+  elif [[ -n "${PRETRAIN_ENCODER_PATH:-}" && -f "${PRETRAIN_ENCODER_PATH}" ]]; then
+    pretrain_encoder_fallback="${PRETRAIN_ENCODER_PATH}"
+  fi
+
+  __ci_manifest_encoder_path=""
+  if [[ -f "$expected_manifest" ]]; then
+    python_cmd=()
+    resolve_ci_python python_cmd
+    if (( ${#python_cmd[@]} )); then
+      if ! __ci_manifest_encoder_path=$("${python_cmd[@]}" - "$expected_manifest" <<'PY' 2>/dev/null
+import json
+import os
+import sys
+
+manifest_path = sys.argv[1]
+try:
+    with open(manifest_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle) or {}
+except Exception:
+    payload = {}
+
+encoder_path = None
+if isinstance(payload, dict):
+    paths = payload.get("paths")
+    if isinstance(paths, dict):
+        encoder_path = paths.get("encoder") or paths.get("encoder_symlink")
+    if encoder_path is None:
+        encoder_path = payload.get("encoder_checkpoint")
+
+if encoder_path:
+    print(os.path.abspath(str(encoder_path)))
+PY
+      ); then
+        __ci_manifest_encoder_path=""
+      fi
+    fi
+  fi
+
+  __ci_manifest_ready=0
+  if [[ -n "$__ci_manifest_encoder_path" && -e "$__ci_manifest_encoder_path" ]]; then
+    __ci_manifest_ready=1
+  fi
+
+  if (( ! __ci_manifest_ready )) && [[ -n "$pretrain_encoder_fallback" && -f "$pretrain_encoder_fallback" ]]; then
+    python_cmd=()
+    resolve_ci_python python_cmd
+    if (( ${#python_cmd[@]} )); then
+      if "${python_cmd[@]}" - "$expected_manifest" "$pretrain_encoder_fallback" "${PRETRAIN_EXP_ID:-}" <<'PY' 2>/dev/null; then
+import json
+import os
+import sys
+
+manifest_path, encoder_path, exp_id = sys.argv[1:4]
+encoder_path = os.path.abspath(encoder_path)
+
+payload = {}
+if os.path.exists(manifest_path):
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle) or {}
+    except Exception:
+        payload = {}
+
+if not isinstance(payload, dict):
+    payload = {}
+
+paths = payload.get("paths")
+if not isinstance(paths, dict):
+    payload["paths"] = {"encoder": encoder_path}
+else:
+    paths["encoder"] = encoder_path
+
+exp_id = (exp_id or "").strip()
+if exp_id:
+    payload["pretrain_exp_id"] = exp_id
+
+tmp_path = manifest_path + ".tmp"
+os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
+with open(tmp_path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+os.replace(tmp_path, manifest_path)
+PY
+        echo "[ci][warn] repaired encoder manifest at ${expected_manifest} using fallback ${pretrain_encoder_fallback}" >&2
+        __ci_manifest_ready=1
+      fi
+    fi
+
+    if (( ! __ci_manifest_ready )); then
+      mkdir -p "$(dirname "$expected_manifest")"
+      cat >"$expected_manifest" <<EOF
+{
+  "paths": {"encoder": "${pretrain_encoder_fallback}"}
+}
+EOF
+      echo "[ci][warn] synthesised encoder manifest at ${expected_manifest} using fallback ${pretrain_encoder_fallback}" >&2
+      __ci_manifest_ready=1
+    fi
+  fi
+
   if [[ ! -f "$expected_manifest" ]]; then
     case "${MJEPACI_STAGE:-}" in
       bench|benchmark)
