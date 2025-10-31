@@ -96,10 +96,32 @@ fi
 python_cmd=()
 if ensure_micromamba >/dev/null 2>&1; then
   python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
-elif [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
-  resolve_ci_python python_cmd
-else
-  ensure_micromamba
+  if (( ${#python_cmd[@]} )); then
+    if ! "${python_cmd[@]}" - <<'PY' 2>/dev/null
+import sys
+sys.exit(0)
+PY
+    then
+      echo "[tox21] warn: micromamba python unavailable; falling back to host interpreter" >&2
+      python_cmd=()
+    fi
+  fi
+fi
+
+if (( ${#python_cmd[@]} == 0 )); then
+  if py=$(python_bin 2>/dev/null); then
+    python_cmd=(env PYTHONUNBUFFERED=1 "$py" -u)
+  elif [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+    resolve_ci_python python_cmd
+  else
+    ensure_micromamba
+    python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
+  fi
+fi
+
+if (( ${#python_cmd[@]} == 0 )); then
+  echo "[tox21] error: unable to resolve a python interpreter" >&2
+  exit 1
 fi
 
 orig_encoder_override="${TOX21_ENCODER_CHECKPOINT:-}"
