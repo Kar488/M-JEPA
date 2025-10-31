@@ -189,14 +189,10 @@ def init_distributed(backend: str | None = None) -> bool:
         return False
 
     available_devices = _visible_cuda_device_count()
-    if local_world_size > 1 and available_devices < local_world_size:
-        message = (
-            "Insufficient CUDA devices for distributed launch: requested "
-            f"{local_world_size} per node but only {available_devices} visible. "
-            "Reduce --devices or set CUDA_VISIBLE_DEVICES accordingly."
-        )
-        logger.error(message)
-        raise RuntimeError(message)
+    cuda_mod = getattr(torch, "cuda", None)
+    cuda_available = bool(
+        getattr(cuda_mod, "is_available", lambda: False)()
+    ) if cuda_mod is not None else False
 
     try:
         _pin_visible_cuda_device_to_local_rank()
@@ -213,10 +209,6 @@ def init_distributed(backend: str | None = None) -> bool:
     os.environ.setdefault("MASTER_PORT", str(_find_free_port()))
 
     if backend is None:
-        cuda_mod = getattr(torch, "cuda", None)
-        cuda_available = bool(
-            getattr(cuda_mod, "is_available", lambda: False)()
-        )
         want_nccl = (
             cuda_available
             and hasattr(dist, "is_nccl_available")
@@ -230,6 +222,15 @@ def init_distributed(backend: str | None = None) -> bool:
     ):
         logger.warning("NCCL not available; falling back to gloo")
         backend = "gloo"
+
+    if backend == "nccl" and local_world_size > 1 and available_devices < local_world_size:
+        message = (
+            "Insufficient CUDA devices for distributed launch: requested "
+            f"{local_world_size} per node but only {available_devices} visible. "
+            "Reduce --devices or set CUDA_VISIBLE_DEVICES accordingly."
+        )
+        logger.error(message)
+        raise RuntimeError(message)
 
     rank = int(os.environ.get("RANK", "0"))
     dist.init_process_group(
