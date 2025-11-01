@@ -1543,20 +1543,32 @@ def run_tox21_case_study(
             desired_add_3d = True
 
         if desired_add_3d and not dataset_has_pos:
-            if attempted_add_3d_materialisation or effective_add_3d:
+            if not attempted_add_3d_materialisation and not effective_add_3d:
+                logger.info(
+                    "Regenerating Tox21 dataset with add_3d=%s to satisfy encoder metadata (previous=%s)",
+                    desired_add_3d,
+                    effective_add_3d,
+                )
+                attempted_add_3d_materialisation = True
+                effective_add_3d = bool(desired_add_3d)
+                cache_hidden_marker = hidden_dim if hidden_dim is not None else final_hidden_candidate
+                continue
+
+            if final_requires_3d:
                 raise RuntimeError(
                     "3D coordinates were requested but could not be generated. "
                     "Ensure RDKit is installed with 3D conformer support or disable add_3d."
                 )
-            logger.info(
-                "Regenerating Tox21 dataset with add_3d=%s to satisfy encoder metadata (previous=%s)",
-                desired_add_3d,
-                effective_add_3d,
+
+            logger.warning(
+                "3D coordinates requested but unavailable; continuing without add_3d features."
             )
-            attempted_add_3d_materialisation = True
-            effective_add_3d = bool(desired_add_3d)
-            cache_hidden_marker = hidden_dim if hidden_dim is not None else final_hidden_candidate
-            continue
+            diagnostics.setdefault("warnings", []).append(
+                "add_3d_unavailable"
+            )
+            desired_add_3d = False
+            effective_add_3d = False
+            final_cfg["add_3d"] = False
 
         if bool(desired_add_3d) != bool(effective_add_3d):
             logger.info(
