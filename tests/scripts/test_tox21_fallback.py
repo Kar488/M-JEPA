@@ -123,10 +123,20 @@ def test_cmd_tox21_runs_with_fallback(tmp_path, monkeypatch, tox21_module):
     assert payload["tasks"]["NR-AR"]["task"] == "NR-AR"
     assert payload.get("overall_gate_passed") is True
     task_payload = payload["tasks"]["NR-AR"]
+    diagnostics = task_payload["diagnostics"]
+    assert diagnostics["benchmark_threshold"] is None
+    assert diagnostics["benchmark_threshold_available"] is False
+    assert diagnostics["benchmark_threshold_original"] is not None
+    assert diagnostics["benchmark_comparison_performed"] is False
+    assert diagnostics["benchmark_override"] is True
+    assert diagnostics["benchmark_override_reason"] == "skipped roc_auc comparison in fallback"
     assert task_payload["met_benchmark_selected"] is True
     assert task_payload["tox21_gate_passed"] is True
     eval_payload = task_payload["evaluations"][0]
     assert eval_payload["met_benchmark"] is True
+    assert eval_payload["benchmark_threshold"] is None
+    assert eval_payload["metrics"]["roc_auc"] is not None
+    assert eval_payload["tox21_gate_passed"] is True
 
     stage_dir = report_dir / "stage-outputs"
     stage_files = list(stage_dir.glob("*.json"))
