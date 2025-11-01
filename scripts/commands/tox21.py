@@ -220,18 +220,20 @@ if run_tox21_case_study is None:  # pragma: no cover - exercised in fallback tes
 
         benchmark_metric = "roc_auc"
         benchmark_threshold: Optional[float] = None
+        benchmark_threshold_original: Optional[float] = None
         met_benchmark: Optional[bool] = True
         benchmark_comparison_performed = False
         if threshold_rule is not None:
             benchmark_metric = str(getattr(threshold_rule, "metric", "roc_auc"))
             try:
-                benchmark_threshold = float(threshold_rule.threshold)
+                benchmark_threshold_original = float(threshold_rule.threshold)
             except Exception:
-                benchmark_threshold = None
+                benchmark_threshold_original = None
 
         diagnostics["benchmark_metric"] = benchmark_metric
         diagnostics["benchmark_threshold"] = benchmark_threshold
         diagnostics["benchmark_threshold_available"] = benchmark_threshold is not None
+        diagnostics["benchmark_threshold_original"] = benchmark_threshold_original
         diagnostics["benchmark_comparison_performed"] = benchmark_comparison_performed
         diagnostics["benchmark_override"] = True
         diagnostics["benchmark_override_reason"] = (
