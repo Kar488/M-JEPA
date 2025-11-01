@@ -550,7 +550,8 @@ def _load_encoder_strict(
         if shape_mismatch:
             diff_parts.append("shape_mismatch=" + ", ".join(shape_mismatch[:10]))
         raise RuntimeError(
-            "Encoder checkpoint mismatch: matched_ratio=%.3f < %.3f (%s)"
+            "Encoder checkpoint mismatch: matched_ratio=%.3f < %.3f (%s). "
+            "Set allow_shape_coercion=true to override."
             % (ratio, verify_match_threshold, "; ".join(diff_parts) or "no detail")
         )
 
@@ -1171,9 +1172,6 @@ def run_tox21_case_study(
     effective_add_3d = requested_add_3d or requires_3d
 
     cache_dir_path: Optional[Path] = None
-    dataset_cache_path: Optional[Path] = None
-    dataset_cache_hit = False
-    schema_digest: Optional[str] = None
     if cache_dir:
         try:
             cache_dir_path = Path(cache_dir).expanduser()
@@ -1189,205 +1187,6 @@ def run_tox21_case_study(
     except Exception:
         head_batch_size = 256
     head_batch_size = max(1, head_batch_size)
-
-    dataset: "GraphDatasetT" | None = None
-    if cache_dir_path is not None:
-        csv_stem = Path(csv_path).stem or "dataset"
-        task_part = str(task_name or dataset_name or "task")
-        hidden_key = f"hd{int(hidden_dim)}" if hidden_dim is not None else "hdunk"
-        schema_parts = [f"3d{int(effective_add_3d)}", hidden_key]
-        fingerprint = "|".join(schema_parts)
-        schema_digest = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:8]
-        cache_name = (
-            f"tox21_{csv_stem}_{task_part}_"
-            f"{'_'.join(schema_parts)}_h{schema_digest}.pkl"
-        )
-        dataset_cache_path = cache_dir_path / cache_name
-        if dataset_cache_path.exists():
-            try:
-                with dataset_cache_path.open("rb") as handle:
-                    graphs, labels_cached, smiles_cached = pickle.load(handle)
-                dataset = GraphDatasetCls(graphs, labels_cached, smiles_cached)
-                dataset_cache_hit = True
-            except Exception:
-                logger.warning(
-                    "Failed to load tox21 dataset cache %s; regenerating graphs.",
-                    dataset_cache_path,
-                    exc_info=True,
-                )
-                dataset = None
-
-    if dataset is None:
-        dataset = GraphDatasetCls.from_smiles_list(
-            smiles_list,
-            labels=labels_list,
-            add_3d=effective_add_3d,
-        )
-        if cache_dir_path is not None and dataset_cache_path is not None:
-            try:
-                payload = (
-                    dataset.graphs,
-                    dataset.labels.tolist() if dataset.labels is not None else None,
-                    dataset.smiles,
-                )
-                tmp_path = dataset_cache_path.with_suffix(dataset_cache_path.suffix + ".tmp")
-                with tmp_path.open("wb") as handle:
-                    pickle.dump(payload, handle)
-                tmp_path.replace(dataset_cache_path)
-            except Exception:
-                logger.debug(
-                    "Failed to materialise tox21 dataset cache at %s",
-                    dataset_cache_path,
-                    exc_info=True,
-                )
-
-    if len(dataset) == 0:
-        raise ValueError("No valid molecules could be parsed from the dataset.")
-
-    if dataset_cache_path is not None:
-        logger.info(
-            "[cache] selected_cache=%s (hit=%s add_3d=%s hidden_dim=%s schema_hash=%s)",
-            dataset_cache_path,
-            "yes" if dataset_cache_hit else "no",
-            bool(effective_add_3d),
-            hidden_dim if hidden_dim is not None else "<unset>",
-            schema_digest if schema_digest is not None else "<unknown>",
-        )
-        diagnostics["cache"] = {
-            "path": str(dataset_cache_path),
-            "hit": bool(dataset_cache_hit),
-            "add_3d": bool(effective_add_3d),
-            "hidden_dim": int(hidden_dim) if hidden_dim is not None else None,
-            "schema_hash": schema_digest,
-        }
-        if ci_diag:
-            _ci_log(
-                "tox21 dataset cache",
-                path=str(dataset_cache_path),
-                hit=bool(dataset_cache_hit),
-                add_3d=bool(effective_add_3d),
-                hidden_dim=int(hidden_dim) if hidden_dim is not None else None,
-                schema_hash=schema_digest,
-            )
-
-    if ci_diag:
-        labels_arr = dataset.labels
-        task_count = 0
-        if labels_arr is not None:
-            task_count = 1 if labels_arr.ndim == 1 else int(labels_arr.shape[1])
-        diagnostics.update(
-            {
-                "task_count": task_count,
-                "num_molecules": int(len(dataset)),
-            }
-        )
-
-    if requires_3d and all(getattr(g, "pos", None) is None for g in dataset.graphs):
-        raise ValueError(
-            "SchNet-style encoders require 3D coordinates, but none were generated. "
-            "Ensure RDKit is installed with 3D conformer support."
-        )
-
-    diagnostics["add_3d_requested"] = requested_add_3d
-    diagnostics["add_3d_effective"] = effective_add_3d
-
-    target_edge_dim = EDGE_TOTAL_DIM if effective_add_3d else EDGE_BASE_DIM
-
-    for i, graph in enumerate(dataset.graphs):
-        smi = getattr(graph, "smiles", None) or (
-            getattr(dataset, "smiles", None)[i] if hasattr(dataset, "smiles") else None
-        )
-        if not smi:
-            continue
-        graph.smiles = smi
-        edge_attr = getattr(graph, "edge_attr", None)
-        if edge_attr is None or getattr(edge_attr, "shape", (0, 0))[1] == 0:
-            attach_bond_features_from_smiles(
-                graph,
-                smi,
-                target_edge_dim=target_edge_dim,
-            )
-
-    all_labels = dataset.labels.astype(float)
-    num_total = len(dataset)
-
-    threshold_rule = _resolve_threshold_rule(dataset_name, task_name)
-
-    def _split_summary(indices: List[int]) -> Dict[str, int]:
-        if not indices:
-            return {"size": 0, "finite": 0, "positives": 0}
-        arr = all_labels[np.asarray(indices, dtype=int)]
-        mask = np.isfinite(arr)
-        finite = int(mask.sum())
-        positives = int(np.nansum(arr[mask]))
-        return {
-            "size": int(len(indices)),
-            "finite": finite,
-            "positives": positives,
-        }
-
-    if scaffold_split_indices and _HAS_RDKIT:
-        train_split, val_split, test_split = scaffold_split_indices(
-            smiles_list,
-            train_frac=train_fraction,
-            val_frac=val_fraction,
-            seed=seed,
-        )
-        train_idx = _to_list(np.asarray(train_split, dtype=int))
-        val_idx = _to_list(np.asarray(val_split, dtype=int))
-        test_idx = _to_list(np.asarray(test_split, dtype=int))
-        logger.info(
-            "Scaffold split: train=%d val=%d test=%d",
-            len(train_idx),
-            len(val_idx),
-            len(test_idx),
-        )
-    else:
-        logger.warning("RDKit scaffold split unavailable; using stratified random split.")
-        indices = list(range(num_total))
-        rand_state = random.getstate()
-        np_state = np.random.get_state()
-        train_idx, val_idx, test_idx = stratified_split(
-            indices,
-            dataset.labels,
-            train_frac=train_fraction,
-            val_frac=val_fraction,
-        )
-        random.setstate(rand_state)
-        np.random.set_state(np_state)
-
-    split_summary = {
-        "train": _split_summary(train_idx),
-        "val": _split_summary(val_idx),
-        "test": _split_summary(test_idx),
-    }
-    diagnostics["split_counts"] = split_summary
-    for split_name, stats in split_summary.items():
-        logger.info(
-            "Split %s: size=%d finite=%d positives=%d",
-            split_name,
-            stats.get("size", 0),
-            stats.get("finite", 0),
-            stats.get("positives", 0),
-        )
-    if ci_diag:
-        _ci_log(
-            "tox21 dataset split",
-            num_molecules=diagnostics.get("num_molecules", 0),
-            task_count=diagnostics.get("task_count", 0),
-            train=split_summary.get("train", {}),
-            val=split_summary.get("val", {}),
-            test=split_summary.get("test", {}),
-        )
-
-    input_dim = dataset.graphs[0].x.shape[1]
-    edge_dim = 0
-    try:
-        g0 = dataset.graphs[0]
-        if getattr(g0, "edge_attr", None) is not None:
-            edge_dim = int(g0.edge_attr.shape[1])
-    except Exception:
-        edge_dim = 0
 
     manifest_payload = _load_manifest_payload(encoder_manifest)
     manifest_cfg = _manifest_payload_to_config(manifest_payload)
@@ -1542,124 +1341,283 @@ def run_tox21_case_study(
             checkpoint_add_3d = coerced
             break
 
-    final_cfg: Dict[str, Any] = {}
-    if cli_gnn_type_provided and gnn_type is not None:
-        final_cfg["gnn_type"] = gnn_type
-    if cli_hidden_dim_provided and hidden_dim is not None:
-        final_cfg["hidden_dim"] = hidden_dim
-    if cli_num_layers_provided and num_layers is not None:
-        final_cfg["num_layers"] = num_layers
-    final_cfg["add_3d"] = bool(effective_add_3d)
-    final_cfg["edge_dim"] = int(edge_dim) if edge_dim is not None else None
-    cli_cfg = final_cfg.copy()
-    mismatch_report: Dict[str, Tuple[Any, Any]] = {}
-    allow_shape_normalisation = (
-        bool(allow_shape_coercion)
-        if allow_shape_coercion is not None
-        else bool(state_cfg or manifest_cfg)
-    )
-    auto_shape_normalisation = allow_shape_coercion is None and allow_shape_normalisation
-    for source in (state_cfg, manifest_cfg):
-        for key in ("gnn_type", "hidden_dim", "num_layers", "add_3d", "edge_dim"):
-            value = source.get(key)
-            if value is None:
-                continue
-            current_value = final_cfg.get(key)
-            if (
-                strict_encoder_config
-                and current_value is not None
-                and str(current_value) != str(value)
-            ):
-                raise ValueError(
-                    f"Encoder configuration mismatch for {key}: CLI={current_value} checkpoint={value}"
-                )
-            if key == "add_3d":
-                coerced = _maybe_bool_value(value)
-                if coerced is not None:
-                    value = coerced
-            elif key == "edge_dim":
-                coerced_int = _maybe_int_value(value)
-                if coerced_int is not None:
-                    value = coerced_int
-            if allow_shape_normalisation:
-                if current_value is None or str(current_value) == str(value):
-                    final_cfg[key] = value
-                else:
-                    original = cli_cfg.get(key)
-                    if original is not None and key not in mismatch_report:
-                        mismatch_report[key] = (original, value)
-                    final_cfg[key] = value
-            elif current_value is None:
-                final_cfg[key] = value
-    if mismatch_report and allow_shape_normalisation:
-        details = ", ".join(
-            f"{name} {before}→{after}" for name, (before, after) in mismatch_report.items()
+    cache_hidden_marker = hidden_dim if hidden_dim is not None else checkpoint_hidden_dim
+
+    dataset: "GraphDatasetT"
+    dataset_cache_path: Optional[Path] = None
+    dataset_cache_hit = False
+    schema_digest: Optional[str] = None
+
+    def _materialise_dataset(
+        add_3d_flag: bool,
+        hidden_marker: Optional[int],
+    ) -> Tuple["GraphDatasetT", Optional[Path], bool, Optional[str]]:
+        dataset_local: "GraphDatasetT" | None = None
+        cache_path_local: Optional[Path] = None
+        cache_hit_local = False
+        schema_digest_local: Optional[str] = None
+        if cache_dir_path is not None:
+            csv_stem = Path(csv_path).stem or "dataset"
+            task_part = str(task_name or dataset_name or "task")
+            hidden_key = f"hd{int(hidden_marker)}" if hidden_marker is not None else "hdunk"
+            schema_parts = [f"3d{int(add_3d_flag)}", hidden_key]
+            fingerprint = "|".join(schema_parts)
+            schema_digest_local = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:8]
+            cache_name = (
+                f"tox21_{csv_stem}_{task_part}_"
+                f"{'_'.join(schema_parts)}_h{schema_digest_local}.pkl"
+            )
+            cache_path_local = cache_dir_path / cache_name
+            if cache_path_local.exists():
+                try:
+                    with cache_path_local.open("rb") as handle:
+                        graphs, labels_cached, smiles_cached = pickle.load(handle)
+                    dataset_local = GraphDatasetCls(graphs, labels_cached, smiles_cached)
+                    cache_hit_local = True
+                except Exception:
+                    logger.warning(
+                        "Failed to load tox21 dataset cache %s; regenerating graphs.",
+                        cache_path_local,
+                        exc_info=True,
+                    )
+                    dataset_local = None
+        if dataset_local is None:
+            dataset_local = GraphDatasetCls.from_smiles_list(
+                smiles_list,
+                labels=labels_list,
+                add_3d=add_3d_flag,
+            )
+            if cache_dir_path is not None and cache_path_local is not None:
+                try:
+                    payload = (
+                        dataset_local.graphs,
+                        dataset_local.labels.tolist() if dataset_local.labels is not None else None,
+                        dataset_local.smiles,
+                    )
+                    tmp_path = cache_path_local.with_suffix(cache_path_local.suffix + ".tmp")
+                    with tmp_path.open("wb") as handle:
+                        pickle.dump(payload, handle)
+                    tmp_path.replace(cache_path_local)
+                except Exception:
+                    logger.debug(
+                        "Failed to materialise tox21 dataset cache at %s",
+                        cache_path_local,
+                        exc_info=True,
+                    )
+        return dataset_local, cache_path_local, cache_hit_local, schema_digest_local
+
+    final_hidden_dim: Optional[int] = None
+    final_num_layers: Optional[int] = None
+    final_gnn_type: Optional[str] = None
+    final_edge_dim: Optional[int] = None
+    input_dim = 0
+    edge_dim = 0
+
+    while True:
+        dataset, dataset_cache_path, dataset_cache_hit, schema_digest = _materialise_dataset(
+            effective_add_3d,
+            cache_hidden_marker,
         )
-        if auto_shape_normalisation:
-            logger.info(
-                "Auto shape coercion enabled; normalising encoder configuration from checkpoint metadata: %s",
-                details,
-            )
-        else:
-            logger.info(
-                "Normalising encoder configuration from checkpoint metadata: %s",
-                details,
-            )
+        if len(dataset) == 0:
+            raise ValueError("No valid molecules could be parsed from the dataset.")
 
-    hidden_dim_fallback = hidden_dim if hidden_dim is not None else 256
-    num_layers_fallback = num_layers if num_layers is not None else 3
-    gnn_type_fallback = gnn_type or "mpnn"
+        dataset_has_pos = any(getattr(graph, "pos", None) is not None for graph in dataset.graphs)
 
-    resolved_hidden_dim = final_cfg.get("hidden_dim", hidden_dim_fallback)
-    resolved_num_layers = final_cfg.get("num_layers", num_layers_fallback)
-    resolved_gnn_type = final_cfg.get("gnn_type", gnn_type_fallback)
-
-    final_edge_dim = final_cfg.get("edge_dim", edge_dim)
-    if final_edge_dim is not None:
         try:
-            final_edge_dim = int(final_edge_dim)
+            g0 = dataset.graphs[0]
+            input_dim = g0.x.shape[1]
+            current_edge_dim = int(g0.edge_attr.shape[1]) if getattr(g0, "edge_attr", None) is not None else 0
         except Exception:
-            final_edge_dim = edge_dim
-    effective_add_3d = bool(final_cfg.get("add_3d", effective_add_3d))
+            current_edge_dim = 0
+            if dataset.graphs and getattr(dataset.graphs[0], "x", None) is not None:
+                input_dim = dataset.graphs[0].x.shape[1]
 
-    dataset_edge_dim = int(final_edge_dim) if final_edge_dim is not None else 0
-    if checkpoint_edge_dim is not None and dataset_edge_dim != int(checkpoint_edge_dim):
-        raise RuntimeError(
-            "Encoder featurizer mismatch: checkpoint edge_dim=%s dataset edge_dim=%s. "
-            "Set allow_shape_coercion=true to override."
-            % (checkpoint_edge_dim, dataset_edge_dim)
+        final_cfg: Dict[str, Any] = {}
+        if cli_gnn_type_provided and gnn_type is not None:
+            final_cfg["gnn_type"] = gnn_type
+        if cli_hidden_dim_provided and hidden_dim is not None:
+            final_cfg["hidden_dim"] = hidden_dim
+        if cli_num_layers_provided and num_layers is not None:
+            final_cfg["num_layers"] = num_layers
+        final_cfg["add_3d"] = bool(effective_add_3d)
+        final_cfg["edge_dim"] = current_edge_dim
+        cli_cfg = final_cfg.copy()
+        mismatch_report: Dict[str, Tuple[Any, Any]] = {}
+        allow_shape_normalisation = (
+            bool(allow_shape_coercion)
+            if allow_shape_coercion is not None
+            else bool(state_cfg or manifest_cfg)
         )
-    if checkpoint_add_3d is not None and bool(checkpoint_add_3d) != bool(effective_add_3d):
-        raise RuntimeError(
-            "Encoder featurizer mismatch: checkpoint add_3d=%s requested add_3d=%s. "
-            "Set allow_shape_coercion=true to override."
-            % (checkpoint_add_3d, bool(effective_add_3d))
+        auto_shape_normalisation = allow_shape_coercion is None and allow_shape_normalisation
+        for source in (state_cfg, manifest_cfg):
+            for key in ("gnn_type", "hidden_dim", "num_layers", "add_3d", "edge_dim"):
+                value = source.get(key)
+                if value is None:
+                    continue
+                current_value = final_cfg.get(key)
+                if (
+                    strict_encoder_config
+                    and current_value is not None
+                    and str(current_value) != str(value)
+                ):
+                    raise ValueError(
+                        f"Encoder configuration mismatch for {key}: CLI={current_value} checkpoint={value}"
+                    )
+                if key == "add_3d":
+                    coerced_bool = _maybe_bool_value(value)
+                    if coerced_bool is not None:
+                        value = coerced_bool
+                elif key == "edge_dim":
+                    coerced_int = _maybe_int_value(value)
+                    if coerced_int is not None:
+                        value = coerced_int
+                if allow_shape_normalisation:
+                    if current_value is None or str(current_value) == str(value):
+                        final_cfg[key] = value
+                    else:
+                        original = cli_cfg.get(key)
+                        if original is not None and key not in mismatch_report:
+                            mismatch_report[key] = (original, value)
+                        final_cfg[key] = value
+                elif current_value is None:
+                    final_cfg[key] = value
+        if mismatch_report and allow_shape_normalisation:
+            details = ", ".join(
+                f"{name} {before}→{after}" for name, (before, after) in mismatch_report.items()
+            )
+            if auto_shape_normalisation:
+                logger.info(
+                    "Auto shape coercion enabled; normalising encoder configuration from checkpoint metadata: %s",
+                    details,
+                )
+            else:
+                logger.info(
+                    "Normalising encoder configuration from checkpoint metadata: %s",
+                    details,
+                )
+
+        hidden_dim_fallback = hidden_dim if hidden_dim is not None else 256
+        num_layers_fallback = num_layers if num_layers is not None else 3
+        gnn_type_fallback = gnn_type or "mpnn"
+
+        resolved_hidden = final_cfg.get("hidden_dim", hidden_dim_fallback)
+        resolved_layers = final_cfg.get("num_layers", num_layers_fallback)
+        resolved_gnn = final_cfg.get("gnn_type", gnn_type_fallback)
+
+        final_edge_dim_candidate = final_cfg.get("edge_dim", current_edge_dim)
+        if final_edge_dim_candidate is not None:
+            try:
+                final_edge_dim_candidate = int(final_edge_dim_candidate)
+            except Exception:
+                final_edge_dim_candidate = current_edge_dim
+
+        desired_add_3d = bool(final_cfg.get("add_3d", effective_add_3d))
+
+        dataset_edge_dim_expected = (
+            int(final_edge_dim_candidate) if final_edge_dim_candidate is not None else 0
+        )
+        if checkpoint_edge_dim is not None and dataset_edge_dim_expected != int(checkpoint_edge_dim):
+            raise RuntimeError(
+                "Encoder featurizer mismatch: checkpoint edge_dim=%s dataset edge_dim=%s. "
+                "Set allow_shape_coercion=true to override."
+                % (checkpoint_edge_dim, dataset_edge_dim_expected)
+            )
+        if checkpoint_add_3d is not None and bool(checkpoint_add_3d) != bool(desired_add_3d):
+            raise RuntimeError(
+                "Encoder featurizer mismatch: checkpoint add_3d=%s requested add_3d=%s. "
+                "Set allow_shape_coercion=true to override."
+                % (checkpoint_add_3d, bool(desired_add_3d))
+            )
+
+        final_gnn_candidate = str(resolved_gnn)
+        final_hidden_candidate = int(resolved_hidden)
+        final_layers_candidate = int(resolved_layers)
+        final_requires_3d = final_gnn_candidate.lower() in {"schnet3d", "schnet"}
+        if final_requires_3d:
+            desired_add_3d = True
+
+        if desired_add_3d and not dataset_has_pos:
+            logger.info(
+                "Regenerating Tox21 dataset with add_3d=%s to satisfy encoder metadata (previous=%s)",
+                desired_add_3d,
+                effective_add_3d,
+            )
+            effective_add_3d = bool(desired_add_3d)
+            cache_hidden_marker = hidden_dim if hidden_dim is not None else final_hidden_candidate
+            continue
+
+        if bool(desired_add_3d) != bool(effective_add_3d):
+            logger.info(
+                "Updating Tox21 dataset add_3d flag to %s based on encoder metadata (previous=%s)",
+                desired_add_3d,
+                effective_add_3d,
+            )
+            effective_add_3d = bool(desired_add_3d)
+            cache_hidden_marker = hidden_dim if hidden_dim is not None else final_hidden_candidate
+            continue
+
+        final_hidden_dim = final_hidden_candidate
+        final_num_layers = final_layers_candidate
+        final_gnn_type = final_gnn_candidate
+        final_edge_dim = final_edge_dim_candidate
+        effective_add_3d = bool(desired_add_3d)
+        edge_dim = dataset_edge_dim_expected
+        break
+
+    assert final_hidden_dim is not None
+    assert final_num_layers is not None
+    assert final_gnn_type is not None
+
+    if dataset_cache_path is not None:
+        logger.info(
+            "[cache] selected_cache=%s (hit=%s add_3d=%s hidden_dim=%s schema_hash=%s)",
+            dataset_cache_path,
+            "yes" if dataset_cache_hit else "no",
+            bool(effective_add_3d),
+            final_hidden_dim,
+            schema_digest if schema_digest is not None else "<unknown>",
+        )
+        diagnostics["cache"] = {
+            "path": str(dataset_cache_path),
+            "hit": bool(dataset_cache_hit),
+            "add_3d": bool(effective_add_3d),
+            "hidden_dim": int(final_hidden_dim),
+            "schema_hash": schema_digest,
+        }
+        if ci_diag:
+            _ci_log(
+                "tox21 dataset cache",
+                path=str(dataset_cache_path),
+                hit=bool(dataset_cache_hit),
+                add_3d=bool(effective_add_3d),
+                hidden_dim=int(final_hidden_dim),
+                schema_hash=schema_digest,
+            )
+
+    if ci_diag:
+        labels_arr = dataset.labels
+        task_count = 0
+        if labels_arr is not None:
+            task_count = 1 if labels_arr.ndim == 1 else int(labels_arr.shape[1])
+        diagnostics.update(
+            {
+                "task_count": task_count,
+                "num_molecules": int(len(dataset)),
+            }
         )
 
-    if resolved_hidden_dim is None or resolved_num_layers is None or resolved_gnn_type is None:
-        raise ValueError("Unable to determine encoder architecture from CLI or metadata")
+    if final_gnn_type.lower() in {"schnet3d", "schnet"} and all(
+        getattr(g, "pos", None) is None for g in dataset.graphs
+    ):
+        raise ValueError(
+            "SchNet-style encoders require 3D coordinates, but none were generated. "
+            "Ensure RDKit is installed with 3D conformer support."
+        )
 
-    final_hidden_dim = int(resolved_hidden_dim)
-    final_num_layers = int(resolved_num_layers)
-    final_gnn_type = str(resolved_gnn_type)
+    diagnostics["add_3d_requested"] = requested_add_3d
+    diagnostics["add_3d_effective"] = bool(effective_add_3d)
 
-    logger.info(
-        "[enc_cfg] gnn_type=%s hidden_dim=%s num_layers=%s add_3d=%s edge_dim=%s",
-        final_gnn_type,
-        final_hidden_dim,
-        final_num_layers,
-        bool(effective_add_3d),
-        final_edge_dim,
-    )
-
-    diagnostics["encoder_config"] = {
-        "gnn_type": final_gnn_type,
-        "hidden_dim": int(final_hidden_dim),
-        "num_layers": int(final_num_layers),
-        "add_3d": bool(effective_add_3d),
-        "edge_dim": int(final_edge_dim) if final_edge_dim is not None else None,
-    }
-
+    final_edge_dim_value = final_edge_dim
     gnn_type_lower = final_gnn_type.lower()
     if gnn_type_lower in {
         "gine",
@@ -1672,32 +1630,127 @@ def run_tox21_case_study(
         "chemprop",
         "attentivefp",
         "attnfp",
-    } and (final_edge_dim is None or final_edge_dim <= 0):
-        final_edge_dim = 1
+    } and (final_edge_dim_value is None or final_edge_dim_value <= 0):
+        final_edge_dim_value = 1
 
-    edge_dim = int(final_edge_dim) if final_edge_dim is not None else 0
+    logger.info(
+        "[enc_cfg] gnn_type=%s hidden_dim=%s num_layers=%s add_3d=%s edge_dim=%s",
+        final_gnn_type,
+        final_hidden_dim,
+        final_num_layers,
+        bool(effective_add_3d),
+        final_edge_dim_value,
+    )
+
+    diagnostics["encoder_config"] = {
+        "gnn_type": final_gnn_type,
+        "hidden_dim": int(final_hidden_dim),
+        "num_layers": int(final_num_layers),
+        "add_3d": bool(effective_add_3d),
+        "edge_dim": int(final_edge_dim_value) if final_edge_dim_value is not None else None,
+    }
+
+    edge_dim = int(final_edge_dim_value) if final_edge_dim_value is not None else 0
+    final_edge_dim = final_edge_dim_value
+
+    target_edge_dim = EDGE_TOTAL_DIM if effective_add_3d else EDGE_BASE_DIM
 
     for i, graph in enumerate(dataset.graphs):
-        dataset.graphs[i] = ensure_edge_attr(graph, edge_dim, device=device)
-
-    try:
-        from models.factory import build_encoder  # type: ignore[import-not-found]
-    except Exception:
-        from models.encoder import GNNEncoder as _BasicEnc
-
-        def build_encoder(
-            gnn_type: str,
-            input_dim: int,
-            hidden_dim: int,
-            num_layers: int,
-            edge_dim: Optional[int] = None,
-        ):
-            return _BasicEnc(
-                input_dim=input_dim,
-                hidden_dim=hidden_dim,
-                num_layers=num_layers,
-                gnn_type=gnn_type,
+        smi = getattr(graph, "smiles", None) or (
+            getattr(dataset, "smiles", None)[i] if hasattr(dataset, "smiles") else None
+        )
+        if not smi:
+            continue
+        graph.smiles = smi
+        edge_attr = getattr(graph, "edge_attr", None)
+        if edge_attr is None or getattr(edge_attr, "shape", (0, 0))[1] == 0:
+            attach_bond_features_from_smiles(
+                graph,
+                smi,
+                target_edge_dim=target_edge_dim,
             )
+
+    all_labels = dataset.labels.astype(float)
+    num_total = len(dataset)
+
+    threshold_rule = _resolve_threshold_rule(dataset_name, task_name)
+
+
+    def _split_summary(indices: List[int]) -> Dict[str, int]:
+        if not indices:
+            return {"size": 0, "finite": 0, "positives": 0}
+        arr = all_labels[np.asarray(indices, dtype=int)]
+        mask = np.isfinite(arr)
+        finite = int(mask.sum())
+        positives = int(np.nansum(arr[mask]))
+        return {
+            "size": int(len(indices)),
+            "finite": finite,
+            "positives": positives,
+        }
+
+    if scaffold_split_indices and _HAS_RDKIT:
+        train_split, val_split, test_split = scaffold_split_indices(
+            smiles_list,
+            train_frac=train_fraction,
+            val_frac=val_fraction,
+            seed=seed,
+        )
+        train_idx = _to_list(np.asarray(train_split, dtype=int))
+        val_idx = _to_list(np.asarray(val_split, dtype=int))
+        test_idx = _to_list(np.asarray(test_split, dtype=int))
+        logger.info(
+            "Scaffold split: train=%d val=%d test=%d",
+            len(train_idx),
+            len(val_idx),
+            len(test_idx),
+        )
+    else:
+        logger.warning("RDKit scaffold split unavailable; using stratified random split.")
+        indices = list(range(num_total))
+        rand_state = random.getstate()
+        np_state = np.random.get_state()
+        train_idx, val_idx, test_idx = stratified_split(
+            indices,
+            dataset.labels,
+            train_frac=train_fraction,
+            val_frac=val_fraction,
+        )
+        random.setstate(rand_state)
+        np.random.set_state(np_state)
+
+    split_summary = {
+        "train": _split_summary(train_idx),
+        "val": _split_summary(val_idx),
+        "test": _split_summary(test_idx),
+    }
+    diagnostics["split_counts"] = split_summary
+    for split_name, stats in split_summary.items():
+        logger.info(
+            "Split %s: size=%d finite=%d positives=%d",
+            split_name,
+            stats.get("size", 0),
+            stats.get("finite", 0),
+            stats.get("positives", 0),
+        )
+    if ci_diag:
+        _ci_log(
+            "tox21 dataset split",
+            num_molecules=diagnostics.get("num_molecules", 0),
+            task_count=diagnostics.get("task_count", 0),
+            train=split_summary.get("train", {}),
+            val=split_summary.get("val", {}),
+            test=split_summary.get("test", {}),
+        )
+
+    input_dim = dataset.graphs[0].x.shape[1]
+    edge_dim = 0
+    try:
+        g0 = dataset.graphs[0]
+        if getattr(g0, "edge_attr", None) is not None:
+            edge_dim = int(g0.edge_attr.shape[1])
+    except Exception:
+        edge_dim = 0
 
     encoder = build_encoder(
         gnn_type=final_gnn_type,
