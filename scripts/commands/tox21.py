@@ -479,6 +479,13 @@ def _run_tox21_single_task(
         allow_shape_requested_marker: Any = bool(allow_shape_requested_val)
     else:
         allow_shape_requested_marker = "auto"
+    if isinstance(diagnostics, dict):
+        diagnostics.setdefault("allow_shape_coercion_effective", bool(allow_shape_effective_val))
+        diagnostics.setdefault("allow_shape_coercion_requested", allow_shape_requested_val)
+        diagnostics.setdefault(
+            "allow_shape_coercion_requested_marker", allow_shape_requested_marker
+        )
+        diagnostics.setdefault("allow_shape_coercion_auto", bool(auto_allow_shape))
     if split_summary and "split_counts" not in diagnostics:
         diagnostics["split_counts"] = split_summary
 
@@ -1013,6 +1020,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     aggregated_auc_summaries: Dict[str, Any] = {}
     per_task_diagnostics: Dict[str, Any] = {}
     diagnostics_template: Dict[str, Any] | None = None
+    aggregated_allow_shape_effective: Optional[bool] = None
+    aggregated_allow_shape_requested: Any = getattr(args, "allow_shape_coercion", None)
+    aggregated_allow_shape_auto = False
 
     try:
         for task_name in tasks_to_run:
@@ -1043,13 +1053,43 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 per_task_diagnostics[task_name] = diagnostics
                 if diagnostics_template is None:
                     diagnostics_template = dict(diagnostics)
+                effective_marker = diagnostics.get("allow_shape_coercion_effective")
+                if effective_marker is not None:
+                    aggregated_allow_shape_effective = bool(effective_marker)
+                elif diagnostics.get("allow_shape_coercion_forced"):
+                    aggregated_allow_shape_effective = True
+                requested_marker = diagnostics.get("allow_shape_coercion_requested")
+                if requested_marker in (True, False):
+                    aggregated_allow_shape_requested = bool(requested_marker)
+                elif (
+                    aggregated_allow_shape_requested is None
+                    and requested_marker is not None
+                ):
+                    aggregated_allow_shape_requested = requested_marker
+                if diagnostics.get("allow_shape_coercion_auto"):
+                    aggregated_allow_shape_auto = True
 
+
+        if aggregated_allow_shape_effective is not None:
+            setattr(args, "allow_shape_coercion", bool(aggregated_allow_shape_effective))
+        elif aggregated_allow_shape_requested in (True, False):
+            setattr(args, "allow_shape_coercion", bool(aggregated_allow_shape_requested))
 
         combined_diagnostics: Dict[str, Any] = {}
         if diagnostics_template is not None:
             combined_diagnostics = dict(diagnostics_template)
         combined_diagnostics["task_count"] = len(tasks_to_run)
         combined_diagnostics["per_task"] = per_task_diagnostics
+        if aggregated_allow_shape_effective is not None:
+            combined_diagnostics["allow_shape_coercion_effective"] = bool(
+                aggregated_allow_shape_effective
+            )
+        if aggregated_allow_shape_requested is not None:
+            combined_diagnostics["allow_shape_coercion_requested"] = (
+                aggregated_allow_shape_requested
+            )
+        if aggregated_allow_shape_auto:
+            combined_diagnostics["allow_shape_coercion_auto"] = True
 
         stage_dir = os.path.join(report_dir, "stage-outputs")
         os.makedirs(stage_dir, exist_ok=True)
