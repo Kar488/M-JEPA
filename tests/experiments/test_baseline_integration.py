@@ -1,9 +1,10 @@
-import numpy as np
-import pandas as pd
 from pathlib import Path
+
 import pytest
 
-from experiments import baseline_integration as bi
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
+bi = pytest.importorskip("experiments.baseline_integration")
 
 try:
     import pyarrow  # type: ignore  # noqa: F401
