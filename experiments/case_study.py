@@ -73,9 +73,9 @@ from models.encoder import GNNEncoder
 from models.predictor import MLPPredictor
 
 try:  # pragma: no cover - optional dependency
-    from models.factory import build_encoder
+    from models.factory import build_encoder as _IMPORTED_BUILD_ENCODER
 except Exception:  # pragma: no cover - fallback when factory is unavailable
-    build_encoder = None  # type: ignore[assignment]
+    _IMPORTED_BUILD_ENCODER = None  # type: ignore[assignment]
 from utils.seed import set_seed
 from utils.metrics import expected_calibration_error
 
@@ -167,6 +167,25 @@ def _train_linear_head_callable() -> Callable[..., Any]:
 
 def _train_jepa_callable() -> Callable[..., Any]:
     return _resolve_training_callable("train_jepa", train_jepa)
+
+
+def _build_encoder_callable() -> Optional[Callable[..., Any]]:
+    """Return the latest ``build_encoder`` implementation if available.
+
+    ``experiments.case_study`` imports :func:`models.factory.build_encoder` at
+    module import time, but many tests swap the ``models`` package with lightweight
+    stubs *after* the module has been loaded.  We therefore resolve the callable at
+    runtime so that monkeypatched factories are honoured instead of the cached
+    import.
+    """
+
+    module = sys.modules.get("models.factory")
+    candidate = getattr(module, "build_encoder", None) if module is not None else None
+    if callable(candidate):
+        return candidate
+    if callable(_IMPORTED_BUILD_ENCODER):
+        return _IMPORTED_BUILD_ENCODER
+    return None
 
 try:  # pragma: no cover - optional during tests
     from training.supervised import stratified_split as _lib_stratified_split  # type: ignore[import-not-found]
@@ -1776,8 +1795,9 @@ def run_tox21_case_study(
     except Exception:
         edge_dim = 0
 
-    if build_encoder is not None:
-        encoder = build_encoder(
+    build_encoder_fn = _build_encoder_callable()
+    if build_encoder_fn is not None:
+        encoder = build_encoder_fn(
             gnn_type=final_gnn_type,
             input_dim=input_dim,
             hidden_dim=final_hidden_dim,
@@ -2012,13 +2032,26 @@ def run_tox21_case_study(
         encoder_source = "full_finetune"
         eval_name = "full_finetune"
     if should_pretrain:
-        ema_encoder = build_encoder(
-            gnn_type=final_gnn_type,
-            input_dim=input_dim,
-            hidden_dim=final_hidden_dim,
-            num_layers=final_num_layers,
-            edge_dim=edge_dim,
-        )
+        ema_encoder_fn = _build_encoder_callable()
+        if ema_encoder_fn is None:
+            logger.warning(
+                "models.factory.build_encoder unavailable during pretraining; "
+                "falling back to GNNEncoder.",
+            )
+            ema_encoder = GNNEncoder(
+                input_dim=input_dim,
+                hidden_dim=final_hidden_dim,
+                num_layers=final_num_layers,
+                gnn_type=final_gnn_type,
+            )
+        else:
+            ema_encoder = ema_encoder_fn(
+                gnn_type=final_gnn_type,
+                input_dim=input_dim,
+                hidden_dim=final_hidden_dim,
+                num_layers=final_num_layers,
+                edge_dim=edge_dim,
+            )
         ema_helper = EMA(encoder, decay=0.99)
         predictor = MLPPredictor(embed_dim=final_hidden_dim, hidden_dim=final_hidden_dim * 2)
 
