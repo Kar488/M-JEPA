@@ -4,6 +4,8 @@ import logging
 
 import pandas as pd
 import pytest
+from types import SimpleNamespace
+from typing import Optional
 
 import models.encoder  # noqa: F401
 import models.factory  # noqa: F401
@@ -466,6 +468,102 @@ def test_cmd_tox21_inherits_best_config_loader_flags(tmp_path, monkeypatch):
     assert args.bf16_head is True
     assert args.devices == 2
 
+
+def test_cmd_tox21_auto_retries_allow_shape(monkeypatch, tmp_path):
+    call_history: list[Optional[bool]] = []
+
+    def tox_stub(**kwargs):
+        call_history.append(kwargs.get("allow_shape_coercion"))
+        if len(call_history) == 1:
+            raise RuntimeError(
+                "Encoder featurizer mismatch: checkpoint add_3d=True requested add_3d=False. "
+                "Set allow_shape_coercion=true to override."
+            )
+        evaluation = SimpleNamespace(
+            name="pretrain",
+            encoder_source="pretrain_frozen",
+            metrics={"roc_auc": 0.91},
+            baseline_means={"baseline": 0.2},
+            mean_true=0.3,
+            mean_random=0.1,
+            mean_pred=0.5,
+            benchmark_metric="roc_auc",
+            benchmark_threshold=0.6,
+            met_benchmark=True,
+            manifest_path="manifest.json",
+        )
+        result = SimpleNamespace(
+            evaluations=[evaluation],
+            threshold_rule=SimpleNamespace(metric="roc_auc", threshold=0.6),
+            diagnostics={},
+            encoder_hash="hash123",
+            baseline_encoder_hash=None,
+            encoder_load={},
+            calibrator_state=None,
+            split_summary={},
+        )
+        return result
+
+    monkeypatch.setattr(tj, "run_tox21_case_study", tox_stub)
+
+    class DummyWB:
+        def __init__(self):
+            self.logs = []
+
+        def log(self, data):
+            self.logs.append(data)
+
+        def finish(self):
+            pass
+
+    holder = {}
+
+    def maybe_init_wandb_stub(*args, **kwargs):
+        holder["wb"] = DummyWB()
+        return holder["wb"]
+
+    monkeypatch.setattr(tj, "maybe_init_wandb", maybe_init_wandb_stub)
+
+    csv_path = tmp_path / "tox.csv"
+    csv_path.write_text("smiles,NR-AR\nC,1\n", encoding="utf-8")
+
+    args = argparse.Namespace(
+        csv=str(csv_path),
+        task="NR-AR",
+        dataset="tox21",
+        pretrain_epochs=1,
+        finetune_epochs=1,
+        pretrain_lr=1e-4,
+        triage_pct=0.10,
+        tox21_dir=str(tmp_path / "reports"),
+        device="cpu",
+        use_wandb=True,
+        wandb_project="proj",
+        wandb_tags=[],
+        num_workers=2,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        bf16=False,
+        allow_shape_coercion=False,
+        hidden_dim=128,
+        num_layers=3,
+        gnn_type="edge_mpnn",
+        add_3d=False,
+    )
+
+    tj.cmd_tox21(args)
+
+    assert call_history == [False, True]
+    assert args.allow_shape_coercion is True
+
+    logs = holder["wb"].logs
+    assert any(log.get("allow_shape_coercion_retry") for log in logs)
+
+    summary_path = tmp_path / "reports" / "tox21_summary.json"
+    assert summary_path.is_file()
+    summary_payload = json.loads(summary_path.read_text())
+    assert summary_payload["overall_gate_passed"] in {True, False}
 
 def test_cmd_tox21_failure(tmp_path,monkeypatch):
     monkeypatch.setattr(

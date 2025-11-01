@@ -369,52 +369,97 @@ def _run_tox21_single_task(
     start_log.update(target_payload)
     _wandb_log_safe(wb, start_log)
 
-    result = run_tox21_case_study(
-        csv_path=getattr(args, "csv"),
-        task_name=task_name,
-        dataset_name=dataset_name,
-        pretrain_epochs=getattr(args, "pretrain_epochs", 5),
-        finetune_epochs=getattr(args, "finetune_epochs", 20),
-        lr=getattr(args, "lr", 1e-3),
-        pretrain_lr=getattr(args, "pretrain_lr", None),
-        head_lr=getattr(args, "head_lr", None),
-        encoder_lr=getattr(args, "encoder_lr", None),
-        weight_decay=getattr(args, "weight_decay", None),
-        class_weights=class_weights_arg,
-        hidden_dim=getattr(args, "hidden_dim", 128),
-        num_layers=getattr(args, "num_layers", 2),
-        gnn_type=getattr(args, "gnn_type", "edge_mpnn"),
-        add_3d=getattr(args, "add_3d", False),
-        contrastive=getattr(args, "contrastive", False),
-        triage_pct=triage_pct,
-        calibrate=calibrate,
-        device=resolve_device(getattr(args, "device", "cpu")),
-        devices=devices_val,
-        num_workers=getattr(args, "num_workers", -1),
-        pin_memory=getattr(args, "pin_memory", True),
-        persistent_workers=getattr(args, "persistent_workers", True),
-        prefetch_factor=getattr(args, "prefetch_factor", 4),
-        bf16=getattr(args, "bf16", False),
-        bf16_head=getattr(args, "bf16_head", None),
-        pretrain_time_budget_mins=getattr(args, "pretrain_time_budget_mins", 0),
-        finetune_time_budget_mins=getattr(args, "finetune_time_budget_mins", 0),
-        cache_dir=cache_dir,
-        encoder_checkpoint=getattr(args, "encoder_checkpoint", None),
-        encoder_manifest=getattr(args, "encoder_manifest", None),
-        strict_encoder_config=getattr(args, "strict_encoder_config", False),
-        encoder_source_override=getattr(args, "encoder_source", None),
-        evaluation_mode=eval_mode,
-        allow_shape_coercion=allow_shape_flag,
-        allow_equal_hash=getattr(args, "allow_equal_hash", False),
-        verify_match_threshold=float(getattr(args, "verify_match_threshold", 0.98)),
-        finetune_patience=getattr(args, "patience", None),
-        cli_hidden_dim_provided=getattr(args, "_hidden_dim_provided", True),
-        cli_num_layers_provided=getattr(args, "_num_layers_provided", True),
-        cli_gnn_type_provided=getattr(args, "_gnn_type_provided", True),
-        full_finetune=getattr(args, "full_finetune", None),
-        unfreeze_top_layers=int(getattr(args, "unfreeze_top_layers", 0) or 0),
-        tox21_head_batch_size=int(getattr(args, "tox21_head_batch_size", 256) or 256),
-    )
+    case_study_kwargs: Dict[str, Any] = {
+        "csv_path": getattr(args, "csv"),
+        "task_name": task_name,
+        "dataset_name": dataset_name,
+        "pretrain_epochs": getattr(args, "pretrain_epochs", 5),
+        "finetune_epochs": getattr(args, "finetune_epochs", 20),
+        "lr": getattr(args, "lr", 1e-3),
+        "pretrain_lr": getattr(args, "pretrain_lr", None),
+        "head_lr": getattr(args, "head_lr", None),
+        "encoder_lr": getattr(args, "encoder_lr", None),
+        "weight_decay": getattr(args, "weight_decay", None),
+        "class_weights": class_weights_arg,
+        "hidden_dim": getattr(args, "hidden_dim", 128),
+        "num_layers": getattr(args, "num_layers", 2),
+        "gnn_type": getattr(args, "gnn_type", "edge_mpnn"),
+        "add_3d": getattr(args, "add_3d", False),
+        "contrastive": getattr(args, "contrastive", False),
+        "triage_pct": triage_pct,
+        "calibrate": calibrate,
+        "device": resolve_device(getattr(args, "device", "cpu")),
+        "devices": devices_val,
+        "num_workers": getattr(args, "num_workers", -1),
+        "pin_memory": getattr(args, "pin_memory", True),
+        "persistent_workers": getattr(args, "persistent_workers", True),
+        "prefetch_factor": getattr(args, "prefetch_factor", 4),
+        "bf16": getattr(args, "bf16", False),
+        "bf16_head": getattr(args, "bf16_head", None),
+        "pretrain_time_budget_mins": getattr(args, "pretrain_time_budget_mins", 0),
+        "finetune_time_budget_mins": getattr(args, "finetune_time_budget_mins", 0),
+        "cache_dir": cache_dir,
+        "encoder_checkpoint": getattr(args, "encoder_checkpoint", None),
+        "encoder_manifest": getattr(args, "encoder_manifest", None),
+        "strict_encoder_config": getattr(args, "strict_encoder_config", False),
+        "encoder_source_override": getattr(args, "encoder_source", None),
+        "evaluation_mode": eval_mode,
+        "allow_shape_coercion": allow_shape_flag,
+        "allow_equal_hash": getattr(args, "allow_equal_hash", False),
+        "verify_match_threshold": float(getattr(args, "verify_match_threshold", 0.98)),
+        "finetune_patience": getattr(args, "patience", None),
+        "cli_hidden_dim_provided": getattr(args, "_hidden_dim_provided", True),
+        "cli_num_layers_provided": getattr(args, "_num_layers_provided", True),
+        "cli_gnn_type_provided": getattr(args, "_gnn_type_provided", True),
+        "full_finetune": getattr(args, "full_finetune", None),
+        "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
+        "tox21_head_batch_size": int(getattr(args, "tox21_head_batch_size", 256) or 256),
+    }
+
+    def _invoke_case_study(allow_shape_value: Optional[bool]) -> Any:
+        payload = dict(case_study_kwargs)
+        payload["allow_shape_coercion"] = allow_shape_value
+        return run_tox21_case_study(**payload)
+
+    allow_shape_retry = False
+    allow_shape_error: Optional[str] = None
+
+    try:
+        result = _invoke_case_study(allow_shape_flag)
+    except RuntimeError as exc:
+        message = str(exc)
+        mismatch_hint = "allow_shape_coercion" in message or "featurizer mismatch" in message
+        if mismatch_hint and allow_shape_flag is not True:
+            condensed = message.splitlines()[0].strip()
+            logger.warning(
+                "Tox21 case study encountered encoder configuration mismatch (%s); "
+                "retrying with allow_shape_coercion enabled.",
+                condensed,
+            )
+            allow_shape_retry = True
+            allow_shape_error = message
+            result = _invoke_case_study(True)
+            allow_shape_flag = True
+            setattr(args, "allow_shape_coercion", True)
+            _wandb_log_safe(
+                wb,
+                {
+                    "phase": "tox21",
+                    "status": "warning",
+                    "task": task_name,
+                    "allow_shape_coercion_retry": True,
+                    "allow_shape_retry_reason": condensed,
+                },
+            )
+        else:
+            raise
+
+    if allow_shape_retry:
+        diagnostics_ref = getattr(result, "diagnostics", None)
+        if isinstance(diagnostics_ref, dict):
+            diagnostics_ref.setdefault("allow_shape_coercion_forced", True)
+            if allow_shape_error:
+                diagnostics_ref.setdefault("allow_shape_coercion_retry_reason", allow_shape_error)
 
     diagnostics = getattr(result, "diagnostics", {}) or {}
     encoder_hash = getattr(result, "encoder_hash", None)
