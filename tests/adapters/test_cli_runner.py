@@ -2,6 +2,8 @@ import os
 import sys
 import types
 
+import pytest
+
 import utils.ddp as ddp
 
 # @pytest.fixture(autouse=True)
@@ -47,7 +49,64 @@ def test_init_distributed_initializes(monkeypatch):
     assert fake_init_process_group.world_size == 2
 
 
-def test_init_distributed_pins_cuda_visible_devices(monkeypatch):
+def test_init_distributed_gloo_skips_cuda_pinning(monkeypatch):
+    monkeypatch.delenv("DISABLE_DDP", raising=False)
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+
+    class _FakeCuda:
+        def __init__(self):
+            self.set_calls = []
+
+        def is_available(self):
+            return True
+
+        def device_count(self):
+            return 1
+
+        def set_device(self, idx):
+            self.set_calls.append(idx)
+
+    fake_cuda = _FakeCuda()
+
+    class _FakeDist:
+        def __init__(self):
+            self.initialized = False
+
+        def is_available(self):
+            return True
+
+        def is_initialized(self):
+            return self.initialized
+
+        def init_process_group(self, **_):
+            self.initialized = True
+
+        def get_rank(self):
+            return 0
+
+        def get_world_size(self):
+            return 1
+
+        def destroy_process_group(self):
+            self.initialized = False
+
+        def is_nccl_available(self):
+            return False
+
+    fake_torch = types.SimpleNamespace(cuda=fake_cuda)
+
+    monkeypatch.setattr(ddp, "torch", fake_torch, raising=False)
+    monkeypatch.setattr(ddp, "dist", _FakeDist(), raising=False)
+
+    assert ddp.init_distributed(backend="gloo") is True
+    assert os.environ.get("CUDA_VISIBLE_DEVICES") is None
+    assert fake_cuda.set_calls == []
+
+
+def test_init_distributed_nccl_pins_cuda_visible_devices(monkeypatch):
     monkeypatch.delenv("DISABLE_DDP", raising=False)
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
@@ -92,16 +151,59 @@ def test_init_distributed_pins_cuda_visible_devices(monkeypatch):
             self.initialized = False
 
         def is_nccl_available(self):
-            return False
+            return True
 
     fake_torch = types.SimpleNamespace(cuda=fake_cuda)
 
     monkeypatch.setattr(ddp, "torch", fake_torch, raising=False)
     monkeypatch.setattr(ddp, "dist", _FakeDist(), raising=False)
 
-    assert ddp.init_distributed(backend="gloo") is True
+    assert ddp.init_distributed(backend="nccl") is True
     assert os.environ["CUDA_VISIBLE_DEVICES"] == "5"
     assert fake_cuda.set_calls == [0]
+
+
+def test_init_distributed_nccl_requires_visible_cuda(monkeypatch):
+    monkeypatch.delenv("DISABLE_DDP", raising=False)
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
+
+    class _FakeCuda:
+        def is_available(self):
+            return True
+
+        def device_count(self):
+            return 1
+
+    class _FakeDist:
+        def is_available(self):
+            return True
+
+        def is_initialized(self):
+            return False
+
+        def init_process_group(self, **_):
+            raise AssertionError("init_process_group should not be called")
+
+        def get_rank(self):
+            return 0
+
+        def get_world_size(self):
+            return 1
+
+        def destroy_process_group(self):
+            pass
+
+        def is_nccl_available(self):
+            return True
+
+    fake_torch = types.SimpleNamespace(cuda=_FakeCuda())
+
+    monkeypatch.setattr(ddp, "torch", fake_torch, raising=False)
+    monkeypatch.setattr(ddp, "dist", _FakeDist(), raising=False)
+
+    with pytest.raises(RuntimeError):
+        ddp.init_distributed(backend="nccl")
 
 
 def test_get_rank_world_size_default(monkeypatch):
