@@ -71,6 +71,11 @@ except Exception:  # pragma: no cover - fallback for environments without checkp
 from models.ema import EMA
 from models.encoder import GNNEncoder
 from models.predictor import MLPPredictor
+
+try:  # pragma: no cover - optional dependency
+    from models.factory import build_encoder
+except Exception:  # pragma: no cover - fallback when factory is unavailable
+    build_encoder = None  # type: ignore[assignment]
 from utils.seed import set_seed
 from utils.metrics import expected_calibration_error
 
@@ -1412,6 +1417,7 @@ def run_tox21_case_study(
     final_edge_dim: Optional[int] = None
     input_dim = 0
     edge_dim = 0
+    attempted_add_3d_materialisation = False
 
     while True:
         dataset, dataset_cache_path, dataset_cache_hit, schema_digest = _materialise_dataset(
@@ -1537,11 +1543,17 @@ def run_tox21_case_study(
             desired_add_3d = True
 
         if desired_add_3d and not dataset_has_pos:
+            if attempted_add_3d_materialisation or effective_add_3d:
+                raise RuntimeError(
+                    "3D coordinates were requested but could not be generated. "
+                    "Ensure RDKit is installed with 3D conformer support or disable add_3d."
+                )
             logger.info(
                 "Regenerating Tox21 dataset with add_3d=%s to satisfy encoder metadata (previous=%s)",
                 desired_add_3d,
                 effective_add_3d,
             )
+            attempted_add_3d_materialisation = True
             effective_add_3d = bool(desired_add_3d)
             cache_hidden_marker = hidden_dim if hidden_dim is not None else final_hidden_candidate
             continue
@@ -1752,13 +1764,24 @@ def run_tox21_case_study(
     except Exception:
         edge_dim = 0
 
-    encoder = build_encoder(
-        gnn_type=final_gnn_type,
-        input_dim=input_dim,
-        hidden_dim=final_hidden_dim,
-        num_layers=final_num_layers,
-        edge_dim=edge_dim,
-    )
+    if build_encoder is not None:
+        encoder = build_encoder(
+            gnn_type=final_gnn_type,
+            input_dim=input_dim,
+            hidden_dim=final_hidden_dim,
+            num_layers=final_num_layers,
+            edge_dim=edge_dim,
+        )
+    else:  # pragma: no cover - exercised only when factory import fails
+        logger.warning(
+            "models.factory.build_encoder unavailable; falling back to GNNEncoder."
+        )
+        encoder = GNNEncoder(
+            input_dim=input_dim,
+            hidden_dim=final_hidden_dim,
+            num_layers=final_num_layers,
+            gnn_type=final_gnn_type,
+        )
 
     requested_mode = evaluation_mode
     normalized_mode = requested_mode.lower().replace("-", "_")
