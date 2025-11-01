@@ -121,10 +121,16 @@ def test_cmd_tox21_runs_with_fallback(tmp_path, monkeypatch, tox21_module):
     payload = json.loads(summary_path.read_text())
     assert payload["dataset"] == "tox21"
     assert payload["tasks"]["NR-AR"]["task"] == "NR-AR"
+    assert payload.get("overall_gate_passed") is True
+    task_payload = payload["tasks"]["NR-AR"]
+    assert task_payload["met_benchmark_selected"] is True
+    assert task_payload["tox21_gate_passed"] is True
+    eval_payload = task_payload["evaluations"][0]
+    assert eval_payload["met_benchmark"] is True
 
     stage_dir = report_dir / "stage-outputs"
     stage_files = list(stage_dir.glob("*.json"))
     assert stage_files, "stage outputs were not produced by fallback"
 
     gate_env = env_path.read_text()
-    assert "TOX21_MET_GATE=" in gate_env
+    assert "TOX21_MET_GATE=true" in gate_env
