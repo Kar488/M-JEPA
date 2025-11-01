@@ -96,10 +96,32 @@ fi
 python_cmd=()
 if ensure_micromamba >/dev/null 2>&1; then
   python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
-elif [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
-  resolve_ci_python python_cmd
-else
-  ensure_micromamba
+  if (( ${#python_cmd[@]} )); then
+    if ! "${python_cmd[@]}" - <<'PY' 2>/dev/null
+import sys
+sys.exit(0)
+PY
+    then
+      echo "[tox21] warn: micromamba python unavailable; falling back to host interpreter" >&2
+      python_cmd=()
+    fi
+  fi
+fi
+
+if (( ${#python_cmd[@]} == 0 )); then
+  if py=$(python_bin 2>/dev/null); then
+    python_cmd=(env PYTHONUNBUFFERED=1 "$py" -u)
+  elif [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+    resolve_ci_python python_cmd
+  else
+    ensure_micromamba
+    python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
+  fi
+fi
+
+if (( ${#python_cmd[@]} == 0 )); then
+  echo "[tox21] error: unable to resolve a python interpreter" >&2
+  exit 1
 fi
 
 orig_encoder_override="${TOX21_ENCODER_CHECKPOINT:-}"
@@ -187,7 +209,8 @@ ensure_dir() {
 
 if [[ "$SOURCE" == "pretrain_frozen" ]]; then
   ensure_dir "$MANIFEST_PATH"
-  TOX21_ENCODER_CHECKPOINT=$("${python_cmd[@]}" - "$MANIFEST_PATH" <<'PY'
+  manifest_encoder=""
+  manifest_encoder=$("${python_cmd[@]}" - "$MANIFEST_PATH" <<'PY'
 import json, os, sys
 manifest = json.load(open(sys.argv[1]))
 paths = manifest.get("paths") if isinstance(manifest, dict) else {}
@@ -200,14 +223,53 @@ if candidate:
     print(os.path.abspath(candidate))
 PY
   )
-  TOX21_ENCODER_CHECKPOINT=${TOX21_ENCODER_CHECKPOINT:-}
-  if [[ -z "$TOX21_ENCODER_CHECKPOINT" ]]; then
-    echo "[tox21] could not extract encoder path from $MANIFEST_PATH" >&2
+  encoder_candidates=()
+  encoder_candidates+=("manifest" "${manifest_encoder:-}")
+  if [[ -n "${PRETRAIN_DIR:-}" ]]; then
+    encoder_candidates+=("pretrain_dir" "${PRETRAIN_DIR%/}/encoder.pt")
+  fi
+  if [[ -n "${PRETRAIN_ARTIFACTS_DIR:-}" ]]; then
+    encoder_candidates+=("artifacts" "${PRETRAIN_ARTIFACTS_DIR%/}/encoder.pt")
+  fi
+
+  resolved_path=""
+  resolved_label=""
+  if ! select_encoder_candidate resolved_path resolved_label "${encoder_candidates[@]}"; then
+    select_status=$?
+  else
+    select_status=0
+  fi
+
+  TOX21_ENCODER_CHECKPOINT="$resolved_path"
+  if [[ -z "${resolved_label:-}" ]]; then
+    resolved_label="manifest"
+  fi
+  encoder_decision_source="$resolved_label"
+
+  if (( select_status )); then
+    if [[ -n "$TOX21_ENCODER_CHECKPOINT" ]]; then
+      echo "[tox21] falling back to ${encoder_decision_source}: ${TOX21_ENCODER_CHECKPOINT}" >&2
+    else
+      echo "[tox21] warning: encoder candidates unavailable from manifest ${MANIFEST_PATH}" >&2
+    fi
+  fi
+
+  encoder_hint_parts=()
+  i=0
+  while (( i < ${#encoder_candidates[@]} )); do
+    label="${encoder_candidates[i]}"
+    path="${encoder_candidates[i+1]}"
+    encoder_hint_parts+=("${label}=${path:-<unset>}")
+    ((i+=2))
+  done
+
+  if [[ -z "$TOX21_ENCODER_CHECKPOINT" || ! -e "$TOX21_ENCODER_CHECKPOINT" ]]; then
+    echo "[tox21] error: encoder checkpoint not found. Checked candidates: ${encoder_hint_parts[*]}" >&2
     exit 1
   fi
+
   export TOX21_ENCODER_CHECKPOINT
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
-  encoder_decision_source="manifest"
 elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   stage_json="${FINETUNE_DIR}/stage-outputs/finetune.json"
   ft_export_path=""
@@ -221,12 +283,15 @@ elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   fi
   resolved_path=""
   resolved_label=""
-  select_encoder_candidate resolved_path resolved_label \
+  if ! select_encoder_candidate resolved_path resolved_label \
     finetune_export "$ft_export_path" \
     explicit_override "$orig_encoder_override" \
     encoder_ft "${FINETUNE_DIR}/encoder_ft.pt" \
-    seed_best "${FINETUNE_DIR}/seed_0/ft_best.pt"
-  select_status=$?
+    seed_best "${FINETUNE_DIR}/seed_0/ft_best.pt"; then
+    select_status=$?
+  else
+    select_status=0
+  fi
   TOX21_ENCODER_CHECKPOINT="$resolved_path"
   encoder_decision_source="$resolved_label"
   if (( select_status )); then
@@ -251,12 +316,15 @@ elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   fi
   resolved_path=""
   resolved_label=""
-  select_encoder_candidate resolved_path resolved_label \
+  if ! select_encoder_candidate resolved_path resolved_label \
     finetune_export "$ft_export_path" \
     explicit_override "$orig_encoder_override" \
     seed_best "${FINETUNE_DIR}/seed_0/ft_best.pt" \
-    encoder_ft "${FINETUNE_DIR}/encoder_ft.pt"
-  select_status=$?
+    encoder_ft "${FINETUNE_DIR}/encoder_ft.pt"; then
+    select_status=$?
+  else
+    select_status=0
+  fi
   TOX21_ENCODER_CHECKPOINT="$resolved_path"
   encoder_decision_source="$resolved_label"
   if (( select_status )); then
