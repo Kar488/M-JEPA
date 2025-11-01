@@ -194,13 +194,6 @@ def init_distributed(backend: str | None = None) -> bool:
         getattr(cuda_mod, "is_available", lambda: False)()
     ) if cuda_mod is not None else False
 
-    try:
-        _pin_visible_cuda_device_to_local_rank()
-    except RuntimeError:
-        raise
-    except Exception:
-        logger.debug("Unable to pin CUDA devices", exc_info=True)
-
     if not dist.is_available() or dist.is_initialized():
         return dist.is_initialized()
 
@@ -222,6 +215,14 @@ def init_distributed(backend: str | None = None) -> bool:
     ):
         logger.warning("NCCL not available; falling back to gloo")
         backend = "gloo"
+
+    if backend == "nccl":
+        try:
+            _pin_visible_cuda_device_to_local_rank()
+        except RuntimeError:
+            raise
+        except Exception:
+            logger.debug("Unable to pin CUDA devices", exc_info=True)
 
     if backend == "nccl" and local_world_size > 1 and available_devices < local_world_size:
         message = (
