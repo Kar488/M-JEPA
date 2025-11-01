@@ -100,6 +100,7 @@ class GraphSAGE(EncoderBase):
         dropout: float = 0.1,
     ):
         super().__init__()
+        self.hidden_dim = hidden_dim
         self.proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList(
             [
@@ -143,6 +144,7 @@ class GIN(EncoderBase):
         self, input_dim: int, hidden_dim: int, num_layers: int = 3, dropout: float = 0.1
     ):
         super().__init__()
+        self.hidden_dim = hidden_dim
         self.proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList(
             [GINLayer(hidden_dim, dropout=dropout) for _ in range(num_layers)]
@@ -224,6 +226,7 @@ class GATMultiHead(EncoderBase):
         dropout: float = 0.1,
     ):
         super().__init__()
+        self.hidden_dim = hidden_dim
         self.proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList(
             [
@@ -271,6 +274,7 @@ class GINELayer(nn.Module):
 class GINE(EncoderBase):
     def __init__(self, input_dim: int, edge_dim: int, hidden_dim: int, num_layers: int = 3, dropout: float = 0.1):
         super().__init__()
+        self.hidden_dim = hidden_dim
         self.edge_dim = int(edge_dim)
         self.proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList(
@@ -339,6 +343,7 @@ class DMPNNLayer(nn.Module):
 class DMPNN(EncoderBase):
     def __init__(self, input_dim: int, edge_dim: int, hidden_dim: int, num_layers: int = 3, dropout: float = 0.1):
         super().__init__()
+        self.hidden_dim = hidden_dim
         self.edge_dim = int(edge_dim)
         self.proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList(
@@ -396,6 +401,7 @@ class AttnReadout(nn.Module):
 class AttentiveFPEncoder(EncoderBase):
     def __init__(self, input_dim: int, edge_dim: int, hidden_dim: int, num_layers: int = 3, dropout: float = 0.1):
         super().__init__()
+        self.hidden_dim = hidden_dim
         self.edge_dim = int(edge_dim)
         self.proj = nn.Linear(input_dim, hidden_dim)
         self.layers = nn.ModuleList(
@@ -482,6 +488,7 @@ class SchNetInteraction(nn.Module):
 class SchNet3D(EncoderBase):
     def __init__(self, input_dim: int, hidden_dim: int, num_layers: int = 3, num_kernels: int = 64, cutoff: float = 5.0):
         super().__init__()
+        self.hidden_dim = hidden_dim
         self.proj = nn.Linear(input_dim, hidden_dim)
         self.rbf = RBF(num_kernels=num_kernels, cutoff=cutoff)
         self.layers = nn.ModuleList([SchNetInteraction(hidden_dim, num_kernels) for _ in range(num_layers)])
