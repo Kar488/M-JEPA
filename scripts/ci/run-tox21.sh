@@ -315,8 +315,9 @@ ensure_dir() {
 if [[ "$SOURCE" == "pretrain_frozen" ]]; then
   ensure_dir "$MANIFEST_PATH"
   manifest_encoder=""
-  print_python_cmd python_interp_cmd
-  manifest_encoder=$("${python_interp_cmd[@]}" - "$MANIFEST_PATH" <<'PY'
+  python_cmd=("${python_interp_cmd[@]}")
+  print_python_cmd python_cmd
+  manifest_encoder=$("${python_cmd[@]}" - "$MANIFEST_PATH" <<'PY'
 import json, os, sys
 manifest = json.load(open(sys.argv[1]))
 paths = manifest.get("paths") if isinstance(manifest, dict) else {}
@@ -329,6 +330,7 @@ if candidate:
     print(os.path.abspath(candidate))
 PY
   )
+  python_cmd=()
   encoder_candidates=()
   encoder_candidates+=("manifest" "${manifest_encoder:-}")
   if [[ -n "${PRETRAIN_DIR:-}" ]]; then
