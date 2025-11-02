@@ -1194,6 +1194,56 @@ build_stage_args() {
 
   prune_empty_args OUT
 
+  # Deduplicate repeated flags while preserving the last occurrence (typically
+  # the best-config override).  Treat each flag and its value payload as a
+  # single block so we never leave orphaned positional tokens behind.
+  if (( ${#OUT[@]} )); then
+    local -a __dedup_entries=()
+    declare -A __dedup_index=()
+    local __sep=$'\037'
+    local __idx=0
+    while (( __idx < ${#OUT[@]} )); do
+      local __token="${OUT[__idx]}"
+      if [[ "${__token}" == --* ]]; then
+        local __next=$((__idx + 1))
+        local -a __block=("${__token}")
+        while (( __next < ${#OUT[@]} )) && [[ "${OUT[__next]}" != --* ]]; do
+          __block+=("${OUT[__next]}")
+          ((__next++))
+        done
+        if [[ -v __dedup_index["${__token}"] ]]; then
+          __dedup_entries[${__dedup_index["${__token}"]}]=""
+        fi
+        local __serial="__FLAG__${__block[0]}"
+        local __part
+        for __part in "${__block[@]:1}"; do
+          __serial+="${__sep}${__part}"
+        done
+        __dedup_index["${__block[0]}"]=${#__dedup_entries[@]}
+        __dedup_entries+=("${__serial}")
+        __idx=${__next}
+        continue
+      fi
+      __dedup_entries+=("__POS__${__token}")
+      ((__idx++))
+    done
+
+    local -a __flattened=()
+    local __entry
+    for __entry in "${__dedup_entries[@]}"; do
+      [[ -z "${__entry}" ]] && continue
+      if [[ "${__entry}" == __FLAG__* ]]; then
+        local __payload="${__entry#__FLAG__}"
+        IFS="${__sep}" read -r -a __parts <<<"${__payload}"
+        __flattened+=("${__parts[@]}")
+      elif [[ "${__entry}" == __POS__* ]]; then
+        __flattened+=("${__entry#__POS__}")
+      fi
+    done
+
+    OUT=("${__flattened[@]}")
+  fi
+
   if [ "$s" = "tox21" ]; then
     local enforce_flag="${TOX21_FULL_FINETUNE:-}"
     local have_flag=0

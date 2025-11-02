@@ -6,6 +6,7 @@ import argparse
 import importlib
 import json
 import sys
+import types
 
 import pytest
 
@@ -144,3 +145,37 @@ def test_cmd_tox21_runs_with_fallback(tmp_path, monkeypatch, tox21_module):
 
     gate_env = env_path.read_text()
     assert "TOX21_MET_GATE=true" in gate_env
+
+
+def test_module_main_delegates_to_train_jepa(monkeypatch, tmp_path):
+    import scripts.commands.tox21 as tox21
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        tox21,
+        "cmd_tox21",
+        lambda args: captured.update({"csv": getattr(args, "csv", None)}),
+    )
+
+    def fake_build_parser():
+        parser = argparse.ArgumentParser()
+        sub = parser.add_subparsers(dest="command", required=True)
+        tox = sub.add_parser("tox21")
+        tox.add_argument("--csv", required=True)
+        tox.set_defaults(func=tox21.cmd_tox21)
+        return parser
+
+    fake_module = types.SimpleNamespace(build_parser=fake_build_parser)
+    monkeypatch.setitem(sys.modules, "scripts.train_jepa", fake_module)
+    import scripts
+
+    monkeypatch.setattr(scripts, "train_jepa", fake_module, raising=False)
+
+    path = tmp_path / "data.csv"
+    path.write_text("stub", encoding="utf-8")
+
+    rc = tox21.main(["--csv", str(path)])
+
+    assert rc == 0
+    assert captured["csv"] == str(path)
