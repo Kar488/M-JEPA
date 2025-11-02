@@ -131,6 +131,8 @@ repair_micromamba_env() {
 python_interp_cmd=()
 python_cmd=()
 
+unset MJEPACI_FORCE_SYSTEM_PYTHON MJEPACI_SYSTEM_PYTHON_BIN
+
 python_mamba_ready=0
 if ensure_micromamba; then
   python_interp_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
@@ -199,8 +201,15 @@ fi
 
 if (( ${#python_interp_cmd[@]} == 0 )); then
   if py=$(python_bin 2>/dev/null); then
-    python_interp_cmd=(env PYTHONUNBUFFERED=1 "$py" -u)
-    echo "[tox21] warn: using system python interpreter ($(command -v "$py"))" >&2
+    py_path="$(command -v "$py" 2>/dev/null || true)"
+    if [[ -z "$py_path" ]]; then
+      py_path="$py"
+    fi
+    python_interp_cmd=(env PYTHONUNBUFFERED=1 "$py_path" -u)
+    MJEPACI_FORCE_SYSTEM_PYTHON=1
+    MJEPACI_SYSTEM_PYTHON_BIN="$py_path"
+    export MJEPACI_FORCE_SYSTEM_PYTHON MJEPACI_SYSTEM_PYTHON_BIN
+    echo "[tox21] warn: using system python interpreter (${py_path})" >&2
   elif [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
     resolve_ci_python python_cmd
     if (( ${#python_cmd[@]} )); then
