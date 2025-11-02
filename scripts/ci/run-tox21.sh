@@ -9,6 +9,15 @@ export MJEPACI_STAGE="tox21"
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
 
+if [[ ! -f "$APP_DIR/scripts/train_jepa.py" ]]; then
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+  if [[ -f "$repo_root/scripts/train_jepa.py" ]]; then
+    APP_DIR="$repo_root"
+    export APP_DIR
+    export PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}"
+  fi
+fi
+
 if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
   STAGE_BIN="${MJEPACI_STAGE_SHIM}"
 elif [[ -z "${STAGE_BIN:-}" ]]; then
@@ -95,43 +104,114 @@ if [[ ! -f "$MANIFEST_PATH" ]]; then
 fi
 
 print_python_cmd() {
+  local target="${1:-python_cmd}"
+  local -n arr="$target"
   local joined=""
-  if (( ${#python_cmd[@]} )); then
-    printf -v joined '%q ' "${python_cmd[@]}"
+  if (( ${#arr[@]} )); then
+    printf -v joined '%q ' "${arr[@]}"
     joined=${joined% }
   fi
-  echo "[diag] python_cmd=${joined}"
+  echo "[diag] ${target}=${joined}"
 }
 
+repair_micromamba_env() {
+  if [[ ! -x "${APP_DIR}/scripts/ci/prepare_env.sh" ]]; then
+    echo "[tox21] warn: scripts/ci/prepare_env.sh missing; cannot repair micromamba env" >&2
+    return 1
+  fi
+  if APP_DIR="$APP_DIR" MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-$HOME/micromamba}" \
+    bash "${APP_DIR}/scripts/ci/prepare_env.sh"; then
+    return 0
+  fi
+  local status=$?
+  echo "[tox21] warn: prepare_env.sh failed to repair micromamba env (status ${status})" >&2
+  return "$status"
+}
+
+python_interp_cmd=()
 python_cmd=()
-if ensure_micromamba >/dev/null 2>&1; then
-  python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
-  if (( ${#python_cmd[@]} )); then
-    print_python_cmd
-    if ! "${python_cmd[@]}" - <<'PY' 2>/dev/null
+
+python_mamba_ready=0
+if ensure_micromamba; then
+  python_interp_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
+  python_mamba_ready=1
+  print_python_cmd python_interp_cmd
+  if ! "${python_interp_cmd[@]}" - <<'PY'
 import sys
 sys.exit(0)
 PY
-    then
-      echo "[tox21] warn: micromamba python unavailable; falling back to host interpreter" >&2
+  then
+    echo "[tox21] warn: micromamba env 'mjepa' missing python; attempting repair" >&2
+    if repair_micromamba_env; then
+      python_interp_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
+      print_python_cmd python_interp_cmd
+      if "${python_interp_cmd[@]}" - <<'PY'
+import sys
+sys.exit(0)
+PY
+      then
+        python_mamba_ready=1
+      else
+        python_mamba_ready=0
+        echo "[tox21] warn: micromamba python still unavailable after repair" >&2
+        python_interp_cmd=()
+      fi
+    else
+      python_mamba_ready=0
+      python_interp_cmd=()
+    fi
+  else
+    python_mamba_ready=1
+  fi
+else
+  echo "[tox21] warn: micromamba bootstrap unavailable; falling back to system python" >&2
+fi
+
+if (( python_mamba_ready )) && [[ -z "${MJEPACI_STAGE_SHIM:-}" ]]; then
+  if ! "${python_interp_cmd[@]}" - <<'PY'
+try:
+    import yaml  # noqa: F401
+except Exception:
+    raise SystemExit(1)
+PY
+  then
+    echo "[tox21] warn: micromamba env missing PyYAML; attempting repair" >&2
+    if repair_micromamba_env; then
+      python_interp_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
+      print_python_cmd python_interp_cmd
+      if "${python_interp_cmd[@]}" - <<'PY'
+try:
+    import yaml  # noqa: F401
+except Exception:
+    raise SystemExit(1)
+PY
+      then
+        :
+      else
+        echo "[tox21] warn: micromamba python still missing PyYAML after repair" >&2
+        python_interp_cmd=()
+      fi
+    else
+      python_interp_cmd=()
+    fi
+  fi
+fi
+
+if (( ${#python_interp_cmd[@]} == 0 )); then
+  if py=$(python_bin 2>/dev/null); then
+    python_interp_cmd=(env PYTHONUNBUFFERED=1 "$py" -u)
+    echo "[tox21] warn: using system python interpreter ($(command -v "$py"))" >&2
+  elif [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+    resolve_ci_python python_cmd
+    if (( ${#python_cmd[@]} )); then
+      python_interp_cmd=("${python_cmd[@]}")
       python_cmd=()
     fi
   fi
 fi
 
-if (( ${#python_cmd[@]} == 0 )); then
-  if py=$(python_bin 2>/dev/null); then
-    python_cmd=(env PYTHONUNBUFFERED=1 "$py" -u)
-  elif [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
-    resolve_ci_python python_cmd
-  else
-    ensure_micromamba
-    python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
-  fi
-fi
-
-if (( ${#python_cmd[@]} == 0 )); then
-  echo "[diag] about to exit: python interpreter unavailable (python_cmd=<empty>)" >&2
+if (( ${#python_interp_cmd[@]} == 0 )); then
+  echo "[diag] about to exit: python interpreter unavailable (python_interp_cmd=<empty>)" >&2
   echo "[tox21] error: unable to resolve a python interpreter" >&2
   exit 1
 fi
@@ -147,8 +227,8 @@ extract_finetune_export() {
   local result
   local status=0
   set +e
-  print_python_cmd
-  result=$("${python_cmd[@]}" - "$json_path" 2>/dev/null <<'PY'
+  print_python_cmd python_interp_cmd
+  result=$("${python_interp_cmd[@]}" - "$json_path" <<'PY'
 import json
 import os
 import sys
@@ -226,8 +306,8 @@ ensure_dir() {
 if [[ "$SOURCE" == "pretrain_frozen" ]]; then
   ensure_dir "$MANIFEST_PATH"
   manifest_encoder=""
-  print_python_cmd
-  manifest_encoder=$("${python_cmd[@]}" - "$MANIFEST_PATH" <<'PY'
+  print_python_cmd python_interp_cmd
+  manifest_encoder=$("${python_interp_cmd[@]}" - "$MANIFEST_PATH" <<'PY'
 import json, os, sys
 manifest = json.load(open(sys.argv[1]))
 paths = manifest.get("paths") if isinstance(manifest, dict) else {}
@@ -378,6 +458,35 @@ ensure_dir "$TOX21_ENCODER_CHECKPOINT"
 : "${CI_DIAG:=1}"
 export CI_DIAG
 
+tox21_stage_args=()
+if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+  echo "[tox21] warning: stage shim active; skipping tox21 argument construction" >&2
+  python_cmd=("${python_interp_cmd[@]}" -m scripts.commands.tox21 --stage-shim)
+else
+  if build_stage_args "tox21"; then
+    tox21_stage_args=("${STAGE_ARGS[@]}")
+    if (( ${#tox21_stage_args[@]} == 0 )); then
+      echo "[diag] about to exit: tox21 argument vector empty after build_stage_args" >&2
+      echo "[tox21] error: tox21 argument vector resolved to empty list" >&2
+      exit 1
+    fi
+    python_cmd=("${python_interp_cmd[@]}" -m scripts.commands.tox21 "${tox21_stage_args[@]}")
+  else
+    build_status=$?
+    echo "[diag] about to exit: build_stage_args failed for tox21 (status=${build_status})" >&2
+    echo "[tox21] error: unable to construct tox21 argument vector" >&2
+    exit "$build_status"
+  fi
+fi
+
+if (( ${#python_cmd[@]} == 0 )); then
+  echo "[diag] about to exit: python_cmd missing after tox21 arg resolution" >&2
+  echo "[tox21] error: tox21 python command unavailable" >&2
+  exit 1
+fi
+
+print_python_cmd python_cmd
+
 env_file="$MET_ENV_FILE"
 echo "[tox21] writing summary env to ${env_file}" >&2
 
@@ -391,8 +500,8 @@ SECONDS=0
 elapsed="${SECONDS}" 
 
 stage_file="${TOX21_DIR}/stage-outputs/tox21_${SOURCE}.json"
-print_python_cmd
-"${python_cmd[@]}" - <<'PY' "$stage_file" "$SOURCE" "$env_file" "$elapsed"
+print_python_cmd python_interp_cmd
+"${python_interp_cmd[@]}" - <<'PY' "$stage_file" "$SOURCE" "$env_file" "$elapsed"
 import json, os, sys
 
 stage_path, source, env_path, elapsed = sys.argv[1:5]
