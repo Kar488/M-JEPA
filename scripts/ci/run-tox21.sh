@@ -100,7 +100,7 @@ print_python_cmd() {
     printf -v joined '%q ' "${python_cmd[@]}"
     joined=${joined% }
   fi
-  echo "[diag] python_cmd=${joined}"
+  echo "[diag] python_cmd=${joined}" >&2
 }
 
 python_cmd=()
