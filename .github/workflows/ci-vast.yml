@@ -359,7 +359,7 @@ jobs:
           WANDB_COUNT: 2
           # recheck knobs (separate budget)
           TOPK_RECHECK: 5
-          EXTRA_SEEDS: 5
+          EXTRA_SEEDS: 3
           PHASE2_METRIC: val_rmse
           PHASE2_DIRECTION: min
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
