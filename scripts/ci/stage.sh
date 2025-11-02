@@ -1162,6 +1162,7 @@ build_stage_args() {
         printf '[stage:%s] failed to execute %s --help even via micromamba python (exit %d).\n' \
           "$s" "$subcmd" "$status" >&2
         printf '%s\n' "$help_output" >&2
+        echo "[diag] about to exit: stage help resolution failed (stage=${s} status=${status} subcmd=${subcmd})" >&2
         return "$status"
       fi
     fi
@@ -1556,6 +1557,12 @@ PY
       micromamba_cmd+=(python -u "${entrypoint[@]}")
     fi
 
+    local stage_python_cmd_str=""
+    if (( ${#micromamba_cmd[@]} )); then
+      printf -v stage_python_cmd_str '%q ' "${micromamba_cmd[@]}"
+      stage_python_cmd_str=${stage_python_cmd_str% }
+    fi
+    echo "[diag] stage python command (stage=${s}): ${stage_python_cmd_str}" >&2
     timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
       env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
       "${micromamba_cmd[@]}" \
@@ -1590,6 +1597,7 @@ PY
       return 0
     else
       echo "[ERROR][$s] train_jepa.py failed with exit code $rc" >&2
+      echo "[diag] about to exit: train_jepa execution failed (stage=${s} rc=${rc} command=${stage_python_cmd_str})" >&2
       exit $rc
     fi
   # --- WandB mode: run-grid passes a full cmd array --

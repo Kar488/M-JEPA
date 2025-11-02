@@ -89,14 +89,25 @@ echo "[tox21] state path=${PRETRAIN_STATE_FILE} (canonical=${PRETRAIN_STATE_FILE
 echo "[tox21] expected tox21 env seed=${PRETRAIN_TOX21_ENV}" >&2
 
 if [[ ! -f "$MANIFEST_PATH" ]]; then
+  echo "[diag] about to exit: missing manifest (MANIFEST_PATH=${MANIFEST_PATH})" >&2
   echo "[ci] error: expected ${MANIFEST_PATH} but it was not found. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain." >&2
   exit 1
 fi
+
+print_python_cmd() {
+  local joined=""
+  if (( ${#python_cmd[@]} )); then
+    printf -v joined '%q ' "${python_cmd[@]}"
+    joined=${joined% }
+  fi
+  echo "[diag] python_cmd=${joined}"
+}
 
 python_cmd=()
 if ensure_micromamba >/dev/null 2>&1; then
   python_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
   if (( ${#python_cmd[@]} )); then
+    print_python_cmd
     if ! "${python_cmd[@]}" - <<'PY' 2>/dev/null
 import sys
 sys.exit(0)
@@ -120,9 +131,12 @@ if (( ${#python_cmd[@]} == 0 )); then
 fi
 
 if (( ${#python_cmd[@]} == 0 )); then
+  echo "[diag] about to exit: python interpreter unavailable (python_cmd=<empty>)" >&2
   echo "[tox21] error: unable to resolve a python interpreter" >&2
   exit 1
 fi
+
+echo "[diag] PY=$(command -v python || true)"
 
 orig_encoder_override="${TOX21_ENCODER_CHECKPOINT:-}"
 encoder_decision_source="unknown"
@@ -133,6 +147,7 @@ extract_finetune_export() {
   local result
   local status=0
   set +e
+  print_python_cmd
   result=$("${python_cmd[@]}" - "$json_path" 2>/dev/null <<'PY'
 import json
 import os
@@ -202,6 +217,7 @@ fi
 ensure_dir() {
   local path="$1"
   if [[ ! -e "$path" ]]; then
+    echo "[diag] about to exit: required path missing (path=${path})" >&2
     echo "[ci] error: required file missing: $path" >&2
     exit 1
   fi
@@ -210,6 +226,7 @@ ensure_dir() {
 if [[ "$SOURCE" == "pretrain_frozen" ]]; then
   ensure_dir "$MANIFEST_PATH"
   manifest_encoder=""
+  print_python_cmd
   manifest_encoder=$("${python_cmd[@]}" - "$MANIFEST_PATH" <<'PY'
 import json, os, sys
 manifest = json.load(open(sys.argv[1]))
@@ -264,6 +281,7 @@ PY
   done
 
   if [[ -z "$TOX21_ENCODER_CHECKPOINT" || ! -e "$TOX21_ENCODER_CHECKPOINT" ]]; then
+    echo "[diag] about to exit: encoder checkpoint missing (SOURCE=${SOURCE} resolved=${TOX21_ENCODER_CHECKPOINT:-<unset>} candidates=${encoder_hint_parts[*]})" >&2
     echo "[tox21] error: encoder checkpoint not found. Checked candidates: ${encoder_hint_parts[*]}" >&2
     exit 1
   fi
@@ -348,6 +366,7 @@ if [[ -z "${encoder_decision_source:-}" ]]; then
 fi
 
 if [[ -z "${TOX21_ENCODER_CHECKPOINT:-}" ]]; then
+  echo "[diag] about to exit: encoder checkpoint empty (SOURCE=${SOURCE} encoder_decision_source=${encoder_decision_source:-<unset>})" >&2
   echo "[tox21] error: encoder checkpoint path resolved to empty string" >&2
   exit 1
 fi
@@ -372,6 +391,7 @@ SECONDS=0
 elapsed="${SECONDS}" 
 
 stage_file="${TOX21_DIR}/stage-outputs/tox21_${SOURCE}.json"
+print_python_cmd
 "${python_cmd[@]}" - <<'PY' "$stage_file" "$SOURCE" "$env_file" "$elapsed"
 import json, os, sys
 
