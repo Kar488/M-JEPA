@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -195,6 +196,180 @@ def test_tox21_uses_resolved_python():
     assert "python - \"$MANIFEST_PATH\"" not in script
     assert "python - <<'PY'" not in script
     assert '"${python_cmd[@]}" - "$MANIFEST_PATH"' in script
+
+
+def test_dedupe_stage_args_handles_joined_aliases():
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+    stage_sh = REPO_ROOT / "scripts" / "ci" / "stage.sh"
+    cmd = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(common_sh))}; "
+        f"source {shlex.quote(str(stage_sh))}; "
+        "arr=(--pin-memory 1 --pin_memory=0 --pin-memory 0 --pin-memory=1 "
+        "--num-workers 4 --num_workers=8 keep); "
+        "dedupe_stage_args arr; "
+        "printf '%s\\n' \"${arr[@]}\""
+    )
+    proc = subprocess.run(
+        ["bash", "-lc", cmd],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+    tokens = [line for line in proc.stdout.splitlines() if line]
+    assert tokens == ["--pin-memory=1", "--num_workers=8", "keep"]
+
+
+def test_tox21_cli_command_has_unique_flags(tmp_path):
+    experiments_root = tmp_path / "experiments"
+    exp_id = "314159"
+    pretrain_root = experiments_root / exp_id
+    pretrain_dir = pretrain_root / "pretrain"
+    pretrain_artifacts = pretrain_root / "artifacts"
+    tox21_dir = pretrain_root / "tox21"
+    grid_dir = pretrain_root / "grid"
+
+    for directory in (pretrain_dir, pretrain_artifacts, tox21_dir, grid_dir / "phase2_export"):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    encoder_path = pretrain_dir / "encoder.pt"
+    encoder_path.write_text("stub", encoding="utf-8")
+
+    manifest_path = pretrain_artifacts / "encoder_manifest.json"
+    manifest_payload = {"paths": {"encoder": str(encoder_path)}}
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+
+    state_path = pretrain_root / "pretrain_state.json"
+    state_payload = {"id": exp_id, "encoder_manifest": str(manifest_path)}
+    state_path.write_text(json.dumps(state_payload), encoding="utf-8")
+
+    best_cfg = {
+        "prefetch_factor": 2,
+        "persistent_workers": 0,
+        "pin_memory": 0,
+        "bf16": 0,
+        "devices": 3,
+        "num_workers": 6,
+        "pretrain_batch_size": 128,
+    }
+    best_paths = [grid_dir / "best_grid_config.json", grid_dir / "phase2_export" / "best_grid_config.json"]
+    for cfg_path in best_paths:
+        cfg_path.write_text(json.dumps(best_cfg), encoding="utf-8")
+
+    micromamba_stub = tmp_path / "micromamba"
+    micromamba_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -e\n"
+        "if [[ \"${1:-}\" == \"run\" ]]; then\n"
+        "  shift\n"
+        "  if [[ \"${1:-}\" == \"-n\" ]]; then\n"
+        "    shift 2\n"
+        "  fi\n"
+        "  exec \"$@\"\n"
+        "elif [[ \"${1:-}\" == \"shell\" && \"${2:-}\" == \"hook\" ]]; then\n"
+        "  exit 0\n"
+        "else\n"
+        "  echo \"micromamba stub unsupported: $*\" >&2\n"
+        "  exit 1\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    micromamba_stub.chmod(0o755)
+
+    stage_stub = tmp_path / "stage_stub.sh"
+    stage_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "mkdir -p \"${TOX21_DIR}/stage-outputs\"\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    stage_stub.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "APP_DIR": str(REPO_ROOT),
+            "EXPERIMENTS_ROOT": str(experiments_root),
+            "EXP_ID": exp_id,
+            "PRETRAIN_EXP_ID": exp_id,
+            "PRETRAIN_EXPERIMENT_ROOT": str(pretrain_root),
+            "PRETRAIN_DIR": str(pretrain_dir),
+            "PRETRAIN_ARTIFACTS_DIR": str(pretrain_artifacts),
+            "PRETRAIN_MANIFEST": str(manifest_path),
+            "PRETRAIN_STATE_FILE": str(state_path),
+            "PRETRAIN_STATE_FILE_CANONICAL": str(state_path),
+            "PRETRAIN_TOX21_ENV": str(pretrain_root / "tox21_gate.env"),
+            "TOX21_DIR": str(tox21_dir),
+            "GITHUB_ENV": str(pretrain_root / "tox21_gate.env"),
+            "WANDB_API_KEY": "",
+            "STAGE_BIN": str(stage_stub),
+            "MMBIN": str(micromamba_stub),
+            "MAMBA_ROOT_PREFIX": str(tmp_path / "micromamba_root"),
+            "GRID_DIR": str(grid_dir),
+            "GRID_SOURCE_DIR": str(grid_dir),
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", "scripts/ci/run-tox21.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+
+    command_line = None
+    for line in proc.stderr.splitlines():
+        if "[diag] python_cmd=" in line and "scripts.commands.tox21" in line:
+            command_line = line.split("python_cmd=", 1)[1]
+    assert command_line, proc.stderr
+
+    tokens = shlex.split(command_line)
+    assert "-m" in tokens and "scripts.commands.tox21" in tokens
+    tox_index = tokens.index("scripts.commands.tox21")
+    tox_args = tokens[tox_index + 1 :]
+
+    flag_counts: dict[str, int] = {}
+    resolved_values: dict[str, str] = {}
+    i = 0
+    while i < len(tox_args):
+        token = tox_args[i]
+        if token.startswith("--"):
+            flag = token
+            value = None
+            consumed = 1
+            if "=" in flag:
+                flag, value = flag.split("=", 1)
+            elif i + 1 < len(tox_args) and not tox_args[i + 1].startswith("--"):
+                value = tox_args[i + 1]
+                consumed = 2
+            canonical = flag.replace("_", "-")
+            flag_counts[canonical] = flag_counts.get(canonical, 0) + 1
+            if value is not None:
+                resolved_values[canonical] = value
+            i += consumed
+            continue
+        i += 1
+
+    for canonical in ("--num-workers", "--prefetch-factor", "--persistent-workers", "--pin-memory", "--bf16", "--devices", "--batch-size"):
+        assert flag_counts.get(canonical) == 1, f"duplicate flag {canonical}: {flag_counts}"
+
+    forbidden = "--finetune-batch-size"
+    assert forbidden not in {flag.split("=", 1)[0] for flag in tox_args if flag.startswith("--")}
+
+    assert resolved_values.get("--num-workers") == "6"
+    assert resolved_values.get("--prefetch-factor") == "2"
+    assert resolved_values.get("--persistent-workers") == "0"
+    assert resolved_values.get("--pin-memory") == "0"
+    assert resolved_values.get("--bf16") == "0"
+    assert resolved_values.get("--devices") == "3"
+    assert resolved_values.get("--batch-size") == "128"
 
 
 def test_finetune_met_benchmark_flag_handles_missing_gate(tmp_path):

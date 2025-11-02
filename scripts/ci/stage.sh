@@ -1176,16 +1176,35 @@ build_stage_args() {
     if (( allowlist_skipped )); then
       OUT=("${COMBINED[@]}")
     else
+      local -A ALLOWED_NORMALIZED=()
+      local __allow_token
+      for __allow_token in "${ALLOWED[@]}"; do
+        [[ -z "${__allow_token}" ]] && continue
+        local __norm="${__allow_token//_/-}"
+        ALLOWED_NORMALIZED["${__norm}"]=1
+      done
+
       local i=0 j=0
       while (( i < ${#COMBINED[@]} )); do
         local f="${COMBINED[$i]}"
-        if [[ "$f" == --* ]] && printf '%s\n' "${ALLOWED[@]}" | grep -qx -- "$f"; then
-          OUT+=("$f")
-          j=$((i+1))
-          while (( j < ${#COMBINED[@]} )) && [[ "${COMBINED[$j]}" != --* ]]; do
-            OUT+=("${COMBINED[$j]}"); ((j++))
-          done
-          i=$j; continue
+        if [[ "$f" == --* ]]; then
+          local check_flag="$f"
+          local has_inline_value=0
+          if [[ "$check_flag" == *=* ]]; then
+            check_flag="${check_flag%%=*}"
+            has_inline_value=1
+          fi
+          local canonical_flag="${check_flag//_/-}"
+          if [[ -n "${ALLOWED_NORMALIZED[${canonical_flag}]:-}" ]]; then
+            OUT+=("$f")
+            j=$((i+1))
+            if (( ! has_inline_value )); then
+              while (( j < ${#COMBINED[@]} )) && [[ "${COMBINED[$j]}" != --* ]]; do
+                OUT+=("${COMBINED[$j]}"); ((j++))
+              done
+            fi
+            i=$j; continue
+          fi
         fi
         ((i++))
       done
@@ -1194,55 +1213,7 @@ build_stage_args() {
 
   prune_empty_args OUT
 
-  # Deduplicate repeated flags while preserving the last occurrence (typically
-  # the best-config override).  Treat each flag and its value payload as a
-  # single block so we never leave orphaned positional tokens behind.
-  if (( ${#OUT[@]} )); then
-    local -a __dedup_entries=()
-    declare -A __dedup_index=()
-    local __sep=$'\037'
-    local __idx=0
-    while (( __idx < ${#OUT[@]} )); do
-      local __token="${OUT[__idx]}"
-      if [[ "${__token}" == --* ]]; then
-        local __next=$((__idx + 1))
-        local -a __block=("${__token}")
-        while (( __next < ${#OUT[@]} )) && [[ "${OUT[__next]}" != --* ]]; do
-          __block+=("${OUT[__next]}")
-          ((__next++))
-        done
-        if [[ -v __dedup_index["${__token}"] ]]; then
-          __dedup_entries[${__dedup_index["${__token}"]}]=""
-        fi
-        local __serial="__FLAG__${__block[0]}"
-        local __part
-        for __part in "${__block[@]:1}"; do
-          __serial+="${__sep}${__part}"
-        done
-        __dedup_index["${__block[0]}"]=${#__dedup_entries[@]}
-        __dedup_entries+=("${__serial}")
-        __idx=${__next}
-        continue
-      fi
-      __dedup_entries+=("__POS__${__token}")
-      ((__idx++))
-    done
-
-    local -a __flattened=()
-    local __entry
-    for __entry in "${__dedup_entries[@]}"; do
-      [[ -z "${__entry}" ]] && continue
-      if [[ "${__entry}" == __FLAG__* ]]; then
-        local __payload="${__entry#__FLAG__}"
-        IFS="${__sep}" read -r -a __parts <<<"${__payload}"
-        __flattened+=("${__parts[@]}")
-      elif [[ "${__entry}" == __POS__* ]]; then
-        __flattened+=("${__entry#__POS__}")
-      fi
-    done
-
-    OUT=("${__flattened[@]}")
-  fi
+  dedupe_stage_args OUT
 
   if [ "$s" = "tox21" ]; then
     local enforce_flag="${TOX21_FULL_FINETUNE:-}"
@@ -1291,6 +1262,98 @@ build_stage_args() {
   fi
 
   STAGE_ARGS=("${OUT[@]}")
+}
+
+dedupe_stage_args() {
+  local arr_name="${1:?array name required}"
+  local -n __arr="$arr_name"
+
+  if (( ${#__arr[@]} == 0 )); then
+    return 0
+  fi
+
+  local -a __dedup_entries=()
+  declare -A __dedup_index=()
+  local __sep=$'\037'
+  local __idx=0
+
+  while (( __idx < ${#__arr[@]} )); do
+    local __token="${__arr[__idx]}"
+    if [[ "${__token}" == --* ]]; then
+      local __style="split"
+      local __original_flag="${__token}"
+      local __normalized_flag="${__original_flag//_/-}"
+      local -a __values=()
+      local __next=$((__idx + 1))
+
+      if [[ "${__token}" == *=* ]]; then
+        __style="joined"
+        __original_flag="${__token%%=*}"
+        __normalized_flag="${__original_flag//_/-}"
+        local __joined_value="${__token#*=}"
+        if [[ -n "${__joined_value}" ]]; then
+          __values+=("${__joined_value}")
+        fi
+      else
+        while (( __next < ${#__arr[@]} )) && [[ "${__arr[__next]}" != --* ]]; do
+          __values+=("${__arr[__next]}")
+          ((__next++))
+        done
+      fi
+
+      if [[ -v __dedup_index["${__normalized_flag}"] ]]; then
+        __dedup_entries[${__dedup_index["${__normalized_flag}"]}]=""
+      fi
+
+      local __serial="__FLAG__${__style}${__sep}${__original_flag}"
+      local __part
+      for __part in "${__values[@]}"; do
+        __serial+="${__sep}${__part}"
+      done
+
+      __dedup_index["${__normalized_flag}"]=${#__dedup_entries[@]}
+      __dedup_entries+=("${__serial}")
+
+      if [[ "${__style}" == "split" ]]; then
+        __idx=${__next}
+      else
+        ((__idx++))
+      fi
+      continue
+    fi
+
+    __dedup_entries+=("__POS__${__token}")
+    ((__idx++))
+  done
+
+  local -a __flattened=()
+  local __entry
+  for __entry in "${__dedup_entries[@]}"; do
+    [[ -z "${__entry}" ]] && continue
+    if [[ "${__entry}" == __FLAG__* ]]; then
+      local __payload="${__entry#__FLAG__}"
+      IFS="${__sep}" read -r -a __parts <<<"${__payload}"
+      local __style="${__parts[0]}"
+      local __flag="${__parts[1]}"
+      local -a __vals=("${__parts[@]:2}")
+      if [[ "${__style}" == "joined" && ${#__vals[@]} -eq 1 ]]; then
+        if [[ -n "${__vals[0]}" ]]; then
+          __flattened+=("${__flag}=${__vals[0]}")
+        else
+          __flattened+=("${__flag}")
+        fi
+      else
+        __flattened+=("${__flag}")
+        if (( ${#__vals[@]} )); then
+          __flattened+=("${__vals[@]}")
+        fi
+      fi
+    elif [[ "${__entry}" == __POS__* ]]; then
+      __flattened+=("${__entry#__POS__}")
+    fi
+  done
+
+  __arr=("${__flattened[@]}")
 }
 
 # ---------- dataset preflight (harmless if flags absent) ----------
