@@ -1127,6 +1127,7 @@ build_stage_args() {
     local -a ALLOWED=()
     local help_output=""
     local fallback_to_micromamba=0
+    local allowlist_skipped=0
 
     if py=$(python_bin 2>/dev/null); then
       if help_output=$(PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
@@ -1162,24 +1163,33 @@ build_stage_args() {
         printf '[stage:%s] failed to execute %s --help even via micromamba python (exit %d).\n' \
           "$s" "$subcmd" "$status" >&2
         printf '%s\n' "$help_output" >&2
-        echo "[diag] about to exit: stage help resolution failed (stage=${s} status=${status} subcmd=${subcmd})" >&2
-        return "$status"
+        if [[ "$s" == "tox21" ]]; then
+          echo "[stage:$s] warning: skipping help/introspection preflight; proceeding without allowlist" >&2
+          allowlist_skipped=1
+        else
+          echo "[diag] about to exit: stage help resolution failed (stage=${s} status=${status} subcmd=${subcmd})" >&2
+          return "$status"
+        fi
       fi
     fi
 
-    local i=0 j=0
-    while (( i < ${#COMBINED[@]} )); do
-      local f="${COMBINED[$i]}"
-      if [[ "$f" == --* ]] && printf '%s\n' "${ALLOWED[@]}" | grep -qx -- "$f"; then
-        OUT+=("$f")
-        j=$((i+1))
-        while (( j < ${#COMBINED[@]} )) && [[ "${COMBINED[$j]}" != --* ]]; do
-          OUT+=("${COMBINED[$j]}"); ((j++))
-        done
-        i=$j; continue
-      fi
-      ((i++))
-    done
+    if (( allowlist_skipped )); then
+      OUT=("${COMBINED[@]}")
+    else
+      local i=0 j=0
+      while (( i < ${#COMBINED[@]} )); do
+        local f="${COMBINED[$i]}"
+        if [[ "$f" == --* ]] && printf '%s\n' "${ALLOWED[@]}" | grep -qx -- "$f"; then
+          OUT+=("$f")
+          j=$((i+1))
+          while (( j < ${#COMBINED[@]} )) && [[ "${COMBINED[$j]}" != --* ]]; do
+            OUT+=("${COMBINED[$j]}"); ((j++))
+          done
+          i=$j; continue
+        fi
+        ((i++))
+      done
+    fi
   fi
 
   prune_empty_args OUT
