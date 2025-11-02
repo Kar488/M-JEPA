@@ -111,7 +111,7 @@ print_python_cmd() {
     printf -v joined '%q ' "${arr[@]}"
     joined=${joined% }
   fi
-  echo "[diag] ${target}=${joined}"
+  echo "[diag] python_cmd=${joined}" >&2 
 }
 
 repair_micromamba_env() {
