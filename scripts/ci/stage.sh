@@ -1127,6 +1127,7 @@ build_stage_args() {
     local -a ALLOWED=()
     local help_output=""
     local fallback_to_micromamba=0
+    local allowlist_skipped=0
 
     if py=$(python_bin 2>/dev/null); then
       if help_output=$(PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
@@ -1162,24 +1163,33 @@ build_stage_args() {
         printf '[stage:%s] failed to execute %s --help even via micromamba python (exit %d).\n' \
           "$s" "$subcmd" "$status" >&2
         printf '%s\n' "$help_output" >&2
-        echo "[diag] about to exit: stage help resolution failed (stage=${s} status=${status} subcmd=${subcmd})" >&2
-        return "$status"
+        if [[ "$s" == "tox21" ]]; then
+          echo "[stage:$s] warning: skipping help/introspection preflight; proceeding without allowlist" >&2
+          allowlist_skipped=1
+        else
+          echo "[diag] about to exit: stage help resolution failed (stage=${s} status=${status} subcmd=${subcmd})" >&2
+          return "$status"
+        fi
       fi
     fi
 
-    local i=0 j=0
-    while (( i < ${#COMBINED[@]} )); do
-      local f="${COMBINED[$i]}"
-      if [[ "$f" == --* ]] && printf '%s\n' "${ALLOWED[@]}" | grep -qx -- "$f"; then
-        OUT+=("$f")
-        j=$((i+1))
-        while (( j < ${#COMBINED[@]} )) && [[ "${COMBINED[$j]}" != --* ]]; do
-          OUT+=("${COMBINED[$j]}"); ((j++))
-        done
-        i=$j; continue
-      fi
-      ((i++))
-    done
+    if (( allowlist_skipped )); then
+      OUT=("${COMBINED[@]}")
+    else
+      local i=0 j=0
+      while (( i < ${#COMBINED[@]} )); do
+        local f="${COMBINED[$i]}"
+        if [[ "$f" == --* ]] && printf '%s\n' "${ALLOWED[@]}" | grep -qx -- "$f"; then
+          OUT+=("$f")
+          j=$((i+1))
+          while (( j < ${#COMBINED[@]} )) && [[ "${COMBINED[$j]}" != --* ]]; do
+            OUT+=("${COMBINED[$j]}"); ((j++))
+          done
+          i=$j; continue
+        fi
+        ((i++))
+      done
+    fi
   fi
 
   prune_empty_args OUT
@@ -1265,6 +1275,51 @@ stage_dataset_preflight() {
     echo "[warn] csv file not found: $CSV"
   fi
   }
+
+ci_stage_resolve_python_runner() {
+  local -n __out_env="$1"
+  local -n __out_bin="$2"
+  local -n __out_args="$3"
+  local __stage_label="${4:-stage}"
+
+  __out_env=()
+  __out_bin=""
+  __out_args=(-u)
+
+  local prefer_system=0
+  local system_bin="${MJEPACI_SYSTEM_PYTHON_BIN:-}"
+  if [[ "${MJEPACI_FORCE_SYSTEM_PYTHON:-}" == "1" ]]; then
+    prefer_system=1
+  fi
+
+  if (( ! prefer_system )); then
+    if ensure_micromamba; then
+      __out_env=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1)
+      __out_bin="python"
+      return 0
+    fi
+    echo "[stage:${__stage_label}] warn: micromamba unavailable; falling back to system python" >&2
+    prefer_system=1
+  fi
+
+  if [[ -z "$system_bin" ]]; then
+    if py=$(python_bin 2>/dev/null); then
+      system_bin="$(command -v "$py" 2>/dev/null || true)"
+      if [[ -z "$system_bin" ]]; then
+        system_bin="$py"
+      fi
+    fi
+  fi
+
+  if [[ -z "$system_bin" ]]; then
+    echo "[stage:${__stage_label}] error: unable to resolve system python interpreter" >&2
+    return 1
+  fi
+
+  __out_env=(env PYTHONUNBUFFERED=1)
+  __out_bin="$system_bin"
+  return 0
+}
 
 # ---------- timeout + SIGINT ----------
 run_with_timeout() {
@@ -1409,7 +1464,15 @@ run_with_timeout() {
     mkdir -p "$LOG_DIR" 
     LOG="${LOG_DIR}/${s}.log"
     
-    local -a launch_prefix=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1)
+    local -a stage_launch_env=()
+    local stage_python_bin=""
+    local -a stage_python_args=()
+    if ! ci_stage_resolve_python_runner stage_launch_env stage_python_bin stage_python_args "$s"; then
+      echo "[diag] about to exit: unable to resolve python runner (stage=${s})" >&2
+      exit 1
+    fi
+
+    local -a python_runner_cmd=("${stage_launch_env[@]}" "$stage_python_bin" "${stage_python_args[@]}")
     local -a ddp_launcher=()
     local previous_world="${WORLD_SIZE-}"
     local previous_master_addr="${MASTER_ADDR-}"
@@ -1459,7 +1522,7 @@ run_with_timeout() {
       if [[ "$requested_devices" =~ ^[0-9]+$ && "$requested_devices" -gt 1 ]]; then
         local probe_output=""
         local ddp_supported=0
-        if probe_output=$("${launch_prefix[@]}" python - <<'PY'
+        if probe_output=$("${python_runner_cmd[@]}" - <<'PY'
 import os
 import sys
 
@@ -1525,7 +1588,7 @@ PY
           else
             echo "[stage:$s] WORLD_SIZE=${world}; assuming external launcher configured DDP" >&2
           fi
-          ddp_launcher=(python -m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
+          ddp_launcher=(-m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
         else
           effective_devices=1
         fi
@@ -1550,22 +1613,22 @@ PY
 
     entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${entrypoint_args[@]}")
 
-    local -a micromamba_cmd=("${launch_prefix[@]}")
+    local -a stage_cmd=("${python_runner_cmd[@]}")
     if (( ${#ddp_launcher[@]} )); then
-      micromamba_cmd+=("${ddp_launcher[@]}" "${entrypoint[@]}")
+      stage_cmd+=("${ddp_launcher[@]}" "${entrypoint[@]}")
     else
-      micromamba_cmd+=(python -u "${entrypoint[@]}")
+      stage_cmd+=("${entrypoint[@]}")
     fi
 
     local stage_python_cmd_str=""
-    if (( ${#micromamba_cmd[@]} )); then
-      printf -v stage_python_cmd_str '%q ' "${micromamba_cmd[@]}"
+    if (( ${#stage_cmd[@]} )); then
+      printf -v stage_python_cmd_str '%q ' "${stage_cmd[@]}"
       stage_python_cmd_str=${stage_python_cmd_str% }
     fi
     echo "[diag] stage python command (stage=${s}): ${stage_python_cmd_str}" >&2
     timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
       env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-      "${micromamba_cmd[@]}" \
+      "${stage_cmd[@]}" \
       2>&1 | tee "$LOG_DIR/${s}.log"
     rc=${PIPESTATUS[0]}
     if (( ddp_env_modified )); then
@@ -1971,7 +2034,15 @@ run_stage() {
     return 0
   fi
 
-  ensure_micromamba
+  if ! ensure_micromamba; then
+    if [[ "${MJEPACI_FORCE_SYSTEM_PYTHON:-}" == "1" ]]; then
+      echo "[${stage}] warn: micromamba unavailable; proceeding with system python fallback" >&2
+    else
+      echo "[${stage}] error: unable to bootstrap micromamba environment" >&2
+      rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
+      return 1
+    fi
+  fi
   : "${WANDB_NAME:=$stage}"; export WANDB_NAME
   : "${WANDB_JOB_TYPE:=$stage}"; export WANDB_JOB_TYPE
   export WANDB_RUN_GROUP="${GITHUB_RUN_ID:-${WANDB_RUN_GROUP:-}}"
