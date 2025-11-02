@@ -391,3 +391,87 @@ printf '%s\\n' \"${{STAGE_ARGS[@]}}\" > \"$ARGS_CAPTURE\"
     args_unset = _invoke(None, "args_unset.txt")
     assert "--full-finetune" not in args_unset
     assert "--no-full-finetune" not in args_unset
+
+
+def test_build_stage_args_deduplicates_bestcfg_overrides(tmp_path):
+    best_cfg = {
+        "config": {
+            "batch_size": {"value": 128},
+            "prefetch_factor": {"value": 2},
+            "num_workers": {"value": 6},
+            "persistent_workers": {"value": 1},
+            "pin_memory": {"value": 1},
+            "bf16": {"value": 1},
+        }
+    }
+    best_path = tmp_path / "best_grid_config.json"
+    best_path.write_text(json.dumps(best_cfg), encoding="utf-8")
+
+    encoder_path = tmp_path / "encoder.pt"
+    encoder_path.write_text("stub", encoding="utf-8")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps({"paths": {"encoder": str(encoder_path)}}), encoding="utf-8"
+    )
+    tox21_dir = tmp_path / "tox21"
+    tox21_dir.mkdir()
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "APP_DIR": str(REPO_ROOT),
+            "GRID_SOURCE_DIR": str(tmp_path),
+            "GRID_DIR": str(tmp_path),
+            "TOX21_DIR": str(tox21_dir),
+            "TOX21_ENCODER_CHECKPOINT": str(encoder_path),
+            "TOX21_ENCODER_MANIFEST": str(manifest_path),
+            "PRETRAIN_MANIFEST": str(manifest_path),
+            "PRETRAIN_DIR": str(tmp_path / "pretrain"),
+            "PRETRAIN_ARTIFACTS_DIR": str(tmp_path / "artifacts"),
+            "FINETUNE_DIR": str(tmp_path / "finetune"),
+            "PRETRAIN_EPOCHS": "5",
+            "FINETUNE_EPOCHS": "5",
+            "WANDB_API_KEY": "",
+        }
+    )
+
+    capture_path = tmp_path / "dedup_args.txt"
+    env["ARGS_CAPTURE"] = str(capture_path)
+
+    script = f"""
+set -euo pipefail
+source \"{REPO_ROOT}/scripts/ci/common.sh\"
+source \"{REPO_ROOT}/scripts/ci/stage.sh\"
+build_stage_args tox21
+printf '%s\\n' \"${{STAGE_ARGS[@]}}\" > \"$ARGS_CAPTURE\"
+"""
+    subprocess.run(["bash", "-lc", script], check=True, cwd=REPO_ROOT, env=env)
+
+    tokens = capture_path.read_text(encoding="utf-8").splitlines()
+
+    def _value(flag: str) -> str | None:
+        assert flag in tokens, flag
+        idx = tokens.index(flag)
+        if idx + 1 < len(tokens) and not tokens[idx + 1].startswith("--"):
+            return tokens[idx + 1]
+        return None
+
+    for flag in (
+        "--batch-size",
+        "--prefetch-factor",
+        "--num-workers",
+        "--persistent-workers",
+        "--pin-memory",
+        "--bf16",
+    ):
+        assert tokens.count(flag) <= 1
+
+    assert _value("--batch-size") == "128"
+    assert _value("--prefetch-factor") == "2"
+    assert _value("--num-workers") == "6"
+    if "--persistent-workers" in tokens:
+        assert _value("--persistent-workers") in {"1", None}
+    if "--pin-memory" in tokens:
+        assert _value("--pin-memory") in {"1", None}
+    if "--bf16" in tokens:
+        assert _value("--bf16") in {"1", None}

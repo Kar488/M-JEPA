@@ -1480,3 +1480,35 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         except Exception:
             pass
 
+
+def main(argv: Optional[List[str]] | None = None) -> int:
+    """Execute the Tox21 command directly when run as a module."""
+
+    args = list(argv if argv is not None else sys.argv[1:])
+
+    if "--stage-shim" in args:
+        logger.debug("stage shim requested; exiting early")
+        return 0
+
+    try:
+        from scripts import train_jepa as _train_jepa
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.error("Unable to import train_jepa parser: %s", exc)
+        return 2
+
+    parser = _train_jepa.build_parser()
+    try:
+        parsed = parser.parse_args(["tox21", *args])
+    except SystemExit as exc:  # pragma: no cover - argparse handles help/errors
+        return int(exc.code or 0)
+
+    if not hasattr(parsed, "func"):
+        parser.error("tox21 command missing handler")
+
+    parsed.func(parsed)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
