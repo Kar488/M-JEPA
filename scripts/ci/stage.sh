@@ -1816,6 +1816,7 @@ PY
           else
             echo "[stage:$s] WORLD_SIZE=${world}; assuming external launcher configured DDP" >&2
           fi
+          echo "43"
           ddp_launcher=(-m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
           ddp_enabled=1
         else
@@ -1840,6 +1841,7 @@ PY
     fi
 
     if [[ -n "$ddp_stage" ]]; then
+      echo "47"
       local requested_device=""
       local device_token=""
       local idx=0
@@ -1854,11 +1856,13 @@ PY
           requested_device="${device_token#--device=}"
           break
         fi
+        echo "48"
         ((idx++))
       done
-
+      echo "49"
       local normalized_device="${requested_device,,}"
       if [[ -z "$normalized_device" ]]; then
+        echo "50"
         normalized_device="cuda"
       fi
 
@@ -1870,6 +1874,7 @@ import sys
 try:
     import torch
 except Exception:
+    print("bummed on torch import")
     torch = None
 
 count = 0
@@ -1889,27 +1894,33 @@ if torch is not None:
 print(max(count, 0))
 PY
       ); then
+        echo "51"
         cuda_count="${cuda_probe_output:-0}"
         cuda_count="${cuda_count//$'\r'/}"
         cuda_count="${cuda_count//$'\n'/}"
         cuda_count="${cuda_count//[[:space:]]/}"
       else
+        echo "52"
         cuda_count="0"
       fi
 
       if [[ -z "$cuda_count" ]]; then
+        echo "53"
         cuda_count="0"
       fi
 
       if [[ -n "$detected_cuda_devices" ]]; then
+        echo "54"
         cuda_count="$detected_cuda_devices"
       fi
 
       if [[ "$normalized_device" == cuda* && "$cuda_count" =~ ^[0-9]+$ && "$cuda_count" -eq 0 ]]; then
+        echo "55"
         force_cpu_execution=1
       fi
 
       if (( force_cpu_execution )); then
+        echo "56"
         ddp_launcher=()
         ddp_enabled=0
         set_devices_arg 1
@@ -1923,25 +1934,29 @@ PY
 
     local build_entrypoint
     build_entrypoint() {
+      echo "57"
       entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${entrypoint_args[@]}")
     }
 
     local fallback_attempted=0
-
+    echo "58"
     while true; do
       build_entrypoint
 
       local -a stage_cmd=("${python_runner_cmd[@]}")
       local using_ddp=0
       if (( ${#ddp_launcher[@]} )); then
+        echo "59"
         stage_cmd+=("${ddp_launcher[@]}" "${entrypoint[@]}")
         using_ddp=1
       else
+        echo "60"
         stage_cmd+=("${entrypoint[@]}")
       fi
 
       local stage_python_cmd_str=""
       if (( ${#stage_cmd[@]} )); then
+        echo "61"
         printf -v stage_python_cmd_str '%q ' "${stage_cmd[@]}"
         stage_python_cmd_str=${stage_python_cmd_str% }
       fi
@@ -1983,6 +1998,7 @@ PY
         mark_graceful_stop "$s"
         return 0
       elif (( using_ddp )) && (( ddp_enabled )) && (( ! fallback_attempted )); then
+        echo "62"
         fallback_attempted=1
         ddp_launcher=()
         set_devices_arg 1
