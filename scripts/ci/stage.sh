@@ -871,15 +871,49 @@ run_phase2_recheck_stage() {
 
   mapfile -t __RECHECK_VISIBLE_GPUS < <(visible_gpu_ids)
   local recheck_gpu_count="${#__RECHECK_VISIBLE_GPUS[@]}"
+
+  local recheck_devices_raw="${PHASE2_RECHECK_FORCE_DEVICES:-${PHASE2_FORCE_DEVICES:-}}"
+  local recheck_devices_per_run=0
+  if [[ -n "$recheck_devices_raw" && "$recheck_devices_raw" =~ ^[0-9]+$ ]] && (( recheck_devices_raw > 0 )); then
+    recheck_devices_per_run=$recheck_devices_raw
+  fi
+
+  local recheck_max_parallel="$recheck_gpu_count"
+  if (( recheck_devices_per_run > 1 )); then
+    if (( recheck_gpu_count > 0 )); then
+      recheck_max_parallel=$(( recheck_gpu_count / recheck_devices_per_run ))
+      if (( recheck_max_parallel < 1 )); then
+        recheck_max_parallel=1
+      fi
+    else
+      recheck_max_parallel=1
+    fi
+  fi
+
   if [[ -z "${PHASE2_RECHECK_AGENT_COUNT:-}" ]]; then
+    local auto_recheck_agents=""
     if [[ -n "${PHASE2_AGENT_COUNT:-}" ]]; then
       if [[ "$PHASE2_AGENT_COUNT" =~ ^[0-9]+$ ]] && (( PHASE2_AGENT_COUNT > 0 )); then
-        export PHASE2_RECHECK_AGENT_COUNT="$PHASE2_AGENT_COUNT"
+        auto_recheck_agents="$PHASE2_AGENT_COUNT"
       else
         echo "[$step][warn] ignoring non-numeric PHASE2_AGENT_COUNT='${PHASE2_AGENT_COUNT}' for recheck" >&2
       fi
     elif (( recheck_gpu_count > 1 )); then
-      export PHASE2_RECHECK_AGENT_COUNT="$recheck_gpu_count"
+      auto_recheck_agents="$recheck_gpu_count"
+    fi
+
+    if [[ -n "$auto_recheck_agents" ]]; then
+      if [[ "$auto_recheck_agents" =~ ^[0-9]+$ ]] && (( recheck_max_parallel > 0 )); then
+        local desired_agents="$auto_recheck_agents"
+        local clamped_agents="$desired_agents"
+        if (( recheck_devices_per_run > 1 )) && (( desired_agents > recheck_max_parallel )); then
+          clamped_agents="$recheck_max_parallel"
+          echo "[$step][warn] reducing recheck workers from ${desired_agents} to ${clamped_agents} to honour ${recheck_devices_per_run} GPU(s) per run" >&2
+        fi
+        export PHASE2_RECHECK_AGENT_COUNT="$clamped_agents"
+      else
+        export PHASE2_RECHECK_AGENT_COUNT="$auto_recheck_agents"
+      fi
     fi
   fi
   unset __RECHECK_VISIBLE_GPUS || true
@@ -888,6 +922,9 @@ run_phase2_recheck_stage() {
   export PHASE2_RECHECK_SENTINEL="$sentinel"
   export PHASE2_RECHECK_RESUME=1
   export PHASE2_RECHECK_INCOMPLETE="$incomplete"
+  if [[ -z "${PHASE2_RECHECK_FORCE_DEVICES:-}" && -n "${PHASE2_FORCE_DEVICES:-}" ]]; then
+    export PHASE2_RECHECK_FORCE_DEVICES="$PHASE2_FORCE_DEVICES"
+  fi
 
   local log_path="${step_log_dir}/recheck_topk.log"
 
@@ -1897,6 +1934,7 @@ run_stage() {
           "direction=${PHASE2_DIRECTION:-min}" \
           "topk=${TOPK_RECHECK:-5}" \
           "extra=${EXTRA_SEEDS:-3}" \
+          "devices=${PHASE2_RECHECK_FORCE_DEVICES:-${PHASE2_FORCE_DEVICES:-}}" \
           "labeled=${PHASE2_LABELED_DIR:-}" \
           "unlabeled=${PHASE2_UNLABELED_DIR:-}" \
         )"

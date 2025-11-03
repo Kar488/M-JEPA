@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import numbers
 import os
 import pathlib
 import queue
@@ -52,6 +53,23 @@ def _env_positive_int(name: str) -> Optional[int]:
         return None
     if value <= 0:
         print(f"[recheck][warn] non-positive {name}={raw!r}; ignoring", flush=True)
+        return None
+    return value
+
+
+def _coerce_positive_int(raw: Optional[str], label: str) -> Optional[int]:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        print(f"[recheck][warn] ignoring non-integer {label}={raw!r}", flush=True)
+        return None
+    if value <= 0:
+        print(f"[recheck][warn] ignoring non-positive {label}={raw!r}", flush=True)
         return None
     return value
 
@@ -112,7 +130,40 @@ def _split_gpu_ids(ids: Sequence[str], agent_count: int) -> List[str]:
     return result
 
 
-def _resolve_agent_count(visible_gpu_ids: Sequence[str]) -> int:
+def _extract_positive_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        value = int(value)
+
+    if isinstance(value, numbers.Integral):
+        result = int(value)
+    elif isinstance(value, numbers.Real) and math.isfinite(float(value)):
+        result = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            result = int(text, 10)
+        except ValueError:
+            try:
+                parsed = float(text)
+            except ValueError:
+                return None
+            if not math.isfinite(parsed) or not parsed.is_integer():
+                return None
+            result = int(parsed)
+    else:
+        return None
+
+    if result <= 0:
+        return None
+    return result
+
+
+def _resolve_agent_count(visible_gpu_ids: Sequence[str], override_devices: Optional[int] = None) -> int:
     gpu_ids = list(visible_gpu_ids)
 
     explicit = _env_positive_int("PHASE2_RECHECK_AGENT_COUNT")
@@ -127,9 +178,68 @@ def _resolve_agent_count(visible_gpu_ids: Sequence[str]) -> int:
         count = 1
 
     if gpu_ids:
-        count = min(count, len(gpu_ids))
+        max_parallel = len(gpu_ids)
+        if override_devices and override_devices > 1:
+            max_parallel = len(gpu_ids) // override_devices
+            if max_parallel <= 0:
+                max_parallel = 1
+        count = min(count, max_parallel)
 
     return max(1, count)
+
+
+def _compute_worker_gpu_masks(
+    visible_gpu_ids: Sequence[str],
+    desired_workers: int,
+    devices_per_run: Optional[int],
+) -> Tuple[int, List[str]]:
+    gpu_ids = [gpu for gpu in visible_gpu_ids if str(gpu).strip()]
+    total = len(gpu_ids)
+    worker_count = max(1, desired_workers)
+
+    per_run = devices_per_run or 1
+    if per_run <= 0:
+        per_run = 1
+
+    if not gpu_ids:
+        return worker_count, []
+
+    if per_run > total:
+        return 1, [",".join(gpu_ids)] if gpu_ids else []
+
+    max_parallel = total // per_run if per_run > 0 else total
+    if max_parallel <= 0:
+        max_parallel = 1
+
+    if worker_count > max_parallel:
+        worker_count = max_parallel
+
+    if worker_count <= 1:
+        return 1, [",".join(gpu_ids)] if gpu_ids else []
+
+    if per_run <= 1:
+        masks = [mask for mask in _split_gpu_ids(gpu_ids, worker_count) if mask]
+        return worker_count, masks
+
+    masks: List[str] = []
+    index = 0
+    for _ in range(worker_count):
+        chunk = gpu_ids[index : index + per_run]
+        if len(chunk) < per_run:
+            break
+        masks.append(",".join(chunk))
+        index += per_run
+
+    if not masks:
+        return 1, [",".join(gpu_ids)] if gpu_ids else []
+
+    return worker_count, masks
+
+
+def _apply_config_overrides(cfg: Dict[str, Any], *, override_devices: Optional[int]) -> None:
+    if override_devices is not None:
+        cfg["devices"] = override_devices
+        cfg.pop("device", None)
 
 def _safe_getattr(obj: Any, name: str, default: Any = None) -> Any:
     """Like ``getattr`` but tolerates wrappers that raise ``KeyError``."""
@@ -779,16 +889,30 @@ def main() -> None:
                     help="Fail if fewer than topk runs expose the metric after retries")
     ap.add_argument("--resume", action="store_true",
                     help="Skip seeds with existing local results and resume pending ones")
+    default_override_devices = os.environ.get("PHASE2_RECHECK_FORCE_DEVICES")
+    if default_override_devices is None:
+        default_override_devices = os.environ.get("PHASE2_FORCE_DEVICES")
+    ap.add_argument(
+        "--override-devices",
+        dest="override_devices",
+        default=default_override_devices,
+        help="Force a specific --devices value for each recheck launch",
+    )
     args = ap.parse_args()
 
     resume_env = os.environ.get("PHASE2_RECHECK_RESUME")
     if resume_env is not None:
         args.resume = str(resume_env).strip().lower() in {"1", "true", "yes", "on"}
 
+    override_devices = _coerce_positive_int(args.override_devices, "override-devices")
+    args.override_devices = override_devices
+    if override_devices is not None:
+        print(f"[recheck] forcing devices={override_devices} for all seeds", flush=True)
+
     print("[recheck] args parsed:", flush=True)
     for field in (
         "sweep", "project", "group", "metric", "direction", "topk", "extra_seeds",
-        "program", "subcmd", "unlabeled_dir", "labeled_dir", "mm", "log_dir", "out", "strict", "resume",
+        "program", "subcmd", "unlabeled_dir", "labeled_dir", "mm", "log_dir", "out", "strict", "resume", "override_devices",
     ):
         print(f"  {field:<11}= {getattr(args, field)}", flush=True)
 
@@ -1159,6 +1283,7 @@ def main() -> None:
                     continue
                 cfg[key] = _unwrap_config_value(value)
             cfg.pop("seed", None)
+            _apply_config_overrides(cfg, override_devices=args.override_devices)
             top_configs.append(cfg)
 
         results.clear()
@@ -1189,31 +1314,15 @@ def main() -> None:
         )
 
         visible_gpu_ids = _discover_visible_gpu_ids()
-        agent_workers = _resolve_agent_count(visible_gpu_ids)
+        agent_workers = _resolve_agent_count(visible_gpu_ids, args.override_devices)
         default_gpu_mask = ",".join(visible_gpu_ids) if visible_gpu_ids else ""
-        gpu_masks = _split_gpu_ids(visible_gpu_ids, agent_workers) if visible_gpu_ids else []
-        if gpu_masks:
-            gpu_masks = [mask for mask in gpu_masks if mask.strip()]
         if not visible_gpu_ids and agent_workers > 1:
             print(
                 f"[recheck][warn] requested {agent_workers} workers but no GPUs detected; running sequentially",
                 flush=True,
             )
             agent_workers = 1
-            gpu_masks = []
-
-        if agent_workers > 1:
-            if gpu_masks:
-                print(
-                    f"[recheck] enabling parallel recheck across {agent_workers} worker(s); "
-                    f"GPU splits={gpu_masks}",
-                    flush=True,
-                )
-            else:
-                print(
-                    f"[recheck] enabling parallel recheck across {agent_workers} worker(s)",
-                    flush=True,
-                )
+        gpu_warned: set[Tuple[int, int]] = set()
 
         for index, cfg, seeds, completed_seeds, pending_seeds in plan_entries:
             _print_config_banner(index, seeds, args.project, entity, offline_mode)
@@ -1224,12 +1333,39 @@ def main() -> None:
                     flush=True,
                 )
                 method = str(cfg.get("training_method", "jepa")).lower()
+                per_run_devices = _extract_positive_int(cfg.get("devices")) or 1
                 worker_masks: List[Optional[str]] = []
+                effective_workers = agent_workers
+                gpu_masks: List[str] = []
+                if visible_gpu_ids:
+                    effective_workers, gpu_masks = _compute_worker_gpu_masks(
+                        visible_gpu_ids, agent_workers, per_run_devices
+                    )
+                    if per_run_devices > 1 and agent_workers > effective_workers:
+                        key = (agent_workers, per_run_devices)
+                        if key not in gpu_warned:
+                            print(
+                                "[recheck][warn] reducing worker count to "
+                                f"{effective_workers} because each run requests "
+                                f"{per_run_devices} GPU(s) but only {len(visible_gpu_ids)} visible",
+                                flush=True,
+                            )
+                            gpu_warned.add(key)
                 if gpu_masks:
                     worker_masks = [mask or None for mask in gpu_masks]
-                worker_count = len(worker_masks)
-                if worker_count == 0:
+                worker_count = len(worker_masks) if worker_masks else effective_workers
+                if worker_count <= 0:
                     worker_count = 1
+
+                if worker_count > 1:
+                    message = (
+                        f"[recheck] enabling parallel recheck across {worker_count} worker(s)"
+                    )
+                    if per_run_devices > 1:
+                        message += f" with {per_run_devices} GPU(s) per worker"
+                    if gpu_masks:
+                        message += f"; GPU splits={gpu_masks}"
+                    print(message, flush=True)
 
                 if worker_count == 1 or len(pending_seeds) <= worker_count:
                     masks: List[Optional[str]]

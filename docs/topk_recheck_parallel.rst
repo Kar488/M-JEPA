@@ -105,6 +105,12 @@ Operational Updates
 * ``recheck_topk_from_wandb.py`` now falls back to ``nvidia-smi`` when
   ``torch`` is unavailable, so GitHub runners without a populated
   ``CUDA_VISIBLE_DEVICES`` mask still expose their GPU indices to the scheduler.
+* Operators can force distributed launches per seed by setting
+  ``PHASE2_RECHECK_FORCE_DEVICES`` (or passing ``--override-devices`` to the
+  recheck script). The launcher falls back to ``PHASE2_FORCE_DEVICES`` for
+  consistency with the sweep stage, and automatically groups visible GPUs so
+  each worker receives the requested number of devices (e.g. 2 GPUs per run on a
+  dual-GPU host yields a single worker pinned to ``CUDA_VISIBLE_DEVICES=0,1``).
 * Each configuration write refreshes ``grid/best_grid_config.json`` and the
   consolidated summary. If the process terminates early, it stamps
   ``grid/phase2_recheck/recheck_incomplete.ok`` so the next invocation resumes

@@ -188,6 +188,11 @@ Automation & Sweeps
 
 ``scripts/ci/export_best_from_wandb.py`` & ``scripts/ci/recheck_topk_from_wandb.py``
   Export top configurations (CSV + YAML) and refresh them if new runs finish.
+  ``recheck_topk_from_wandb.py`` honours ``PHASE2_RECHECK_FORCE_DEVICES`` (and
+  falls back to ``PHASE2_FORCE_DEVICES``) or an explicit ``--override-devices``
+  flag to replay seeds with a higher ``--devices`` count during validation. When
+  multiple GPUs are requested per run, it automatically groups and clamps worker
+  masks so every launch sees the full device set it expects.
 
 ``scripts/ci/run-grid-phase2.sh``
   Launches a Bayesian optimisation sweep for the winning method using the
