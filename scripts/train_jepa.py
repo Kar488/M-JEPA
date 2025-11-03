@@ -692,7 +692,7 @@ def _inject_shared(m):
         override = getattr(this, name, context_value)
         if override is None and hasattr(m, name):
             existing = getattr(m, name)
-            if existing is not None:
+            if existing is not None and context_value is None:
                 continue
         setattr(m, name, override)
 
