@@ -1293,7 +1293,7 @@ build_stage_args() {
         fi
       fi
       FILTERED+=("$token")
-      ((idx++))
+      ((idx+=1))
     done
     OUT=("${FILTERED[@]}")
   fi
@@ -1857,7 +1857,7 @@ PY
           break
         fi
         echo "48"
-        ((idx++))
+        ((idx+=1))
       done
       echo "49"
       local normalized_device="${requested_device,,}"
