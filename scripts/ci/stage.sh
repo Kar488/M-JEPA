@@ -1243,7 +1243,7 @@ build_stage_args() {
             i=$j; continue
           fi
         fi
-        ((i++))
+        ((++i))
       done
     fi
   fi
@@ -1640,40 +1640,50 @@ run_with_timeout() {
     local -a entrypoint_args=("${arr[@]}")
     echo "12"
     local -a entrypoint=()
-    echo "13"
     local ddp_enabled=0
-    echo "14"
+
     local set_devices_arg
-    echo "15"
     set_devices_arg() {
-      echo "16"
       local value="$1"
-      echo "17"
       local i=0
-      echo "18"
       while (( i < ${#entrypoint_args[@]} )); do
-        echo "19"
         local token="${entrypoint_args[$i]}"
-        echo "20"
         if [[ "$token" == "--devices" ]]; then
-          echo "21"
           if (( i + 1 < ${#entrypoint_args[@]} )); then
-            echo "22"
             entrypoint_args[$((i + 1))]="$value"
           else
-            echo "23"
             entrypoint_args+=("$value")
           fi
           return 0
         elif [[ "$token" == --devices=* ]]; then
-          echo "24"
           entrypoint_args[$i]="--devices=${value}"
           return 0
         fi
-        ((i++))
+        ((++i))
       done
-      echo "25"
       entrypoint_args+=("--devices" "$value")
+    }
+
+    local set_arg_value
+    set_arg_value() {
+      local flag="$1" value="$2"
+      local i=0
+      while (( i < ${#entrypoint_args[@]} )); do
+        local token="${entrypoint_args[$i]}"
+        if [[ "$token" == "$flag" ]]; then
+          if (( i + 1 < ${#entrypoint_args[@]} )); then
+            entrypoint_args[$((i + 1))]="$value"
+          else
+            entrypoint_args+=("$value")
+          fi
+          return 0
+        elif [[ "$token" == ${flag}=* ]]; then
+          entrypoint_args[$i]="${flag}=${value}"
+          return 0
+        fi
+        ((++i))
+      done
+      entrypoint_args+=("$flag" "$value")
     }
 
     local ddp_stage=""
@@ -1681,6 +1691,8 @@ run_with_timeout() {
     case "$s" in
       finetune|tox21) ddp_stage="$s" ;;
     esac
+
+    local force_cpu_execution=0
 
     if [[ -n "$ddp_stage" ]]; then
       echo "27"
@@ -1691,6 +1703,7 @@ run_with_timeout() {
       local requested_devices=""
       echo "30"
       local i=0
+      local detected_cuda_devices=""
       while (( i < ${#entrypoint_args[@]} )); do
         echo "31"
         local token="${entrypoint_args[$i]}"
@@ -1711,7 +1724,7 @@ run_with_timeout() {
           requested_devices="${token#--devices=}"
           break
         fi
-        ((i++))
+        ((++i))
       done
 
       if [[ -z "$requested_devices" ]]; then
@@ -1772,9 +1785,11 @@ PY
           if [[ -z "$available_devices" ]]; then
             available_devices=0
           fi
+          detected_cuda_devices="$available_devices"
           if (( available_devices <= 0 )); then
             echo "[stage:$s] no CUDA devices detected; falling back to single-process execution" >&2
             effective_devices=1
+            force_cpu_execution=1
           elif (( available_devices < effective_devices )); then
             echo "[stage:$s] requested ${effective_devices} devices but only ${available_devices} visible; clamping" >&2
             effective_devices=$available_devices
@@ -1803,7 +1818,6 @@ PY
           fi
           ddp_launcher=(-m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
           ddp_enabled=1
-          echo "43"
         else
           effective_devices=1
         fi
@@ -1826,20 +1840,95 @@ PY
     fi
 
     if [[ -n "$ddp_stage" ]]; then
-      echo "47"
+      local requested_device=""
+      local device_token=""
+      local idx=0
+      while (( idx < ${#entrypoint_args[@]} )); do
+        device_token="${entrypoint_args[$idx]}"
+        if [[ "$device_token" == "--device" ]]; then
+          if (( idx + 1 < ${#entrypoint_args[@]} )); then
+            requested_device="${entrypoint_args[$((idx + 1))]}"
+          fi
+          break
+        elif [[ "$device_token" == --device=* ]]; then
+          requested_device="${device_token#--device=}"
+          break
+        fi
+        ((idx++))
+      done
+
+      local normalized_device="${requested_device,,}"
+      if [[ -z "$normalized_device" ]]; then
+        normalized_device="cuda"
+      fi
+
+      local cuda_probe_output=""
+      local cuda_count=""
+      if cuda_probe_output=$("${python_runner_cmd[@]}" - <<'PY'
+import sys
+
+try:
+    import torch
+except Exception:
+    torch = None
+
+count = 0
+if torch is not None:
+    cuda = getattr(torch, "cuda", None)
+    if cuda is not None:
+        try:
+            if callable(getattr(cuda, "is_available", None)) and cuda.is_available():
+                try:
+                    count = int(cuda.device_count())
+                except Exception:
+                    count = 0
+            else:
+                count = 0
+        except Exception:
+            count = 0
+print(max(count, 0))
+PY
+      ); then
+        cuda_count="${cuda_probe_output:-0}"
+        cuda_count="${cuda_count//$'\r'/}"
+        cuda_count="${cuda_count//$'\n'/}"
+        cuda_count="${cuda_count//[[:space:]]/}"
+      else
+        cuda_count="0"
+      fi
+
+      if [[ -z "$cuda_count" ]]; then
+        cuda_count="0"
+      fi
+
+      if [[ -n "$detected_cuda_devices" ]]; then
+        cuda_count="$detected_cuda_devices"
+      fi
+
+      if [[ "$normalized_device" == cuda* && "$cuda_count" =~ ^[0-9]+$ && "$cuda_count" -eq 0 ]]; then
+        force_cpu_execution=1
+      fi
+
+      if (( force_cpu_execution )); then
+        ddp_launcher=()
+        ddp_enabled=0
+        set_devices_arg 1
+        set_arg_value "--device" "cpu"
+        set_arg_value "--bf16" "0"
+        echo "[stage:$s] warn: CUDA unavailable; forcing CPU execution (devices=1, device=cpu, bf16=0)" >&2
+      fi
+
       arr=("${entrypoint_args[@]}")
     fi
 
     local build_entrypoint
     build_entrypoint() {
-      echo "48"
       entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${entrypoint_args[@]}")
     }
 
     local fallback_attempted=0
 
     while true; do
-      echo "49"
       build_entrypoint
 
       local -a stage_cmd=("${python_runner_cmd[@]}")
