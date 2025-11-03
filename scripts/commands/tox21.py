@@ -458,7 +458,10 @@ def _resolve_tox21_tasks(args: argparse.Namespace) -> List[str]:
     candidates: List[str] = []
     explicit = getattr(args, "tasks", None)
     if explicit:
-        candidates.extend(explicit)
+        if isinstance(explicit, str):
+            candidates.append(explicit)
+        else:
+            candidates.extend(explicit)
     single = getattr(args, "task", None)
     if single:
         candidates.append(str(single))
@@ -1638,6 +1641,8 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
 def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespace:
     if not hasattr(namespace, "tasks") or namespace.tasks is None:
         namespace.tasks = []
+    elif isinstance(namespace.tasks, str):
+        namespace.tasks = [namespace.tasks]
     elif not isinstance(namespace.tasks, list):
         namespace.tasks = list(namespace.tasks)
     if namespace.wandb_tags is None:
