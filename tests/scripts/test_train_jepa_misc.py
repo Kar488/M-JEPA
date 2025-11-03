@@ -9,6 +9,7 @@ from typing import Optional
 
 import models.encoder  # noqa: F401
 import models.factory  # noqa: F401
+import scripts.commands.tox21 as tox_cmd
 from scripts import train_jepa as tj
 
 torch = pytest.importorskip("torch")
@@ -415,8 +416,6 @@ def test_cmd_tox21_inherits_best_config_loader_flags(tmp_path, monkeypatch):
     monkeypatch.setattr(tj, "run_tox21_case_study", tox_stub)
     monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: None)
 
-    import scripts.commands.tox21 as tox_cmd
-
     monkeypatch.setattr(tox_cmd.sys, "argv", ["train_jepa.py", "tox21"])
 
     args = argparse.Namespace(
@@ -565,7 +564,7 @@ def test_cmd_tox21_auto_retries_allow_shape(monkeypatch, tmp_path):
     summary_payload = json.loads(summary_path.read_text())
     assert summary_payload["overall_gate_passed"] in {True, False}
 
-def test_cmd_tox21_failure(tmp_path,monkeypatch):
+def test_cmd_tox21_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(
         tj,
         "run_tox21_case_study",
@@ -600,6 +599,17 @@ def test_cmd_tox21_failure(tmp_path,monkeypatch):
     with pytest.raises(SystemExit) as ex:
         tj.cmd_tox21(args)
     assert ex.value.code == 5
+
+
+def test_resolve_tox21_tasks_preserves_scalar_string():
+    args = SimpleNamespace(tasks="NR-AR", task=None)
+    assert tox_cmd._resolve_tox21_tasks(args) == ["NR-AR"]
+
+
+def test_finalise_standalone_args_wraps_scalar_task():
+    namespace = argparse.Namespace(tasks="NR-AR")
+    finalised = tox_cmd._finalise_standalone_args(namespace)
+    assert finalised.tasks == ["NR-AR"]
 
 
 # ---------------------------------------------------------------------------
