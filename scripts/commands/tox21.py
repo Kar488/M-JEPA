@@ -1639,21 +1639,21 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
 
 
 def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespace:
-    if not hasattr(namespace, "tasks") or namespace.tasks is None:
+    if not hasattr(namespace, "tasks") or getattr(namespace, "tasks", None) is None:
         namespace.tasks = []
     elif isinstance(namespace.tasks, str):
         namespace.tasks = [namespace.tasks]
     elif not isinstance(namespace.tasks, list):
         namespace.tasks = list(namespace.tasks)
-    if namespace.wandb_tags is None:
+    if getattr(namespace, "wandb_tags", None) is None:
         namespace.wandb_tags = []
-    if namespace.use_wandb is None:
+    if getattr(namespace, "use_wandb", None) is None:
         namespace.use_wandb = False
-    if namespace.triage_pct is None:
+    if getattr(namespace, "triage_pct", None) is None:
         namespace.triage_pct = 0.10
     if not hasattr(namespace, "no_calibrate"):
         namespace.no_calibrate = False
-    if namespace.tox21_head_batch_size is None:
+    if getattr(namespace, "tox21_head_batch_size", None) is None:
         namespace.tox21_head_batch_size = 256
     for attr in ("gnn_type", "hidden_dim", "num_layers"):
         provided = getattr(namespace, attr, None) is not None
@@ -1697,6 +1697,9 @@ def main(argv: Optional[List[str]] | None = None) -> int:
 
     if not hasattr(parsed, "func"):
         parser.error("tox21 command missing handler")
+
+    if getattr(parsed, "command", None) == "tox21":
+        parsed = _finalise_standalone_args(parsed)
 
     parsed.func(parsed)
     return 0
