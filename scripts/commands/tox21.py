@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import sys
+import traceback
 from pathlib import Path
 from random import Random
 from types import SimpleNamespace
@@ -20,10 +21,24 @@ try:  # pragma: no cover - optional relative import depending on entry point
 except ImportError:  # pragma: no cover - fallback when executed as a script
     from scripts.bench import BenchmarkRule, resolve_metric_threshold
 
+_CASE_STUDY_IMPORT_ERROR: Optional[str] = None
+_CASE_STUDY_IMPORT_TRACEBACK: Optional[str] = None
+
 try:  # pragma: no cover - optional dependency when experiments package missing
     from experiments.case_study import run_tox21_case_study
-except Exception:  # pragma: no cover - allow tests to patch in stub
+except Exception as exc:  # pragma: no cover - allow tests to patch in stub
+    _CASE_STUDY_IMPORT_ERROR = f"{exc.__class__.__name__}: {exc}"
+    _CASE_STUDY_IMPORT_TRACEBACK = traceback.format_exc()
     run_tox21_case_study = None  # type: ignore[assignment]
+    debug_msg = (
+        "[tox21] debug: failed to import experiments.case_study.run_tox21_case_study; "
+        "falling back to simplified implementation"
+    )
+    print(f"{debug_msg}: {_CASE_STUDY_IMPORT_ERROR}", file=sys.stderr)
+    logging.getLogger(__name__).debug(
+        "experiments.case_study import failed; using fallback\n%s",
+        _CASE_STUDY_IMPORT_TRACEBACK,
+    )
 
 try:  # pragma: no cover - optional dependency in lightweight environments
     from utils.device import resolve_device
@@ -192,9 +207,15 @@ if run_tox21_case_study is None:  # pragma: no cover - exercised in fallback tes
             or evaluation_mode
             or "fallback_encoder"
         )
+        fallback_reason = "experiments.case_study import failed"
+        if _CASE_STUDY_IMPORT_ERROR:
+            fallback_reason = f"{fallback_reason}: {_CASE_STUDY_IMPORT_ERROR}"
+
         diagnostics = {
             "fallback": True,
-            "fallback_reason": "experiments.case_study import failed",
+            "fallback_reason": fallback_reason,
+            "fallback_import_error": _CASE_STUDY_IMPORT_ERROR,
+            "fallback_import_traceback": _CASE_STUDY_IMPORT_TRACEBACK,
             "encoder_checkpoint": encoder_checkpoint,
             "encoder_manifest": encoder_manifest,
             "encoder_source": encoder_source,
@@ -1481,6 +1502,157 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             pass
 
 
+class _StandaloneBoolFlag(argparse.Action):
+    """argparse action mirroring ``train_jepa.BoolFlag``."""
+
+    def __init__(self, option_strings, dest, **kwargs):  # type: ignore[override]
+        kwargs.setdefault("nargs", "?")
+        kwargs.setdefault("const", True)
+        kwargs.setdefault("default", None)
+        super().__init__(option_strings, dest, **kwargs)
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Optional[str],
+        option_string: Optional[str] = None,
+    ) -> None:
+        if values is None:
+            setattr(namespace, self.dest, True)
+        else:
+            coerced = _coerce_bool_like(values)
+            if coerced is None:
+                parser.error(f"Expected boolean for {option_string}, got '{values}'")
+            setattr(namespace, self.dest, coerced)
+        try:
+            setattr(namespace, f"_{self.dest}_provided", True)
+        except Exception:
+            pass
+
+
+def _build_standalone_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="scripts.commands.tox21")
+    parser.add_argument("--cache-dir")
+    parser.add_argument("--csv", required=True)
+    parser.add_argument("--tasks", nargs="+")
+    parser.add_argument("--dataset")
+    parser.add_argument("--report-dir")
+    parser.add_argument("--tox21-dir")
+    parser.add_argument("--pretrain-epochs", type=int, dest="pretrain_epochs")
+    parser.add_argument("--finetune-epochs", type=int, dest="finetune_epochs")
+    parser.add_argument(
+        "--pretrain-time-budget-mins",
+        type=int,
+        dest="pretrain_time_budget_mins",
+    )
+    parser.add_argument(
+        "--finetune-time-budget-mins",
+        type=int,
+        dest="finetune_time_budget_mins",
+    )
+    parser.add_argument("--encoder-checkpoint")
+    parser.add_argument("--encoder-manifest")
+    parser.add_argument("--encoder-source")
+    parser.add_argument("--evaluation-mode")
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--patience", type=int)
+    parser.add_argument("--head-lr", type=float, dest="head_lr")
+    parser.add_argument("--encoder-lr", type=float, dest="encoder_lr")
+    parser.add_argument("--weight-decay", type=float, dest="weight_decay")
+    parser.add_argument("--lr", type=float)
+    parser.add_argument("--pretrain-lr", type=float, dest="pretrain_lr")
+    parser.add_argument("--class-weights", dest="class_weights")
+    parser.add_argument(
+        "--verify-match-threshold",
+        type=float,
+        dest="verify_match_threshold",
+    )
+    parser.add_argument("--use-wandb", action=_StandaloneBoolFlag, dest="use_wandb")
+    parser.add_argument("--wandb-project")
+    parser.add_argument("--wandb-tags", nargs="*")
+    parser.add_argument("--num-workers", type=int, dest="num_workers")
+    parser.add_argument("--prefetch-factor", type=int, dest="prefetch_factor")
+    parser.add_argument(
+        "--persistent-workers",
+        action=_StandaloneBoolFlag,
+        dest="persistent_workers",
+    )
+    parser.add_argument(
+        "--pin-memory",
+        "--pin_memory",
+        action=_StandaloneBoolFlag,
+        dest="pin_memory",
+    )
+    parser.add_argument("--bf16", action=_StandaloneBoolFlag, dest="bf16")
+    parser.add_argument("--bf16-head", action=_StandaloneBoolFlag, dest="bf16_head")
+    parser.add_argument("--devices", type=int, dest="devices")
+    parser.add_argument("--device")
+    parser.add_argument("--gnn-type", dest="gnn_type")
+    parser.add_argument("--hidden-dim", type=int, dest="hidden_dim")
+    parser.add_argument("--num-layers", type=int, dest="num_layers")
+    parser.add_argument("--ema-decay", type=float, dest="ema_decay")
+    parser.add_argument("--contiguity", action=_StandaloneBoolFlag, dest="contiguity")
+    parser.add_argument("--temperature", type=float, dest="temperature")
+    parser.add_argument("--batch-size", type=int, dest="batch_size")
+    parser.add_argument("--triage-pct", type=float, dest="triage_pct")
+    parser.add_argument("--no-calibrate", action="store_true", dest="no_calibrate")
+    parser.add_argument(
+        "--allow-shape-coercion",
+        action=_StandaloneBoolFlag,
+        dest="allow_shape_coercion",
+    )
+    parser.add_argument(
+        "--allow-equal-hash",
+        action=_StandaloneBoolFlag,
+        dest="allow_equal_hash",
+    )
+    parser.add_argument(
+        "--strict-encoder-config",
+        action=_StandaloneBoolFlag,
+        dest="strict_encoder_config",
+    )
+    parser.add_argument(
+        "--full-finetune",
+        action=_StandaloneBoolFlag,
+        dest="full_finetune",
+    )
+    parser.add_argument(
+        "--contrastive",
+        action=_StandaloneBoolFlag,
+        dest="contrastive",
+    )
+    parser.add_argument("--tox21-head-batch-size", type=int, dest="tox21_head_batch_size")
+    parser.add_argument("--unfreeze-top-layers", type=int, dest="unfreeze_top_layers")
+    parser.add_argument("--best-config", dest="best_config")
+    parser.add_argument("--best-config-json", dest="best_config_json")
+    parser.add_argument("--best-config-path", dest="best_config_path")
+    parser.add_argument("--add-3d", action=_StandaloneBoolFlag, dest="add_3d")
+    return parser
+
+
+def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespace:
+    if not hasattr(namespace, "tasks") or namespace.tasks is None:
+        namespace.tasks = []
+    if namespace.wandb_tags is None:
+        namespace.wandb_tags = []
+    if namespace.use_wandb is None:
+        namespace.use_wandb = False
+    if namespace.triage_pct is None:
+        namespace.triage_pct = 0.10
+    if not hasattr(namespace, "no_calibrate"):
+        namespace.no_calibrate = False
+    if namespace.tox21_head_batch_size is None:
+        namespace.tox21_head_batch_size = 256
+    for attr in ("gnn_type", "hidden_dim", "num_layers"):
+        provided = getattr(namespace, attr, None) is not None
+        setattr(namespace, f"_{attr}_provided", provided)
+    for attr in ("num_workers", "prefetch_factor", "devices"):
+        if getattr(namespace, attr, None) is not None:
+            setattr(namespace, f"_{attr}_provided", True)
+    return namespace
+
+
 def main(argv: Optional[List[str]] | None = None) -> int:
     """Execute the Tox21 command directly when run as a module."""
 
@@ -1493,8 +1665,18 @@ def main(argv: Optional[List[str]] | None = None) -> int:
     try:
         from scripts import train_jepa as _train_jepa
     except Exception as exc:  # pragma: no cover - defensive guard
-        logger.error("Unable to import train_jepa parser: %s", exc)
-        return 2
+        logger.error(
+            "Unable to import train_jepa parser: %s", exc,
+            exc_info=True,
+        )
+        parser = _build_standalone_parser()
+        try:
+            parsed = parser.parse_args(args)
+        except SystemExit as exc_parse:
+            return int(exc_parse.code or 0)
+        parsed = _finalise_standalone_args(parsed)
+        cmd_tox21(parsed)
+        return 0
 
     parser = _train_jepa.build_parser()
     try:

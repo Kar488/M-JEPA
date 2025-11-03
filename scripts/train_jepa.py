@@ -35,7 +35,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-import numpy as np
+try:
+    import numpy as np
+except Exception:  # pragma: no cover - exercised when numpy missing
+    class _MissingNumpy:
+        """Minimal ``numpy`` shim that preserves import-time behaviour."""
+
+        def __getattr__(self, name: str) -> "_MissingNumpy":
+            raise ModuleNotFoundError("numpy is required for training")
+
+        def __call__(self, *args, **kwargs):  # type: ignore[override]
+            raise ModuleNotFoundError("numpy is required for training")
+
+    np = _MissingNumpy()  # type: ignore[assignment]
+
 # Attempt to import real PyTorch.  Some unit tests only need this module to be
 # importable and will skip themselves if ``torch`` is absent.  To keep those
 # tests lightweight we provide a tiny stub when the import fails; attempting to
@@ -675,7 +688,13 @@ def _inject_shared(m):
     import sys as _sys
     this = _sys.modules[__name__]
     for name in CMD_CONTEXT.__dict__:
-        setattr(m, name, getattr(this, name, getattr(CMD_CONTEXT, name)))
+        context_value = getattr(CMD_CONTEXT, name)
+        override = getattr(this, name, context_value)
+        if override is None and hasattr(m, name):
+            existing = getattr(m, name)
+            if existing is not None:
+                continue
+        setattr(m, name, override)
 
 
 def cmd_sweep_run(args: argparse.Namespace) -> None:

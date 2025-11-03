@@ -179,3 +179,69 @@ def test_module_main_delegates_to_train_jepa(monkeypatch, tmp_path):
 
     assert rc == 0
     assert captured["csv"] == str(path)
+
+
+def test_module_main_standalone_parser_handles_flags(monkeypatch, tmp_path):
+    import builtins
+    import scripts.commands.tox21 as tox21
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        tox21,
+        "cmd_tox21",
+        lambda args: captured.update(
+            {
+                "persistent": getattr(args, "persistent_workers", None),
+                "pin": getattr(args, "pin_memory", None),
+                "bf16": getattr(args, "bf16", None),
+                "use_wandb": getattr(args, "use_wandb", None),
+                "hidden_provided": getattr(args, "_hidden_dim_provided", False),
+            }
+        ),
+    )
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):  # type: ignore[override]
+        if name == "scripts.train_jepa":
+            raise ModuleNotFoundError("train_jepa missing")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    csv_path = tmp_path / "data.csv"
+    csv_path.write_text("smiles,NR-AR\nC,1\n", encoding="utf-8")
+
+    rc = tox21.main(
+        [
+            "--csv",
+            str(csv_path),
+            "--tasks",
+            "NR-AR",
+            "--encoder-checkpoint",
+            str(tmp_path / "encoder.pt"),
+            "--encoder-manifest",
+            str(tmp_path / "manifest.json"),
+            "--persistent-workers",
+            "0",
+            "--pin-memory",
+            "0",
+            "--bf16",
+            "1",
+            "--use-wandb",
+            "--num-workers",
+            "4",
+            "--prefetch-factor",
+            "2",
+            "--hidden-dim",
+            "128",
+        ]
+    )
+
+    assert rc == 0
+    assert captured["persistent"] is False
+    assert captured["pin"] is False
+    assert captured["bf16"] is True
+    assert captured["use_wandb"] is True
+    assert captured["hidden_provided"] is True
