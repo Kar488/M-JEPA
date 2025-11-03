@@ -1638,6 +1638,8 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
 def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespace:
     if not hasattr(namespace, "tasks") or namespace.tasks is None:
         namespace.tasks = []
+    elif not isinstance(namespace.tasks, list):
+        namespace.tasks = list(namespace.tasks)
     if namespace.wandb_tags is None:
         namespace.wandb_tags = []
     if namespace.use_wandb is None:
