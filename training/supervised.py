@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import random
 import time as _time
 from types import SimpleNamespace
@@ -777,7 +778,25 @@ def train_linear_head(
         is_main_process,
     )
 
-    distributed = devices > 1 and init_distributed()
+    distributed = False
+    if devices > 1:
+        try:
+            distributed = init_distributed()
+        except RuntimeError as exc:
+            logger.warning(
+                "Distributed initialisation failed (requested devices=%s); "
+                "falling back to single-process execution.",
+                devices,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
+            cleanup()
+            distributed = False
+            devices = 1
+            os.environ["WORLD_SIZE"] = "1"
+            os.environ["LOCAL_WORLD_SIZE"] = "1"
+            os.environ["RANK"] = "0"
+            os.environ["LOCAL_RANK"] = "0"
+
     device_t = torch.device(device)
 
     stage_config_local = stage_config

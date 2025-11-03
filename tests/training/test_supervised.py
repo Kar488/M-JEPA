@@ -1,4 +1,6 @@
 from __future__ import annotations
+import logging
+import os
 import random
 
 import numpy as np
@@ -357,6 +359,44 @@ def test_encoder_base_handles_sequence_wrapped_graph():
 
     assert out.shape == (1, graph.x.shape[1])
     assert encoder.seen_graphs == [graph]
+
+
+def test_train_linear_head_falls_back_when_ddp_init_fails(monkeypatch, caplog):
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+
+    def _failing_init(*_args, **_kwargs):
+        raise RuntimeError("ddp init failed")
+
+    monkeypatch.setattr("utils.ddp.init_distributed", _failing_init, raising=False)
+
+    np.random.seed(1)
+    torch.manual_seed(1)
+    labels = [0, 1, 0, 1]
+    dataset = DummyDataset(labels)
+    encoder = DummyEncoder(4)
+
+    caplog.set_level(logging.WARNING, logger="training.supervised")
+
+    metrics = train_linear_head(
+        dataset,
+        encoder,
+        "classification",
+        epochs=1,
+        batch_size=2,
+        lr=1e-3,
+        patience=1,
+        devices=2,
+    )
+
+    assert "falling back to single-process execution" in caplog.text
+    assert "roc_auc" in metrics or "val_auc" in metrics
+    assert os.environ.get("WORLD_SIZE") == "1"
+    assert os.environ.get("LOCAL_WORLD_SIZE") == "1"
+    assert os.environ.get("RANK") == "0"
+    assert os.environ.get("LOCAL_RANK") == "0"
 
 
 def test_train_linear_head_uses_encode_graph_cache(monkeypatch):
