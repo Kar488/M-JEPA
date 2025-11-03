@@ -675,7 +675,13 @@ def _inject_shared(m):
     import sys as _sys
     this = _sys.modules[__name__]
     for name in CMD_CONTEXT.__dict__:
-        setattr(m, name, getattr(this, name, getattr(CMD_CONTEXT, name)))
+        context_value = getattr(CMD_CONTEXT, name)
+        override = getattr(this, name, context_value)
+        if override is None and hasattr(m, name):
+            existing = getattr(m, name)
+            if existing is not None:
+                continue
+        setattr(m, name, override)
 
 
 def cmd_sweep_run(args: argparse.Namespace) -> None:

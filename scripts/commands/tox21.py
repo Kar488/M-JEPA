@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import sys
+import traceback
 from pathlib import Path
 from random import Random
 from types import SimpleNamespace
@@ -20,10 +21,24 @@ try:  # pragma: no cover - optional relative import depending on entry point
 except ImportError:  # pragma: no cover - fallback when executed as a script
     from scripts.bench import BenchmarkRule, resolve_metric_threshold
 
+_CASE_STUDY_IMPORT_ERROR: Optional[str] = None
+_CASE_STUDY_IMPORT_TRACEBACK: Optional[str] = None
+
 try:  # pragma: no cover - optional dependency when experiments package missing
     from experiments.case_study import run_tox21_case_study
-except Exception:  # pragma: no cover - allow tests to patch in stub
+except Exception as exc:  # pragma: no cover - allow tests to patch in stub
+    _CASE_STUDY_IMPORT_ERROR = f"{exc.__class__.__name__}: {exc}"
+    _CASE_STUDY_IMPORT_TRACEBACK = traceback.format_exc()
     run_tox21_case_study = None  # type: ignore[assignment]
+    debug_msg = (
+        "[tox21] debug: failed to import experiments.case_study.run_tox21_case_study; "
+        "falling back to simplified implementation"
+    )
+    print(f"{debug_msg}: {_CASE_STUDY_IMPORT_ERROR}", file=sys.stderr)
+    logging.getLogger(__name__).debug(
+        "experiments.case_study import failed; using fallback\n%s",
+        _CASE_STUDY_IMPORT_TRACEBACK,
+    )
 
 try:  # pragma: no cover - optional dependency in lightweight environments
     from utils.device import resolve_device
@@ -192,9 +207,15 @@ if run_tox21_case_study is None:  # pragma: no cover - exercised in fallback tes
             or evaluation_mode
             or "fallback_encoder"
         )
+        fallback_reason = "experiments.case_study import failed"
+        if _CASE_STUDY_IMPORT_ERROR:
+            fallback_reason = f"{fallback_reason}: {_CASE_STUDY_IMPORT_ERROR}"
+
         diagnostics = {
             "fallback": True,
-            "fallback_reason": "experiments.case_study import failed",
+            "fallback_reason": fallback_reason,
+            "fallback_import_error": _CASE_STUDY_IMPORT_ERROR,
+            "fallback_import_traceback": _CASE_STUDY_IMPORT_TRACEBACK,
             "encoder_checkpoint": encoder_checkpoint,
             "encoder_manifest": encoder_manifest,
             "encoder_source": encoder_source,
