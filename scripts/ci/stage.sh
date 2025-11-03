@@ -1243,7 +1243,7 @@ build_stage_args() {
             i=$j; continue
           fi
         fi
-        ((i++))
+        ((++i))
       done
     fi
   fi
@@ -1630,17 +1630,65 @@ run_with_timeout() {
     local ddp_env_modified=0
     local -a entrypoint_args=("${arr[@]}")
     local -a entrypoint=()
+    local ddp_enabled=0
+
+    local set_devices_arg
+    set_devices_arg() {
+      local value="$1"
+      local i=0
+      while (( i < ${#entrypoint_args[@]} )); do
+        local token="${entrypoint_args[$i]}"
+        if [[ "$token" == "--devices" ]]; then
+          if (( i + 1 < ${#entrypoint_args[@]} )); then
+            entrypoint_args[$((i + 1))]="$value"
+          else
+            entrypoint_args+=("$value")
+          fi
+          return 0
+        elif [[ "$token" == --devices=* ]]; then
+          entrypoint_args[$i]="--devices=${value}"
+          return 0
+        fi
+        ((++i))
+      done
+      entrypoint_args+=("--devices" "$value")
+    }
+
+    local set_arg_value
+    set_arg_value() {
+      local flag="$1" value="$2"
+      local i=0
+      while (( i < ${#entrypoint_args[@]} )); do
+        local token="${entrypoint_args[$i]}"
+        if [[ "$token" == "$flag" ]]; then
+          if (( i + 1 < ${#entrypoint_args[@]} )); then
+            entrypoint_args[$((i + 1))]="$value"
+          else
+            entrypoint_args+=("$value")
+          fi
+          return 0
+        elif [[ "$token" == ${flag}=* ]]; then
+          entrypoint_args[$i]="${flag}=${value}"
+          return 0
+        fi
+        ((++i))
+      done
+      entrypoint_args+=("$flag" "$value")
+    }
 
     local ddp_stage=""
     case "$s" in
       finetune|tox21) ddp_stage="$s" ;;
     esac
 
+    local force_cpu_execution=0
+
     if [[ -n "$ddp_stage" ]]; then
       local devices_idx=-1
       local devices_joined=0
       local requested_devices=""
       local i=0
+      local detected_cuda_devices=""
       while (( i < ${#entrypoint_args[@]} )); do
         local token="${entrypoint_args[$i]}"
         if [[ "$token" == "--devices" ]]; then
@@ -1655,7 +1703,7 @@ run_with_timeout() {
           requested_devices="${token#--devices=}"
           break
         fi
-        ((i++))
+        ((++i))
       done
 
       if [[ -z "$requested_devices" ]]; then
@@ -1711,9 +1759,11 @@ PY
           if [[ -z "$available_devices" ]]; then
             available_devices=0
           fi
+          detected_cuda_devices="$available_devices"
           if (( available_devices <= 0 )); then
             echo "[stage:$s] no CUDA devices detected; falling back to single-process execution" >&2
             effective_devices=1
+            force_cpu_execution=1
           elif (( available_devices < effective_devices )); then
             echo "[stage:$s] requested ${effective_devices} devices but only ${available_devices} visible; clamping" >&2
             effective_devices=$available_devices
@@ -1739,6 +1789,7 @@ PY
             echo "[stage:$s] WORLD_SIZE=${world}; assuming external launcher configured DDP" >&2
           fi
           ddp_launcher=(-m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
+          ddp_enabled=1
         else
           effective_devices=1
         fi
@@ -1758,61 +1809,162 @@ PY
     fi
 
     if [[ -n "$ddp_stage" ]]; then
+      local requested_device=""
+      local device_token=""
+      local idx=0
+      while (( idx < ${#entrypoint_args[@]} )); do
+        device_token="${entrypoint_args[$idx]}"
+        if [[ "$device_token" == "--device" ]]; then
+          if (( idx + 1 < ${#entrypoint_args[@]} )); then
+            requested_device="${entrypoint_args[$((idx + 1))]}"
+          fi
+          break
+        elif [[ "$device_token" == --device=* ]]; then
+          requested_device="${device_token#--device=}"
+          break
+        fi
+        ((idx++))
+      done
+
+      local normalized_device="${requested_device,,}"
+      if [[ -z "$normalized_device" ]]; then
+        normalized_device="cuda"
+      fi
+
+      local cuda_probe_output=""
+      local cuda_count=""
+      if cuda_probe_output=$("${python_runner_cmd[@]}" - <<'PY'
+import sys
+
+try:
+    import torch
+except Exception:
+    torch = None
+
+count = 0
+if torch is not None:
+    cuda = getattr(torch, "cuda", None)
+    if cuda is not None:
+        try:
+            if callable(getattr(cuda, "is_available", None)) and cuda.is_available():
+                try:
+                    count = int(cuda.device_count())
+                except Exception:
+                    count = 0
+            else:
+                count = 0
+        except Exception:
+            count = 0
+print(max(count, 0))
+PY
+      ); then
+        cuda_count="${cuda_probe_output:-0}"
+        cuda_count="${cuda_count//$'\r'/}"
+        cuda_count="${cuda_count//$'\n'/}"
+        cuda_count="${cuda_count//[[:space:]]/}"
+      else
+        cuda_count="0"
+      fi
+
+      if [[ -z "$cuda_count" ]]; then
+        cuda_count="0"
+      fi
+
+      if [[ -n "$detected_cuda_devices" ]]; then
+        cuda_count="$detected_cuda_devices"
+      fi
+
+      if [[ "$normalized_device" == cuda* && "$cuda_count" =~ ^[0-9]+$ && "$cuda_count" -eq 0 ]]; then
+        force_cpu_execution=1
+      fi
+
+      if (( force_cpu_execution )); then
+        ddp_launcher=()
+        ddp_enabled=0
+        set_devices_arg 1
+        set_arg_value "--device" "cpu"
+        set_arg_value "--bf16" "0"
+        echo "[stage:$s] warn: CUDA unavailable; forcing CPU execution (devices=1, device=cpu, bf16=0)" >&2
+      fi
+
       arr=("${entrypoint_args[@]}")
     fi
 
-    entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${entrypoint_args[@]}")
+    local build_entrypoint
+    build_entrypoint() {
+      entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${entrypoint_args[@]}")
+    }
 
-    local -a stage_cmd=("${python_runner_cmd[@]}")
-    if (( ${#ddp_launcher[@]} )); then
-      stage_cmd+=("${ddp_launcher[@]}" "${entrypoint[@]}")
-    else
-      stage_cmd+=("${entrypoint[@]}")
-    fi
+    local fallback_attempted=0
 
-    local stage_python_cmd_str=""
-    if (( ${#stage_cmd[@]} )); then
-      printf -v stage_python_cmd_str '%q ' "${stage_cmd[@]}"
-      stage_python_cmd_str=${stage_python_cmd_str% }
-    fi
-    echo "[diag] stage python command (stage=${s}): ${stage_python_cmd_str}" >&2
-    timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
-      env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-      "${stage_cmd[@]}" \
-      2>&1 | tee "$LOG_DIR/${s}.log"
-    rc=${PIPESTATUS[0]}
-    if (( ddp_env_modified )); then
-      if [[ -n "$previous_world" ]]; then
-        export WORLD_SIZE="$previous_world"
+    while true; do
+      build_entrypoint
+
+      local -a stage_cmd=("${python_runner_cmd[@]}")
+      local using_ddp=0
+      if (( ${#ddp_launcher[@]} )); then
+        stage_cmd+=("${ddp_launcher[@]}" "${entrypoint[@]}")
+        using_ddp=1
       else
-        unset WORLD_SIZE
+        stage_cmd+=("${entrypoint[@]}")
       fi
-      if [[ -n "$previous_master_addr" ]]; then
-        export MASTER_ADDR="$previous_master_addr"
+
+      local stage_python_cmd_str=""
+      if (( ${#stage_cmd[@]} )); then
+        printf -v stage_python_cmd_str '%q ' "${stage_cmd[@]}"
+        stage_python_cmd_str=${stage_python_cmd_str% }
+      fi
+      echo "[diag] stage python command (stage=${s}): ${stage_python_cmd_str}" >&2
+      set +e
+      timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
+        env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+        "${stage_cmd[@]}" \
+        2>&1 | tee "$LOG_DIR/${s}.log"
+      local timeout_rc=${PIPESTATUS[0]}
+      set -e
+      rc=$timeout_rc
+      if (( ddp_env_modified && using_ddp )); then
+        if [[ -n "$previous_world" ]]; then
+          export WORLD_SIZE="$previous_world"
+        else
+          unset WORLD_SIZE
+        fi
+        if [[ -n "$previous_master_addr" ]]; then
+          export MASTER_ADDR="$previous_master_addr"
+        else
+          unset MASTER_ADDR
+        fi
+        if [[ -n "$previous_master_port" ]]; then
+          export MASTER_PORT="$previous_master_port"
+        else
+          unset MASTER_PORT
+        fi
+        ddp_env_modified=0
+      fi
+      # 0   = success
+      # 124 = 'timeout' exceeded (we later sent SIGTERM/SIGKILL)
+      # 143 = terminated by SIGTERM (128+15)
+      # 137 = killed by SIGKILL   (128+9)
+      if [[ $rc -eq 0 ]]; then
+        break
+      elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
+        echo "[INFO][$s] graceful stop (rc=$rc); not marking stage done; outputs should be flushed."
+        mark_graceful_stop "$s"
+        return 0
+      elif (( using_ddp )) && (( ddp_enabled )) && (( ! fallback_attempted )); then
+        fallback_attempted=1
+        ddp_launcher=()
+        set_devices_arg 1
+        arr=("${entrypoint_args[@]}")
+        echo "[stage:$s] warn: distributed launch failed (rc=$rc); retrying with --devices 1" >&2
+        echo "[diag] stage ddp fallback (stage=${s} rc=${rc} command=${stage_python_cmd_str})" >&2
+        continue
       else
-        unset MASTER_ADDR
+        echo "[ERROR][$s] train_jepa.py failed with exit code $rc" >&2
+        echo "[diag] about to exit: train_jepa execution failed (stage=${s} rc=${rc} command=${stage_python_cmd_str})" >&2
+        exit $rc
       fi
-      if [[ -n "$previous_master_port" ]]; then
-        export MASTER_PORT="$previous_master_port"
-      else
-        unset MASTER_PORT
-      fi
-    fi
-    # 0   = success
-    # 124 = 'timeout' exceeded (we later sent SIGTERM/SIGKILL)
-    # 143 = terminated by SIGTERM (128+15)
-    # 137 = killed by SIGKILL   (128+9)
-    if [[ $rc -eq 0 ]]; then
-      :
-    elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
-      echo "[INFO][$s] graceful stop (rc=$rc); not marking stage done; outputs should be flushed."
-      mark_graceful_stop "$s"
-      return 0
-    else
-      echo "[ERROR][$s] train_jepa.py failed with exit code $rc" >&2
-      echo "[diag] about to exit: train_jepa execution failed (stage=${s} rc=${rc} command=${stage_python_cmd_str})" >&2
-      exit $rc
-    fi
+    done
   # --- WandB mode: run-grid passes a full cmd array --
   else
     ensure_micromamba
