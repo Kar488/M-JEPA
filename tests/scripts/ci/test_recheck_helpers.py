@@ -2,6 +2,7 @@ from collections import Counter
 import json
 import sys
 import types
+from typing import Any
 
 if "wandb" not in sys.modules:
     stub = types.ModuleType("wandb")
@@ -46,6 +47,26 @@ def test_config_and_numeric_helpers():
     assert rc._num_close(1.0000001, 1.0)
     assert rc._norm_cfg({"Foo": {"value": 1}})["foo"] == 1
     assert set(rc._metric_candidates("val/loss")) == {"val/loss", "val.loss"}
+
+
+def test_override_devices_helpers(monkeypatch):
+    assert rc._coerce_positive_int("5", "devices") == 5
+    assert rc._coerce_positive_int("0", "devices") is None
+    assert rc._coerce_positive_int("abc", "devices") is None
+
+    assert rc._extract_positive_int(4) == 4
+    assert rc._extract_positive_int("7") == 7
+    assert rc._extract_positive_int("3.0") == 3
+    assert rc._extract_positive_int("three") is None
+
+    cfg = {"devices": 1, "device": "cuda:0"}
+    rc._apply_config_overrides(cfg, override_devices=3)
+    assert cfg["devices"] == 3
+    assert "device" not in cfg
+
+    cfg2: dict[str, Any] = {}
+    rc._apply_config_overrides(cfg2, override_devices=None)
+    assert cfg2 == {}
 
 
 def test_history_latest_and_metric_of():
@@ -104,7 +125,20 @@ def test_gpu_parallel_helpers(monkeypatch):
     assert rc._resolve_agent_count(["0", "1", "2"]) == 3
     monkeypatch.delenv("PHASE2_AGENT_COUNT", raising=False)
 
-    assert rc._resolve_agent_count([]) == 1
+    assert rc._resolve_agent_count([], override_devices=2) == 1
+    assert rc._resolve_agent_count(["0", "1"], override_devices=2) == 1
+
+    workers, masks = rc._compute_worker_gpu_masks(["0", "1"], 2, 2)
+    assert workers == 1
+    assert masks == ["0,1"]
+
+    workers, masks = rc._compute_worker_gpu_masks(["0", "1", "2", "3"], 4, 2)
+    assert workers == 2
+    assert masks == ["0,1", "2,3"]
+
+    workers, masks = rc._compute_worker_gpu_masks(["0", "1", "2"], 2, 1)
+    assert workers == 2
+    assert masks == ["0,1", "2"]
 
 
 def test_run_once_writes_log(tmp_path, monkeypatch):
