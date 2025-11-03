@@ -1535,6 +1535,10 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="scripts.commands.tox21")
     parser.add_argument("--cache-dir")
     parser.add_argument("--csv", required=True)
+    parser.add_argument(
+        "--task",
+        help="Name of the toxicity column to predict (deprecated when --tasks is used)",
+    )
     parser.add_argument("--tasks", nargs="+")
     parser.add_argument("--dataset")
     parser.add_argument("--report-dir")

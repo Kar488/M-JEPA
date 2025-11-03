@@ -245,3 +245,44 @@ def test_module_main_standalone_parser_handles_flags(monkeypatch, tmp_path):
     assert captured["bf16"] is True
     assert captured["use_wandb"] is True
     assert captured["hidden_provided"] is True
+
+
+def test_module_main_standalone_parser_accepts_legacy_task(monkeypatch, tmp_path):
+    import builtins
+    import scripts.commands.tox21 as tox21
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        tox21,
+        "cmd_tox21",
+        lambda args: captured.update(
+            {
+                "task": getattr(args, "task", None),
+                "tasks": getattr(args, "tasks", None),
+            }
+        ),
+    )
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):  # type: ignore[override]
+        if name == "scripts.train_jepa":
+            raise ModuleNotFoundError("train_jepa missing")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    csv_path = tmp_path / "data.csv"
+    csv_path.write_text("smiles,NR-AR\nC,1\n", encoding="utf-8")
+
+    rc = tox21.main([
+        "--csv",
+        str(csv_path),
+        "--task",
+        "NR-AR",
+    ])
+
+    assert rc == 0
+    assert captured["task"] == "NR-AR"
+    assert captured["tasks"] == []
