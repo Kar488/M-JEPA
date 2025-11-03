@@ -1630,6 +1630,29 @@ run_with_timeout() {
     local ddp_env_modified=0
     local -a entrypoint_args=("${arr[@]}")
     local -a entrypoint=()
+    local ddp_enabled=0
+
+    local set_devices_arg
+    set_devices_arg() {
+      local value="$1"
+      local i=0
+      while (( i < ${#entrypoint_args[@]} )); do
+        local token="${entrypoint_args[$i]}"
+        if [[ "$token" == "--devices" ]]; then
+          if (( i + 1 < ${#entrypoint_args[@]} )); then
+            entrypoint_args[$((i + 1))]="$value"
+          else
+            entrypoint_args+=("$value")
+          fi
+          return 0
+        elif [[ "$token" == --devices=* ]]; then
+          entrypoint_args[$i]="--devices=${value}"
+          return 0
+        fi
+        ((i++))
+      done
+      entrypoint_args+=("--devices" "$value")
+    }
 
     local ddp_stage=""
     case "$s" in
@@ -1739,6 +1762,7 @@ PY
             echo "[stage:$s] WORLD_SIZE=${world}; assuming external launcher configured DDP" >&2
           fi
           ddp_launcher=(-m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
+          ddp_enabled=1
         else
           effective_devices=1
         fi
@@ -1761,58 +1785,81 @@ PY
       arr=("${entrypoint_args[@]}")
     fi
 
-    entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${entrypoint_args[@]}")
+    local build_entrypoint
+    build_entrypoint() {
+      entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${entrypoint_args[@]}")
+    }
 
-    local -a stage_cmd=("${python_runner_cmd[@]}")
-    if (( ${#ddp_launcher[@]} )); then
-      stage_cmd+=("${ddp_launcher[@]}" "${entrypoint[@]}")
-    else
-      stage_cmd+=("${entrypoint[@]}")
-    fi
+    local fallback_attempted=0
 
-    local stage_python_cmd_str=""
-    if (( ${#stage_cmd[@]} )); then
-      printf -v stage_python_cmd_str '%q ' "${stage_cmd[@]}"
-      stage_python_cmd_str=${stage_python_cmd_str% }
-    fi
-    echo "[diag] stage python command (stage=${s}): ${stage_python_cmd_str}" >&2
-    timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
-      env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-      "${stage_cmd[@]}" \
-      2>&1 | tee "$LOG_DIR/${s}.log"
-    rc=${PIPESTATUS[0]}
-    if (( ddp_env_modified )); then
-      if [[ -n "$previous_world" ]]; then
-        export WORLD_SIZE="$previous_world"
+    while true; do
+      build_entrypoint
+
+      local -a stage_cmd=("${python_runner_cmd[@]}")
+      local using_ddp=0
+      if (( ${#ddp_launcher[@]} )); then
+        stage_cmd+=("${ddp_launcher[@]}" "${entrypoint[@]}")
+        using_ddp=1
       else
-        unset WORLD_SIZE
+        stage_cmd+=("${entrypoint[@]}")
       fi
-      if [[ -n "$previous_master_addr" ]]; then
-        export MASTER_ADDR="$previous_master_addr"
+
+      local stage_python_cmd_str=""
+      if (( ${#stage_cmd[@]} )); then
+        printf -v stage_python_cmd_str '%q ' "${stage_cmd[@]}"
+        stage_python_cmd_str=${stage_python_cmd_str% }
+      fi
+      echo "[diag] stage python command (stage=${s}): ${stage_python_cmd_str}" >&2
+      set +e
+      timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
+        env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+        "${stage_cmd[@]}" \
+        2>&1 | tee "$LOG_DIR/${s}.log"
+      local timeout_rc=${PIPESTATUS[0]}
+      set -e
+      rc=$timeout_rc
+      if (( ddp_env_modified && using_ddp )); then
+        if [[ -n "$previous_world" ]]; then
+          export WORLD_SIZE="$previous_world"
+        else
+          unset WORLD_SIZE
+        fi
+        if [[ -n "$previous_master_addr" ]]; then
+          export MASTER_ADDR="$previous_master_addr"
+        else
+          unset MASTER_ADDR
+        fi
+        if [[ -n "$previous_master_port" ]]; then
+          export MASTER_PORT="$previous_master_port"
+        else
+          unset MASTER_PORT
+        fi
+        ddp_env_modified=0
+      fi
+      # 0   = success
+      # 124 = 'timeout' exceeded (we later sent SIGTERM/SIGKILL)
+      # 143 = terminated by SIGTERM (128+15)
+      # 137 = killed by SIGKILL   (128+9)
+      if [[ $rc -eq 0 ]]; then
+        break
+      elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
+        echo "[INFO][$s] graceful stop (rc=$rc); not marking stage done; outputs should be flushed."
+        mark_graceful_stop "$s"
+        return 0
+      elif (( using_ddp )) && (( ddp_enabled )) && (( ! fallback_attempted )); then
+        fallback_attempted=1
+        ddp_launcher=()
+        set_devices_arg 1
+        arr=("${entrypoint_args[@]}")
+        echo "[stage:$s] warn: distributed launch failed (rc=$rc); retrying with --devices 1" >&2
+        echo "[diag] stage ddp fallback (stage=${s} rc=${rc} command=${stage_python_cmd_str})" >&2
+        continue
       else
-        unset MASTER_ADDR
+        echo "[ERROR][$s] train_jepa.py failed with exit code $rc" >&2
+        echo "[diag] about to exit: train_jepa execution failed (stage=${s} rc=${rc} command=${stage_python_cmd_str})" >&2
+        exit $rc
       fi
-      if [[ -n "$previous_master_port" ]]; then
-        export MASTER_PORT="$previous_master_port"
-      else
-        unset MASTER_PORT
-      fi
-    fi
-    # 0   = success
-    # 124 = 'timeout' exceeded (we later sent SIGTERM/SIGKILL)
-    # 143 = terminated by SIGTERM (128+15)
-    # 137 = killed by SIGKILL   (128+9)
-    if [[ $rc -eq 0 ]]; then
-      :
-    elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
-      echo "[INFO][$s] graceful stop (rc=$rc); not marking stage done; outputs should be flushed."
-      mark_graceful_stop "$s"
-      return 0
-    else
-      echo "[ERROR][$s] train_jepa.py failed with exit code $rc" >&2
-      echo "[diag] about to exit: train_jepa execution failed (stage=${s} rc=${rc} command=${stage_python_cmd_str})" >&2
-      exit $rc
-    fi
+    done
   # --- WandB mode: run-grid passes a full cmd array --
   else
     ensure_micromamba

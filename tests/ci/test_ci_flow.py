@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -197,6 +198,146 @@ def test_tox21_uses_resolved_python():
     assert "python - <<'PY'" not in script
     assert '"${python_cmd[@]}" - "$MANIFEST_PATH"' in script
 
+
+def test_tox21_ddp_fallback(tmp_path):
+    fake_site = tmp_path / "fake_site"
+    (fake_site / "torch" / "distributed").mkdir(parents=True)
+
+    (fake_site / "torch" / "__init__.py").write_text(
+        """
+class _Cuda:
+    def is_available(self):
+        return True
+
+    def device_count(self):
+        return 2
+
+
+cuda = _Cuda()
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (fake_site / "torch" / "distributed" / "__init__.py").write_text("", encoding="utf-8")
+    (fake_site / "torch" / "distributed" / "run.py").write_text(
+        """
+import os
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    attempts_path = os.environ.get("DDP_ATTEMPTS_FILE")
+    if attempts_path:
+        path = Path(attempts_path)
+        try:
+            count = int(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            count = 0
+        path.write_text(str(count + 1), encoding="utf-8")
+    exit_code = int(os.environ.get("DDP_SIMULATED_EXIT", "5"))
+    print("simulated torch.distributed.run failure", flush=True)
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    app_dir = tmp_path / "app"
+    (app_dir / "scripts").mkdir(parents=True)
+    train_invocations = tmp_path / "train_invocations.txt"
+    train_args_log = tmp_path / "train_args.txt"
+    (app_dir / "scripts" / "train_jepa.py").write_text(
+        """
+import os
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    devices = None
+    for index, token in enumerate(args):
+        if token == "--devices" and index + 1 < len(args):
+            devices = args[index + 1]
+            break
+        if token.startswith("--devices="):
+            devices = token.split("=", 1)[1]
+            break
+    if devices is None:
+        devices = "missing"
+
+    count_path = Path(os.environ["TRAIN_INVOCATION_FILE"])
+    try:
+        count = int(count_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        count = 0
+    count_path.write_text(str(count + 1), encoding="utf-8")
+
+    payload_path = Path(os.environ["TRAIN_LOG_FILE"])
+    payload_path.write_text("devices={}".format(devices), encoding="utf-8")
+    print("train invoked devices={}".format(devices))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    log_dir = tmp_path / "logs"
+    ddp_attempts = tmp_path / "ddp_attempts.txt"
+
+    env = os.environ.copy()
+    base_pythonpath = env.get("PYTHONPATH", "")
+    combined_pythonpath = f"{fake_site}:{base_pythonpath}" if base_pythonpath else str(fake_site)
+    env.update(
+        {
+            "APP_DIR": str(app_dir),
+            "LOG_DIR": str(log_dir),
+            "MJEPACI_FORCE_SYSTEM_PYTHON": "1",
+            "MJEPACI_SYSTEM_PYTHON_BIN": sys.executable,
+            "PYTHONPATH": combined_pythonpath,
+            "DDP_ATTEMPTS_FILE": str(ddp_attempts),
+            "DDP_SIMULATED_EXIT": "7",
+            "TRAIN_LOG_FILE": str(train_args_log),
+            "TRAIN_INVOCATION_FILE": str(train_invocations),
+        }
+    )
+
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "source scripts/ci/common.sh",
+            "source scripts/ci/stage.sh",
+            "mkdir -p \"${LOG_DIR}\"",
+            "STAGE_ARGS=(--devices 2 --epochs 1)",
+            "run_with_timeout tox21 STAGE_ARGS",
+        ]
+    )
+
+    proc = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert ddp_attempts.read_text(encoding="utf-8") == "1"
+    assert train_invocations.read_text(encoding="utf-8") == "1"
+    assert train_args_log.read_text(encoding="utf-8") == "devices=1"
+    assert (log_dir / "tox21.log").is_file()
+    log_contents = (log_dir / "tox21.log").read_text(encoding="utf-8")
+    assert "train invoked devices=1" in log_contents
+    assert "[stage:tox21] warn: distributed launch failed" in proc.stderr
 
 def test_dedupe_stage_args_handles_joined_aliases():
     common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
