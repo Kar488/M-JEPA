@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import os
 import platform
 import socket
@@ -270,14 +271,31 @@ class DistributedSamplerList:
         import numpy as np
 
         n = len(self.data)
-        idx = np.arange(n)
+        if n == 0:
+            return iter(())
+
+        indices = np.arange(n)
         if self.shuffle:
-            rng = np.random.default_rng(seed=self.rank)  # simple per-rank seed
-            rng.shuffle(idx)
-        shard = idx[self.rank :: self.world]
-        for i in shard:
-            yield self.data[i]
+            rng = np.random.default_rng(seed=self.rank)
+            rng.shuffle(indices)
+
+        world = max(1, self.world)
+        shard_size = math.ceil(n / world)
+        total_needed = shard_size * world
+        if total_needed > n:
+            reps = math.ceil(total_needed / n)
+            padded = np.resize(indices, reps * n)[:total_needed]
+        else:
+            padded = indices[:total_needed]
+
+        start = self.rank
+        stop = start + shard_size * world
+        shard_indices = padded[start:stop:world]
+        for idx in shard_indices:
+            yield self.data[int(idx)]
 
     def __len__(self) -> int:
         n = len(self.data)
-        return (n + self.world - 1 - self.rank) // self.world
+        if n == 0:
+            return 0
+        return math.ceil(n / max(1, self.world))
