@@ -71,6 +71,8 @@ finetune:
   use_scaffold: ${FINETUNE_USE_SCAFFOLD:-false}
   seeds:
     - ${FINETUNE_SEED_0:-0}
+    - ${FINETUNE_SEED_1:-}
+    - ${FINETUNE_SEED_2:-}
   use_wandb: true
 
 bench:
