@@ -389,6 +389,7 @@ def test_train_linear_head_falls_back_when_ddp_init_fails(monkeypatch, caplog):
         lr=1e-3,
         patience=1,
         devices=2,
+        device="cpu",
     )
 
     assert "falling back to single-process execution" in caplog.text
