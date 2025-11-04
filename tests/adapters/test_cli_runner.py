@@ -228,8 +228,38 @@ def test_distributed_sampler_list(monkeypatch):
 
                 return _Rng()
 
+        def resize(self, array, new_size):  # type: ignore[override]
+            return (array * ((new_size + len(array) - 1) // len(array)))[:new_size]
+
     monkeypatch.setitem(sys.modules, "numpy", _FakeNp())
     data = list(range(10))
     sampler = ddp.DistributedSamplerList(data, shuffle=False)
-    assert list(sampler) == data[1::3]
-    assert len(sampler) == (len(data) + 3 - 1 - 1) // 3
+    assert list(sampler) == [1, 4, 7, 0]
+    assert len(sampler) == 4
+
+
+def test_distributed_sampler_list_handles_small_datasets(monkeypatch):
+    monkeypatch.setattr(ddp, "get_rank", lambda: 2)
+    monkeypatch.setattr(ddp, "get_world_size", lambda: 4)
+
+    class _FakeNp:
+        def arange(self, n):
+            return list(range(n))
+
+        class random:  # type: ignore[valid-type]
+            @staticmethod
+            def default_rng(seed=None):  # noqa: D401 - simple stub
+                class _Rng:
+                    def shuffle(self, seq):
+                        pass
+
+                return _Rng()
+
+        def resize(self, array, new_size):  # type: ignore[override]
+            return (array * ((new_size + len(array) - 1) // len(array)))[:new_size]
+
+    monkeypatch.setitem(sys.modules, "numpy", _FakeNp())
+    data = [42]
+    sampler = ddp.DistributedSamplerList(data, shuffle=False)
+    assert list(sampler) == [42]
+    assert len(sampler) == 1
