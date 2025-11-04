@@ -63,7 +63,7 @@ finetune:
   label_col: "${FINETUNE_LABEL_COL:-measured log solubility in mols per litre}"
   ckpt_dir: ${FINETUNE_DIR}
   save_every: 1
-  finetune_epochs: ${FINETUNE_EPOCHS:-18}    # maps to --epochs for "finetune"
+  finetune_epochs: ${FINETUNE_EPOCHS:-10}    # maps to --epochs for "finetune"
   metric: "${FINETUNE_METRIC:-val_auc}"
   patience: 15
   max_finetune_batches: 0
@@ -71,8 +71,6 @@ finetune:
   use_scaffold: ${FINETUNE_USE_SCAFFOLD:-false}
   seeds:
     - ${FINETUNE_SEED_0:-0}
-    - ${FINETUNE_SEED_1:-1}
-    - ${FINETUNE_SEED_2:-2}
   use_wandb: true
 
 bench:
@@ -107,7 +105,7 @@ tox21:
   dataset: tox21
   tox21_dir: ${TOX21_DIR}
   pretrain_epochs: ${PRETRAIN_EPOCHS:-70}   # maps to --pretrain-epochs for "tox21"
-  finetune_epochs: ${FINETUNE_EPOCHS:-18}    # maps to --finetune-epochs for "tox21"
+  finetune_epochs: ${FINETUNE_EPOCHS:-10}    # maps to --finetune-epochs for "tox21"
   pretrain_time_budget_mins: 90
   finetune_time_budget_mins: 60
   encoder_checkpoint: ${TOX21_ENCODER_CHECKPOINT}

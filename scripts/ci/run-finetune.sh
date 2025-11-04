@@ -115,9 +115,7 @@ if [[ "$baseline_flag_lc" == "false" ]]; then
   : "${FINETUNE_TASK_TYPE:=classification}"
   : "${FINETUNE_METRIC:=val_auc}"
   : "${FINETUNE_USE_SCAFFOLD:=true}"
-  : "${FINETUNE_SEED_0:=11}"
-  : "${FINETUNE_SEED_1:=29}"
-  : "${FINETUNE_SEED_2:=37}"
+  : "${FINETUNE_SEED_0:=0}"
   : "${FINETUNE_DATASET_OVERRIDE_REASON:=tox21_gate_failure}"
 
   export FINETUNE_LABELED_DIR
@@ -125,7 +123,17 @@ if [[ "$baseline_flag_lc" == "false" ]]; then
   export FINETUNE_TASK_TYPE
   export FINETUNE_METRIC
   export FINETUNE_USE_SCAFFOLD
-  export FINETUNE_SEED_0 FINETUNE_SEED_1 FINETUNE_SEED_2
+
+  if [[ -n ${FINETUNE_SEED_1+x} || -n ${FINETUNE_SEED_2+x} ]]; then
+    # Honour multi-seed overrides when the caller explicitly sets them.
+    export FINETUNE_SEED_0
+    [[ -n ${FINETUNE_SEED_1+x} ]] && export FINETUNE_SEED_1
+    [[ -n ${FINETUNE_SEED_2+x} ]] && export FINETUNE_SEED_2
+  else
+    unset FINETUNE_SEED_1 FINETUNE_SEED_2
+    export FINETUNE_SEED_0
+  fi
+
   export FINETUNE_DATASET_OVERRIDE_REASON
 
   echo "[finetune] Baseline gate unmet; redirecting fine-tune to Tox21 tasks: ${FINETUNE_LABEL_COLS} (task_type=${FINETUNE_TASK_TYPE} metric=${FINETUNE_METRIC})" >&2
