@@ -798,6 +798,36 @@ def train_linear_head(
             os.environ["LOCAL_RANK"] = "0"
 
     device_t = torch.device(device)
+    ddp_device_index: Optional[int] = None
+    if device_t.type == "cuda":
+        cuda_mod = getattr(torch, "cuda", None)
+        is_available = getattr(cuda_mod, "is_available", None) if cuda_mod is not None else None
+        if callable(is_available) and is_available():
+            candidate_index = getattr(device_t, "index", None)
+            local_rank_env = os.environ.get("LOCAL_RANK")
+            if local_rank_env is not None:
+                try:
+                    local_rank_val = int(local_rank_env)
+                except (TypeError, ValueError):
+                    local_rank_val = None
+                else:
+                    try:
+                        cuda_mod.set_device(local_rank_val)  # type: ignore[attr-defined]
+                        candidate_index = local_rank_val
+                    except Exception:
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "Failed to set CUDA device from LOCAL_RANK=%s", local_rank_env, exc_info=True
+                            )
+            if candidate_index is None or int(candidate_index) < 0:
+                try:
+                    candidate_index = int(cuda_mod.current_device())  # type: ignore[attr-defined]
+                except Exception:
+                    candidate_index = None
+            if candidate_index is not None and int(candidate_index) >= 0:
+                candidate_index = int(candidate_index)
+                device_t = torch.device("cuda", candidate_index)
+                ddp_device_index = candidate_index
 
     stage_config_local = stage_config
     if stage_config_local is None and "stage_config" in unused:
@@ -815,6 +845,10 @@ def train_linear_head(
     enc_param = next(encoder.parameters(), None)
     if enc_param is not None:
         device_t = enc_param.device
+        if isinstance(device_t, torch.device) and device_t.type == "cuda":
+            index_attr = getattr(device_t, "index", None)
+            if index_attr is not None and int(index_attr) >= 0:
+                ddp_device_index = int(index_attr)
 
     def _apply_encoder_trainability(module: nn.Module) -> None:
         params_fn = getattr(module, "parameters", None)
@@ -947,11 +981,29 @@ def train_linear_head(
     head_module = head_module.to(device_t)
 
     if distributed:
+        ddp_device_ids = None
+        ddp_output_device = None
+        if device_t.type == "cuda":
+            candidate = ddp_device_index
+            if candidate is None or candidate < 0:
+                cuda_mod = getattr(torch, "cuda", None)
+                if cuda_mod is not None:
+                    try:
+                        candidate = int(cuda_mod.current_device())  # type: ignore[attr-defined]
+                    except Exception:
+                        candidate = None
+            if candidate is not None and candidate >= 0:
+                ddp_device_ids = [candidate]
+                ddp_output_device = candidate
         encoder = nn.parallel.DistributedDataParallel(
-            encoder, device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None
+            encoder,
+            device_ids=ddp_device_ids,
+            output_device=ddp_output_device,
         )
         head_module = nn.parallel.DistributedDataParallel(
-            head_module, device_ids=[torch.cuda.current_device()] if device_t.type == "cuda" else None
+            head_module,
+            device_ids=ddp_device_ids,
+            output_device=ddp_output_device,
         )
     head_param_source = (
         head_module.module
