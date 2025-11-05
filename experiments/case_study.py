@@ -1541,18 +1541,47 @@ def run_tox21_case_study(
         dataset_edge_dim_expected = (
             int(final_edge_dim_candidate) if final_edge_dim_candidate is not None else 0
         )
-        if checkpoint_edge_dim is not None and dataset_edge_dim_expected != int(checkpoint_edge_dim):
-            raise RuntimeError(
-                "Encoder featurizer mismatch: checkpoint edge_dim=%s dataset edge_dim=%s. "
-                "Set allow_shape_coercion=true to override."
-                % (checkpoint_edge_dim, dataset_edge_dim_expected)
+        edge_dim_mismatch = (
+            checkpoint_edge_dim is not None
+            and dataset_edge_dim_expected != int(checkpoint_edge_dim)
+        )
+        if edge_dim_mismatch:
+            if allow_shape_coercion is False:
+                raise RuntimeError(
+                    "Encoder featurizer mismatch: checkpoint edge_dim=%s dataset edge_dim=%s. "
+                    "Set allow_shape_coercion=true to override."
+                    % (checkpoint_edge_dim, dataset_edge_dim_expected)
+                )
+            logger.warning(
+                "Encoder edge_dim mismatch detected (checkpoint=%s dataset=%s); proceeding with "
+                "shape coercion enabled.",
+                checkpoint_edge_dim,
+                dataset_edge_dim_expected,
             )
-        if checkpoint_add_3d is not None and bool(checkpoint_add_3d) != bool(desired_add_3d):
-            raise RuntimeError(
-                "Encoder featurizer mismatch: checkpoint add_3d=%s requested add_3d=%s. "
-                "Set allow_shape_coercion=true to override."
-                % (checkpoint_add_3d, bool(desired_add_3d))
+            diagnostics.setdefault("warnings", []).append("edge_dim_coerced")
+            diagnostics.setdefault("allow_shape_coercion_effective", True)
+            if allow_shape_coercion is None:
+                diagnostics.setdefault("allow_shape_coercion_auto", True)
+        add_3d_mismatch = (
+            checkpoint_add_3d is not None and bool(checkpoint_add_3d) != bool(desired_add_3d)
+        )
+        if add_3d_mismatch:
+            if allow_shape_coercion is False:
+                raise RuntimeError(
+                    "Encoder featurizer mismatch: checkpoint add_3d=%s requested add_3d=%s. "
+                    "Set allow_shape_coercion=true to override."
+                    % (checkpoint_add_3d, bool(desired_add_3d))
+                )
+            logger.warning(
+                "Encoder add_3d mismatch detected (checkpoint=%s requested=%s); proceeding with "
+                "shape coercion enabled.",
+                checkpoint_add_3d,
+                bool(desired_add_3d),
             )
+            diagnostics.setdefault("warnings", []).append("add_3d_coerced")
+            diagnostics.setdefault("allow_shape_coercion_effective", True)
+            if allow_shape_coercion is None:
+                diagnostics.setdefault("allow_shape_coercion_auto", True)
 
         final_gnn_candidate = str(resolved_gnn)
         final_hidden_candidate = int(resolved_hidden)
