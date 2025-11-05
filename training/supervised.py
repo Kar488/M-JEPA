@@ -980,6 +980,8 @@ def train_linear_head(
         head_module = nn.Linear(in_dim, 1)
     head_module = head_module.to(device_t)
 
+    head_has_trainable = any(p.requires_grad for p in head_module.parameters())
+
     if distributed:
         ddp_device_ids = None
         ddp_output_device = None
@@ -995,16 +997,26 @@ def train_linear_head(
             if candidate is not None and candidate >= 0:
                 ddp_device_ids = [candidate]
                 ddp_output_device = candidate
-        encoder = nn.parallel.DistributedDataParallel(
-            encoder,
-            device_ids=ddp_device_ids,
-            output_device=ddp_output_device,
-        )
-        head_module = nn.parallel.DistributedDataParallel(
-            head_module,
-            device_ids=ddp_device_ids,
-            output_device=ddp_output_device,
-        )
+        if encoder_has_trainable:
+            encoder = nn.parallel.DistributedDataParallel(
+                encoder,
+                device_ids=ddp_device_ids,
+                output_device=ddp_output_device,
+            )
+        else:
+            logger.debug(
+                "Skipping DDP wrapper for encoder because it has no trainable parameters."
+            )
+        if head_has_trainable:
+            head_module = nn.parallel.DistributedDataParallel(
+                head_module,
+                device_ids=ddp_device_ids,
+                output_device=ddp_output_device,
+            )
+        else:
+            logger.debug(
+                "Skipping DDP wrapper for head because it has no trainable parameters."
+            )
     head_param_source = (
         head_module.module
         if isinstance(head_module, nn.parallel.DistributedDataParallel)
