@@ -784,6 +784,10 @@ def _train_linear_head_impl(
         try:
             distributed = init_distributed()
         except RuntimeError as exc:
+            if should_retry_with_gloo(exc):
+                cleanup()
+                raise
+
             logger.warning(
                 "Distributed initialisation failed (requested devices=%s); "
                 "falling back to single-process execution.",
