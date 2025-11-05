@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -610,6 +611,48 @@ def test_finalise_standalone_args_wraps_scalar_task():
     namespace = argparse.Namespace(tasks="NR-AR")
     finalised = tox_cmd._finalise_standalone_args(namespace)
     assert finalised.tasks == ["NR-AR"]
+
+
+def test_resolve_task_encoder_checkpoint_switches_task(tmp_path):
+    finetune_root = tmp_path / "finetune"
+    source_dir = finetune_root / "NR-AR"
+    target_dir = finetune_root / "NR-ER"
+    source_dir.mkdir(parents=True)
+    target_dir.mkdir(parents=True)
+
+    base_checkpoint = source_dir / "encoder_ft_1909.pt"
+    base_checkpoint.write_text("base", encoding="utf-8")
+    target_checkpoint = target_dir / "encoder_ft_1909.pt"
+    target_checkpoint.write_text("target", encoding="utf-8")
+
+    resolved, info = tox_cmd._resolve_task_encoder_checkpoint(
+        str(base_checkpoint),
+        "NR-ER",
+    )
+
+    assert Path(resolved) == target_checkpoint
+    assert info["source"] == "task_dir"
+    assert info["task_dir"] == str(target_dir)
+
+
+def test_resolve_task_encoder_checkpoint_handles_missing(tmp_path):
+    finetune_root = tmp_path / "finetune"
+    source_dir = finetune_root / "NR-AR"
+    target_dir = finetune_root / "SR-ARE"
+    source_dir.mkdir(parents=True)
+    target_dir.mkdir(parents=True)
+
+    base_checkpoint = source_dir / "encoder_ft.pt"
+    base_checkpoint.write_text("base", encoding="utf-8")
+
+    resolved, info = tox_cmd._resolve_task_encoder_checkpoint(
+        str(base_checkpoint),
+        "SR-ARE",
+    )
+
+    assert resolved == str(base_checkpoint)
+    assert info["source"] == "task_dir_missing"
+    assert info["task_dir"] == str(target_dir)
 
 
 # ---------------------------------------------------------------------------

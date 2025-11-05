@@ -454,6 +454,105 @@ def _schema_cache_dir(base: Optional[str], add_3d: Optional[bool], hidden_dim: O
     return str(schema_path)
 
 
+def _resolve_task_encoder_checkpoint(
+    base_checkpoint: Optional[str],
+    task_name: str,
+) -> Tuple[Optional[str], Dict[str, Any]]:
+    """Resolve the encoder checkpoint for a specific Tox21 task.
+
+    When the evaluation entry-point receives a fine-tuned checkpoint from the
+    CI wrappers it typically points at one assay directory (e.g. the first
+    task).  This helper re-roots the path so that each assay loads its
+    corresponding fine-tuned encoder, falling back to the provided path when a
+    task-specific export is unavailable.
+    """
+
+    info: Dict[str, Any] = {
+        "task": task_name,
+        "provided": base_checkpoint,
+        "resolved": base_checkpoint,
+        "source": "unset" if not base_checkpoint else "provided",
+        "task_dir": None,
+        "candidates": [],
+    }
+
+    if not base_checkpoint or not task_name:
+        return base_checkpoint, info
+
+    try:
+        base_path = Path(base_checkpoint).expanduser()
+    except Exception as exc:
+        info["error"] = f"{exc.__class__.__name__}: {exc}"
+        return base_checkpoint, info
+
+    resolved_str = str(base_path)
+    info["resolved"] = resolved_str
+    info["candidates"].append(resolved_str)
+
+    parent = base_path.parent
+    if parent.name == task_name:
+        info["source"] = "provided_task_dir"
+        info["task_dir"] = str(parent)
+        return resolved_str, info
+
+    finetune_root: Optional[Path] = None
+    if parent.name == "finetune":
+        finetune_root = parent
+    else:
+        try:
+            grandparent = parent.parent
+        except Exception:
+            grandparent = None
+        if grandparent is not None and grandparent.name == "finetune":
+            finetune_root = grandparent
+
+    if finetune_root is None:
+        info["source"] = "provided"
+        return resolved_str, info
+
+    task_dir = finetune_root / task_name
+    info["task_dir"] = str(task_dir)
+
+    candidate_paths: List[Path] = []
+    candidate_paths.append(task_dir / base_path.name)
+
+    suffix = base_path.suffix
+    if suffix:
+        candidate_paths.append(task_dir / f"encoder_ft{suffix}")
+    candidate_paths.append(task_dir / "encoder_ft.pt")
+
+    seen_candidates = {str(candidate) for candidate in candidate_paths}
+    try:
+        for candidate in sorted(task_dir.glob("encoder_ft*.pt")):
+            candidate_str = str(candidate)
+            if candidate_str not in seen_candidates:
+                candidate_paths.append(candidate)
+                seen_candidates.add(candidate_str)
+    except Exception:
+        pass
+
+    for candidate in candidate_paths:
+        candidate_str = str(candidate)
+        info["candidates"].append(candidate_str)
+        try:
+            if candidate.is_file():
+                info["resolved"] = candidate_str
+                info["source"] = "task_dir"
+                return candidate_str, info
+        except Exception:
+            continue
+
+    try:
+        if task_dir.is_dir():
+            info["source"] = "task_dir_missing"
+        else:
+            info["source"] = "provided"
+    except Exception:
+        info["source"] = "provided"
+
+    return resolved_str, info
+
+
 def _resolve_tox21_tasks(args: argparse.Namespace) -> List[str]:
     candidates: List[str] = []
     explicit = getattr(args, "tasks", None)
@@ -586,6 +685,28 @@ def _run_tox21_single_task(
 
     allow_shape_flag = getattr(args, "allow_shape_coercion", None)
 
+    base_encoder_checkpoint = getattr(args, "encoder_checkpoint", None)
+    task_encoder_checkpoint, task_encoder_info = _resolve_task_encoder_checkpoint(
+        base_encoder_checkpoint,
+        task_name,
+    )
+    if task_encoder_info.get("source") == "task_dir" and task_encoder_checkpoint != base_encoder_checkpoint:
+        logger.info(
+            "Tox21 task %s using fine-tuned encoder checkpoint %s", task_name, task_encoder_checkpoint
+        )
+    elif task_encoder_info.get("source") == "task_dir_missing" and base_encoder_checkpoint:
+        candidates = ", ".join(task_encoder_info.get("candidates", [])[1:]) or "<none>"
+        logger.warning(
+            "Fine-tuned encoder for %s not found under %s (candidates: %s); falling back to %s",
+            task_name,
+            task_encoder_info.get("task_dir"),
+            candidates,
+            base_encoder_checkpoint,
+        )
+    if task_encoder_checkpoint != base_encoder_checkpoint:
+        setattr(args, "encoder_checkpoint", task_encoder_checkpoint)
+    resolved_encoder_checkpoint = getattr(args, "encoder_checkpoint", None)
+
     try:
         threshold_rule = resolve_metric_threshold(dataset_name, task_name)
     except KeyError:
@@ -642,7 +763,7 @@ def _run_tox21_single_task(
         "pretrain_time_budget_mins": getattr(args, "pretrain_time_budget_mins", 0),
         "finetune_time_budget_mins": getattr(args, "finetune_time_budget_mins", 0),
         "cache_dir": cache_dir,
-        "encoder_checkpoint": getattr(args, "encoder_checkpoint", None),
+        "encoder_checkpoint": resolved_encoder_checkpoint,
         "encoder_manifest": getattr(args, "encoder_manifest", None),
         "strict_encoder_config": getattr(args, "strict_encoder_config", False),
         "encoder_source_override": getattr(args, "encoder_source", None),
@@ -705,6 +826,14 @@ def _run_tox21_single_task(
                 diagnostics_ref.setdefault("allow_shape_coercion_retry_reason", allow_shape_error)
 
     diagnostics = getattr(result, "diagnostics", {}) or {}
+    try:
+        resolver_payload = dict(task_encoder_info)
+    except Exception:
+        resolver_payload = {"task": task_name, "provided": base_encoder_checkpoint}
+    if isinstance(resolver_payload.get("candidates"), list):
+        resolver_payload["candidates"] = [str(entry) for entry in resolver_payload["candidates"]]
+    if isinstance(diagnostics, dict):
+        diagnostics.setdefault("task_encoder_resolver", resolver_payload)
     encoder_hash = getattr(result, "encoder_hash", None)
     baseline_hash = getattr(result, "baseline_encoder_hash", None)
     encoder_load = getattr(result, "encoder_load", {}) or {}
