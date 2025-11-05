@@ -1820,7 +1820,13 @@ def _train_linear_head_impl(
                 avg_val_loss = float(np.mean(val_losses)) if val_losses else 0.0
                 avg_t = torch.tensor([avg_val_loss], device=device_t)
                 if distributed:
-                    torch.distributed.all_reduce(avg_t, op=torch.distributed.ReduceOp.AVG)
+                    dist_mod = getattr(torch, "distributed", None)
+                    if (
+                        dist_mod is not None
+                        and getattr(dist_mod, "is_available", lambda: False)()
+                        and getattr(dist_mod, "is_initialized", lambda: False)()
+                    ):
+                        dist_mod.all_reduce(avg_t, op=dist_mod.ReduceOp.AVG)
                 avg_val_loss = avg_t.item()
                 val_metric_values: Dict[str, float] = {}
                 if val_preds_store and val_targets_store:
