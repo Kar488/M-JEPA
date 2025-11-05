@@ -15,7 +15,12 @@ logger = logging.getLogger(__name__)
 def should_retry_with_gloo(exc: BaseException) -> bool:
     """Return ``True`` when a distributed failure suggests a gloo retry."""
 
-    needles = ("Duplicate GPU detected", "ncclInvalidUsage")
+    needles = (
+        "Duplicate GPU detected",
+        "ncclInvalidUsage",
+        "contains duplicate entries",
+        "Each distributed rank must map to a unique GPU",
+    )
 
     seen: set[int] = set()
     current: BaseException | None = exc
