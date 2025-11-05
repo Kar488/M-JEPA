@@ -1047,6 +1047,9 @@ def _train_linear_head_impl(
         if isinstance(head_module, nn.parallel.DistributedDataParallel)
         else head_module
     )
+
+    encoder_initial_mode = encoder.training
+    head_initial_mode = head_module.training
     if task_type == "classification":
         pos_weight_tensor: Optional[torch.Tensor] = None
         if pos_weight is not None:
@@ -1987,6 +1990,16 @@ def _train_linear_head_impl(
         if _budget_remaining_secs is not None:
             metrics.setdefault("time/headroom_secs", max(float(_budget_remaining_secs), 0.0))
         metrics.setdefault("time/budget_exhausted", float(1.0 if _headroom_triggered else 0.0))
+
+    try:
+        encoder.train(encoder_initial_mode)
+    except Exception:  # pragma: no cover - best effort restoration
+        logger.debug("Failed to restore encoder training mode", exc_info=True)
+
+    try:
+        head_module.train(head_initial_mode)
+    except Exception:  # pragma: no cover - best effort restoration
+        logger.debug("Failed to restore head training mode", exc_info=True)
 
     if distributed:
         cleanup()
