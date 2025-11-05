@@ -801,6 +801,26 @@ def _train_linear_head_impl(
             os.environ["LOCAL_WORLD_SIZE"] = "1"
             os.environ["RANK"] = "0"
             os.environ["LOCAL_RANK"] = "0"
+        else:
+            if distributed:
+                dist_mod = getattr(torch, "distributed", None)
+                is_initialised = bool(
+                    dist_mod is not None
+                    and getattr(dist_mod, "is_available", lambda: False)()
+                    and getattr(dist_mod, "is_initialized", lambda: False)()
+                )
+                if not is_initialised:
+                    logger.warning(
+                        "Distributed initialisation reported success but no process group is active; "
+                        "falling back to single-process execution.",
+                    )
+                    cleanup()
+                    distributed = False
+                    devices = 1
+                    os.environ["WORLD_SIZE"] = "1"
+                    os.environ["LOCAL_WORLD_SIZE"] = "1"
+                    os.environ["RANK"] = "0"
+                    os.environ["LOCAL_RANK"] = "0"
 
     device_t = torch.device(device)
     ddp_device_index: Optional[int] = None
