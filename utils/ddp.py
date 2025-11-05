@@ -12,6 +12,46 @@ from typing import Iterator, Sequence, TYPE_CHECKING
 logger = logging.getLogger(__name__)
 
 
+def _resolve_visible_cuda_devices() -> tuple[list[str], list[str], str]:
+    """Return the unique CUDA device entries and any duplicates in the mask."""
+
+    raw_mask = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
+    duplicates: list[str] = []
+
+    if raw_mask:
+        unique: list[str] = []
+        seen: dict[str, str] = {}
+        for entry in raw_mask.split(","):
+            token = entry.strip()
+            if not token:
+                continue
+            canonical = token
+            if ":" in canonical:
+                prefix, _, suffix = canonical.partition(":")
+                if prefix.lower() == "cuda":
+                    canonical = suffix
+            key = canonical.strip().lower()
+            if key in seen:
+                duplicates.append(token)
+                continue
+            seen[key] = token
+            unique.append(token)
+        return unique, duplicates, raw_mask
+
+    cuda_mod = getattr(torch, "cuda", None)
+    if cuda_mod is None:
+        return [], [], ""
+
+    device_count_fn = getattr(cuda_mod, "device_count", None)
+    try:
+        available = int(device_count_fn()) if callable(device_count_fn) else 0
+    except Exception:
+        available = 0
+
+    unique = [str(i) for i in range(max(0, available))]
+    return unique, duplicates, ""
+
+
 def _pin_visible_cuda_device_to_local_rank() -> None:
     """Restrict ``CUDA_VISIBLE_DEVICES`` to the device assigned to this rank."""
 
@@ -37,26 +77,20 @@ def _pin_visible_cuda_device_to_local_rank() -> None:
     if local_world_size <= 1:
         return
 
-    raw_mask = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
-    if raw_mask:
-        devices = [entry.strip() for entry in raw_mask.split(",") if entry.strip()]
-    else:
-        device_count_fn = getattr(cuda_mod, "device_count", None)
-        try:
-            available = int(device_count_fn()) if callable(device_count_fn) else 0
-        except Exception:
-            available = 0
-        devices = [str(i) for i in range(max(0, available))]
+    devices, duplicates, raw_mask = _resolve_visible_cuda_devices()
 
     if not devices:
         return
 
     if len(devices) < local_world_size:
+        descriptor = raw_mask or "device_count"
+        if duplicates:
+            descriptor = f"{descriptor} (duplicates trimmed)".strip()
         logger.error(
             "Distributed launch requested %d CUDA devices per node but only %d are visible (%s).",
             local_world_size,
             len(devices),
-            raw_mask or "device_count",
+            descriptor,
         )
         raise RuntimeError(
             "Insufficient CUDA devices for distributed launch. Set CUDA_VISIBLE_DEVICES "
@@ -88,21 +122,8 @@ def _pin_visible_cuda_device_to_local_rank() -> None:
 def _visible_cuda_device_count() -> int:
     """Return the number of CUDA devices visible to the current process."""
 
-    mask = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
-    if mask:
-        devices = [entry.strip() for entry in mask.split(",") if entry.strip()]
-        return len(devices)
-
-    cuda_mod = getattr(torch, "cuda", None)
-    if cuda_mod is None:
-        return 0
-
-    device_count_fn = getattr(cuda_mod, "device_count", None)
-    try:
-        available = int(device_count_fn()) if callable(device_count_fn) else 0
-    except Exception:
-        available = 0
-    return max(0, available)
+    devices, _, _ = _resolve_visible_cuda_devices()
+    return len(devices)
 
 
 def _find_free_port() -> int:
@@ -189,7 +210,8 @@ def init_distributed(backend: str | None = None) -> bool:
     if world_size <= 1:
         return False
 
-    available_devices = _visible_cuda_device_count()
+    visible_devices, duplicate_entries, raw_mask = _resolve_visible_cuda_devices()
+    available_devices = len(visible_devices)
     cuda_mod = getattr(torch, "cuda", None)
     cuda_available = bool(
         getattr(cuda_mod, "is_available", lambda: False)()
@@ -216,6 +238,18 @@ def init_distributed(backend: str | None = None) -> bool:
     ):
         logger.warning("NCCL not available; falling back to gloo")
         backend = "gloo"
+
+    if backend == "nccl" and local_world_size > 1 and duplicate_entries:
+        deduped = sorted({entry.strip() for entry in duplicate_entries if entry.strip()})
+        detail = ", ".join(deduped) or raw_mask or "CUDA_VISIBLE_DEVICES"
+        message = (
+            "CUDA_VISIBLE_DEVICES contains duplicate entries "
+            f"({detail}) but LOCAL_WORLD_SIZE={local_world_size}. "
+            "Each distributed rank must map to a unique GPU; adjust the mask or "
+            "reduce --devices."
+        )
+        logger.error(message)
+        raise RuntimeError(message)
 
     if backend == "nccl":
         try:

@@ -206,6 +206,56 @@ def test_init_distributed_nccl_requires_visible_cuda(monkeypatch):
         ddp.init_distributed(backend="nccl")
 
 
+def test_init_distributed_nccl_rejects_duplicate_visible_cuda(monkeypatch):
+    monkeypatch.delenv("DISABLE_DDP", raising=False)
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,0")
+
+    class _FakeCuda:
+        def is_available(self):
+            return True
+
+        def device_count(self):
+            return 2
+
+        def set_device(self, idx):  # pragma: no cover - should not be called
+            raise AssertionError("set_device should not be invoked when duplicates are present")
+
+    class _FakeDist:
+        def is_available(self):
+            return True
+
+        def is_initialized(self):
+            return False
+
+        def init_process_group(self, **_):  # pragma: no cover - should not run
+            raise AssertionError("init_process_group should not be called")
+
+        def get_rank(self):
+            return 0
+
+        def get_world_size(self):
+            return 1
+
+        def destroy_process_group(self):
+            pass
+
+        def is_nccl_available(self):
+            return True
+
+    fake_torch = types.SimpleNamespace(cuda=_FakeCuda())
+    monkeypatch.setattr(ddp, "torch", fake_torch, raising=False)
+    monkeypatch.setattr(ddp, "dist", _FakeDist(), raising=False)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        ddp.init_distributed(backend="nccl")
+
+    message = str(excinfo.value).lower()
+    assert "duplicate" in message
+
+
 def test_get_rank_world_size_default(monkeypatch):
     ddp.dist.is_initialized = lambda: False
     assert ddp.get_rank() == 0
