@@ -34,6 +34,7 @@ from utils.early_stopping import EarlyStopping
 from utils.dataset import SupportsTeardown
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.graph_ops import _encode_graph
+from utils.ddp import should_retry_with_gloo
 from utils.dataloader import (
     autotune_worker_pool,
     check_fd_budget,
@@ -686,7 +687,7 @@ def _dataset_size(dataset) -> int:
     )
 
 
-def train_linear_head(
+def _train_linear_head_impl(
     dataset: GraphDataset,
     encoder: GNNEncoder,
     task_type: str,
@@ -1960,3 +1961,160 @@ def train_linear_head(
     if distributed:
         cleanup()
     return metrics
+
+
+def train_linear_head(
+    dataset: GraphDataset,
+    encoder: GNNEncoder,
+    task_type: str,
+    epochs: int = 50,
+    lr: float = 1e-3,
+    batch_size: int = 32,
+    device: str = "cuda",
+    patience: int = 10,
+    num_workers: int = -1,
+    pin_memory=True,
+    persistent_workers=True,
+    prefetch_factor=4,
+    bf16=False,
+    use_scaffold: bool = False,
+    devices: int = 1,
+    *,
+    max_batches: int = 0,
+    time_budget_mins: int = 0,
+    head: Optional[nn.Module] = None,
+    optimizer: Optional[Optimizer] = None,
+    scheduler: Optional[_LRScheduler] = None,
+    encoder_lr: Optional[float] = None,
+    head_lr: Optional[float] = None,
+    freeze_encoder: bool = True,
+    early_stop_metric: str = "val_loss",
+    early_stop_mode: Optional[str] = None,
+    cache_graph_embeddings: bool = True,
+    train_indices: Optional[Iterable[int]] = None,
+    val_indices: Optional[Iterable[int]] = None,
+    test_indices: Optional[Iterable[int]] = None,
+    enable_batch_autoscale: bool = False,
+    batch_autoscale_min_steps: int = 10,
+    batch_autoscale_floor: int = 64,
+    unfreeze_top_layers: int = 0,
+    stage_config: Optional[Dict[str, Any]] = None,
+    pos_weight: Optional[Any] = None,
+    class_weight: Optional[Any] = None,
+    **unused,
+) -> Dict[str, float]:
+    """Train a linear head and retry with gloo when NCCL detects duplicates."""
+
+    backend_override = os.environ.get("DDP_FORCE_BACKEND", "").strip().lower()
+
+    try:
+        return _train_linear_head_impl(
+            dataset=dataset,
+            encoder=encoder,
+            task_type=task_type,
+            epochs=epochs,
+            lr=lr,
+            batch_size=batch_size,
+            device=device,
+            patience=patience,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
+            prefetch_factor=prefetch_factor,
+            bf16=bf16,
+            use_scaffold=use_scaffold,
+            devices=devices,
+            max_batches=max_batches,
+            time_budget_mins=time_budget_mins,
+            head=head,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            encoder_lr=encoder_lr,
+            head_lr=head_lr,
+            freeze_encoder=freeze_encoder,
+            early_stop_metric=early_stop_metric,
+            early_stop_mode=early_stop_mode,
+            cache_graph_embeddings=cache_graph_embeddings,
+            train_indices=train_indices,
+            val_indices=val_indices,
+            test_indices=test_indices,
+            enable_batch_autoscale=enable_batch_autoscale,
+            batch_autoscale_min_steps=batch_autoscale_min_steps,
+            batch_autoscale_floor=batch_autoscale_floor,
+            unfreeze_top_layers=unfreeze_top_layers,
+            stage_config=stage_config,
+            pos_weight=pos_weight,
+            class_weight=class_weight,
+            **unused,
+        )
+    except Exception as exc:
+        if backend_override == "gloo" or not should_retry_with_gloo(exc):
+            raise
+
+        logger.warning(
+            "Distributed linear head training failed with NCCL backend (%s); retrying with gloo.",
+            exc,
+        )
+
+        cleanup_fn = None
+        try:
+            from utils.ddp import cleanup as cleanup_fn  # type: ignore[assignment]
+        except Exception:
+            cleanup_fn = None  # type: ignore[assignment]
+
+        if callable(cleanup_fn):
+            try:
+                cleanup_fn()
+            except Exception:
+                logger.debug("DDP cleanup prior to gloo retry failed", exc_info=True)
+
+        previous_backend = os.environ.get("DDP_FORCE_BACKEND")
+        try:
+            os.environ["DDP_FORCE_BACKEND"] = "gloo"
+            return _train_linear_head_impl(
+                dataset=dataset,
+                encoder=encoder,
+                task_type=task_type,
+                epochs=epochs,
+                lr=lr,
+                batch_size=batch_size,
+                device=device,
+                patience=patience,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+                persistent_workers=persistent_workers,
+                prefetch_factor=prefetch_factor,
+                bf16=bf16,
+                use_scaffold=use_scaffold,
+                devices=devices,
+                max_batches=max_batches,
+                time_budget_mins=time_budget_mins,
+                head=head,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                encoder_lr=encoder_lr,
+                head_lr=head_lr,
+                freeze_encoder=freeze_encoder,
+                early_stop_metric=early_stop_metric,
+                early_stop_mode=early_stop_mode,
+                cache_graph_embeddings=cache_graph_embeddings,
+                train_indices=train_indices,
+                val_indices=val_indices,
+                test_indices=test_indices,
+                enable_batch_autoscale=enable_batch_autoscale,
+                batch_autoscale_min_steps=batch_autoscale_min_steps,
+                batch_autoscale_floor=batch_autoscale_floor,
+                unfreeze_top_layers=unfreeze_top_layers,
+                stage_config=stage_config,
+                pos_weight=pos_weight,
+                class_weight=class_weight,
+                **unused,
+            )
+        finally:
+            if previous_backend is None:
+                os.environ.pop("DDP_FORCE_BACKEND", None)
+            else:
+                os.environ["DDP_FORCE_BACKEND"] = previous_backend
+
+
+train_linear_head.__doc__ = _train_linear_head_impl.__doc__
