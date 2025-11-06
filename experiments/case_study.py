@@ -2300,6 +2300,15 @@ def run_tox21_case_study(
 
         head = clf_metrics.get("head")
         if head is None:
+            fallback_head = linear_kwargs.get("head")
+            if fallback_head is not None:
+                logger.warning(
+                    "train_linear_head did not return a head module; falling back to the provided head instance."
+                )
+                head = fallback_head
+        if isinstance(head, torch.nn.parallel.DistributedDataParallel):
+            head = head.module
+        if head is None:
             raise RuntimeError("train_linear_head did not return a head module")
         head = head.to(device)
         head_trained = True
