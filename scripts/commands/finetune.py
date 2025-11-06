@@ -10,7 +10,7 @@ import random
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -50,6 +50,218 @@ _TOX21_TASKS = {
     "SR-MMP",
     "SR-p53",
 }
+
+
+def _flag_was_provided(flags: Iterable[str]) -> bool:
+    argv = sys.argv[1:]
+    for token in argv:
+        for flag in flags:
+            if token == flag or token.startswith(f"{flag}="):
+                return True
+    return False
+
+
+def _extract_bestcfg_value(raw: Dict[str, Any], key: str) -> Any:
+    direct = raw.get(key)
+    if isinstance(direct, dict) and "value" in direct:
+        return direct.get("value")
+    if direct is not None:
+        return direct
+    for container_key in ("parameters", "config"):
+        container = raw.get(container_key)
+        if isinstance(container, dict):
+            value = container.get(key)
+            if isinstance(value, dict) and "value" in value:
+                return value.get("value")
+            if value is not None:
+                return value
+    return None
+
+
+def _coerce_bool_like(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        norm = value.strip().lower()
+        if norm in {"1", "true", "yes", "on"}:
+            return True
+        if norm in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _coerce_int_like(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _coerce_float_like(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _discover_best_config_path(args: argparse.Namespace) -> Optional[Path]:
+    candidates: List[Path] = []
+    for attr in ("best_config_path", "best_config", "best_config_json"):
+        val = getattr(args, attr, None)
+        if val:
+            candidates.append(Path(str(val)))
+
+    env_hints = [
+        os.getenv("BEST_CONFIG_PATH"),
+        os.getenv("FINETUNE_BEST_CONFIG"),
+        os.getenv("TRAIN_JEPA_BEST_CONFIG"),
+        os.getenv("TOX21_BEST_CONFIG"),
+    ]
+    for hint in env_hints:
+        if hint:
+            candidates.append(Path(hint))
+
+    for env in ("GRID_DIR", "GRID_SOURCE_DIR", "EXPERIMENT_DIR", "EXPERIMENTS_ROOT"):
+        base = os.getenv(env)
+        if not base:
+            continue
+        root = Path(base)
+        candidates.append(root / "best_grid_config.json")
+        candidates.append(root / "phase2_export" / "best_grid_config.json")
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve()
+        except Exception:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.is_file():
+            return resolved
+    return None
+
+
+def _load_best_config_overrides(args: argparse.Namespace) -> Tuple[Dict[str, Any], Optional[Path]]:
+    path = _discover_best_config_path(args)
+    if path is None:
+        return {}, None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.debug("Failed to read best_config from %s", path, exc_info=True)
+        return {}, path
+
+    overrides: Dict[str, Any] = {}
+
+    hidden_val = _coerce_int_like(_extract_bestcfg_value(raw, "hidden_dim"))
+    if hidden_val is not None:
+        overrides["hidden_dim"] = hidden_val
+
+    layers_val = _coerce_int_like(_extract_bestcfg_value(raw, "num_layers"))
+    if layers_val is not None:
+        overrides["num_layers"] = layers_val
+
+    gnn_raw = _extract_bestcfg_value(raw, "gnn_type")
+    if isinstance(gnn_raw, str) and gnn_raw.strip():
+        overrides["gnn_type"] = gnn_raw.strip()
+
+    add_val = _coerce_bool_like(_extract_bestcfg_value(raw, "add_3d"))
+    if add_val is not None:
+        overrides["add_3d"] = add_val
+
+    devices_val = _coerce_int_like(_extract_bestcfg_value(raw, "devices"))
+    if devices_val is not None:
+        overrides["devices"] = devices_val
+
+    num_workers_val = _coerce_int_like(_extract_bestcfg_value(raw, "num_workers"))
+    if num_workers_val is not None:
+        overrides["num_workers"] = num_workers_val
+
+    prefetch_val = _coerce_int_like(_extract_bestcfg_value(raw, "prefetch_factor"))
+    if prefetch_val is not None:
+        overrides["prefetch_factor"] = prefetch_val
+
+    pin_memory_val = _coerce_bool_like(_extract_bestcfg_value(raw, "pin_memory"))
+    if pin_memory_val is not None:
+        overrides["pin_memory"] = pin_memory_val
+
+    persistent_val = _coerce_bool_like(_extract_bestcfg_value(raw, "persistent_workers"))
+    if persistent_val is not None:
+        overrides["persistent_workers"] = persistent_val
+
+    bf16_val = _coerce_bool_like(_extract_bestcfg_value(raw, "bf16"))
+    if bf16_val is not None:
+        overrides["bf16"] = bf16_val
+
+    batch_val = _coerce_int_like(_extract_bestcfg_value(raw, "finetune_batch_size"))
+    if batch_val is not None:
+        overrides["batch_size"] = batch_val
+
+    epoch_val = _coerce_int_like(_extract_bestcfg_value(raw, "finetune_epochs"))
+    if epoch_val is not None:
+        overrides["epochs"] = epoch_val
+
+    lr_val = _coerce_float_like(_extract_bestcfg_value(raw, "lr"))
+    if lr_val is None:
+        lr_val = _coerce_float_like(_extract_bestcfg_value(raw, "learning_rate"))
+    if lr_val is not None:
+        overrides["lr"] = lr_val
+
+    return overrides, path
+
+
+def _apply_best_config_overrides(args: argparse.Namespace) -> None:
+    best_overrides, best_path = _load_best_config_overrides(args)
+    if not best_overrides:
+        return
+
+    inherited: List[str] = []
+
+    def _apply(dest: str, value: Any, *, flags: Tuple[str, ...] = ()) -> None:
+        if value is None:
+            return
+        if flags and _flag_was_provided(flags):
+            return
+        current = getattr(args, dest, None)
+        if isinstance(value, bool):
+            coerced: Any = bool(value)
+        else:
+            coerced = value
+        if current == coerced:
+            return
+        setattr(args, dest, coerced)
+        inherited.append(f"{dest}={coerced}")
+
+    _apply("gnn_type", best_overrides.get("gnn_type"), flags=("--gnn-type", "--gnn_type"))
+    _apply("hidden_dim", best_overrides.get("hidden_dim"), flags=("--hidden-dim", "--hidden_dim"))
+    _apply("num_layers", best_overrides.get("num_layers"), flags=("--num-layers", "--num_layers"))
+    _apply("add_3d", best_overrides.get("add_3d"), flags=("--add-3d", "--add_3d"))
+    _apply("devices", best_overrides.get("devices"), flags=("--devices",))
+    _apply("num_workers", best_overrides.get("num_workers"), flags=("--num-workers", "--num_workers"))
+    _apply("prefetch_factor", best_overrides.get("prefetch_factor"), flags=("--prefetch-factor", "--prefetch_factor"))
+    _apply("pin_memory", best_overrides.get("pin_memory"), flags=("--pin-memory", "--pin_memory"))
+    _apply("persistent_workers", best_overrides.get("persistent_workers"), flags=("--persistent-workers", "--persistent_workers"))
+    _apply("bf16", best_overrides.get("bf16"), flags=("--bf16",))
+    _apply("batch_size", best_overrides.get("batch_size"), flags=("--batch-size", "--batch_size"))
+    _apply("epochs", best_overrides.get("epochs"), flags=("--epochs",))
+    _apply("lr", best_overrides.get("lr"), flags=("--lr",))
+
+    if inherited and best_path is not None:
+        logger.info(
+            "Inheriting Phase-2 best_config overrides from %s: %s",
+            best_path,
+            ", ".join(inherited),
+        )
 
 def _split_label_list(raw: str) -> List[str]:
     tokens: List[str] = []
@@ -1446,6 +1658,7 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def cmd_finetune(args: argparse.Namespace) -> None:
+    _apply_best_config_overrides(args)
     label_columns = _resolve_label_columns(args)
     if len(label_columns) <= 1:
         if label_columns:

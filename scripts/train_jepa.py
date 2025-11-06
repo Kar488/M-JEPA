@@ -1153,6 +1153,27 @@ def build_parser() -> argparse.ArgumentParser:
             "This is independent from --max-pretrain-batches."
         ),
     )
+    ft.add_argument(
+        "--best-config",
+        dest="best_config",
+        type=str,
+        default=None,
+        help="Optional path to a best_config JSON file to inherit downstream overrides.",
+    )
+    ft.add_argument(
+        "--best-config-json",
+        dest="best_config_json",
+        type=str,
+        default=None,
+        help="Alias for --best-config when providing a JSON file with tuned hyper-parameters.",
+    )
+    ft.add_argument(
+        "--best-config-path",
+        dest="best_config_path",
+        type=str,
+        default=None,
+        help="Alias for --best-config to ease integration with existing CI tooling.",
+    )
     _add_common_args(ft, "finetune")
     _add_model_args(ft)
     ft.set_defaults(func=cmd_finetune)
@@ -1168,6 +1189,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ev.add_argument("--task-type", choices=["classification", "regression"], default="classification")
     ev.add_argument("--patience", type=int, default=CONFIG.get("evaluate", {}).get("patience", 10), help="Early stopping patience")
+    ev.add_argument(
+        "--best-config",
+        dest="best_config",
+        type=str,
+        default=None,
+        help="Optional path to a best_config JSON file to inherit downstream overrides.",
+    )
+    ev.add_argument(
+        "--best-config-json",
+        dest="best_config_json",
+        type=str,
+        default=None,
+        help="Alias for --best-config when providing a JSON file with tuned hyper-parameters.",
+    )
+    ev.add_argument(
+        "--best-config-path",
+        dest="best_config_path",
+        type=str,
+        default=None,
+        help="Alias for --best-config to ease integration with existing CI tooling.",
+    )
     _add_common_args(ev, "evaluate")
     _add_model_args(ev)
     ev.set_defaults(func=cmd_evaluate)

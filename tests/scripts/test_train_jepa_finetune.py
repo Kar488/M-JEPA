@@ -58,6 +58,96 @@ class DummyDataset:
         return 1
 
 
+def test_cmd_finetune_inherits_best_config_overrides(tmp_path, monkeypatch):
+    import scripts.commands.finetune as ft
+
+    best_payload = {
+        "add_3d": {"value": 1},
+        "hidden_dim": {"value": 64},
+        "num_layers": {"value": 3},
+        "lr": {"value": 5e-4},
+    }
+    best_path = tmp_path / "best.json"
+    best_path.write_text(json.dumps(best_payload))
+
+    dataset = DummyDataset()
+    load_calls = {}
+
+    def load_dataset_stub(path, *, add_3d=False, **kwargs):
+        load_calls["add_3d"] = add_3d
+        load_calls["kwargs"] = kwargs
+        return dataset
+
+    monkeypatch.setattr(tj, "load_directory_dataset", load_dataset_stub, raising=False)
+    monkeypatch.setattr(ft, "load_directory_dataset", load_dataset_stub, raising=False)
+
+    class DummyEncoder:
+        def __init__(self, hidden_dim=16, num_layers=2):
+            self.hidden_dim = hidden_dim
+            self.num_layers = num_layers
+
+        def state_dict(self):
+            return {}
+
+        def parameters(self):
+            return []
+
+        def children(self):
+            return []
+
+    encoder_cfg = {}
+
+    def build_encoder_stub(**kwargs):
+        encoder_cfg.update(kwargs)
+        return DummyEncoder(hidden_dim=kwargs.get("hidden_dim", 16), num_layers=kwargs.get("num_layers", 2))
+
+    monkeypatch.setattr(tj, "build_encoder", build_encoder_stub, raising=False)
+
+    class DummyHead(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(16, 1)
+
+    def train_linear_head_stub(**_kwargs):
+        return {
+            "val_auc": 0.5,
+            "head": DummyHead(),
+            "train/batches": 1.0,
+            "train/epoch_batches": 1.0,
+        }
+
+    monkeypatch.setattr(tj, "train_linear_head", train_linear_head_stub, raising=False)
+
+    class DummyWB:
+        def __init__(self):
+            self.config = type("Cfg", (), {"update": lambda *_a, **_k: None})()
+
+        def log(self, *_args, **_kwargs):
+            pass
+
+        def finish(self):
+            pass
+
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: DummyWB(), raising=False)
+
+    monkeypatch.setattr(ft.sys, "argv", ["train_jepa.py", "finetune"])
+    monkeypatch.setenv("TRAIN_JEPA_BEST_CONFIG", str(best_path))
+    monkeypatch.setattr(tj.torch, "load", lambda *a, **k: {"encoder": {}}, raising=True)
+
+    args = make_args(tmp_path, seeds=[0])
+    args.metric = "val_auc"
+    args.ckpt_dir = str(tmp_path / "ft_best")
+    args.best_config_path = str(best_path)
+
+    tj.cmd_finetune(args)
+
+    assert load_calls.get("add_3d") is True
+    assert bool(getattr(args, "add_3d", False)) is True
+    assert encoder_cfg.get("hidden_dim") == 64
+    assert encoder_cfg.get("num_layers") == 3
+    assert pytest.approx(args.lr) == pytest.approx(5e-4)
+
+
 def test_cmd_finetune_reuses_split_across_epochs(tmp_path, monkeypatch):
     import scripts.commands.finetune as ft
 
