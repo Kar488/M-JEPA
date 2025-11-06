@@ -12,6 +12,28 @@ from typing import Iterator, Sequence, TYPE_CHECKING
 logger = logging.getLogger(__name__)
 
 
+def should_retry_with_gloo(exc: BaseException) -> bool:
+    """Return ``True`` when a distributed failure suggests a gloo retry."""
+
+    needles = (
+        "Duplicate GPU detected",
+        "ncclInvalidUsage",
+        "contains duplicate entries",
+        "Each distributed rank must map to a unique GPU",
+    )
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current)
+        if any(token in message for token in needles):
+            return True
+        current = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+
+    return False
+
+
 def _resolve_visible_cuda_devices() -> tuple[list[str], list[str], str]:
     """Return the unique CUDA device entries and any duplicates in the mask."""
 
@@ -223,6 +245,18 @@ def init_distributed(backend: str | None = None) -> bool:
     # Default to a loopback rendezvous so unit tests / local runs avoid hostname lookups.
     os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
     os.environ.setdefault("MASTER_PORT", str(_find_free_port()))
+
+    backend_override = os.environ.get("DDP_FORCE_BACKEND")
+    if backend_override:
+        override = backend_override.strip().lower()
+        if override:
+            if backend is not None and override != backend:
+                logger.info(
+                    "Overriding distributed backend via DDP_FORCE_BACKEND=%s (was %s)",
+                    override,
+                    backend,
+                )
+            backend = override
 
     if backend is None:
         want_nccl = (

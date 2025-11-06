@@ -1611,34 +1611,22 @@ run_with_timeout() {
     local GRACE="${KILL_AFTER_SECS:-60}"
     echo "[stage] wall budget=${BUDGET_MINS}m (${SOFT}s), grace=${GRACE}s"
 
-    mkdir -p "$LOG_DIR" 
-    echo "1"
+    mkdir -p "$LOG_DIR"
     LOG="${LOG_DIR}/${s}.log"
-    echo "2"
     local -a stage_launch_env=()
-    echo "3"
     local stage_python_bin=""
-    echo "4"
     local -a stage_python_args=()
     if ! ci_stage_resolve_python_runner stage_launch_env stage_python_bin stage_python_args "$s"; then
       echo "[diag] about to exit: unable to resolve python runner (stage=${s})" >&2
       exit 1
     fi
-    echo "5"
     local -a python_runner_cmd=("${stage_launch_env[@]}" "$stage_python_bin" "${stage_python_args[@]}")
-    echo "16"
     local -a ddp_launcher=()
-    echo "7"
     local previous_world="${WORLD_SIZE-}"
-    echo "8"
     local previous_master_addr="${MASTER_ADDR-}"
-    echo "9"
     local previous_master_port="${MASTER_PORT-}"
-    echo "10"
     local ddp_env_modified=0
-    echo "11"
     local -a entrypoint_args=("${arr[@]}")
-    echo "12"
     local -a entrypoint=()
     local ddp_enabled=0
 
@@ -1687,7 +1675,6 @@ run_with_timeout() {
     }
 
     local ddp_stage=""
-    echo "26"
     case "$s" in
       finetune|tox21) ddp_stage="$s" ;;
     esac
@@ -1695,30 +1682,20 @@ run_with_timeout() {
     local force_cpu_execution=0
 
     if [[ -n "$ddp_stage" ]]; then
-      echo "27"
       local devices_idx=-1
-      echo "28"
       local devices_joined=0
-      echo "29"
       local requested_devices=""
-      echo "30"
       local i=0
       local detected_cuda_devices=""
       while (( i < ${#entrypoint_args[@]} )); do
-        echo "31"
         local token="${entrypoint_args[$i]}"
-        echo "32"
         if [[ "$token" == "--devices" ]]; then
-          echo "33"
           devices_idx=$i
-          echo "34"
           if (( i + 1 < ${#entrypoint_args[@]} )); then
-            echo "35"
             requested_devices="${entrypoint_args[$((i + 1))]}"
           fi
           break
         elif [[ "$token" == --devices=* ]]; then
-          echo "36"
           devices_idx=$i
           devices_joined=1
           requested_devices="${token#--devices=}"
@@ -1728,7 +1705,6 @@ run_with_timeout() {
       done
 
       if [[ -z "$requested_devices" ]]; then
-        echo "37"
         case "$ddp_stage" in
           finetune)
             requested_devices="${FINETUNE_DEVICES:-}"
@@ -1740,7 +1716,6 @@ run_with_timeout() {
       fi
 
       if [[ "$requested_devices" =~ ^[0-9]+$ && "$requested_devices" -gt 1 ]]; then
-        echo "38"
         local probe_output=""
         local ddp_supported=0
         if probe_output=$("${python_runner_cmd[@]}" - <<'PY'
@@ -1770,14 +1745,12 @@ else:
 print(max(count, 0))
 PY
         ); then
-          echo "39"
           ddp_supported=1
         fi
 
         local effective_devices="$requested_devices"
         local available_devices=0
         if (( ddp_supported )); then
-          echo "40"
           available_devices="${probe_output:-0}"
           available_devices="${available_devices//$'\r'/}"
           available_devices="${available_devices//$'\n'/}"
@@ -1796,12 +1769,10 @@ PY
           fi
         else
           echo "[stage:$s] torch.distributed.run unavailable; falling back to single-process execution" >&2
-          echo "41"
           effective_devices=1
         fi
 
         if (( effective_devices > 1 && ddp_supported )); then
-          echo "42"
           local world="${WORLD_SIZE:-}"
           if [[ -z "$world" || "$world" -le 1 ]]; then
             local ddp_port="${MASTER_PORT:-}"
@@ -1816,7 +1787,6 @@ PY
           else
             echo "[stage:$s] WORLD_SIZE=${world}; assuming external launcher configured DDP" >&2
           fi
-          echo "43"
           ddp_launcher=(-m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
           ddp_enabled=1
         else
@@ -1824,16 +1794,13 @@ PY
         fi
 
         if (( effective_devices != ${requested_devices} )); then
-          echo "44"
           if (( devices_idx >= 0 )); then
             if (( devices_joined )); then
-              echo "45"
               entrypoint_args[$devices_idx]="--devices=${effective_devices}"
             else
               entrypoint_args[$((devices_idx + 1))]="${effective_devices}"
             fi
           else
-            echo "46"
             entrypoint_args+=("--devices" "${effective_devices}")
           fi
         fi
@@ -1841,7 +1808,6 @@ PY
     fi
 
     if [[ -n "$ddp_stage" ]]; then
-      echo "47"
       local requested_device=""
       local device_token=""
       local idx=0
@@ -1856,13 +1822,10 @@ PY
           requested_device="${device_token#--device=}"
           break
         fi
-        echo "48"
         ((idx+=1))
       done
-      echo "49"
       local normalized_device="${requested_device,,}"
       if [[ -z "$normalized_device" ]]; then
-        echo "50"
         normalized_device="cuda"
       fi
 
@@ -1894,33 +1857,27 @@ if torch is not None:
 print(max(count, 0))
 PY
       ); then
-        echo "51"
         cuda_count="${cuda_probe_output:-0}"
         cuda_count="${cuda_count//$'\r'/}"
         cuda_count="${cuda_count//$'\n'/}"
         cuda_count="${cuda_count//[[:space:]]/}"
       else
-        echo "52"
         cuda_count="0"
       fi
 
       if [[ -z "$cuda_count" ]]; then
-        echo "53"
         cuda_count="0"
       fi
 
       if [[ -n "$detected_cuda_devices" ]]; then
-        echo "54"
         cuda_count="$detected_cuda_devices"
       fi
 
       if [[ "$normalized_device" == cuda* && "$cuda_count" =~ ^[0-9]+$ && "$cuda_count" -eq 0 ]]; then
-        echo "55"
         force_cpu_execution=1
       fi
 
       if (( force_cpu_execution )); then
-        echo "56"
         ddp_launcher=()
         ddp_enabled=0
         set_devices_arg 1
@@ -1934,29 +1891,24 @@ PY
 
     local build_entrypoint
     build_entrypoint() {
-      echo "57"
       entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${entrypoint_args[@]}")
     }
 
     local fallback_attempted=0
-    echo "58"
     while true; do
       build_entrypoint
 
       local -a stage_cmd=("${python_runner_cmd[@]}")
       local using_ddp=0
       if (( ${#ddp_launcher[@]} )); then
-        echo "59"
         stage_cmd+=("${ddp_launcher[@]}" "${entrypoint[@]}")
         using_ddp=1
       else
-        echo "60"
         stage_cmd+=("${entrypoint[@]}")
       fi
 
       local stage_python_cmd_str=""
       if (( ${#stage_cmd[@]} )); then
-        echo "61"
         printf -v stage_python_cmd_str '%q ' "${stage_cmd[@]}"
         stage_python_cmd_str=${stage_python_cmd_str% }
       fi
@@ -1998,7 +1950,6 @@ PY
         mark_graceful_stop "$s"
         return 0
       elif (( using_ddp )) && (( ddp_enabled )) && (( ! fallback_attempted )); then
-        echo "62"
         fallback_attempted=1
         ddp_launcher=()
         set_devices_arg 1

@@ -9,6 +9,7 @@ import inspect
 import io
 import json
 import logging
+import math
 import os
 import tempfile
 from collections.abc import Mapping as MappingABC
@@ -18,6 +19,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
 import pandas as pd
+
+try:  # pragma: no cover - numpy optional in some environments
+    import numpy as np
+except Exception:  # pragma: no cover - fallback when numpy unavailable
+    np = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - optional plotting dependencies
     from . import (
@@ -277,6 +283,86 @@ def _figure_to_markdown(fig: Any, title: str) -> Optional[str]:
     if not encoded:
         return None
     return f"![{title}](data:image/png;base64,{encoded})"
+
+
+def _normalise_table_cell(value: Any) -> Any:
+    """Convert complex dataframe values into wandb-friendly scalars."""
+
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):  # type: ignore[arg-type]
+            return None
+    except Exception:
+        pass
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        return float(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return base64.b64encode(value).decode("ascii")
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, pd.Timedelta):
+        return str(value)
+
+    if np is not None:
+        try:
+            if isinstance(value, np.generic):
+                return _normalise_table_cell(value.item())
+            if isinstance(value, np.ndarray):
+                normalised = [_normalise_table_cell(v) for v in value.tolist()]
+                return json.dumps(normalised, ensure_ascii=False, default=str)
+        except Exception:
+            return str(value)
+
+    if isinstance(value, pd.Series):
+        normalised = [_normalise_table_cell(v) for v in value.tolist()]
+        return json.dumps(normalised, ensure_ascii=False, default=str)
+
+    if isinstance(value, MappingABC):
+        try:
+            normalised = {str(k): _normalise_table_cell(v) for k, v in value.items()}
+        except Exception:
+            return str(value)
+        return json.dumps(normalised, ensure_ascii=False, sort_keys=True, default=str)
+
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        normalised = [_normalise_table_cell(v) for v in value]
+        return json.dumps(normalised, ensure_ascii=False, default=str)
+
+    try:
+        tolist = getattr(value, "tolist")
+    except (AttributeError, KeyError):
+        tolist = None
+    if callable(tolist):
+        with contextlib.suppress(Exception):
+            normalised = [_normalise_table_cell(v) for v in tolist()]
+            return json.dumps(normalised, ensure_ascii=False, default=str)
+
+    return str(value)
+
+
+def _sanitise_dataframe_for_wandb(df: Any) -> Any:
+    """Return a dataframe copy with cells reduced to wandb-friendly scalars."""
+
+    if df is None:
+        return None
+    if not isinstance(df, pd.DataFrame):
+        return df
+    if df.empty:
+        return df.copy()
+    return df.applymap(_normalise_table_cell)
 
 
 def _instantiate_report(
@@ -1123,14 +1209,15 @@ def _log_assets_to_wandb(
     figure_static: Dict[str, Optional[str]] = {}
 
     for table_name, df, caption in tables:
-        static_markdown = _dataframe_to_markdown(df)
+        sanitised_df = _sanitise_dataframe_for_wandb(df)
+        static_markdown = _dataframe_to_markdown(sanitised_df)
         table_static[table_name] = static_markdown
         asset = cached_assets.get(table_name)
         if asset and asset.kind == "table":
             asset.static_markdown = static_markdown
             reused.append(asset)
             continue
-        tables_to_log.append((table_name, df, caption))
+        tables_to_log.append((table_name, sanitised_df, caption))
 
     for fig_name, fig, caption in figures:
         static_markdown = _figure_to_markdown(fig, fig_name)

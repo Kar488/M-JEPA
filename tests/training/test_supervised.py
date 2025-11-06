@@ -400,6 +400,55 @@ def test_train_linear_head_falls_back_when_ddp_init_fails(monkeypatch, caplog):
     assert os.environ.get("LOCAL_RANK") == "0"
 
 
+def test_train_linear_head_retries_with_gloo_on_duplicate_devices(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+
+    init_calls: list[str | None] = []
+
+    def _init_with_duplicate_failure(*_args, **_kwargs):
+        init_calls.append(os.environ.get("DDP_FORCE_BACKEND"))
+        if len(init_calls) == 1:
+            raise RuntimeError(
+                "CUDA_VISIBLE_DEVICES contains duplicate entries (0, 0) but "
+                "LOCAL_WORLD_SIZE=2. Each distributed rank must map to a unique GPU; "
+                "adjust the mask or reduce --devices."
+            )
+        return True
+
+    monkeypatch.setattr(
+        "utils.ddp.init_distributed",
+        _init_with_duplicate_failure,
+        raising=False,
+    )
+
+    np.random.seed(1)
+    torch.manual_seed(1)
+    labels = [0, 1, 0, 1]
+    dataset = DummyDataset(labels)
+    encoder = DummyEncoder(4)
+
+    metrics = train_linear_head(
+        dataset,
+        encoder,
+        "classification",
+        epochs=1,
+        batch_size=2,
+        lr=1e-3,
+        patience=1,
+        devices=2,
+        device="cpu",
+    )
+
+    assert len(init_calls) == 2
+    assert init_calls[0] in (None, "")
+    assert init_calls[1] == "gloo"
+    assert "roc_auc" in metrics or "val_auc" in metrics
+    assert metrics["head"].training  # type: ignore[index]
+
+
 def test_train_linear_head_uses_encode_graph_cache(monkeypatch):
     graphs = [
         GraphData(
