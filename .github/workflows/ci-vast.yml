@@ -737,7 +737,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 100m
+          command_timeout: 910m
           envs: APP_DIR,GRID_DIR,TOX21_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
