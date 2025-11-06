@@ -726,7 +726,7 @@ def _train_linear_head_impl(
     pos_weight: Optional[Any] = None,
     class_weight: Optional[Any] = None,
     **unused,
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """Train a linear head on a frozen encoder for classification or regression.
 
     When ``devices > 1`` the encoder and head are wrapped with
@@ -1922,7 +1922,7 @@ def _train_linear_head_impl(
                 )
                 break
 
-    metrics: Dict[str, float] = {}
+    metrics: Dict[str, Any] = {"head": head_param_source}
     if is_main_process() or not distributed:
         encoder.eval()
         head_module.eval()
@@ -1973,14 +1973,13 @@ def _train_linear_head_impl(
         y_true = np.nan_to_num(y_true, nan=0.0, posinf=0.0, neginf=0.0)
         y_pred = np.nan_to_num(y_pred, nan=0.0, posinf=0.0, neginf=0.0)
         if task_type == "classification":
-            metrics = compute_classification_metrics(y_true, y_pred)
+            metrics.update(compute_classification_metrics(y_true, y_pred))
         else:
-            metrics = compute_regression_metrics(y_true, y_pred)
+            metrics.update(compute_regression_metrics(y_true, y_pred))
         if best_val_snapshot:
             metrics.update(best_val_snapshot)
         elif val_loader is not None:
             metrics.setdefault("val_loss", float("nan"))
-        metrics["head"] = head_param_source
         metrics["train/batches"] = float(total_batches_done)
         metrics["train/loader_batches"] = float(planned_train_batches)
         metrics["train/epoch_batches"] = float(last_epoch_batches)
@@ -2003,6 +2002,7 @@ def _train_linear_head_impl(
 
     if distributed:
         cleanup()
+    metrics["head"] = head_param_source
     return metrics
 
 
@@ -2045,7 +2045,7 @@ def train_linear_head(
     pos_weight: Optional[Any] = None,
     class_weight: Optional[Any] = None,
     **unused,
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """Train a linear head and retry with gloo when NCCL detects duplicates."""
 
     backend_override = os.environ.get("DDP_FORCE_BACKEND", "").strip().lower()
