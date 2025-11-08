@@ -1146,6 +1146,8 @@ def _evaluate_case_study(
 
     if (
         roc_auc_is_nan
+        and unique_valid_labels is not None
+        and unique_valid_labels.size >= 2
         and num_valid >= 2
         and per_head_probs.get("test")
     ):
@@ -1941,7 +1943,8 @@ def run_tox21_case_study(
             "positives": positives,
         }
 
-    if scaffold_split_indices and _HAS_RDKIT:
+    used_scaffold_split = bool(scaffold_split_indices and _HAS_RDKIT)
+    if used_scaffold_split:
         train_split, val_split, test_split = scaffold_split_indices(
             smiles_list,
             train_frac=train_fraction,
@@ -1970,6 +1973,45 @@ def run_tox21_case_study(
         )
         random.setstate(rand_state)
         np.random.set_state(np_state)
+
+    def _has_label_diversity(indices: List[int]) -> bool:
+        if not indices:
+            return False
+        arr = all_labels[np.asarray(indices, dtype=int)]
+        mask = np.isfinite(arr)
+        observed = arr[mask]
+        if observed.size < 2:
+            return False
+        unique = np.unique(observed.astype(int, copy=False))
+        return unique.size >= 2
+
+    if used_scaffold_split:
+        missing_diversity: List[str] = []
+        if not _has_label_diversity(val_idx):
+            missing_diversity.append("val")
+        if not _has_label_diversity(test_idx):
+            missing_diversity.append("test")
+        if missing_diversity:
+            logger.warning(
+                "Scaffold split produced %s split(s) without label diversity; falling back to stratified split.",
+                ",".join(missing_diversity),
+            )
+            indices = list(range(num_total))
+            rand_state = random.getstate()
+            np_state = np.random.get_state()
+            train_idx, val_idx, test_idx = stratified_split(
+                indices,
+                dataset.labels,
+                train_frac=train_fraction,
+                val_frac=val_fraction,
+            )
+            random.setstate(rand_state)
+            np.random.set_state(np_state)
+            diagnostics["split_strategy"] = "stratified_fallback"
+        else:
+            diagnostics["split_strategy"] = "scaffold"
+    else:
+        diagnostics["split_strategy"] = "stratified"
 
     split_summary = {
         "train": _split_summary(train_idx),
