@@ -19,7 +19,7 @@ import pickle
 import random
 import sys
 import types
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
@@ -695,7 +695,11 @@ def _predict_logits_probs_in_chunks(
     diag_hook: Optional[Callable[[int, int], None]] = None,
 ):
     encoder.eval()
-    head.eval()
+    if isinstance(head, Sequence):
+        for member in head:
+            member.eval()
+    else:
+        head.eval()
     device_t = torch.device(device) if not isinstance(device, torch.device) else device
     logits_list: List[torch.Tensor] = []
     probs_list: List[torch.Tensor] = []
@@ -794,24 +798,59 @@ def _evaluate_case_study(
 
         return _hook
 
-    val_logits, val_probs = _predict_logits_probs_in_chunks(
-        dataset,
-        val_indices,
-        encoder,
-        head,
-        device,
-        edge_dim,
-        diag_hook=_make_batch_hook("val"),
-    )
-    test_logits, test_probs = _predict_logits_probs_in_chunks(
-        dataset,
-        test_indices,
-        encoder,
-        head,
-        device,
-        edge_dim,
-        diag_hook=_make_batch_hook("test"),
-    )
+    head_modules: List[torch.nn.Module] = []
+    if isinstance(head, Sequence) and not isinstance(head, torch.nn.Module):
+        for member in head:
+            if isinstance(member, torch.nn.Module):
+                head_modules.append(member)
+    elif isinstance(head, torch.nn.Module):
+        head_modules.append(head)
+    if not head_modules:
+        raise RuntimeError("No prediction head available for evaluation")
+
+    def _mean_tensors(
+        tensors: List[torch.Tensor],
+        split: str,
+        kind: str,
+    ) -> torch.Tensor:
+        if not tensors:
+            return torch.empty((0, 1))
+        if len(tensors) == 1:
+            return tensors[0]
+        lengths = {int(t.shape[0]) for t in tensors}
+        if len(lengths) > 1:
+            min_len = min(lengths)
+            logger.warning(
+                "Head ensemble produced mismatched %s lengths on %s split; truncating to %d",
+                kind,
+                split,
+                min_len,
+            )
+            tensors = [t[:min_len] for t in tensors]
+        stacked = torch.stack([t.to(torch.float32) for t in tensors], dim=0)
+        return stacked.mean(dim=0)
+
+    def _collect_predictions(split: str, indices: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
+        logits_members: List[torch.Tensor] = []
+        probs_members: List[torch.Tensor] = []
+        base_hook = _make_batch_hook(split)
+        for idx, module in enumerate(head_modules):
+            hook = base_hook if idx == 0 else None
+            logits, probs = _predict_logits_probs_in_chunks(
+                dataset,
+                indices,
+                encoder,
+                module,
+                device,
+                edge_dim,
+                diag_hook=hook,
+            )
+            logits_members.append(logits)
+            probs_members.append(probs)
+        return _mean_tensors(logits_members, split, "logits"), _mean_tensors(probs_members, split, "probabilities")
+
+    val_logits, val_probs = _collect_predictions("val", val_indices)
+    test_logits, test_probs = _collect_predictions("test", test_indices)
 
     def _select_positive_probabilities(arr: np.ndarray) -> np.ndarray:
         arr = np.asarray(arr)
@@ -1089,6 +1128,7 @@ def run_tox21_case_study(
     encoder_lr: Optional[float] = None,
     weight_decay: Optional[float] = None,
     class_weights: Any = "auto",
+    pos_class_weight: Any = None,
     hidden_dim: int = 256,
     num_layers: int = 3,
     gnn_type: str = "mpnn",
@@ -1125,8 +1165,10 @@ def run_tox21_case_study(
     cli_num_layers_provided: bool = True,
     cli_gnn_type_provided: bool = True,
     full_finetune: Optional[bool] = None,
+    freeze_encoder: bool = False,
     unfreeze_top_layers: int = 0,
     tox21_head_batch_size: int = 256,
+    head_ensemble_size: int = 1,
     cache_dir: Optional[str] = None,
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
@@ -1148,6 +1190,22 @@ def run_tox21_case_study(
     logger.debug("Loaded %d molecules", len(smiles_list))
 
     diagnostics: Dict[str, Any] = {}
+    try:
+        ensemble_size = int(head_ensemble_size)
+    except Exception:
+        logger.warning(
+            "Failed to parse head_ensemble_size=%s; defaulting to 1",
+            head_ensemble_size,
+            exc_info=True,
+        )
+        ensemble_size = 1
+    if ensemble_size <= 0:
+        logger.warning(
+            "Invalid head_ensemble_size=%s; forcing at least one head",
+            head_ensemble_size,
+        )
+        ensemble_size = 1
+    diagnostics["head_ensemble_size"] = int(ensemble_size)
     full_finetune_requested = full_finetune
     full_finetune_effective = (
         bool(full_finetune_requested)
@@ -1877,6 +1935,15 @@ def run_tox21_case_study(
                 "Fine-tuned checkpoint supplied without explicit full_finetune flag; keeping encoder frozen.",
             )
 
+    freeze_encoder_requested = bool(freeze_encoder)
+    if freeze_encoder_requested and full_finetune_effective:
+        logger.info(
+            "Freeze-encoder flag set; disabling full fine-tuning for evaluation mode '%s'.",
+            display_mode,
+        )
+        full_finetune_effective = False
+        auto_full_finetune = False
+
     if (
         normalized_mode in {"frozen_finetuned", "end_to_end"}
         and not encoder_checkpoint
@@ -2029,6 +2096,10 @@ def run_tox21_case_study(
     diagnostics["auto_pretrain"] = bool(auto_pretrain)
     diagnostics["full_finetune"] = bool(full_finetune_effective)
     diagnostics["full_finetune_requested"] = full_finetune_requested
+    diagnostics["freeze_encoder_requested"] = freeze_encoder_requested
+    diagnostics["freeze_encoder_effective"] = bool(
+        freeze_encoder_requested or not full_finetune_effective
+    )
     diagnostics["encoder_load"] = encoder_load_info
     diagnostics["encoder_hash"] = encoder_hash
     diagnostics["baseline_encoder_hash"] = baseline_hash
@@ -2165,15 +2236,18 @@ def run_tox21_case_study(
             )
             weight_decay_value = None
 
-    optimizer_for_head: Optional[torch.optim.Optimizer] = None
-    probe_head: Optional[torch.nn.Module] = None
-    if train_probe and weight_decay_value is not None:
-        probe_head = torch.nn.Linear(int(final_hidden_dim), 1)
-        optimizer_for_head = torch.optim.AdamW(  # type: ignore[call-arg]
-            [{"params": probe_head.parameters(), "lr": head_lr_value}],
+    def _build_probe_head_and_optimizer() -> Tuple[
+        Optional[torch.nn.Module], Optional[torch.optim.Optimizer]
+    ]:
+        if weight_decay_value is None:
+            return None, None
+        head = torch.nn.Linear(int(final_hidden_dim), 1)
+        optimizer = torch.optim.AdamW(  # type: ignore[call-arg]
+            [{"params": head.parameters(), "lr": head_lr_value}],
             lr=head_lr_value,
             weight_decay=weight_decay_value,
         )
+        return head, optimizer
 
     bf16_linear = bf16_head if bf16_head is not None else bf16
 
@@ -2183,6 +2257,39 @@ def run_tox21_case_study(
 
     manual_class_weight: Optional[Dict[int, float]] = None
     automatic_class_weight = bool(use_pos_weight)
+    pos_weight_override: Optional[float] = None
+    if pos_class_weight is not None:
+        candidate: Any = pos_class_weight
+        if isinstance(pos_class_weight, Mapping):
+            keys_to_try = []
+            if task_name is not None:
+                keys_to_try.extend(
+                    [
+                        str(task_name),
+                        str(task_name).lower(),
+                        str(task_name).upper(),
+                    ]
+                )
+            keys_to_try.extend(["default", "Default", "*", "all"])
+            for key in keys_to_try:
+                if key in pos_class_weight:
+                    candidate = pos_class_weight[key]
+                    break
+            else:
+                candidate = None
+        if candidate is not None:
+            try:
+                pos_weight_override = float(candidate)
+            except Exception:
+                logger.warning(
+                    "Failed to parse pos_class_weight=%s; ignoring override",
+                    candidate,
+                    exc_info=True,
+                )
+                pos_weight_override = None
+    diagnostics["pos_class_weight_override"] = (
+        float(pos_weight_override) if pos_weight_override is not None else None
+    )
     linear_train_fn = _train_linear_head_callable()
     if isinstance(class_weights, str):
         mode = class_weights.strip()
@@ -2242,8 +2349,21 @@ def run_tox21_case_study(
         )
 
     extra_args: Dict[str, Any] = {}
+    if manual_class_weight is None and pos_weight_override is not None:
+        if pos_weight_override <= 0:
+            logger.warning(
+                "pos_class_weight must be positive; ignoring override value %.3f",
+                pos_weight_override,
+            )
+        else:
+            manual_class_weight = {0: 1.0, 1: float(pos_weight_override)}
+            automatic_class_weight = False
+
     if manual_class_weight is not None:
         extra_args["class_weight"] = manual_class_weight
+        diagnostics["class_weight_manual"] = {
+            int(k): float(v) for k, v in manual_class_weight.items()
+        }
     elif automatic_class_weight and train_idx_arr.size > 0:
         train_labels = all_labels[train_idx_arr]
         mask = ~np.isnan(train_labels)
@@ -2288,33 +2408,79 @@ def run_tox21_case_study(
             "unfreeze_top_layers": int(unfreeze_top_layers),
             **extra_args,
         }
-        if optimizer_for_head is not None:
-            linear_kwargs["optimizer"] = optimizer_for_head
-        if probe_head is not None:
-            linear_kwargs["head"] = probe_head
-
         if full_finetune_effective:
             linear_kwargs["early_stop_metric"] = "val_auc"
 
-        clf_metrics = linear_train_fn(**linear_kwargs)
+        ensemble_heads: List[torch.nn.Module] = []
+        ensemble_metrics: List[Dict[str, Any]] = []
 
-        head = clf_metrics.get("head")
-        if head is None:
-            fallback_head = linear_kwargs.get("head")
-            if fallback_head is not None:
-                logger.warning(
-                    "train_linear_head did not return a head module; falling back to the provided head instance."
-                )
-                head = fallback_head
-        if isinstance(head, torch.nn.parallel.DistributedDataParallel):
-            head = head.module
-        if head is None:
-            raise RuntimeError("train_linear_head did not return a head module")
-        head = head.to(device)
+        def _aggregate_stat(key: str) -> float:
+            values: List[float] = []
+            for payload in ensemble_metrics:
+                raw = payload.get(key)
+                if raw is None:
+                    continue
+                try:
+                    values.append(float(raw))
+                except Exception:
+                    continue
+            if not values:
+                return 0.0
+            return float(sum(values) / len(values))
+
+        for member in range(ensemble_size):
+            run_kwargs = dict(linear_kwargs)
+            head_seed, opt_seed = (None, None)
+            if train_probe:
+                head_seed, opt_seed = _build_probe_head_and_optimizer()
+            if head_seed is not None:
+                run_kwargs["head"] = head_seed
+            if opt_seed is not None:
+                run_kwargs["optimizer"] = opt_seed
+            if member > 0:
+                set_seed(int(seed) + member)
+            metrics_payload = linear_train_fn(**run_kwargs)
+            ensemble_metrics.append(metrics_payload)
+
+            head_obj = metrics_payload.get("head")
+            if head_obj is None:
+                fallback_head = run_kwargs.get("head")
+                if fallback_head is not None:
+                    logger.warning(
+                        "train_linear_head did not return a head module; falling back to the provided head instance."
+                    )
+                    head_obj = fallback_head
+            if isinstance(head_obj, torch.nn.parallel.DistributedDataParallel):
+                head_obj = head_obj.module
+            if head_obj is None:
+                raise RuntimeError("train_linear_head did not return a head module")
+            head_obj = head_obj.to(device)
+            ensemble_heads.append(head_obj)
+
+        set_seed(int(seed))
+
+        if not ensemble_heads:
+            raise RuntimeError("No heads were trained during Tox21 fine-tuning")
+
+        head = ensemble_heads[0] if len(ensemble_heads) == 1 else ensemble_heads
+        last_metrics = dict(ensemble_metrics[-1]) if ensemble_metrics else {}
+        last_metrics["head"] = ensemble_heads[-1]
+        clf_metrics = last_metrics
         head_trained = True
-        head_training_steps = float(clf_metrics.get("train/batches", 0.0) or 0.0)
-        head_loader_batches = float(clf_metrics.get("train/loader_batches", 0.0) or 0.0)
-        head_epoch_batches = float(clf_metrics.get("train/epoch_batches", 0.0) or 0.0)
+        head_training_steps = _aggregate_stat("train/batches")
+        head_loader_batches = _aggregate_stat("train/loader_batches")
+        head_epoch_batches = _aggregate_stat("train/epoch_batches")
+        diagnostics["head_ensemble_members_trained"] = len(ensemble_heads)
+        metrics_summary: List[Dict[str, float]] = []
+        for payload in ensemble_metrics:
+            numeric: Dict[str, float] = {}
+            for key, value in payload.items():
+                if isinstance(value, (int, float)):
+                    numeric[key] = float(value)
+            if numeric:
+                metrics_summary.append(numeric)
+        if metrics_summary:
+            diagnostics["head_ensemble_metrics"] = metrics_summary
     else:
         out_dim = 1
         in_dim = final_hidden_dim

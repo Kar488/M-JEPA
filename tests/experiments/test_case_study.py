@@ -1,4 +1,5 @@
 import logging
+import math
 import sys
 import types
 from typing import Any, Dict
@@ -538,6 +539,141 @@ def test_case_study_passes_head_lr_and_weight_decay(tmp_path, monkeypatch):
     opt = captured["optimizer"]
     assert isinstance(opt, torch.optim.AdamW)
     assert opt.param_groups[0]["weight_decay"] == pytest.approx(1e-2)
+
+
+def test_case_study_pos_class_weight_override(monkeypatch):
+    import experiments.case_study as case_study
+
+    monkeypatch.setattr(
+        case_study,
+        "safe_load_checkpoint",
+        lambda *args, **kwargs: ({"encoder": {}}, {}),
+    )
+    monkeypatch.setattr(
+        case_study,
+        "_load_encoder_strict",
+        lambda *args, **kwargs: {"hash": "stub", "matched_ratio": 1.0},
+    )
+    monkeypatch.setattr(case_study, "load_state_dict_forgiving", lambda *a, **k: None)
+
+    captured: Dict[str, Any] = {}
+
+    def fake_train_linear_head(*, class_weight=None, **kwargs):
+        captured["class_weight"] = class_weight
+        head = torch.nn.Linear(256, 1)
+        return {"head": head, "train/batches": 1.0}
+
+    monkeypatch.setattr(case_study, "train_linear_head", fake_train_linear_head)
+
+    result = case_study.run_tox21_case_study(
+        csv_path="samples/tox21_mini.csv",
+        task_name="NR-AR",
+        encoder_checkpoint="stub.pt",
+        evaluation_mode="frozen_finetuned",
+        pos_class_weight=6.0,
+        finetune_epochs=1,
+    )
+
+    weights = captured.get("class_weight")
+    assert weights is not None
+    assert weights[1] == pytest.approx(6.0)
+    assert result.diagnostics["class_weight_manual"][1] == pytest.approx(6.0)
+
+
+def test_case_study_freeze_encoder_overrides_full_finetune(monkeypatch):
+    import experiments.case_study as case_study
+
+    monkeypatch.setattr(
+        case_study,
+        "safe_load_checkpoint",
+        lambda *args, **kwargs: ({"encoder": {}}, {}),
+    )
+    monkeypatch.setattr(
+        case_study,
+        "_load_encoder_strict",
+        lambda *args, **kwargs: {"hash": "stub", "matched_ratio": 1.0},
+    )
+    monkeypatch.setattr(case_study, "load_state_dict_forgiving", lambda *a, **k: None)
+
+    def fake_train_linear_head(*args, **kwargs):
+        head = torch.nn.Linear(256, 1)
+        return {"head": head, "train/batches": 1.0}
+
+    monkeypatch.setattr(case_study, "train_linear_head", fake_train_linear_head)
+
+    result = case_study.run_tox21_case_study(
+        csv_path="samples/tox21_mini.csv",
+        task_name="NR-AR",
+        encoder_checkpoint="stub.pt",
+        evaluation_mode="fine_tuned",
+        full_finetune=True,
+        freeze_encoder=True,
+        finetune_epochs=1,
+    )
+
+    assert result.diagnostics["full_finetune_requested"] is True
+    assert result.diagnostics["full_finetune"] is False
+    assert result.diagnostics["freeze_encoder_effective"] is True
+
+
+def test_case_study_head_ensemble_averages_members(monkeypatch):
+    import experiments.case_study as case_study
+
+    monkeypatch.setattr(
+        case_study,
+        "safe_load_checkpoint",
+        lambda *args, **kwargs: ({"encoder": {}}, {}),
+    )
+    monkeypatch.setattr(
+        case_study,
+        "_load_encoder_strict",
+        lambda *args, **kwargs: {"hash": "stub", "matched_ratio": 1.0},
+    )
+    monkeypatch.setattr(case_study, "load_state_dict_forgiving", lambda *a, **k: None)
+
+    logits = [math.log(0.2 / 0.8), math.log(0.8 / 0.2)]
+
+    def fake_train_linear_head(*args, **kwargs):
+        value = logits.pop(0)
+
+        class _ConstantHead(torch.nn.Module):
+            def __init__(self, logit: float) -> None:
+                super().__init__()
+                self.logit_value = float(logit)
+
+            def forward(self, batch):  # pragma: no cover - exercised indirectly
+                return torch.full((batch.shape[0], 1), self.logit_value, dtype=torch.float32)
+
+        head = _ConstantHead(value)
+        return {"head": head, "train/batches": 1.0}
+
+    monkeypatch.setattr(case_study, "train_linear_head", fake_train_linear_head)
+
+    def fake_predict(dataset, indices, encoder, head, device, edge_dim, diag_hook=None):
+        value = getattr(head, "logit_value", 0.0)
+        logits_tensor = torch.full((len(indices), 1), value, dtype=torch.float32)
+        probs_tensor = torch.sigmoid(logits_tensor)
+        if diag_hook is not None:
+            diag_hook(1, len(indices))
+        return logits_tensor, probs_tensor
+
+    monkeypatch.setattr(case_study, "_predict_logits_probs_in_chunks", fake_predict)
+
+    result = case_study.run_tox21_case_study(
+        csv_path="samples/tox21_mini.csv",
+        task_name="NR-AR",
+        encoder_checkpoint="stub.pt",
+        evaluation_mode="frozen_finetuned",
+        head_ensemble_size=2,
+        finetune_epochs=1,
+    )
+
+    diag = result.diagnostics
+    assert diag["head_ensemble_size"] == 2
+    assert diag["head_ensemble_members_trained"] == 2
+    assert len(diag.get("head_ensemble_metrics", [])) == 2
+    metrics = result.evaluations[0].metrics
+    assert not math.isnan(metrics["roc_auc"])
 
 
 def test_auto_shape_coercion_normalises_metadata(tmp_path, monkeypatch):

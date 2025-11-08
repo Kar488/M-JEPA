@@ -345,6 +345,44 @@ def _coerce_int_like(value: Any) -> Optional[int]:
         return None
 
 
+def _parse_pos_class_weight(values: Optional[Iterable[str]]) -> Optional[Any]:
+    if not values:
+        return None
+    scalar: Optional[float] = None
+    mapping: Dict[str, float] = {}
+    for raw in values:
+        if raw is None:
+            continue
+        token = str(raw).strip()
+        if not token:
+            continue
+        if "=" in token:
+            key, weight = token.split("=", 1)
+            key = key.strip()
+            try:
+                mapping[key] = float(weight)
+            except Exception:
+                logger.warning(
+                    "Failed to parse pos_class_weight pair '%s'; ignoring",
+                    token,
+                    exc_info=True,
+                )
+        else:
+            try:
+                scalar = float(token)
+            except Exception:
+                logger.warning(
+                    "Failed to parse pos_class_weight '%s'; ignoring",
+                    token,
+                    exc_info=True,
+                )
+    if mapping:
+        if scalar is not None and "default" not in mapping:
+            mapping["default"] = scalar
+        return mapping
+    return scalar
+
+
 def _discover_best_config_path(args: argparse.Namespace) -> Optional[Path]:
     candidates: List[Path] = []
     for attr in ("best_config_path", "best_config", "best_config_json"):
@@ -672,6 +710,15 @@ def _run_tox21_single_task(
     if class_weights_arg is None:
         class_weights_arg = "auto"
 
+    pos_class_weight_arg = _parse_pos_class_weight(getattr(args, "pos_class_weight", None))
+
+    head_ensemble_value = _coerce_int_like(getattr(args, "head_ensemble_size", None))
+    if head_ensemble_value is None or head_ensemble_value <= 0:
+        head_ensemble_value = 1
+    setattr(args, "head_ensemble_size", head_ensemble_value)
+
+    freeze_encoder_flag = bool(getattr(args, "freeze_encoder", False))
+
     devices_val = _coerce_int_like(getattr(args, "devices", None))
     if devices_val is None:
         raw_devices = getattr(args, "devices", None)
@@ -731,6 +778,10 @@ def _run_tox21_single_task(
     start_log = {"phase": "tox21", "status": "start", "task": task_name}
     start_log.update(threshold_payload)
     start_log.update(target_payload)
+    start_log["freeze_encoder"] = freeze_encoder_flag
+    start_log["head_ensemble_size"] = head_ensemble_value
+    if pos_class_weight_arg is not None:
+        start_log["pos_class_weight"] = pos_class_weight_arg
     _wandb_log_safe(wb, start_log)
 
     case_study_kwargs: Dict[str, Any] = {
@@ -745,6 +796,7 @@ def _run_tox21_single_task(
         "encoder_lr": getattr(args, "encoder_lr", None),
         "weight_decay": getattr(args, "weight_decay", None),
         "class_weights": class_weights_arg,
+        "pos_class_weight": pos_class_weight_arg,
         "hidden_dim": getattr(args, "hidden_dim", 128),
         "num_layers": getattr(args, "num_layers", 2),
         "gnn_type": getattr(args, "gnn_type", "edge_mpnn"),
@@ -776,8 +828,10 @@ def _run_tox21_single_task(
         "cli_num_layers_provided": getattr(args, "_num_layers_provided", True),
         "cli_gnn_type_provided": getattr(args, "_gnn_type_provided", True),
         "full_finetune": getattr(args, "full_finetune", None),
+        "freeze_encoder": freeze_encoder_flag,
         "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
         "tox21_head_batch_size": int(getattr(args, "tox21_head_batch_size", 256) or 256),
+        "head_ensemble_size": head_ensemble_value,
     }
 
     def _invoke_case_study(allow_shape_value: Optional[bool]) -> Any:
@@ -1733,6 +1787,7 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, dest="batch_size")
     parser.add_argument("--triage-pct", type=float, dest="triage_pct")
     parser.add_argument("--no-calibrate", action="store_true", dest="no_calibrate")
+    parser.add_argument("--pos-class-weight", action="append", dest="pos_class_weight")
     parser.add_argument(
         "--allow-shape-coercion",
         action=_StandaloneBoolFlag,
@@ -1754,11 +1809,17 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
         dest="full_finetune",
     )
     parser.add_argument(
+        "--freeze-encoder",
+        action=_StandaloneBoolFlag,
+        dest="freeze_encoder",
+    )
+    parser.add_argument(
         "--contrastive",
         action=_StandaloneBoolFlag,
         dest="contrastive",
     )
     parser.add_argument("--tox21-head-batch-size", type=int, dest="tox21_head_batch_size")
+    parser.add_argument("--head-ensemble-size", type=int, dest="head_ensemble_size")
     parser.add_argument("--unfreeze-top-layers", type=int, dest="unfreeze_top_layers")
     parser.add_argument("--best-config", dest="best_config")
     parser.add_argument("--best-config-json", dest="best_config_json")
@@ -1782,6 +1843,12 @@ def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespa
         namespace.triage_pct = 0.10
     if not hasattr(namespace, "no_calibrate"):
         namespace.no_calibrate = False
+    if not hasattr(namespace, "pos_class_weight"):
+        namespace.pos_class_weight = None
+    if not hasattr(namespace, "freeze_encoder"):
+        namespace.freeze_encoder = False
+    if getattr(namespace, "head_ensemble_size", None) is None:
+        namespace.head_ensemble_size = 1
     if getattr(namespace, "tox21_head_batch_size", None) is None:
         namespace.tox21_head_batch_size = 256
     for attr in ("gnn_type", "hidden_dim", "num_layers"):

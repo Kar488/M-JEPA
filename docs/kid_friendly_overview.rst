@@ -159,6 +159,14 @@ Where sweeps, reports and exploratory studies live.
   Run qualitative evaluations like the Tox21 toxicity case study or probing
   classifiers over frozen embeddings.
 
+  *Tox21 quick knobs.* The case study CLI now accepts ``--pos-class-weight``
+  (float or ``TASK=value`` pairs) to up-weight the scarce positives, a
+  ``--freeze-encoder`` flag to keep the backbone frozen even when fine-tuning is
+  requested, and ``--head-ensemble-size`` to train a handful of independent
+  heads and average their predictions. Combine them with the existing
+  ``--no-calibrate`` switch to run calibration ablations without touching the
+  source code.
+
 ``ablation.py``
   Systematically disables model components to measure their impact.
 
