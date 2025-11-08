@@ -1146,6 +1146,8 @@ def _evaluate_case_study(
 
     if (
         roc_auc_is_nan
+        and unique_valid_labels is not None
+        and unique_valid_labels.size >= 2
         and num_valid >= 2
         and per_head_probs.get("test")
     ):
