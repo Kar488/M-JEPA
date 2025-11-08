@@ -884,6 +884,8 @@ def _evaluate_case_study(
         stacked = torch.stack([t.to(torch.float32) for t in tensors], dim=0)
         return stacked.mean(dim=0)
 
+    per_head_probs: Dict[str, List[torch.Tensor]] = {}
+
     def _collect_predictions(split: str, indices: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
         logits_members: List[torch.Tensor] = []
         probs_members: List[torch.Tensor] = []
@@ -901,6 +903,7 @@ def _evaluate_case_study(
             )
             logits_members.append(logits)
             probs_members.append(probs)
+        per_head_probs[split] = list(probs_members)
         return _mean_tensors(logits_members, split, "logits"), _mean_tensors(probs_members, split, "probabilities")
 
     val_logits, val_probs = _collect_predictions("val", val_indices)
@@ -1133,12 +1136,62 @@ def _evaluate_case_study(
             except Exception:
                 metrics["ece"] = float("nan")
 
+    roc_auc_is_nan = math.isnan(metrics["roc_auc"])
     if (
-        math.isnan(metrics["roc_auc"])
+        roc_auc_is_nan
         and unique_valid_labels is not None
         and unique_valid_labels.size == 1
     ):
         _ci_log("roc_auc_nan_single_class", unique_label=float(unique_valid_labels[0]))
+
+    if (
+        roc_auc_is_nan
+        and num_valid >= 2
+        and per_head_probs.get("test")
+    ):
+        member_aucs: List[float] = []
+        test_size = int(test_idx_arr.size)
+        for probs_tensor in per_head_probs.get("test", []):
+            try:
+                member_probs = _select_positive_probabilities(probs_tensor.cpu().numpy())
+            except Exception:
+                continue
+            member_probs = np.asarray(member_probs, dtype=float).reshape(-1)
+            if test_size == 0:
+                member_probs = np.zeros((0,), dtype=float)
+            elif member_probs.size == 0:
+                member_probs = np.zeros(test_size, dtype=float)
+            elif member_probs.size != test_size:
+                try:
+                    member_probs = np.resize(member_probs, test_size).reshape(-1)
+                except Exception:
+                    member_probs = np.zeros(test_size, dtype=float)
+            member_probs = np.nan_to_num(member_probs, nan=0.5, posinf=1.0, neginf=0.0)
+            member_valid = member_probs[mask_valid]
+            if member_valid.size != num_valid:
+                continue
+            try:
+                auc_val = float(roc_auc_score(y_true_m.astype(int), member_valid))
+            except Exception:
+                auc_val = float("nan")
+            if math.isnan(auc_val) and np.unique(y_true_m.astype(int)).size >= 2:
+                spread = (
+                    float(np.nanmax(member_valid) - np.nanmin(member_valid))
+                    if member_valid.size
+                    else 0.0
+                )
+                if spread <= 1e-12:
+                    auc_val = 0.5
+            if not math.isnan(auc_val):
+                member_aucs.append(auc_val)
+        if member_aucs:
+            metrics["roc_auc"] = float(sum(member_aucs) / len(member_aucs))
+            if diagnostics is not None:
+                fallback = diagnostics.setdefault("head_ensemble", {})
+                fallback["roc_auc_member_average"] = {
+                    "count": len(member_aucs),
+                    "values": [float(v) for v in member_aucs],
+                }
 
     baseline_means: Dict[str, float] = {}
     if baseline_embeddings:
