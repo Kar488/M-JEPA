@@ -1064,6 +1064,8 @@ def _evaluate_case_study(
     mask_valid = np.isfinite(y_true)
     num_valid = int(mask_valid.sum())
     unique_valid_labels: Optional[np.ndarray] = None
+    if num_valid > 0:
+        unique_valid_labels = np.unique(y_true[mask_valid])
 
     if num_valid < 2:
         if num_valid == 0:
@@ -1072,7 +1074,6 @@ def _evaluate_case_study(
             logger.warning("TEST split has fewer than two finite labels. Skipping AUC/Brier/ECE.")
     else:
         y_true_m = y_true[mask_valid]
-        unique_valid_labels = np.unique(y_true_m)
         if unique_valid_labels.size < 2:
             logger.warning("TEST split degenerate (one class/empty). Skipping AUC/Brier/ECE.")
         else:
