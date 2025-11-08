@@ -112,20 +112,32 @@ def _ci_log(message: str, **payload: Any) -> None:
 # ``train_linear_head`` and ``train_jepa`` so import them defensively to honour
 # test stubs.
 try:  # pragma: no cover - exercised mainly in tests
-    if "training" not in sys.modules:
-        sys.modules["training"] = types.ModuleType("training")
-
-    supervised_mod = importlib.import_module("training.supervised")
-    unsupervised_mod = importlib.import_module("training.unsupervised")
-
-    train_linear_head = getattr(supervised_mod, "train_linear_head", None)
-    train_jepa = getattr(unsupervised_mod, "train_jepa", None)
-    if train_linear_head is None or train_jepa is None:
-        raise AttributeError("Expected train_linear_head and train_jepa to exist")
+    try:
+        supervised_mod = importlib.import_module("training.supervised")
+        unsupervised_mod = importlib.import_module("training.unsupervised")
+    except ModuleNotFoundError as exc:
+        # When the real ``training`` package is unavailable (for instance, when
+        # tests register lightweight stubs directly in ``sys.modules``) we fall
+        # back to a minimal namespace package so ``importlib`` can resolve the
+        # dotted module path.  Creating the stub pre-emptively would shadow the
+        # real package, so only install it after the initial import fails.
+        if exc.name and not exc.name.startswith("training"):
+            raise
+        if "training" not in sys.modules:
+            sys.modules["training"] = types.ModuleType("training")
+        supervised_mod = importlib.import_module("training.supervised")
+        unsupervised_mod = importlib.import_module("training.unsupervised")
 except Exception as exc:  # pragma: no cover - fail fast if even the stub is missing
     raise ImportError(
         "train_linear_head and train_jepa are required to run the Tox21 case study"
     ) from exc
+
+train_linear_head = getattr(supervised_mod, "train_linear_head", None)
+train_jepa = getattr(unsupervised_mod, "train_jepa", None)
+if train_linear_head is None or train_jepa is None:
+    raise ImportError(
+        "train_linear_head and train_jepa are required to run the Tox21 case study"
+    )
 
 _ORIGINAL_TRAIN_LINEAR_HEAD = train_linear_head
 _ORIGINAL_TRAIN_JEPA = train_jepa
@@ -1121,13 +1133,12 @@ def _evaluate_case_study(
             except Exception:
                 metrics["ece"] = float("nan")
 
-    if math.isnan(metrics["roc_auc"]) and num_valid > 0:
-        # A degenerate TEST split with a single class yields an undefined AUC.
-        # Returning the random baseline (0.5) preserves compatibility with
-        # downstream consumers that expect a finite value while still
-        # highlighting the issue through the logged warning above.
-        if unique_valid_labels is not None and unique_valid_labels.size == 1:
-            metrics["roc_auc"] = 0.5
+    if (
+        math.isnan(metrics["roc_auc"])
+        and unique_valid_labels is not None
+        and unique_valid_labels.size == 1
+    ):
+        _ci_log("roc_auc_nan_single_class", unique_label=float(unique_valid_labels[0]))
 
     baseline_means: Dict[str, float] = {}
     if baseline_embeddings:
