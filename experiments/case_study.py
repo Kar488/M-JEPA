@@ -1097,9 +1097,15 @@ def _evaluate_case_study(
             pp = np.nan_to_num(y_pred_m, nan=0.5, posinf=1.0, neginf=0.0)
             yy = y_true_m.astype(int)
             try:
-                metrics["roc_auc"] = float(roc_auc_score(yy, pp))
+                roc_auc_val = float(roc_auc_score(yy, pp))
             except Exception:
-                metrics["roc_auc"] = float("nan")
+                roc_auc_val = float("nan")
+            else:
+                if math.isnan(roc_auc_val) and np.unique(yy).size >= 2:
+                    spread = float(np.nanmax(pp) - np.nanmin(pp)) if pp.size else 0.0
+                    if spread <= 1e-12:
+                        roc_auc_val = 0.5
+            metrics["roc_auc"] = roc_auc_val
             try:
                 metrics["pr_auc"] = float(average_precision_score(yy, pp))
             except Exception:
