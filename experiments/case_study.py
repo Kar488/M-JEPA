@@ -1063,6 +1063,7 @@ def _evaluate_case_study(
     y_true = all_labels[test_idx_arr].astype(float)
     mask_valid = np.isfinite(y_true)
     num_valid = int(mask_valid.sum())
+    unique_valid_labels: Optional[np.ndarray] = None
 
     if num_valid < 2:
         if num_valid == 0:
@@ -1071,7 +1072,8 @@ def _evaluate_case_study(
             logger.warning("TEST split has fewer than two finite labels. Skipping AUC/Brier/ECE.")
     else:
         y_true_m = y_true[mask_valid]
-        if np.unique(y_true_m).size < 2:
+        unique_valid_labels = np.unique(y_true_m)
+        if unique_valid_labels.size < 2:
             logger.warning("TEST split degenerate (one class/empty). Skipping AUC/Brier/ECE.")
         else:
             try:
@@ -1117,6 +1119,14 @@ def _evaluate_case_study(
                 metrics["ece"] = float(expected_calibration_error(pp, yy, n_bins=10))
             except Exception:
                 metrics["ece"] = float("nan")
+
+    if math.isnan(metrics["roc_auc"]) and num_valid > 0:
+        # A degenerate TEST split with a single class yields an undefined AUC.
+        # Returning the random baseline (0.5) preserves compatibility with
+        # downstream consumers that expect a finite value while still
+        # highlighting the issue through the logged warning above.
+        if unique_valid_labels is not None and unique_valid_labels.size == 1:
+            metrics["roc_auc"] = 0.5
 
     baseline_means: Dict[str, float] = {}
     if baseline_embeddings:
