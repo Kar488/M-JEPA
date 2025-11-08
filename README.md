@@ -131,6 +131,11 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
         `--pretrain-lr` to tune pretraining without perturbing the linear head. When running with
         `--evaluation-mode fine_tuned` the command automatically enables full encoder fine-tuning when no
         checkpoint is supplied.
+      - You can now dial in class imbalance and encoder updates explicitly:
+        * `--pos-class-weight` accepts either a float or per-task `TASK=weight` override to up-weight rare positives.
+        * `--freeze-encoder/--no-freeze-encoder` toggles whether the backbone remains frozen even in fine-tuned mode.
+        * `--head-ensemble-size` trains several lightweight heads and averages their predictions for a quick ensemble boost.
+        * Pair these with `--no-calibrate` to benchmark calibrated vs. raw ROC-AUC without editing the code.
       - CI stages share a canonical pretrain experiment id recorded in ``/data/mjepa/experiments/pretrain_state.json``.
         Downstream phases (fine‑tune, tox21, reporting) read that file to discover the encoder checkpoint, manifest, and
         ``tox21_gate.env`` so artifact collection does not rely on timestamp guesses.

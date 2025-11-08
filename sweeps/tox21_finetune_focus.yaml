@@ -1,0 +1,87 @@
+program: "${env:APP_DIR}/scripts/train_jepa.py"
+command:
+  - "python"
+  - "${program}"
+  - "tox21"
+  - "--csv"
+  - "${env:APP_DIR}/data/tox21/data.csv"
+  - "--tasks"
+  - "NR-AR NR-AR-LBD NR-AhR NR-Aromatase NR-ER NR-ER-LBD NR-PPAR-gamma SR-ARE SR-ATAD5 SR-HSE SR-MMP SR-p53"
+  - "--dataset"
+  - "tox21"
+  - "--pretrain-epochs"
+  - "0"
+  - "--finetune-epochs"
+  - "24"
+  - "--freeze-encoder"
+  - "--no-calibrate"
+  - "--pos-class-weight"
+  - "${pos-class-weight}"
+  - "--head-ensemble-size"
+  - "${head-ensemble-size}"
+  - "--head-lr"
+  - "${head-lr}"
+  - "--encoder-lr"
+  - "${encoder-lr}"
+  - "--weight-decay"
+  - "${weight-decay}"
+  - "--patience"
+  - "${patience}"
+  - "--gnn-type"
+  - "${gnn-type}"
+  - "--hidden-dim"
+  - "${hidden-dim}"
+  - "--num-layers"
+  - "${num-layers}"
+  - "--learning-rate"
+  - "${lr}"
+  - "--tox21-head-batch-size"
+  - "${tox21-head-batch-size}"
+  - "--devices"
+  - "1"
+  - "--num-workers"
+  - "4"
+  - "--prefetch-factor"
+  - "2"
+  - "--persistent-workers"
+  - "0"
+  - "--pin-memory"
+  - "0"
+  - "--bf16"
+  - "1"
+
+method: bayes
+metric:
+  name: roc_auc
+  goal: maximize
+
+parameters:
+  head-lr:
+    min: 5.0e-4
+    max: 5.0e-3
+    distribution: log_uniform
+  encoder-lr:
+    values: [1.0e-4, 2.0e-4, 3.0e-4, 5.0e-4]
+  weight-decay:
+    min: 1.0e-6
+    max: 5.0e-3
+    distribution: log_uniform
+  patience:
+    values: [8, 12, 16]
+  hidden-dim:
+    values: [256, 384]
+  num-layers:
+    values: [2, 3]
+  gnn-type:
+    values: [schnet3d, gine, dmpnn]
+  lr:
+    min: 5.0e-4
+    max: 2.0e-3
+    distribution: log_uniform
+  pos-class-weight:
+    values: ["default=6.0", "default=8.0", "default=10.0", "NR-AR=12.0"]
+  head-ensemble-size:
+    values: [1, 3]
+  tox21-head-batch-size:
+    values: [128, 192, 256]
+

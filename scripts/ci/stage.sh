@@ -1272,6 +1272,33 @@ build_stage_args() {
           ;;
       esac
     fi
+
+    local no_calib_requested=0
+    for token in "${OUT[@]}"; do
+      if [[ "$token" == "--no-calibrate" ]]; then
+        no_calib_requested=1
+        break
+      fi
+    done
+    if (( ! no_calib_requested )); then
+      local no_calib_env="${TOX21_NO_CALIBRATE:-}"
+      local calibrate_env="${TOX21_CALIBRATE:-}"
+      case "${no_calib_env,,}" in
+        1|true|yes|on)
+          no_calib_requested=1
+          ;;
+      esac
+      if (( ! no_calib_requested )); then
+        case "${calibrate_env,,}" in
+          0|false|no|off)
+            no_calib_requested=1
+            ;;
+        esac
+      fi
+      if (( no_calib_requested )); then
+        OUT+=("--no-calibrate")
+      fi
+    fi
   fi
 
   if [ "$s" = "report" ]; then

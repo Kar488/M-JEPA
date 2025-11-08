@@ -82,6 +82,8 @@ case_study:
   full_finetune: false
   unfreeze_top_layers: 0
   tox21_head_batch_size: 256
+  head_ensemble_size: 1
+  freeze_encoder: false
 
 ###############################################################
 # Weights & Biases settings

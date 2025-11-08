@@ -1294,6 +1294,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Batch size for the Tox21 head/encoder fine-tuning stage",
     )
     tox.add_argument(
+        "--head-ensemble-size",
+        dest="head_ensemble_size",
+        type=int,
+        default=case_cfg.get("head_ensemble_size", 1),
+        help="Number of independent heads to train and ensemble during Tox21 evaluation",
+    )
+    tox.add_argument(
         "--weight-decay",
         dest="weight_decay",
         type=float,
@@ -1306,8 +1313,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=case_cfg.get("class_weights"),
         help="Class weighting policy for Tox21 (auto, none, or JSON mapping)",
     )
+    tox.add_argument(
+        "--pos-class-weight",
+        dest="pos_class_weight",
+        action="append",
+        default=None,
+        help="Override the positive class weight (float or TASK=weight). Repeatable.",
+    )
     tox.add_argument("--triage-pct", type=float, default=0.10, help="Fraction of TEST to exclude (e.g., 0.10 = 10%%)")
     tox.add_argument("--no-calibrate", action="store_true", help="Disable Platt scaling on VAL")
+    tox.add_argument(
+        "--freeze-encoder",
+        dest="freeze_encoder",
+        action=argparse.BooleanOptionalAction,
+        default=case_cfg.get("freeze_encoder", False),
+        help="Force the encoder to remain frozen during Tox21 fine-tuning",
+    )
     tox.add_argument("--contrastive", action="store_true",
                      help="Use contrastive pretraining instead of JEPA during the case study")
     tox.add_argument(

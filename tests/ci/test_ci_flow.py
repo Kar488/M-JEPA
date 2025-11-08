@@ -814,6 +814,64 @@ printf '%s\\n' \"${{STAGE_ARGS[@]}}\" > \"$ARGS_CAPTURE\"
     assert "--no-full-finetune" not in args_unset
 
 
+def test_build_stage_args_injects_no_calibrate_from_env(tmp_path):
+    best_cfg = {"config": {}}
+    best_path = tmp_path / "best_grid_config.json"
+    best_path.write_text(json.dumps(best_cfg), encoding="utf-8")
+
+    encoder_path = tmp_path / "encoder.pt"
+    encoder_path.write_text("stub", encoding="utf-8")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps({"paths": {"encoder": str(encoder_path)}}), encoding="utf-8"
+    )
+    tox21_dir = tmp_path / "tox21"
+    tox21_dir.mkdir()
+
+    base_env = os.environ.copy()
+    base_env.update(
+        {
+            "APP_DIR": str(REPO_ROOT),
+            "GRID_SOURCE_DIR": str(tmp_path),
+            "GRID_DIR": str(tmp_path),
+            "TOX21_DIR": str(tox21_dir),
+            "TOX21_ENCODER_CHECKPOINT": str(encoder_path),
+            "TOX21_ENCODER_MANIFEST": str(manifest_path),
+            "PRETRAIN_MANIFEST": str(manifest_path),
+            "PRETRAIN_DIR": str(tmp_path / "pretrain"),
+            "PRETRAIN_ARTIFACTS_DIR": str(tmp_path / "artifacts"),
+            "FINETUNE_DIR": str(tmp_path / "finetune"),
+            "PRETRAIN_EPOCHS": "5",
+            "FINETUNE_EPOCHS": "5",
+            "WANDB_API_KEY": "",
+        }
+    )
+
+    def _collect(extra_env: dict[str, str]) -> list[str]:
+        env = base_env.copy()
+        env.update(extra_env)
+        capture_path = tmp_path / f"calibrate_capture_{len(extra_env)}.txt"
+        env["ARGS_CAPTURE"] = str(capture_path)
+        script = f"""
+set -euo pipefail
+source \"{REPO_ROOT}/scripts/ci/common.sh\"
+source \"{REPO_ROOT}/scripts/ci/stage.sh\"
+build_stage_args tox21
+printf '%s\\n' \"${{STAGE_ARGS[@]}}\" > \"$ARGS_CAPTURE\"
+"""
+        subprocess.run(["bash", "-lc", script], check=True, cwd=REPO_ROOT, env=env)
+        return capture_path.read_text(encoding="utf-8").splitlines()
+
+    args_default = _collect({})
+    assert "--no-calibrate" not in args_default
+
+    args_flag = _collect({"TOX21_NO_CALIBRATE": "1"})
+    assert "--no-calibrate" in args_flag
+
+    args_calibrate_false = _collect({"TOX21_CALIBRATE": "false"})
+    assert "--no-calibrate" in args_calibrate_false
+
+
 def test_build_stage_args_deduplicates_bestcfg_overrides(tmp_path):
     best_cfg = {
         "config": {
