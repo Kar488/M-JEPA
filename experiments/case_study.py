@@ -1100,11 +1100,10 @@ def _evaluate_case_study(
                 roc_auc_val = float(roc_auc_score(yy, pp))
             except Exception:
                 roc_auc_val = float("nan")
-            else:
-                if math.isnan(roc_auc_val) and np.unique(yy).size >= 2:
-                    spread = float(np.nanmax(pp) - np.nanmin(pp)) if pp.size else 0.0
-                    if spread <= 1e-12:
-                        roc_auc_val = 0.5
+            if math.isnan(roc_auc_val) and np.unique(yy).size >= 2:
+                spread = float(np.nanmax(pp) - np.nanmin(pp)) if pp.size else 0.0
+                if spread <= 1e-12:
+                    roc_auc_val = 0.5
             metrics["roc_auc"] = roc_auc_val
             try:
                 metrics["pr_auc"] = float(average_precision_score(yy, pp))
