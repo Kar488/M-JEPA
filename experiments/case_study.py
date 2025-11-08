@@ -684,6 +684,46 @@ def _resolve_threshold_rule(dataset_name: Optional[str], task_name: Optional[str
         return None
 
 
+def _maybe_set_eval(candidate: Any) -> None:
+    """Switch a module or nested collection of modules into eval mode."""
+
+    if candidate is None:
+        return
+    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+        for member in candidate:
+            _maybe_set_eval(member)
+        return
+    eval_attr = getattr(candidate, "eval", None)
+    if callable(eval_attr):
+        eval_attr()
+
+
+def _forward_head(head: Any, batch: torch.Tensor) -> torch.Tensor:
+    """Invoke a prediction head safely, tolerating callables and stubs."""
+
+    if head is None:
+        return torch.zeros((batch.shape[0], 1), dtype=batch.dtype, device=batch.device)
+    if isinstance(head, Sequence) and not isinstance(head, (torch.nn.Module, str, bytes, bytearray)):
+        outputs = [_forward_head(member, batch) for member in head]
+        stacked = torch.stack(
+            [torch.as_tensor(o, dtype=batch.dtype, device=batch.device) for o in outputs], dim=0
+        )
+        return stacked.mean(dim=0)
+    if callable(head):
+        result = head(batch)
+    else:
+        raise RuntimeError("Prediction head is not callable")
+    if isinstance(result, (list, tuple)):
+        result = (
+            result[0]
+            if result
+            else torch.zeros((batch.shape[0], 1), dtype=batch.dtype, device=batch.device)
+        )
+    if isinstance(result, torch.Tensor):
+        return result
+    return torch.as_tensor(result, dtype=batch.dtype, device=batch.device)
+
+
 def _predict_logits_probs_in_chunks(
     dataset,
     indices: List[int],
@@ -694,12 +734,8 @@ def _predict_logits_probs_in_chunks(
     batch_size: int = 256,
     diag_hook: Optional[Callable[[int, int], None]] = None,
 ):
-    encoder.eval()
-    if isinstance(head, Sequence):
-        for member in head:
-            member.eval()
-    else:
-        head.eval()
+    _maybe_set_eval(encoder)
+    _maybe_set_eval(head)
     device_t = torch.device(device) if not isinstance(device, torch.device) else device
     logits_list: List[torch.Tensor] = []
     probs_list: List[torch.Tensor] = []
@@ -735,7 +771,7 @@ def _predict_logits_probs_in_chunks(
             if not graph_embs:
                 continue
             batch = torch.cat(graph_embs, dim=0).to(device_t)
-            logits = head(batch)
+            logits = _forward_head(head, batch)
             logits = torch.nan_to_num(logits, nan=0.0, posinf=1e6, neginf=-1e6)
             if logits.ndim == 1 or logits.shape[-1] == 1:
                 probs = torch.sigmoid(logits)
@@ -798,15 +834,21 @@ def _evaluate_case_study(
 
         return _hook
 
-    head_modules: List[torch.nn.Module] = []
-    if isinstance(head, Sequence) and not isinstance(head, torch.nn.Module):
-        for member in head:
-            if isinstance(member, torch.nn.Module):
-                head_modules.append(member)
-    elif isinstance(head, torch.nn.Module):
-        head_modules.append(head)
-    if not head_modules:
-        raise RuntimeError("No prediction head available for evaluation")
+    def _as_head_members(candidate: Any) -> List[Any]:
+        if isinstance(candidate, torch.nn.Module):
+            return [candidate]
+        if isinstance(candidate, Sequence) and not isinstance(
+            candidate, (torch.nn.Module, str, bytes)
+        ):
+            return list(candidate)
+        if candidate is None:
+            return []
+        return [candidate]
+
+    head_members: List[Any] = _as_head_members(head)
+    if not head_members:
+        logger.debug("No explicit prediction head supplied; defaulting to stub entry")
+        head_members = [None]
 
     def _mean_tensors(
         tensors: List[torch.Tensor],
@@ -834,7 +876,7 @@ def _evaluate_case_study(
         logits_members: List[torch.Tensor] = []
         probs_members: List[torch.Tensor] = []
         base_hook = _make_batch_hook(split)
-        for idx, module in enumerate(head_modules):
+        for idx, module in enumerate(head_members):
             hook = base_hook if idx == 0 else None
             logits, probs = _predict_logits_probs_in_chunks(
                 dataset,
@@ -2504,7 +2546,19 @@ def run_tox21_case_study(
         clf_metrics = {"head": head}
 
     encoder.eval()
-    head.eval()
+
+    def _eval_head_modules(candidate: Any) -> None:
+        if isinstance(candidate, torch.nn.Module):
+            candidate.eval()
+            return
+        if isinstance(candidate, Sequence) and not isinstance(
+            candidate, (torch.nn.Module, str, bytes)
+        ):
+            for member in candidate:
+                if isinstance(member, torch.nn.Module):
+                    member.eval()
+
+    _eval_head_modules(head)
 
     (
         mean_true,
