@@ -52,6 +52,8 @@ _TOX21_TASKS = {
     "SR-p53",
 }
 
+_TOX21_EPOCH_FLOOR_DEFAULT = 18
+
 
 def _flag_was_provided(flags: Iterable[str]) -> bool:
     argv = sys.argv[1:]
@@ -300,6 +302,45 @@ def _apply_best_config_overrides(args: argparse.Namespace) -> None:
             best_path,
             ", ".join(inherited),
         )
+
+
+def _maybe_enforce_tox21_epoch_floor(
+    args: argparse.Namespace, label_columns: Iterable[str]
+) -> None:
+    labels = [label for label in label_columns if label]
+    if not labels:
+        return
+    if not all(label in _TOX21_TASKS for label in labels):
+        return
+    dataset_hint = str(getattr(args, "labeled_dir", "") or "").lower()
+    if "tox21" not in dataset_hint:
+        return
+
+    requested_epochs = _coerce_int_like(getattr(args, "epochs", None))
+    if requested_epochs is None:
+        return
+    if _flag_was_provided(("--epochs",)):
+        return
+
+    env_floor = os.getenv("TOX21_FINETUNE_EPOCH_FLOOR") or os.getenv(
+        "TOX21_FINETUNE_MIN_EPOCHS"
+    )
+    floor_value = _coerce_int_like(env_floor) if env_floor else None
+    if floor_value is None or floor_value <= 0:
+        floor_value = _TOX21_EPOCH_FLOOR_DEFAULT
+
+    if requested_epochs >= floor_value:
+        return
+
+    setattr(args, "epochs", floor_value)
+    setattr(args, "_tox21_epoch_floor_applied", True)
+    setattr(args, "_tox21_epoch_floor_value", floor_value)
+    setattr(args, "_tox21_epoch_requested", requested_epochs)
+    logger.info(
+        "[finetune] raising Tox21 epoch floor to %d (requested %s)",
+        floor_value,
+        requested_epochs,
+    )
 
 def _split_label_list(raw: str) -> List[str]:
     tokens: List[str] = []
@@ -1749,6 +1790,16 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
             "batch_size_autoscale_notes",
             batch_size_autoscale_notes if batch_size_autoscale_notes else None,
         )
+        if getattr(args, "_tox21_epoch_floor_applied", False):
+            diagnostics.setdefault("tox21_epoch_floor_applied", True)
+            diagnostics.setdefault(
+                "tox21_epoch_floor_value",
+                int(getattr(args, "_tox21_epoch_floor_value", 0) or 0),
+            )
+            diagnostics.setdefault(
+                "tox21_epoch_requested",
+                int(getattr(args, "_tox21_epoch_requested", 0) or 0),
+            )
     _record_finetune_stage_outputs(stage_payload)
 
     if budget_abort:
@@ -1768,6 +1819,7 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
 def cmd_finetune(args: argparse.Namespace) -> None:
     _apply_best_config_overrides(args)
     label_columns = _resolve_label_columns(args)
+    _maybe_enforce_tox21_epoch_floor(args, label_columns)
     if len(label_columns) <= 1:
         if label_columns:
             setattr(args, "label_col", label_columns[0])
