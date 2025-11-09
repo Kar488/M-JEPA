@@ -978,6 +978,7 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
         _gnn_type_provided=False,
         _hidden_dim_provided=False,
         _num_layers_provided=False,
+        _dropout_provided=False,
     )
     gnn_default = md.get("gnn_type", "edge_mpnn")
     hidden_default = md.get("hidden_dim", 128)
@@ -1022,6 +1023,15 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
         default=layers_default,
         action=_RecordProvided,
     )
+    dropout_default = md.get("dropout", 0.1)
+    p.add_argument(
+        "--dropout",
+        dest="dropout",
+        type=float,
+        default=dropout_default,
+        action=_RecordProvided,
+        help="Dropout probability applied within GNN layers (where supported)",
+    )
     p.add_argument("--mask-ratio", "--mask_ratio", dest="mask_ratio", type=float, default=md.get("mask_ratio", 0.15))
     p.add_argument("--ema-decay", "--ema_decay", dest="ema_decay", type=float, default=md.get("ema_decay", 0.996))
     p.add_argument("--temperature", dest="temperature", type=float, default=md.get("temperature", 0.1))
@@ -1059,7 +1069,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Fine‑tune subcommand
     ft = sub.add_parser("finetune", help="Fine‑tune a linear head on labelled data")
-    ft.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs (.parquet or .csv)")
+    ft.add_argument("--labeled-dir", required=True, help="Directory containing labelled graphs")
+    ft.add_argument(
+        "--labeled-csv",
+        dest="labeled_csv",
+        default=None,
+        help="Optional CSV file containing labelled graphs when the directory holds multiple assets",
+    )
     ft.add_argument("--label-col", type=str, default="label", help="Label column name in input files")
     ft.add_argument("--encoder", required=True, help="Path to a pretrained encoder checkpoint (.pt)")
     ft.add_argument("--ckpt-dir", type=str, default="ckpts/finetune", help="dir to write fine-tune checkpoints")
@@ -1301,6 +1317,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of independent heads to train and ensemble during Tox21 evaluation",
     )
     tox.add_argument(
+        "--head-scheduler",
+        dest="head_scheduler",
+        default=case_cfg.get("head_scheduler"),
+        help="Optional learning-rate scheduler for the Tox21 head (e.g., cosine)",
+    )
+    tox.add_argument(
         "--weight-decay",
         dest="weight_decay",
         type=float,
@@ -1320,7 +1342,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override the positive class weight (float or TASK=weight). Repeatable.",
     )
-    tox.add_argument("--triage-pct", type=float, default=0.10, help="Fraction of TEST to exclude (e.g., 0.10 = 10%%)")
+    tox.add_argument(
+        "--triage-pct",
+        type=float,
+        default=case_cfg.get("triage_pct", 0.0),
+        help="Fraction of TEST to exclude (set to 0.0 to keep all examples)",
+    )
     tox.add_argument("--no-calibrate", action="store_true", help="Disable Platt scaling on VAL")
     tox.add_argument(
         "--freeze-encoder",

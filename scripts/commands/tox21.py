@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 from random import Random
 from types import SimpleNamespace
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Mapping
 
 from . import log_effective_gnn
 
@@ -72,6 +72,56 @@ DEFAULT_TOX21_TASKS: Tuple[str, ...] = (
 
 _TOX21_FALLBACK_ACTIVE = False
 _FALLBACK_WARNED = False
+
+_CALIBRATION_ECE_WARN = float(os.getenv("TOX21_CALIBRATION_WARN_ECE", "0.12"))
+
+
+def _estimate_class_balance(csv_path: str, tasks: Iterable[str]) -> Dict[str, Dict[str, float]]:
+    """Estimate positive/negative counts for each Tox21 assay."""
+
+    stats: Dict[str, Dict[str, float]] = {
+        str(task): {"pos": 0.0, "neg": 0.0, "total": 0.0} for task in tasks
+    }
+
+    try:
+        with open(csv_path, "r", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                for task, info in stats.items():
+                    raw = row.get(task)
+                    if raw is None:
+                        continue
+                    token = str(raw).strip()
+                    if not token:
+                        continue
+                    try:
+                        value = float(token)
+                    except Exception:
+                        continue
+                    if math.isnan(value):
+                        continue
+                    info["total"] += 1.0
+                    if value >= 0.5:
+                        info["pos"] += 1.0
+                    else:
+                        info["neg"] += 1.0
+    except FileNotFoundError:
+        logger.warning("Tox21 CSV not found while estimating class balance: %s", csv_path)
+    except Exception:
+        logger.warning("Failed to estimate Tox21 class balance from %s", csv_path, exc_info=True)
+
+    for task, info in stats.items():
+        total = info.get("total", 0.0)
+        pos = info.get("pos", 0.0)
+        neg = info.get("neg", 0.0)
+        if total > 0:
+            info["pos_frac"] = pos / total
+            info["neg_frac"] = neg / total
+        else:
+            info["pos_frac"] = 0.0
+            info["neg_frac"] = 0.0
+        info["pos_weight"] = (neg / pos) if pos > 0 else None
+    return stats
 
 
 def _fallback_load_labels(csv_path: str, label: str) -> Tuple[List[int], int]:
@@ -341,6 +391,15 @@ def _coerce_int_like(value: Any) -> Optional[int]:
         return int(value)
     try:
         return int(value)
+    except Exception:
+        return None
+
+
+def _coerce_float_like(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
     except Exception:
         return None
 
@@ -701,16 +760,24 @@ def _run_tox21_single_task(
     cache_dir: Optional[str],
     report_dir: str,
     wb: Any,
+    class_balance: Dict[str, Dict[str, float]],
+    auto_pos_weights: Dict[str, float],
+    calibration_warn_threshold: float,
 ) -> Dict[str, Any]:
     task_name = getattr(args, "task", None)
     if not task_name:
         raise ValueError("Tox21 task name must be provided")
 
+    balance_entry = class_balance.get(task_name, {}) if class_balance else {}
     class_weights_arg = getattr(args, "class_weights", None)
     if class_weights_arg is None:
         class_weights_arg = "auto"
 
     pos_class_weight_arg = _parse_pos_class_weight(getattr(args, "pos_class_weight", None))
+    if pos_class_weight_arg is None:
+        auto_weight = auto_pos_weights.get(task_name)
+        if auto_weight is not None and auto_weight > 0:
+            pos_class_weight_arg = {task_name: float(auto_weight)}
 
     head_ensemble_value = _coerce_int_like(getattr(args, "head_ensemble_size", None))
     if head_ensemble_value is None or head_ensemble_value <= 0:
@@ -782,6 +849,12 @@ def _run_tox21_single_task(
     start_log["head_ensemble_size"] = head_ensemble_value
     if pos_class_weight_arg is not None:
         start_log["pos_class_weight"] = pos_class_weight_arg
+    if balance_entry:
+        start_log["class_balance_total"] = balance_entry.get("total")
+        start_log["class_balance_pos_frac"] = balance_entry.get("pos_frac")
+        start_log["class_balance_neg_frac"] = balance_entry.get("neg_frac")
+        if balance_entry.get("pos_weight") is not None:
+            start_log["class_balance_pos_weight"] = balance_entry.get("pos_weight")
     _wandb_log_safe(wb, start_log)
 
     case_study_kwargs: Dict[str, Any] = {
@@ -799,6 +872,7 @@ def _run_tox21_single_task(
         "pos_class_weight": pos_class_weight_arg,
         "hidden_dim": getattr(args, "hidden_dim", 128),
         "num_layers": getattr(args, "num_layers", 2),
+        "dropout": getattr(args, "dropout", None),
         "gnn_type": getattr(args, "gnn_type", "edge_mpnn"),
         "add_3d": getattr(args, "add_3d", False),
         "contrastive": getattr(args, "contrastive", False),
@@ -832,6 +906,7 @@ def _run_tox21_single_task(
         "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
         "tox21_head_batch_size": int(getattr(args, "tox21_head_batch_size", 256) or 256),
         "head_ensemble_size": head_ensemble_value,
+        "head_scheduler": getattr(args, "head_scheduler", None),
     }
 
     def _invoke_case_study(allow_shape_value: Optional[bool]) -> Any:
@@ -888,6 +963,8 @@ def _run_tox21_single_task(
         resolver_payload["candidates"] = [str(entry) for entry in resolver_payload["candidates"]]
     if isinstance(diagnostics, dict):
         diagnostics.setdefault("task_encoder_resolver", resolver_payload)
+        if balance_entry:
+            diagnostics.setdefault("class_balance", balance_entry)
     encoder_hash = getattr(result, "encoder_hash", None)
     baseline_hash = getattr(result, "baseline_encoder_hash", None)
     encoder_load = getattr(result, "encoder_load", {}) or {}
@@ -1014,6 +1091,35 @@ def _run_tox21_single_task(
         metrics_block: Dict[str, Any] = getattr(eval_res, "metrics", {}) or {}
         for name, value in metrics_block.items():
             payload[f"{prefix}metrics/{name}"] = float(value)
+
+        ece_value = metrics_block.get("ece")
+        try:
+            ece_float = float(ece_value) if ece_value is not None else None
+        except Exception:
+            ece_float = None
+        if (
+            ece_float is not None
+            and ece_float > calibration_warn_threshold
+            and isinstance(diagnostics, dict)
+        ):
+            warnings_list = diagnostics.setdefault("calibration_warnings", [])
+            warnings_list.append(
+                {
+                    "task": task_name,
+                    "encoder": getattr(eval_res, "encoder_source", getattr(eval_res, "name", "unknown")),
+                    "ece": ece_float,
+                }
+            )
+            _wandb_log_safe(
+                wb,
+                {
+                    "phase": "tox21",
+                    "status": "warning",
+                    "task": task_name,
+                    f"{prefix}metrics/ece": ece_float,
+                    f"{prefix}calibration_warning": True,
+                },
+            )
 
         baseline_block: Dict[str, Any] = getattr(eval_res, "baseline_means", {}) or {}
         for name, value in baseline_block.items():
@@ -1261,6 +1367,14 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             inherited.append(f"hidden_dim={desired_hidden}")
         setattr(args, "hidden_dim", desired_hidden)
         setattr(args, "_hidden_dim_provided", True)
+    if "dropout" in best_overrides and not getattr(args, "_dropout_provided", False):
+        desired_dropout = _coerce_float_like(best_overrides.get("dropout"))
+        if desired_dropout is not None:
+            current_dropout = getattr(args, "dropout", None)
+            if current_dropout is None or float(current_dropout) != float(desired_dropout):
+                inherited.append(f"dropout={desired_dropout}")
+            setattr(args, "dropout", desired_dropout)
+            setattr(args, "_dropout_provided", True)
     numeric_override_specs: Dict[str, Tuple[str, Tuple[str, ...]]] = {
         "devices": ("devices", ("--devices",)),
         "num_workers": ("num_workers", ("--num-workers", "--num_workers")),
@@ -1314,6 +1428,30 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         raise ValueError("No Tox21 tasks specified or discovered")
     primary_task = tasks_to_run[0]
     setattr(args, "task", primary_task)
+
+    class_balance = _estimate_class_balance(args.csv, tasks_to_run)
+    auto_pos_weights: Dict[str, float] = {}
+    for task, info in class_balance.items():
+        weight = info.get("pos_weight")
+        if weight is not None:
+            try:
+                auto_pos_weights[task] = float(weight)
+            except Exception:
+                continue
+    if class_balance:
+        logger.info(
+            "[tox21] class balance summary: %s",
+            {
+                task: {
+                    "total": info.get("total"),
+                    "pos_frac": round(info.get("pos_frac", 0.0), 4)
+                    if info.get("pos_frac") is not None
+                    else None,
+                    "pos_weight": info.get("pos_weight"),
+                }
+                for task, info in class_balance.items()
+            },
+        )
     devices_val = _coerce_int_like(getattr(args, "devices", None))
     if devices_val is None:
         raw_devices = getattr(args, "devices", None)
@@ -1403,6 +1541,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         "gnn_type": getattr(args, "gnn_type", None),
         "hidden_dim": getattr(args, "hidden_dim", None),
         "num_layers": getattr(args, "num_layers", None),
+        "dropout": getattr(args, "dropout", None),
         "add_3d": bool(getattr(args, "add_3d", False)),
         "cache_dir": cache_dir,
         "pretrain_epochs": getattr(args, "pretrain_epochs", 5),
@@ -1422,6 +1561,22 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
         "tox21_head_batch_size": int(getattr(args, "tox21_head_batch_size", 256) or 256),
         "evaluation_mode": eval_mode,
+        "head_lr": getattr(args, "head_lr", None),
+        "encoder_lr": getattr(args, "encoder_lr", None),
+        "weight_decay": getattr(args, "weight_decay", None),
+        "class_weights": getattr(args, "class_weights", None),
+        "pos_class_weight": getattr(args, "pos_class_weight", None),
+        "head_scheduler": getattr(args, "head_scheduler", None),
+        "auto_pos_class_weight": auto_pos_weights,
+        "class_balance": {
+            task: {
+                "total": info.get("total"),
+                "pos_frac": info.get("pos_frac"),
+                "neg_frac": info.get("neg_frac"),
+                "pos_weight": info.get("pos_weight"),
+            }
+            for task, info in class_balance.items()
+        },
     }
     bf16_head_cfg = getattr(args, "bf16_head", None)
     if bf16_head_cfg is not None:
@@ -1449,6 +1604,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     aggregated_allow_shape_effective: Optional[bool] = None
     aggregated_allow_shape_requested: Any = getattr(args, "allow_shape_coercion", None)
     aggregated_allow_shape_auto = False
+    aggregated_calibration: Dict[str, Any] = {}
 
     try:
         for task_name in tasks_to_run:
@@ -1463,6 +1619,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 cache_dir=cache_dir,
                 report_dir=report_dir,
                 wb=wb,
+                class_balance=class_balance,
+                auto_pos_weights=auto_pos_weights,
+                calibration_warn_threshold=_CALIBRATION_ECE_WARN,
             )
             aggregated_results.append(result)
             aggregated_gate = aggregated_gate and bool(result.get("gate_passed"))
@@ -1496,6 +1655,12 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                     aggregated_allow_shape_auto = True
 
 
+        aggregated_calibration = {
+            task: diag.get("calibration_warnings")
+            for task, diag in per_task_diagnostics.items()
+            if isinstance(diag, dict) and diag.get("calibration_warnings")
+        }
+
         if aggregated_allow_shape_effective is not None:
             setattr(args, "allow_shape_coercion", bool(aggregated_allow_shape_effective))
         elif aggregated_allow_shape_requested in (True, False):
@@ -1506,6 +1671,10 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             combined_diagnostics = dict(diagnostics_template)
         combined_diagnostics["task_count"] = len(tasks_to_run)
         combined_diagnostics["per_task"] = per_task_diagnostics
+        if aggregated_calibration:
+            combined_diagnostics["calibration_warnings"] = aggregated_calibration
+        combined_diagnostics["class_balance"] = class_balance
+        combined_diagnostics["auto_pos_class_weight"] = auto_pos_weights
         if aggregated_allow_shape_effective is not None:
             combined_diagnostics["allow_shape_coercion_effective"] = bool(
                 aggregated_allow_shape_effective
@@ -1535,6 +1704,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "thresholds": aggregated_thresholds,
             "targets": aggregated_targets,
             "diagnostics": combined_diagnostics,
+            "class_balance": class_balance,
+            "auto_pos_class_weight": auto_pos_weights,
+            "calibration_warnings": aggregated_calibration,
         }
         for record in aggregated_results:
             task = record.get("task")
@@ -1548,6 +1720,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 "selected_path": stage_info.get("selected_path"),
                 "selected_auc": stage_info.get("selected_auc"),
                 "auc_summary": stage_info.get("auc_summary"),
+                "diagnostics": per_task_diagnostics.get(task),
+                "class_balance": class_balance.get(task),
+                "auto_pos_class_weight": auto_pos_weights.get(task),
             }
 
         def _sanitize_mode_slug(mode: str) -> str:
@@ -1781,6 +1956,7 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gnn-type", dest="gnn_type")
     parser.add_argument("--hidden-dim", type=int, dest="hidden_dim")
     parser.add_argument("--num-layers", type=int, dest="num_layers")
+    parser.add_argument("--dropout", type=float, dest="dropout")
     parser.add_argument("--ema-decay", type=float, dest="ema_decay")
     parser.add_argument("--contiguity", action=_StandaloneBoolFlag, dest="contiguity")
     parser.add_argument("--temperature", type=float, dest="temperature")
@@ -1820,6 +1996,7 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--tox21-head-batch-size", type=int, dest="tox21_head_batch_size")
     parser.add_argument("--head-ensemble-size", type=int, dest="head_ensemble_size")
+    parser.add_argument("--head-scheduler", dest="head_scheduler")
     parser.add_argument("--unfreeze-top-layers", type=int, dest="unfreeze_top_layers")
     parser.add_argument("--best-config", dest="best_config")
     parser.add_argument("--best-config-json", dest="best_config_json")
@@ -1840,7 +2017,7 @@ def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespa
     if getattr(namespace, "use_wandb", None) is None:
         namespace.use_wandb = False
     if getattr(namespace, "triage_pct", None) is None:
-        namespace.triage_pct = 0.10
+        namespace.triage_pct = 0.0
     if not hasattr(namespace, "no_calibrate"):
         namespace.no_calibrate = False
     if not hasattr(namespace, "pos_class_weight"):
@@ -1851,7 +2028,7 @@ def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespa
         namespace.head_ensemble_size = 1
     if getattr(namespace, "tox21_head_batch_size", None) is None:
         namespace.tox21_head_batch_size = 256
-    for attr in ("gnn_type", "hidden_dim", "num_layers"):
+    for attr in ("gnn_type", "hidden_dim", "num_layers", "dropout"):
         provided = getattr(namespace, attr, None) is not None
         setattr(namespace, f"_{attr}_provided", provided)
     for attr in ("num_workers", "prefetch_factor", "devices"):

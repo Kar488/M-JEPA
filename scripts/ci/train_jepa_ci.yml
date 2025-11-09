@@ -58,6 +58,7 @@ pretrain:
 finetune:
   <<: *common
   labeled_dir: "${FINETUNE_LABELED_DIR:-${APP_DIR}/data/katielinkmoleculenet_benchmark/train}"
+  labeled_csv: "${FINETUNE_LABELED_CSV:-}"
   encoder: ${PRETRAIN_DIR}/encoder.pt
   task_type: "${FINETUNE_TASK_TYPE:-classification}"
   label_col: "${FINETUNE_LABEL_COL:-measured log solubility in mols per litre}"
@@ -69,6 +70,9 @@ finetune:
   max_finetune_batches: 0
   no_freeze_encoder: true  # let Vast reruns update encoder weights once the Tox21 gate fails
   use_scaffold: ${FINETUNE_USE_SCAFFOLD:-false}
+  hidden_dim: ${FINETUNE_HIDDEN_DIM:-256}
+  num_layers: ${FINETUNE_NUM_LAYERS:-3}
+  dropout: ${FINETUNE_DROPOUT:-0.1}
   seeds:
     - ${FINETUNE_SEED_0:-0}
     - ${FINETUNE_SEED_1:-}
@@ -117,10 +121,17 @@ tox21:
   batch_size: 64
   epochs: 50
   patience: 12
-  head_lr: 0.001
-  encoder_lr: 0.0001
-  weight_decay: 0.0001
-  class_weights: "auto"
+  head_lr: ${TOX21_HEAD_LR:-0.0005}
+  encoder_lr: ${TOX21_ENCODER_LR:-0.00005}
+  weight_decay: ${TOX21_WEIGHT_DECAY:-0.0001}
+  hidden_dim: ${TOX21_HIDDEN_DIM:-384}
+  num_layers: ${TOX21_NUM_LAYERS:-4}
+  dropout: ${TOX21_DROPOUT:-0.15}
+  head_ensemble_size: ${TOX21_HEAD_ENSEMBLE_SIZE:-3}
+  head_scheduler: ${TOX21_HEAD_SCHEDULER:-cosine}
+  triage_pct: ${TOX21_TRIAGE_PCT:-0.0}
+  class_weights: "${TOX21_CLASS_WEIGHTS:-auto}"
+  pos_class_weight: "${TOX21_POS_CLASS_WEIGHT:-}"
   allow_shape_coercion: false
   allow_equal_hash: false
   verify_match_threshold: 0.98

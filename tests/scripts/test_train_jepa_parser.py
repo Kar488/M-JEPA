@@ -38,6 +38,7 @@ def test_pretrain_parser_defaults_and_handler(tmp_path):
     assert args.lr == CONFIG["pretrain"]["lr"]
     #assert args.gnn_type == CONFIG["model"]["gnn_type"]
     assert args.hidden_dim == CONFIG["model"]["hidden_dim"]
+    assert args.dropout == CONFIG["model"]["dropout"]
 
 
 def test_finetune_parser_defaults_and_handler(tmp_path):

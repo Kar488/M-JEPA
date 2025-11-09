@@ -31,7 +31,7 @@ def test_tox21_case_study_smoke(monkeypatch):
         task_name="NR-AR",
         pretrain_epochs=1,
         finetune_epochs=1,
-        triage_pct=0.10,
+        triage_pct=0.0,
     )
     assert result.evaluations, "Expected at least one evaluation"
     primary = result.evaluations[0]
@@ -723,7 +723,7 @@ def test_auto_shape_coercion_normalises_metadata(tmp_path, monkeypatch):
         def to(self, *args, **kwargs):  # pragma: no cover - fluent helper
             return self
 
-    def _stub_build_encoder(*, gnn_type, input_dim, hidden_dim, num_layers, edge_dim=None):
+    def _stub_build_encoder(*, gnn_type, input_dim, hidden_dim, num_layers, edge_dim=None, dropout=None):
         build_calls.update(
             {
                 "gnn_type": gnn_type,
@@ -731,6 +731,7 @@ def test_auto_shape_coercion_normalises_metadata(tmp_path, monkeypatch):
                 "hidden_dim": hidden_dim,
                 "num_layers": num_layers,
                 "edge_dim": edge_dim,
+                "dropout": dropout,
             }
         )
         return _StubEncoder(hidden_dim)

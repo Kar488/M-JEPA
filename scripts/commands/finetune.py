@@ -115,6 +115,57 @@ def _coerce_float_like(value: Any) -> Optional[float]:
         return None
 
 
+def _resolve_labeled_dataset_source(args: argparse.Namespace) -> str:
+    """Return the path to the labelled dataset, normalising dir/file inputs."""
+
+    labeled_dir_raw = getattr(args, "labeled_dir", None)
+    labeled_csv_raw = getattr(args, "labeled_csv", None)
+
+    resolved_csv: Optional[Path] = None
+    resolved_dir: Optional[Path] = None
+
+    if labeled_csv_raw:
+        try:
+            candidate = Path(str(labeled_csv_raw)).expanduser().resolve()
+        except Exception:
+            candidate = Path(str(labeled_csv_raw))
+        if candidate.is_file():
+            resolved_csv = candidate
+            if not labeled_dir_raw or Path(str(labeled_dir_raw)).resolve() == candidate:
+                resolved_dir = candidate.parent
+        else:
+            logger.warning("Declared --labeled-csv=%s does not exist or is not a file", labeled_csv_raw)
+
+    if labeled_dir_raw:
+        try:
+            candidate_dir = Path(str(labeled_dir_raw)).expanduser().resolve()
+        except Exception:
+            candidate_dir = Path(str(labeled_dir_raw))
+        if candidate_dir.is_file():
+            if resolved_csv is None:
+                resolved_csv = candidate_dir
+            resolved_dir = candidate_dir.parent
+        elif candidate_dir.is_dir():
+            resolved_dir = candidate_dir
+        else:
+            logger.warning("Declared --labeled-dir=%s does not exist", labeled_dir_raw)
+
+    if resolved_dir is not None:
+        setattr(args, "labeled_dir", str(resolved_dir))
+    if resolved_csv is not None:
+        setattr(args, "labeled_csv", str(resolved_csv))
+
+    if resolved_csv is not None:
+        return str(resolved_csv)
+    if resolved_dir is not None:
+        return str(resolved_dir)
+
+    raise FileNotFoundError(
+        f"Unable to resolve labelled dataset from --labeled-dir={labeled_dir_raw!r} "
+        f"or --labeled-csv={labeled_csv_raw!r}"
+    )
+
+
 def _bestcfg_env_skip_keys() -> set[str]:
     raw = os.getenv("BESTCFG_SKIP", "")
     skip = {token.strip() for token in raw.replace(",", " ").split() if token.strip()}
@@ -671,15 +722,23 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
     else:
         seeds = CONFIG.get("finetune", {}).get("seeds", [0])  # type: ignore[assignment]
 
+    try:
+        dataset_path = _resolve_labeled_dataset_source(args)
+    except FileNotFoundError:
+        logger.exception("Unable to locate labelled dataset")
+        sys.exit(1)
+
     wb = maybe_init_wandb(
         args.use_wandb,
         project=args.wandb_project,
         tags=args.wandb_tags,
         config={
             "labeled_dir": args.labeled_dir,
+            "labeled_csv": getattr(args, "labeled_csv", None),
             "gnn_type": args.gnn_type,
             "hidden_dim": args.hidden_dim,
             "num_layers": args.num_layers,
+            "dropout": getattr(args, "dropout", None),
             "task_type": args.task_type,
             "epochs": args.epochs,
             "batch_size": args.batch_size,
@@ -706,7 +765,7 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
     # Load labelled dataset
     try:
         labeled = load_directory_dataset(
-            args.labeled_dir,
+            dataset_path,
             label_col=args.label_col,
             add_3d=args.add_3d,
             num_workers=getattr(args, "num_workers", -1),
@@ -739,7 +798,7 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
         logger.info("[finetune] dataset override reason=%s", dataset_override_reason)
     logger.info(
         "[finetune] dataset path=%s label_col=%s task=%s samples=%d",
-        getattr(args, "labeled_dir", "<unset>"),
+        dataset_path,
         getattr(args, "label_col", "<unset>"),
         getattr(args, "task_type", "<unset>"),
         dataset_size,
@@ -1024,6 +1083,7 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
             hidden_dim=args.hidden_dim,
             num_layers=args.num_layers,
             edge_dim=edge_dim,
+            dropout=getattr(args, "dropout", None),
         )
         # ensure modules on device
         _maybe_to(encoder, device)
@@ -1760,7 +1820,11 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
         seed_list_summary = list(seeds)
 
     dataset_summary: Dict[str, Any] = {
-        "path": os.path.abspath(getattr(args, "labeled_dir", "")) if getattr(args, "labeled_dir", None) else getattr(args, "labeled_dir", None),
+        "path": dataset_path,
+        "directory": os.path.abspath(getattr(args, "labeled_dir", ""))
+        if getattr(args, "labeled_dir", None)
+        else getattr(args, "labeled_dir", None),
+        "csv": getattr(args, "labeled_csv", None),
         "label_col": getattr(args, "label_col", None),
         "task_type": getattr(args, "task_type", None),
         "size": int(dataset_size),
@@ -2039,7 +2103,7 @@ def evaluate_finetuned_head(
             enc_cfg["hidden_dim"] = hid
 
     # 4) Fall back to CLI args for anything still missing
-    for k in ("gnn_type", "hidden_dim", "num_layers", "add_3d"):
+    for k in ("gnn_type", "hidden_dim", "num_layers", "add_3d", "dropout"):
         if k not in enc_cfg and hasattr(args, k):
             enc_cfg[k] = getattr(args, k)
 
