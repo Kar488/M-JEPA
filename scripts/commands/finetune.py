@@ -113,6 +113,14 @@ def _coerce_float_like(value: Any) -> Optional[float]:
         return None
 
 
+def _bestcfg_env_skip_keys() -> set[str]:
+    raw = os.getenv("BESTCFG_SKIP", "")
+    skip = {token.strip() for token in raw.replace(",", " ").split() if token.strip()}
+    if os.getenv("BESTCFG_NO_EPOCHS") == "1":
+        skip.update({"pretrain_epochs", "finetune_epochs", "epochs"})
+    return skip
+
+
 def _discover_best_config_path(args: argparse.Namespace) -> Optional[Path]:
     candidates: List[Path] = []
     for attr in ("best_config_path", "best_config", "best_config_json"):
@@ -163,59 +171,72 @@ def _load_best_config_overrides(args: argparse.Namespace) -> Tuple[Dict[str, Any
         return {}, path
 
     overrides: Dict[str, Any] = {}
+    skip_env = _bestcfg_env_skip_keys()
 
     hidden_val = _coerce_int_like(_extract_bestcfg_value(raw, "hidden_dim"))
-    if hidden_val is not None:
+    if hidden_val is not None and "hidden_dim" not in skip_env:
         overrides["hidden_dim"] = hidden_val
 
     layers_val = _coerce_int_like(_extract_bestcfg_value(raw, "num_layers"))
-    if layers_val is not None:
+    if layers_val is not None and "num_layers" not in skip_env:
         overrides["num_layers"] = layers_val
 
     gnn_raw = _extract_bestcfg_value(raw, "gnn_type")
-    if isinstance(gnn_raw, str) and gnn_raw.strip():
+    if isinstance(gnn_raw, str) and gnn_raw.strip() and "gnn_type" not in skip_env:
         overrides["gnn_type"] = gnn_raw.strip()
 
     add_val = _coerce_bool_like(_extract_bestcfg_value(raw, "add_3d"))
-    if add_val is not None:
+    if add_val is not None and "add_3d" not in skip_env:
         overrides["add_3d"] = add_val
 
     devices_val = _coerce_int_like(_extract_bestcfg_value(raw, "devices"))
-    if devices_val is not None:
+    if devices_val is not None and "devices" not in skip_env:
         overrides["devices"] = devices_val
 
     num_workers_val = _coerce_int_like(_extract_bestcfg_value(raw, "num_workers"))
-    if num_workers_val is not None:
+    if num_workers_val is not None and "num_workers" not in skip_env:
         overrides["num_workers"] = num_workers_val
 
     prefetch_val = _coerce_int_like(_extract_bestcfg_value(raw, "prefetch_factor"))
-    if prefetch_val is not None:
+    if prefetch_val is not None and "prefetch_factor" not in skip_env:
         overrides["prefetch_factor"] = prefetch_val
 
     pin_memory_val = _coerce_bool_like(_extract_bestcfg_value(raw, "pin_memory"))
-    if pin_memory_val is not None:
+    if pin_memory_val is not None and "pin_memory" not in skip_env:
         overrides["pin_memory"] = pin_memory_val
 
     persistent_val = _coerce_bool_like(_extract_bestcfg_value(raw, "persistent_workers"))
-    if persistent_val is not None:
+    if persistent_val is not None and "persistent_workers" not in skip_env:
         overrides["persistent_workers"] = persistent_val
 
     bf16_val = _coerce_bool_like(_extract_bestcfg_value(raw, "bf16"))
-    if bf16_val is not None:
+    if bf16_val is not None and "bf16" not in skip_env:
         overrides["bf16"] = bf16_val
 
     batch_val = _coerce_int_like(_extract_bestcfg_value(raw, "finetune_batch_size"))
-    if batch_val is not None:
+    if batch_val is not None and "finetune_batch_size" not in skip_env:
         overrides["batch_size"] = batch_val
 
-    epoch_val = _coerce_int_like(_extract_bestcfg_value(raw, "finetune_epochs"))
+    epoch_raw = _extract_bestcfg_value(raw, "finetune_epochs")
+    epoch_val = _coerce_int_like(epoch_raw)
     if epoch_val is not None:
-        overrides["epochs"] = epoch_val
+        if "finetune_epochs" in skip_env:
+            source = str(path)
+            logger.info(
+                "Skipping Phase-2 best_config finetune_epochs override (%s from %s) due to BESTCFG_SKIP/BESTCFG_NO_EPOCHS.",
+                epoch_val,
+                source,
+            )
+        else:
+            overrides["epochs"] = epoch_val
 
     lr_val = _coerce_float_like(_extract_bestcfg_value(raw, "lr"))
     if lr_val is None:
         lr_val = _coerce_float_like(_extract_bestcfg_value(raw, "learning_rate"))
-    if lr_val is not None:
+        lr_key = "learning_rate"
+    else:
+        lr_key = "lr"
+    if lr_val is not None and lr_key not in skip_env:
         overrides["lr"] = lr_val
 
     return overrides, path
