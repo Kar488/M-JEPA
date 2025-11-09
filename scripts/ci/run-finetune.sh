@@ -87,7 +87,13 @@ fi
 baseline_flag="${MET_BENCHMARK_BASELINE:-false}"
 baseline_flag_lc="${baseline_flag,,}"
 if [[ "$baseline_flag_lc" == "false" ]]; then
-  : "${FINETUNE_LABELED_DIR:=${APP_DIR}/data/tox21/data.csv}"
+  : "${FINETUNE_LABELED_CSV:=${APP_DIR}/data/tox21/data.csv}"
+  if [[ -z "${FINETUNE_LABELED_DIR:-}" ]]; then
+    FINETUNE_LABELED_DIR="$(dirname "${FINETUNE_LABELED_CSV}")"
+  elif [[ -f "${FINETUNE_LABELED_DIR}" ]]; then
+    FINETUNE_LABELED_CSV="${FINETUNE_LABELED_CSV:-${FINETUNE_LABELED_DIR}}"
+    FINETUNE_LABELED_DIR="$(dirname "${FINETUNE_LABELED_DIR}")"
+  fi
   default_tasks=(
     "NR-AR" "NR-AR-LBD" "NR-AhR" "NR-Aromatase"
     "NR-ER" "NR-ER-LBD" "NR-PPAR-gamma" "SR-ARE"
@@ -116,23 +122,39 @@ if [[ "$baseline_flag_lc" == "false" ]]; then
   : "${FINETUNE_METRIC:=val_auc}"
   : "${FINETUNE_USE_SCAFFOLD:=true}"
   : "${FINETUNE_SEED_0:=0}"
+  if [[ -z ${FINETUNE_SEED_1+x} ]]; then
+    FINETUNE_SEED_1=1
+  fi
+  if [[ -z ${FINETUNE_SEED_2+x} ]]; then
+    FINETUNE_SEED_2=2
+  fi
+  : "${FINETUNE_HIDDEN_DIM:=384}"
+  : "${FINETUNE_NUM_LAYERS:=4}"
+  : "${FINETUNE_DROPOUT:=0.15}"
   : "${FINETUNE_DATASET_OVERRIDE_REASON:=tox21_gate_failure}"
 
+  export FINETUNE_LABELED_CSV
   export FINETUNE_LABELED_DIR
   export FINETUNE_LABEL_COL
   export FINETUNE_TASK_TYPE
   export FINETUNE_METRIC
   export FINETUNE_USE_SCAFFOLD
 
-  if [[ -n ${FINETUNE_SEED_1+x} || -n ${FINETUNE_SEED_2+x} ]]; then
-    # Honour multi-seed overrides when the caller explicitly sets them.
-    export FINETUNE_SEED_0
-    [[ -n ${FINETUNE_SEED_1+x} ]] && export FINETUNE_SEED_1
-    [[ -n ${FINETUNE_SEED_2+x} ]] && export FINETUNE_SEED_2
+  export FINETUNE_SEED_0
+  if [[ -n "${FINETUNE_SEED_1}" ]]; then
+    export FINETUNE_SEED_1
   else
-    unset FINETUNE_SEED_1 FINETUNE_SEED_2
-    export FINETUNE_SEED_0
+    unset FINETUNE_SEED_1
   fi
+  if [[ -n "${FINETUNE_SEED_2}" ]]; then
+    export FINETUNE_SEED_2
+  else
+    unset FINETUNE_SEED_2
+  fi
+
+  export FINETUNE_HIDDEN_DIM
+  export FINETUNE_NUM_LAYERS
+  export FINETUNE_DROPOUT
 
   export FINETUNE_DATASET_OVERRIDE_REASON
 

@@ -29,8 +29,14 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers only
 
 
 def build_encoder(
-    *, gnn_type: str, input_dim: int, hidden_dim: int, num_layers: int,
-    edge_dim: Optional[int] = None, heads: int = 4,
+    *,
+    gnn_type: str,
+    input_dim: int,
+    hidden_dim: int,
+    num_layers: int,
+    edge_dim: Optional[int] = None,
+    heads: int = 4,
+    dropout: Optional[float] = None,
 ):
     """Construct an encoder by name.
 
@@ -42,6 +48,13 @@ def build_encoder(
     gt = gnn_type.lower()
 
     # --- edge-aware families ---
+    dropout_kwargs = {}
+    if dropout is not None:
+        try:
+            dropout_kwargs["dropout"] = float(dropout)
+        except Exception:
+            dropout_kwargs["dropout"] = dropout
+
     if gt in ("edge_mpnn", "mpnn_edge", "edge"):
         if edge_dim is None:
             raise ValueError("edge_dim is required for edge_mpnn encoder.")
@@ -52,6 +65,7 @@ def build_encoder(
             edge_dim=edge_dim,
             hidden_dim=hidden_dim,
             num_layers=num_layers,
+            **dropout_kwargs,
         )
 
     if gt in ("gine", "gin_edge", "gin+edge"):
@@ -64,6 +78,7 @@ def build_encoder(
             edge_dim=edge_dim,
             hidden_dim=hidden_dim,
             num_layers=num_layers,
+            **dropout_kwargs,
         )
 
     if gt in ("dmpnn", "chemprop"):
@@ -76,6 +91,7 @@ def build_encoder(
             edge_dim=edge_dim,
             hidden_dim=hidden_dim,
             num_layers=num_layers,
+            **dropout_kwargs,
         )
 
     if gt in ("attentivefp", "attnfp"):
@@ -88,6 +104,7 @@ def build_encoder(
             edge_dim=edge_dim,
             hidden_dim=hidden_dim,
             num_layers=num_layers,
+            **dropout_kwargs,
         )
 
     if gt in ("schnet3d", "schnet"):
@@ -103,12 +120,22 @@ def build_encoder(
     if gt in ("graphsage", "sage"):
         from models.gnn_variants import GraphSAGE
 
-        return GraphSAGE(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers)
+        return GraphSAGE(
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            **dropout_kwargs,
+        )
 
     if gt in ("gin",):
         from models.gnn_variants import GIN
 
-        return GIN(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers)
+        return GIN(
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            **dropout_kwargs,
+        )
 
     if gt in ("gat_multi", "gatmh", "gatv2_multi"):
         from models.gnn_variants import GATMultiHead
@@ -118,6 +145,7 @@ def build_encoder(
             hidden_dim=hidden_dim,
             num_layers=num_layers,
             heads=heads,
+            **dropout_kwargs,
         )
 
     # fallback to your base encoder (mpnn|gcn|gat single-head)

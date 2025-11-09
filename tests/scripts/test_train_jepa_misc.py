@@ -263,7 +263,7 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         task_name,
         pretrain_epochs,
         finetune_epochs,
-        triage_pct=0.10,
+        triage_pct=0.0,
         calibrate=True,
         device="cpu",
         **kwargs,
@@ -313,7 +313,7 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
         pretrain_epochs=1,
         finetune_epochs=1,
         pretrain_lr=5e-4,
-        triage_pct=0.10,
+        triage_pct=0.0,
         tox21_dir=str(tmp_path / "reports"),
         device="cpu",
         use_wandb=True,
@@ -365,6 +365,10 @@ def test_cmd_tox21_logs_metrics(tmp_path, monkeypatch):
     assert config["bf16"] is True
     assert config["tasks"] == ["NR-AR"]
     assert config["task_count"] == 1
+    assert config["dropout"] is None
+    assert config["head_scheduler"] is None
+    assert config["auto_pos_class_weight"] == {}
+    assert "NR-AR" in config["class_balance"]
 
     summary_path = tmp_path / "reports" / "tox21_summary.json"
     assert summary_path.is_file()
@@ -397,7 +401,7 @@ def test_cmd_tox21_inherits_best_config_loader_flags(tmp_path, monkeypatch):
         task_name,
         pretrain_epochs,
         finetune_epochs,
-        triage_pct=0.10,
+        triage_pct=0.0,
         calibrate=True,
         device="cpu",
         **kwargs,
@@ -426,7 +430,7 @@ def test_cmd_tox21_inherits_best_config_loader_flags(tmp_path, monkeypatch):
         pretrain_epochs=1,
         finetune_epochs=1,
         pretrain_lr=1e-4,
-        triage_pct=0.10,
+        triage_pct=0.0,
         tox21_dir=str(tmp_path / "reports"),
         device="cpu",
         use_wandb=False,
@@ -534,7 +538,7 @@ def test_cmd_tox21_auto_retries_allow_shape(monkeypatch, tmp_path):
         pretrain_epochs=1,
         finetune_epochs=1,
         pretrain_lr=1e-4,
-        triage_pct=0.10,
+        triage_pct=0.0,
         tox21_dir=str(tmp_path / "reports"),
         device="cpu",
         use_wandb=True,
@@ -589,7 +593,7 @@ def test_cmd_tox21_failure(tmp_path, monkeypatch):
         pretrain_epochs=1,
         finetune_epochs=1,
         pretrain_lr=1e-4,
-        triage_pct=0.10,
+        triage_pct=0.0,
         tox21_dir=str(tmp_path / "reports"),
         device="cpu",
         use_wandb=False,

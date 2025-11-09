@@ -1255,12 +1255,13 @@ def run_tox21_case_study(
     pos_class_weight: Any = None,
     hidden_dim: int = 256,
     num_layers: int = 3,
+    dropout: Optional[float] = None,
     gnn_type: str = "mpnn",
     add_3d: bool = False,
     contiguous: bool = False,
     mask_ratio: float = 0.15,
     contrastive: bool = False,
-    triage_pct: float = 0.10,
+    triage_pct: float = 0.0,
     calibrate: bool = True,
     use_pos_weight: bool = True,
     device: str = "cpu",
@@ -1293,6 +1294,7 @@ def run_tox21_case_study(
     unfreeze_top_layers: int = 0,
     tox21_head_batch_size: int = 256,
     head_ensemble_size: int = 1,
+    head_scheduler: Optional[str] = None,
     cache_dir: Optional[str] = None,
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
@@ -1615,6 +1617,7 @@ def run_tox21_case_study(
     final_hidden_dim: Optional[int] = None
     final_num_layers: Optional[int] = None
     final_gnn_type: Optional[str] = None
+    final_dropout: Optional[float] = None
     final_edge_dim: Optional[int] = None
     input_dim = 0
     edge_dim = 0
@@ -1822,6 +1825,14 @@ def run_tox21_case_study(
     assert final_num_layers is not None
     assert final_gnn_type is not None
 
+    if dropout is not None:
+        try:
+            final_dropout = float(dropout)
+        except Exception:
+            final_dropout = float(0.1)
+    else:
+        final_dropout = 0.1
+
     if dataset_cache_path is not None:
         logger.info(
             "[cache] selected_cache=%s (hit=%s add_3d=%s hidden_dim=%s schema_hash=%s)",
@@ -1847,6 +1858,7 @@ def run_tox21_case_study(
                 hidden_dim=int(final_hidden_dim),
                 schema_hash=schema_digest,
             )
+    diagnostics["dropout"] = float(final_dropout) if final_dropout is not None else None
 
     if ci_diag:
         labels_arr = dataset.labels
@@ -2054,6 +2066,7 @@ def run_tox21_case_study(
             hidden_dim=final_hidden_dim,
             num_layers=final_num_layers,
             edge_dim=edge_dim,
+            dropout=final_dropout,
         )
     else:  # pragma: no cover - exercised only when factory import fails
         logger.warning(
@@ -2401,17 +2414,30 @@ def run_tox21_case_study(
             weight_decay_value = None
 
     def _build_probe_head_and_optimizer() -> Tuple[
-        Optional[torch.nn.Module], Optional[torch.optim.Optimizer]
+        Optional[torch.nn.Module], Optional[torch.optim.Optimizer], Optional[Any]
     ]:
         if weight_decay_value is None:
-            return None, None
+            return None, None, None
         head = torch.nn.Linear(int(final_hidden_dim), 1)
         optimizer = torch.optim.AdamW(  # type: ignore[call-arg]
             [{"params": head.parameters(), "lr": head_lr_value}],
             lr=head_lr_value,
             weight_decay=weight_decay_value,
         )
-        return head, optimizer
+        scheduler: Optional[Any] = None
+        scheduler_mode = (str(head_scheduler).strip().lower() if head_scheduler else "")
+        if scheduler_mode in {"cosine", "cosineannealing", "cosine_annealing"}:
+            try:
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer,
+                    T_max=max(1, int(finetune_epochs)),
+                )
+            except Exception:
+                logger.warning("Failed to initialise cosine scheduler; continuing without", exc_info=True)
+                scheduler = None
+        if scheduler_mode:
+            diagnostics.setdefault("head_scheduler", scheduler_mode)
+        return head, optimizer, scheduler
 
     bf16_linear = bf16_head if bf16_head is not None else bf16
 
@@ -2594,13 +2620,15 @@ def run_tox21_case_study(
 
         for member in range(ensemble_size):
             run_kwargs = dict(linear_kwargs)
-            head_seed, opt_seed = (None, None)
+            head_seed, opt_seed, sched_seed = (None, None, None)
             if train_probe:
-                head_seed, opt_seed = _build_probe_head_and_optimizer()
+                head_seed, opt_seed, sched_seed = _build_probe_head_and_optimizer()
             if head_seed is not None:
                 run_kwargs["head"] = head_seed
             if opt_seed is not None:
                 run_kwargs["optimizer"] = opt_seed
+            if sched_seed is not None:
+                run_kwargs["scheduler"] = sched_seed
             if member > 0:
                 set_seed(int(seed) + member)
             metrics_payload = linear_train_fn(**run_kwargs)
@@ -2794,7 +2822,7 @@ if __name__ == "__main__":
             task_name="NR-AR",
             pretrain_epochs=1,
             finetune_epochs=1,
-            triage_pct=0.10,
+            triage_pct=0.0,
         )
         primary = result.evaluations[0]
         logger.info("Mean true toxicity: %s", primary.mean_true)

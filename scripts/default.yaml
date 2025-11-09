@@ -12,6 +12,7 @@ model:
   gnn_type: edge_mpnn   # Encoder backbone (mpnn, gcn, gat, etc.)
   hidden_dim: 256       # Hidden dimension of all GNN layers and embeddings
   num_layers: 3         # Number of message passing layers
+  dropout: 0.1          # Dropout applied within GNN blocks (where supported)
   ema_decay: 0.99       # Exponential moving average decay for target encoder
 
 pretrain:
@@ -82,7 +83,9 @@ case_study:
   full_finetune: false
   unfreeze_top_layers: 0
   tox21_head_batch_size: 256
-  head_ensemble_size: 1
+  head_ensemble_size: 3
+  head_scheduler: cosine
+  triage_pct: 0.0
   freeze_encoder: false
 
 ###############################################################
