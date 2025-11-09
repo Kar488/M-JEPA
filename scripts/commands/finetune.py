@@ -5,6 +5,7 @@ import argparse
 import copy
 import json
 import logging
+import math
 import os
 import random
 import shutil
@@ -112,6 +113,14 @@ def _coerce_float_like(value: Any) -> Optional[float]:
         return None
 
 
+def _bestcfg_env_skip_keys() -> set[str]:
+    raw = os.getenv("BESTCFG_SKIP", "")
+    skip = {token.strip() for token in raw.replace(",", " ").split() if token.strip()}
+    if os.getenv("BESTCFG_NO_EPOCHS") == "1":
+        skip.update({"pretrain_epochs", "finetune_epochs", "epochs"})
+    return skip
+
+
 def _discover_best_config_path(args: argparse.Namespace) -> Optional[Path]:
     candidates: List[Path] = []
     for attr in ("best_config_path", "best_config", "best_config_json"):
@@ -162,59 +171,72 @@ def _load_best_config_overrides(args: argparse.Namespace) -> Tuple[Dict[str, Any
         return {}, path
 
     overrides: Dict[str, Any] = {}
+    skip_env = _bestcfg_env_skip_keys()
 
     hidden_val = _coerce_int_like(_extract_bestcfg_value(raw, "hidden_dim"))
-    if hidden_val is not None:
+    if hidden_val is not None and "hidden_dim" not in skip_env:
         overrides["hidden_dim"] = hidden_val
 
     layers_val = _coerce_int_like(_extract_bestcfg_value(raw, "num_layers"))
-    if layers_val is not None:
+    if layers_val is not None and "num_layers" not in skip_env:
         overrides["num_layers"] = layers_val
 
     gnn_raw = _extract_bestcfg_value(raw, "gnn_type")
-    if isinstance(gnn_raw, str) and gnn_raw.strip():
+    if isinstance(gnn_raw, str) and gnn_raw.strip() and "gnn_type" not in skip_env:
         overrides["gnn_type"] = gnn_raw.strip()
 
     add_val = _coerce_bool_like(_extract_bestcfg_value(raw, "add_3d"))
-    if add_val is not None:
+    if add_val is not None and "add_3d" not in skip_env:
         overrides["add_3d"] = add_val
 
     devices_val = _coerce_int_like(_extract_bestcfg_value(raw, "devices"))
-    if devices_val is not None:
+    if devices_val is not None and "devices" not in skip_env:
         overrides["devices"] = devices_val
 
     num_workers_val = _coerce_int_like(_extract_bestcfg_value(raw, "num_workers"))
-    if num_workers_val is not None:
+    if num_workers_val is not None and "num_workers" not in skip_env:
         overrides["num_workers"] = num_workers_val
 
     prefetch_val = _coerce_int_like(_extract_bestcfg_value(raw, "prefetch_factor"))
-    if prefetch_val is not None:
+    if prefetch_val is not None and "prefetch_factor" not in skip_env:
         overrides["prefetch_factor"] = prefetch_val
 
     pin_memory_val = _coerce_bool_like(_extract_bestcfg_value(raw, "pin_memory"))
-    if pin_memory_val is not None:
+    if pin_memory_val is not None and "pin_memory" not in skip_env:
         overrides["pin_memory"] = pin_memory_val
 
     persistent_val = _coerce_bool_like(_extract_bestcfg_value(raw, "persistent_workers"))
-    if persistent_val is not None:
+    if persistent_val is not None and "persistent_workers" not in skip_env:
         overrides["persistent_workers"] = persistent_val
 
     bf16_val = _coerce_bool_like(_extract_bestcfg_value(raw, "bf16"))
-    if bf16_val is not None:
+    if bf16_val is not None and "bf16" not in skip_env:
         overrides["bf16"] = bf16_val
 
     batch_val = _coerce_int_like(_extract_bestcfg_value(raw, "finetune_batch_size"))
-    if batch_val is not None:
+    if batch_val is not None and "finetune_batch_size" not in skip_env:
         overrides["batch_size"] = batch_val
 
-    epoch_val = _coerce_int_like(_extract_bestcfg_value(raw, "finetune_epochs"))
+    epoch_raw = _extract_bestcfg_value(raw, "finetune_epochs")
+    epoch_val = _coerce_int_like(epoch_raw)
     if epoch_val is not None:
-        overrides["epochs"] = epoch_val
+        if "finetune_epochs" in skip_env:
+            source = str(path)
+            logger.info(
+                "Skipping Phase-2 best_config finetune_epochs override (%s from %s) due to BESTCFG_SKIP/BESTCFG_NO_EPOCHS.",
+                epoch_val,
+                source,
+            )
+        else:
+            overrides["epochs"] = epoch_val
 
     lr_val = _coerce_float_like(_extract_bestcfg_value(raw, "lr"))
     if lr_val is None:
         lr_val = _coerce_float_like(_extract_bestcfg_value(raw, "learning_rate"))
-    if lr_val is not None:
+        lr_key = "learning_rate"
+    else:
+        lr_key = "lr"
+    if lr_val is not None and lr_key not in skip_env:
         overrides["lr"] = lr_val
 
     return overrides, path
@@ -239,6 +261,22 @@ def _apply_best_config_overrides(args: argparse.Namespace) -> None:
             coerced = value
         if current == coerced:
             return
+        if dest == "epochs":
+            current_int = _coerce_int_like(current)
+            override_int = _coerce_int_like(coerced)
+            if (
+                current_int is not None
+                and override_int is not None
+                and override_int < current_int
+            ):
+                source = str(best_path) if best_path is not None else "best_config"
+                logger.info(
+                    "Skipping Phase-2 best_config epochs override (%s from %s) because baseline uses %s epochs.",
+                    override_int,
+                    source,
+                    current_int,
+                )
+                return
         setattr(args, dest, coerced)
         inherited.append(f"{dest}={coerced}")
 
@@ -675,6 +713,20 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
             except Exception:
                 pass
 
+    initial_batch_size = int(getattr(args, "batch_size", 0) or 0)
+    effective_batch_size = initial_batch_size
+    target_batches_env = os.getenv("FINETUNE_MIN_TRAIN_BATCHES", "").strip()
+    min_batches_target = 8
+    if target_batches_env:
+        try:
+            parsed = int(float(target_batches_env))
+        except Exception:
+            parsed = 0
+        if parsed > 0:
+            min_batches_target = max(4, parsed)
+    batch_size_autoscaled = False
+    batch_size_autoscale_notes: List[Dict[str, int]] = []
+
     scaffold_requested = bool(getattr(args, "_use_scaffold_provided", False))
     use_scaffold_flag = bool(getattr(args, "use_scaffold", False))
     labeled_lower = str(getattr(args, "labeled_dir", "") or "").lower()
@@ -878,6 +930,52 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
                 len(val_split),
                 len(test_split),
             )
+
+        approx_train_size = len(train_split)
+        if approx_train_size <= 0:
+            approx_train_size = max(1, int(round(dataset_size * 0.8)))
+        if effective_batch_size > 0 and approx_train_size > 0:
+            threshold = effective_batch_size * min_batches_target
+            if approx_train_size < threshold:
+                candidate_batch_size = int(
+                    math.ceil(approx_train_size / float(min_batches_target))
+                )
+                candidate_batch_size = max(1, candidate_batch_size)
+                candidate_batch_size = min(candidate_batch_size, effective_batch_size)
+                candidate_batch_size = min(candidate_batch_size, approx_train_size)
+                if candidate_batch_size < effective_batch_size:
+                    logger.info(
+                        "[finetune] reducing batch_size from %d to %d to target ≥%d batches (seed=%d train_split=%d)",
+                        effective_batch_size,
+                        candidate_batch_size,
+                        min_batches_target,
+                        seed,
+                        approx_train_size,
+                    )
+                    if wb is not None:
+                        try:
+                            wb.log(
+                                {
+                                    "finetune/batch_size_initial": float(
+                                        effective_batch_size
+                                    ),
+                                    "finetune/batch_size_effective": float(
+                                        candidate_batch_size
+                                    ),
+                                }
+                            )
+                        except Exception:
+                            pass
+                    effective_batch_size = candidate_batch_size
+                    setattr(args, "batch_size", effective_batch_size)
+                    batch_size_autoscaled = True
+                    batch_size_autoscale_notes.append(
+                        {
+                            "seed": int(seed),
+                            "train_samples": int(approx_train_size),
+                            "batch_size": int(effective_batch_size),
+                        }
+                    )
 
         encoder = build_encoder(
             gnn_type=args.gnn_type,
@@ -1630,6 +1728,9 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
         "detected_tox21": bool(detected_tox21),
         "metric": metric_name,
         "override_reason": dataset_override_reason or None,
+        "batch_size_initial": int(initial_batch_size) if initial_batch_size else None,
+        "batch_size_effective": int(effective_batch_size) if effective_batch_size else None,
+        "batch_size_target_batches": int(min_batches_target),
     }
     stage_payload["dataset"] = dataset_summary
     stage_payload["seed_list"] = seed_list_summary
@@ -1641,6 +1742,13 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
     if export_path:
         stage_payload.setdefault("selected_path", export_path)
     stage_payload.setdefault("task_label", getattr(args, "label_col", None))
+    diagnostics = stage_payload.setdefault("diagnostics", {})
+    if isinstance(diagnostics, dict):
+        diagnostics.setdefault("batch_size_autoscaled", bool(batch_size_autoscaled))
+        diagnostics.setdefault(
+            "batch_size_autoscale_notes",
+            batch_size_autoscale_notes if batch_size_autoscale_notes else None,
+        )
     _record_finetune_stage_outputs(stage_payload)
 
     if budget_abort:
