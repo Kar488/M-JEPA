@@ -5,6 +5,7 @@ import argparse
 import copy
 import json
 import logging
+import math
 import os
 import random
 import shutil
@@ -239,6 +240,22 @@ def _apply_best_config_overrides(args: argparse.Namespace) -> None:
             coerced = value
         if current == coerced:
             return
+        if dest == "epochs":
+            current_int = _coerce_int_like(current)
+            override_int = _coerce_int_like(coerced)
+            if (
+                current_int is not None
+                and override_int is not None
+                and override_int < current_int
+            ):
+                source = str(best_path) if best_path is not None else "best_config"
+                logger.info(
+                    "Skipping Phase-2 best_config epochs override (%s from %s) because baseline uses %s epochs.",
+                    override_int,
+                    source,
+                    current_int,
+                )
+                return
         setattr(args, dest, coerced)
         inherited.append(f"{dest}={coerced}")
 
@@ -675,6 +692,20 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
             except Exception:
                 pass
 
+    initial_batch_size = int(getattr(args, "batch_size", 0) or 0)
+    effective_batch_size = initial_batch_size
+    target_batches_env = os.getenv("FINETUNE_MIN_TRAIN_BATCHES", "").strip()
+    min_batches_target = 8
+    if target_batches_env:
+        try:
+            parsed = int(float(target_batches_env))
+        except Exception:
+            parsed = 0
+        if parsed > 0:
+            min_batches_target = max(4, parsed)
+    batch_size_autoscaled = False
+    batch_size_autoscale_notes: List[Dict[str, int]] = []
+
     scaffold_requested = bool(getattr(args, "_use_scaffold_provided", False))
     use_scaffold_flag = bool(getattr(args, "use_scaffold", False))
     labeled_lower = str(getattr(args, "labeled_dir", "") or "").lower()
@@ -878,6 +909,52 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
                 len(val_split),
                 len(test_split),
             )
+
+        approx_train_size = len(train_split)
+        if approx_train_size <= 0:
+            approx_train_size = max(1, int(round(dataset_size * 0.8)))
+        if effective_batch_size > 0 and approx_train_size > 0:
+            threshold = effective_batch_size * min_batches_target
+            if approx_train_size < threshold:
+                candidate_batch_size = int(
+                    math.ceil(approx_train_size / float(min_batches_target))
+                )
+                candidate_batch_size = max(1, candidate_batch_size)
+                candidate_batch_size = min(candidate_batch_size, effective_batch_size)
+                candidate_batch_size = min(candidate_batch_size, approx_train_size)
+                if candidate_batch_size < effective_batch_size:
+                    logger.info(
+                        "[finetune] reducing batch_size from %d to %d to target ≥%d batches (seed=%d train_split=%d)",
+                        effective_batch_size,
+                        candidate_batch_size,
+                        min_batches_target,
+                        seed,
+                        approx_train_size,
+                    )
+                    if wb is not None:
+                        try:
+                            wb.log(
+                                {
+                                    "finetune/batch_size_initial": float(
+                                        effective_batch_size
+                                    ),
+                                    "finetune/batch_size_effective": float(
+                                        candidate_batch_size
+                                    ),
+                                }
+                            )
+                        except Exception:
+                            pass
+                    effective_batch_size = candidate_batch_size
+                    setattr(args, "batch_size", effective_batch_size)
+                    batch_size_autoscaled = True
+                    batch_size_autoscale_notes.append(
+                        {
+                            "seed": int(seed),
+                            "train_samples": int(approx_train_size),
+                            "batch_size": int(effective_batch_size),
+                        }
+                    )
 
         encoder = build_encoder(
             gnn_type=args.gnn_type,
@@ -1630,6 +1707,9 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
         "detected_tox21": bool(detected_tox21),
         "metric": metric_name,
         "override_reason": dataset_override_reason or None,
+        "batch_size_initial": int(initial_batch_size) if initial_batch_size else None,
+        "batch_size_effective": int(effective_batch_size) if effective_batch_size else None,
+        "batch_size_target_batches": int(min_batches_target),
     }
     stage_payload["dataset"] = dataset_summary
     stage_payload["seed_list"] = seed_list_summary
@@ -1641,6 +1721,13 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
     if export_path:
         stage_payload.setdefault("selected_path", export_path)
     stage_payload.setdefault("task_label", getattr(args, "label_col", None))
+    diagnostics = stage_payload.setdefault("diagnostics", {})
+    if isinstance(diagnostics, dict):
+        diagnostics.setdefault("batch_size_autoscaled", bool(batch_size_autoscaled))
+        diagnostics.setdefault(
+            "batch_size_autoscale_notes",
+            batch_size_autoscale_notes if batch_size_autoscale_notes else None,
+        )
     _record_finetune_stage_outputs(stage_payload)
 
     if budget_abort:
