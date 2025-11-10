@@ -11,10 +11,10 @@ from typing import Iterator, Sequence, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
-_ORIGINAL_CUDA_VISIBLE_DEVICES: tuple[bool, str] | None = None
+_ORIGINAL_CUDA_VISIBLE_DEVICES: tuple[str, str] | None = None
 
 
-def _remember_original_cuda_mask() -> None:
+def _remember_original_cuda_mask(devices: Sequence[str]) -> None:
     """Record the initial ``CUDA_VISIBLE_DEVICES`` value for later restoration."""
 
     global _ORIGINAL_CUDA_VISIBLE_DEVICES
@@ -22,9 +22,14 @@ def _remember_original_cuda_mask() -> None:
         return
 
     if "CUDA_VISIBLE_DEVICES" in os.environ:
-        _ORIGINAL_CUDA_VISIBLE_DEVICES = (True, os.environ["CUDA_VISIBLE_DEVICES"])
+        _ORIGINAL_CUDA_VISIBLE_DEVICES = ("env", os.environ["CUDA_VISIBLE_DEVICES"])
+        return
+
+    canonical = ",".join(token for token in devices if token)
+    if canonical:
+        _ORIGINAL_CUDA_VISIBLE_DEVICES = ("synthetic", canonical)
     else:
-        _ORIGINAL_CUDA_VISIBLE_DEVICES = (False, "")
+        _ORIGINAL_CUDA_VISIBLE_DEVICES = ("unset", "")
 
 
 def _restore_original_cuda_mask() -> None:
@@ -34,10 +39,15 @@ def _restore_original_cuda_mask() -> None:
     if _ORIGINAL_CUDA_VISIBLE_DEVICES is None:
         return
 
-    existed, mask = _ORIGINAL_CUDA_VISIBLE_DEVICES
-    if existed:
+    kind, mask = _ORIGINAL_CUDA_VISIBLE_DEVICES
+    if kind == "env":
         os.environ["CUDA_VISIBLE_DEVICES"] = mask
-    else:
+    elif kind == "synthetic":
+        if mask:
+            os.environ["CUDA_VISIBLE_DEVICES"] = mask
+        else:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    else:  # kind == "unset"
         os.environ.pop("CUDA_VISIBLE_DEVICES", None)
 
     _ORIGINAL_CUDA_VISIBLE_DEVICES = None
@@ -133,6 +143,7 @@ def _pin_visible_cuda_device_to_local_rank() -> None:
     _remember_original_cuda_mask()
 
     devices, duplicates, raw_mask = _resolve_visible_cuda_devices()
+    _remember_original_cuda_mask(devices)
 
     if not devices:
         return
