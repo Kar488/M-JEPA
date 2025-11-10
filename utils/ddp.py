@@ -11,6 +11,47 @@ from typing import Iterator, Sequence, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
+_ORIGINAL_CUDA_VISIBLE_DEVICES: tuple[str, str] | None = None
+
+
+def _remember_original_cuda_mask(devices: Sequence[str]) -> None:
+    """Record the initial ``CUDA_VISIBLE_DEVICES`` value for later restoration."""
+
+    global _ORIGINAL_CUDA_VISIBLE_DEVICES
+    if _ORIGINAL_CUDA_VISIBLE_DEVICES is not None:
+        return
+
+    if "CUDA_VISIBLE_DEVICES" in os.environ:
+        _ORIGINAL_CUDA_VISIBLE_DEVICES = ("env", os.environ["CUDA_VISIBLE_DEVICES"])
+        return
+
+    canonical = ",".join(token for token in devices if token)
+    if canonical:
+        _ORIGINAL_CUDA_VISIBLE_DEVICES = ("synthetic", canonical)
+    else:
+        _ORIGINAL_CUDA_VISIBLE_DEVICES = ("unset", "")
+
+
+def _restore_original_cuda_mask() -> None:
+    """Restore the original CUDA mask captured during distributed initialisation."""
+
+    global _ORIGINAL_CUDA_VISIBLE_DEVICES
+    if _ORIGINAL_CUDA_VISIBLE_DEVICES is None:
+        return
+
+    kind, mask = _ORIGINAL_CUDA_VISIBLE_DEVICES
+    if kind == "env":
+        os.environ["CUDA_VISIBLE_DEVICES"] = mask
+    elif kind == "synthetic":
+        if mask:
+            os.environ["CUDA_VISIBLE_DEVICES"] = mask
+        else:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    else:  # kind == "unset"
+        os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+
+    _ORIGINAL_CUDA_VISIBLE_DEVICES = None
+
 
 def should_retry_with_gloo(exc: BaseException) -> bool:
     """Return ``True`` when a distributed failure suggests a gloo retry."""
@@ -100,6 +141,7 @@ def _pin_visible_cuda_device_to_local_rank() -> None:
         return
 
     devices, duplicates, raw_mask = _resolve_visible_cuda_devices()
+    _remember_original_cuda_mask(devices)
 
     if not devices:
         return
@@ -324,6 +366,7 @@ def is_main_process() -> bool:
 def cleanup() -> None:
     if dist.is_available() and dist.is_initialized():
         dist.destroy_process_group()
+    _restore_original_cuda_mask()
 
 
 class DistributedSamplerList:
