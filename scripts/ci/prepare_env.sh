@@ -44,6 +44,14 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     exit 1
   fi
 
+  if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
+    detected_mask=$(printf '%s\n' "$nv_output" | sed -n 's/^GPU \([0-9]\+\):.*/\1/p' | paste -sd, -)
+    if [ -n "$detected_mask" ]; then
+      export CUDA_VISIBLE_DEVICES="$detected_mask"
+      echo "[prepare-env] Defaulting CUDA_VISIBLE_DEVICES to detected GPU mask: $CUDA_VISIBLE_DEVICES"
+    fi
+  fi
+
   if [ "$nv_status" -ne 0 ]; then
     echo "[prepare-env][warn] nvidia-smi -L exited with status $nv_status; continuing with reported devices."
     echo "[prepare-env][warn] Output: $nv_output"

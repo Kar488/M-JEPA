@@ -100,7 +100,7 @@ def _resolve_visible_cuda_devices() -> tuple[list[str], list[str], str]:
     return unique, duplicates, ""
 
 
-def _pin_visible_cuda_device_to_local_rank() -> None:
+def _pin_visible_cuda_device_to_local_rank() -> str | None:
     """Restrict ``CUDA_VISIBLE_DEVICES`` to the device assigned to this rank."""
 
     cuda_mod = getattr(torch, "cuda", None)
@@ -131,7 +131,7 @@ def _pin_visible_cuda_device_to_local_rank() -> None:
     _remember_original_cuda_mask(devices)
 
     if not devices:
-        return
+        return None
 
     _remember_original_cuda_mask()
 
@@ -159,9 +159,9 @@ def _pin_visible_cuda_device_to_local_rank() -> None:
             local_rank,
             local_world_size,
         )
-        _restore_original_cuda_mask()
-        return
+        return None
 
+    _remember_original_cuda_mask()
     selected = devices[local_rank]
 
     try:
@@ -179,6 +179,8 @@ def _pin_visible_cuda_device_to_local_rank() -> None:
     except Exception:
         _restore_original_cuda_mask()
         raise
+
+    return selected
 
 
 def _visible_cuda_device_count() -> int:
@@ -325,9 +327,10 @@ def init_distributed(backend: str | None = None) -> bool:
         logger.error(message)
         raise RuntimeError(message)
 
+    pinned_device: str | None = None
     if backend == "nccl":
         try:
-            _pin_visible_cuda_device_to_local_rank()
+            pinned_device = _pin_visible_cuda_device_to_local_rank()
         except RuntimeError:
             raise
         except Exception:
@@ -346,6 +349,10 @@ def init_distributed(backend: str | None = None) -> bool:
     dist.init_process_group(
         backend=backend, init_method="env://", rank=rank, world_size=world_size
     )
+
+    if pinned_device is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = pinned_device
+
     return True
 
 
