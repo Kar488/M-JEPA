@@ -1784,6 +1784,10 @@ PY
           available_devices="${available_devices//[[:space:]]/}"
           if [[ -z "$available_devices" ]]; then
             available_devices=0
+          elif [[ "$available_devices" =~ ^[0-9]+$ ]]; then
+            available_devices=$(( available_devices + 0 ))
+          else
+            available_devices=0
           fi
           detected_cuda_devices="$available_devices"
           if (( available_devices <= 0 )); then
@@ -1900,7 +1904,14 @@ PY
         cuda_count="$detected_cuda_devices"
       fi
 
-      if [[ "$normalized_device" == cuda* && "$cuda_count" =~ ^[0-9]+$ && "$cuda_count" -eq 0 ]]; then
+      local numeric_cuda_count="$cuda_count"
+      if [[ "$numeric_cuda_count" =~ ^[0-9]+$ ]]; then
+        numeric_cuda_count=$(( numeric_cuda_count + 0 ))
+      else
+        numeric_cuda_count=0
+      fi
+
+      if [[ "$normalized_device" == cuda* && $numeric_cuda_count -eq 0 ]]; then
         force_cpu_execution=1
       fi
 
