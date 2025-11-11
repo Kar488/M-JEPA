@@ -131,7 +131,7 @@ jobs:
         run: micromamba run -n mjepa python -m pytest -m "not gpu and not slow" -q
 
   vast_smoke:
-    if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && secrets.VAST_HOST != '' && secrets.VAST_USER != '' && secrets.VAST_PORT != '' && secrets.VAST_SSH_KEY != '' }}
     name: Smoke on Vast (GPU present?)
     runs-on: ubuntu-latest
     steps:
@@ -155,7 +155,7 @@ jobs:
             PY
 
   vast_deploy_and_prepare_environment:
-    if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && secrets.VAST_HOST != '' && secrets.VAST_USER != '' && secrets.VAST_PORT != '' && secrets.VAST_SSH_KEY != '' }}
     name: Deploy + Prepare environment
     runs-on: ubuntu-latest
     needs: vast_smoke
