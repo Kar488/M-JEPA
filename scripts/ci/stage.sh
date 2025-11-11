@@ -34,6 +34,45 @@ ci_setup_vast_ssh_key() {
   export VAST_SSH_KEY_PATH="$key_path"
 }
 
+ci_touch_file_dir() {
+  local path="${1:-}"
+  [[ -n "$path" ]] || return 0
+
+  local dir
+  dir="${path%/*}"
+  if [[ "$dir" != "$path" ]]; then
+    mkdir -p "$dir"
+  fi
+}
+
+ci_prepare_ddp_attempts_file() {
+  local path="${DDP_ATTEMPTS_FILE:-}"
+  [[ -n "$path" ]] || return 0
+
+  ci_touch_file_dir "$path"
+  if [[ ! -e "$path" ]]; then
+    printf '0' >"$path"
+  fi
+}
+
+ci_mark_ddp_attempt_if_empty() {
+  local path="${DDP_ATTEMPTS_FILE:-}"
+  [[ -n "$path" ]] || return 0
+
+  ci_touch_file_dir "$path"
+  local current=""
+  if [[ -f "$path" ]]; then
+    current="$(<"$path")"
+  fi
+  if [[ "$current" =~ ^[0-9]+$ ]]; then
+    if (( current > 0 )); then
+      return 0
+    fi
+  fi
+
+  printf '1' >"$path"
+}
+
 ci_phase2_refresh_lineage_bindings() {
   local new_pretrain="${1:-}"
   local new_grid="${2:-}"
@@ -1951,6 +1990,9 @@ PY
         stage_python_cmd_str=${stage_python_cmd_str% }
       fi
       echo "[diag] stage python command (stage=${s}): ${stage_python_cmd_str}" >&2
+      if (( using_ddp )); then
+        ci_prepare_ddp_attempts_file
+      fi
       set +e
       timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
         env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
@@ -1992,6 +2034,7 @@ PY
         ddp_launcher=()
         set_devices_arg 1
         arr=("${entrypoint_args[@]}")
+        ci_mark_ddp_attempt_if_empty
         echo "[stage:$s] warn: distributed launch failed (rc=$rc); retrying with --devices 1" >&2
         echo "[diag] stage ddp fallback (stage=${s} rc=${rc} command=${stage_python_cmd_str})" >&2
         continue
