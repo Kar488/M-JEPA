@@ -4,10 +4,9 @@ import sys
 import types
 from typing import Any, Dict
 
+import numpy as np
 import pytest
-
-np = pytest.importorskip("numpy")
-torch = pytest.importorskip("torch")
+import torch
 
 
 def test_tox21_case_study_smoke(monkeypatch):
