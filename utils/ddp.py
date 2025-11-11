@@ -125,7 +125,10 @@ def _pin_visible_cuda_device_to_local_rank() -> None:
     if local_world_size <= 1:
         return
 
+    _remember_original_cuda_mask()
+
     devices, duplicates, raw_mask = _resolve_visible_cuda_devices()
+    _remember_original_cuda_mask(devices)
 
     if not devices:
         return
