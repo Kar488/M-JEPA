@@ -125,10 +125,15 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
     if local_world_size <= 1:
         return
 
+    _remember_original_cuda_mask()
+
     devices, duplicates, raw_mask = _resolve_visible_cuda_devices()
+    _remember_original_cuda_mask(devices)
 
     if not devices:
         return None
+
+    _remember_original_cuda_mask()
 
     if len(devices) < local_world_size:
         descriptor = raw_mask or "device_count"
@@ -140,10 +145,13 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
             len(devices),
             descriptor,
         )
-        raise RuntimeError(
-            "Insufficient CUDA devices for distributed launch. Set CUDA_VISIBLE_DEVICES "
-            "to a comma-separated list with at least LOCAL_WORLD_SIZE entries."
-        )
+        try:
+            raise RuntimeError(
+                "Insufficient CUDA devices for distributed launch. Set CUDA_VISIBLE_DEVICES "
+                "to a comma-separated list with at least LOCAL_WORLD_SIZE entries."
+            )
+        finally:
+            _restore_original_cuda_mask()
 
     if not (0 <= local_rank < local_world_size):
         logger.warning(
