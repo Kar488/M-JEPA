@@ -131,42 +131,67 @@ repair_micromamba_env() {
 python_interp_cmd=()
 python_cmd=()
 
-unset MJEPACI_FORCE_SYSTEM_PYTHON MJEPACI_SYSTEM_PYTHON_BIN
+python_force_system="${MJEPACI_FORCE_SYSTEM_PYTHON:-}"
+python_force_system="${python_force_system,,}"
+python_system_bin="${MJEPACI_SYSTEM_PYTHON_BIN:-}"
 
 python_mamba_ready=0
-if ensure_micromamba; then
-  python_interp_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
-  python_mamba_ready=1
-  print_python_cmd python_interp_cmd
-  if ! "${python_interp_cmd[@]}" - <<'PY'
+if [[ "${python_force_system}" == "1" || "${python_force_system}" == "true" || "${python_force_system}" == "yes" ]]; then
+  if [[ -z "${python_system_bin}" ]]; then
+    if py=$(python_bin 2>/dev/null); then
+      python_system_bin="$(command -v "$py" 2>/dev/null || true)"
+      if [[ -z "${python_system_bin}" ]]; then
+        python_system_bin="$py"
+      fi
+    fi
+  fi
+  if [[ -n "${python_system_bin}" ]]; then
+    python_interp_cmd=(env PYTHONUNBUFFERED=1 "$python_system_bin" -u)
+    print_python_cmd python_interp_cmd
+    MJEPACI_FORCE_SYSTEM_PYTHON=1
+    MJEPACI_SYSTEM_PYTHON_BIN="$python_system_bin"
+    export MJEPACI_FORCE_SYSTEM_PYTHON MJEPACI_SYSTEM_PYTHON_BIN
+  else
+    MJEPACI_FORCE_SYSTEM_PYTHON=1
+    export MJEPACI_FORCE_SYSTEM_PYTHON
+    unset MJEPACI_SYSTEM_PYTHON_BIN
+  fi
+else
+  unset MJEPACI_FORCE_SYSTEM_PYTHON MJEPACI_SYSTEM_PYTHON_BIN
+  if ensure_micromamba; then
+    python_interp_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
+    python_mamba_ready=1
+    print_python_cmd python_interp_cmd
+    if ! "${python_interp_cmd[@]}" - <<'PY'
 import sys
 sys.exit(0)
 PY
-  then
-    echo "[tox21] warn: micromamba env 'mjepa' missing python; attempting repair" >&2
-    if repair_micromamba_env; then
-      python_interp_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
-      print_python_cmd python_interp_cmd
-      if "${python_interp_cmd[@]}" - <<'PY'
+    then
+      echo "[tox21] warn: micromamba env 'mjepa' missing python; attempting repair" >&2
+      if repair_micromamba_env; then
+        python_interp_cmd=("$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 python -u)
+        print_python_cmd python_interp_cmd
+        if "${python_interp_cmd[@]}" - <<'PY'
 import sys
 sys.exit(0)
 PY
-      then
-        python_mamba_ready=1
+        then
+          python_mamba_ready=1
+        else
+          python_mamba_ready=0
+          echo "[tox21] warn: micromamba python still unavailable after repair" >&2
+          python_interp_cmd=()
+        fi
       else
         python_mamba_ready=0
-        echo "[tox21] warn: micromamba python still unavailable after repair" >&2
         python_interp_cmd=()
       fi
     else
-      python_mamba_ready=0
-      python_interp_cmd=()
+      python_mamba_ready=1
     fi
   else
-    python_mamba_ready=1
+    echo "[tox21] warn: micromamba bootstrap unavailable; falling back to system python" >&2
   fi
-else
-  echo "[tox21] warn: micromamba bootstrap unavailable; falling back to system python" >&2
 fi
 
 if (( python_mamba_ready )) && [[ -z "${MJEPACI_STAGE_SHIM:-}" ]]; then
