@@ -133,13 +133,7 @@ jobs:
   vast_smoke:
     if: >
       ${{
-        secrets.VAST_HOST != '' &&
-        secrets.VAST_USER != '' &&
-        secrets.VAST_PORT != '' &&
-        secrets.VAST_SSH_KEY != '' &&
-        (
-          (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
-        )
+        (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
       }}
     name: Smoke on Vast (GPU present?)
     runs-on: ubuntu-latest
@@ -166,13 +160,7 @@ jobs:
   vast_deploy_and_prepare_environment:
     if: >
       ${{
-        secrets.VAST_HOST != '' &&
-        secrets.VAST_USER != '' &&
-        secrets.VAST_PORT != '' &&
-        secrets.VAST_SSH_KEY != '' &&
-        (
-          (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
-        )
+        (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
       }}
     name: Deploy + Prepare environment
     runs-on: ubuntu-latest
@@ -270,11 +258,7 @@ jobs:
   vast_learn_hyperparameters:
     if: >
       ${{
-        secrets.VAST_HOST != '' &&
-        secrets.VAST_USER != '' &&
-        secrets.VAST_PORT != '' &&
-        secrets.VAST_SSH_KEY != '' &&
-        ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs'))
+        (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
       }}
     name: Learn hyperparameters (Custom or WandB)
     runs-on: ubuntu-latest
@@ -344,10 +328,6 @@ jobs:
   vast_sweep_phase2:
     if: >
       ${{
-        secrets.VAST_HOST != '' &&
-        secrets.VAST_USER != '' &&
-        secrets.VAST_PORT != '' &&
-        secrets.VAST_SSH_KEY != '' &&
         ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) &&
         ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb')
       }}
@@ -470,18 +450,12 @@ jobs:
     needs: [vast_learn_hyperparameters, vast_sweep_phase2]
     if: >
       ${{
-          secrets.VAST_HOST != '' &&
-          secrets.VAST_USER != '' &&
-          secrets.VAST_PORT != '' &&
-          secrets.VAST_SSH_KEY != '' &&
-          (
-            ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && (
-              ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb' &&
-               needs.vast_sweep_phase2.result == 'success')
-            ||
-              ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'custom' &&
-               needs.vast_learn_hyperparameters.result == 'success')
-            )
+          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && (
+            ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb' &&
+             needs.vast_sweep_phase2.result == 'success')
+          ||
+            ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'custom' &&
+             needs.vast_learn_hyperparameters.result == 'success')
           )
       }}
     env:
@@ -560,10 +534,6 @@ jobs:
     needs: vast_pretrain
     if:
       ${{
-          secrets.VAST_HOST != '' &&
-          secrets.VAST_USER != '' &&
-          secrets.VAST_PORT != '' &&
-          secrets.VAST_SSH_KEY != '' &&
           ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) &&
           needs.vast_pretrain.result == 'success' }}
     outputs:
@@ -667,10 +637,6 @@ jobs:
     needs: [vast_pretrain, vast_tox21_baseline]
     if:
       ${{
-          secrets.VAST_HOST != '' &&
-          secrets.VAST_USER != '' &&
-          secrets.VAST_PORT != '' &&
-          secrets.VAST_SSH_KEY != '' &&
           ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) &&
           needs.vast_pretrain.result == 'success' &&
           needs.vast_tox21_baseline.result == 'success' &&
@@ -716,10 +682,6 @@ jobs:
     if:
       ${{
           always() &&
-          secrets.VAST_HOST != '' &&
-          secrets.VAST_USER != '' &&
-          secrets.VAST_PORT != '' &&
-          secrets.VAST_SSH_KEY != '' &&
           ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -765,10 +727,6 @@ jobs:
     needs: [vast_pretrain, vast_finetune]
     if:
       ${{
-          secrets.VAST_HOST != '' &&
-          secrets.VAST_USER != '' &&
-          secrets.VAST_PORT != '' &&
-          secrets.VAST_SSH_KEY != '' &&
           ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) &&
           needs.vast_finetune.result == 'success' }}
     env:
@@ -840,10 +798,6 @@ jobs:
     if:
       ${{
           always() &&
-          secrets.VAST_HOST != '' &&
-          secrets.VAST_USER != '' &&
-          secrets.VAST_PORT != '' &&
-          secrets.VAST_SSH_KEY != '' &&
           ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
     steps:
       - name: Publish Vast report
