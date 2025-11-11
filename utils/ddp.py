@@ -11,46 +11,31 @@ from typing import Iterator, Sequence, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
-_ORIGINAL_CUDA_VISIBLE_DEVICES: tuple[str, str] | None = None
+_CUDA_VISIBLE_DEVICE_STACK: list[tuple[bool, str]] = []
 
 
-def _remember_original_cuda_mask(devices: Sequence[str]) -> None:
-    """Record the initial ``CUDA_VISIBLE_DEVICES`` value for later restoration."""
-
-    global _ORIGINAL_CUDA_VISIBLE_DEVICES
-    if _ORIGINAL_CUDA_VISIBLE_DEVICES is not None:
-        return
+def _remember_original_cuda_mask() -> None:
+    """Push the current CUDA visibility mask onto a stack."""
 
     if "CUDA_VISIBLE_DEVICES" in os.environ:
-        _ORIGINAL_CUDA_VISIBLE_DEVICES = ("env", os.environ["CUDA_VISIBLE_DEVICES"])
-        return
-
-    canonical = ",".join(token for token in devices if token)
-    if canonical:
-        _ORIGINAL_CUDA_VISIBLE_DEVICES = ("synthetic", canonical)
+        _CUDA_VISIBLE_DEVICE_STACK.append((True, os.environ["CUDA_VISIBLE_DEVICES"]))
     else:
-        _ORIGINAL_CUDA_VISIBLE_DEVICES = ("unset", "")
+        _CUDA_VISIBLE_DEVICE_STACK.append((False, ""))
 
 
 def _restore_original_cuda_mask() -> None:
-    """Restore the original CUDA mask captured during distributed initialisation."""
+    """Pop and restore the most recent CUDA visibility mask."""
 
-    global _ORIGINAL_CUDA_VISIBLE_DEVICES
-    if _ORIGINAL_CUDA_VISIBLE_DEVICES is None:
+    if not _CUDA_VISIBLE_DEVICE_STACK:
         return
 
-    kind, mask = _ORIGINAL_CUDA_VISIBLE_DEVICES
-    if kind == "env":
+    had_env, mask = _CUDA_VISIBLE_DEVICE_STACK.pop()
+    if had_env and mask:
         os.environ["CUDA_VISIBLE_DEVICES"] = mask
-    elif kind == "synthetic":
-        if mask:
-            os.environ["CUDA_VISIBLE_DEVICES"] = mask
-        else:
-            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-    else:  # kind == "unset"
+    elif had_env:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    else:
         os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-
-    _ORIGINAL_CUDA_VISIBLE_DEVICES = None
 
 
 def should_retry_with_gloo(exc: BaseException) -> bool:
@@ -148,6 +133,8 @@ def _pin_visible_cuda_device_to_local_rank() -> None:
     if not devices:
         return
 
+    _remember_original_cuda_mask()
+
     if len(devices) < local_world_size:
         descriptor = raw_mask or "device_count"
         if duplicates:
@@ -158,10 +145,13 @@ def _pin_visible_cuda_device_to_local_rank() -> None:
             len(devices),
             descriptor,
         )
-        raise RuntimeError(
-            "Insufficient CUDA devices for distributed launch. Set CUDA_VISIBLE_DEVICES "
-            "to a comma-separated list with at least LOCAL_WORLD_SIZE entries."
-        )
+        try:
+            raise RuntimeError(
+                "Insufficient CUDA devices for distributed launch. Set CUDA_VISIBLE_DEVICES "
+                "to a comma-separated list with at least LOCAL_WORLD_SIZE entries."
+            )
+        finally:
+            _restore_original_cuda_mask()
 
     if not (0 <= local_rank < local_world_size):
         logger.warning(
@@ -169,20 +159,26 @@ def _pin_visible_cuda_device_to_local_rank() -> None:
             local_rank,
             local_world_size,
         )
+        _restore_original_cuda_mask()
         return
 
     selected = devices[local_rank]
-    os.environ["CUDA_VISIBLE_DEVICES"] = selected
-    logger.debug(
-        "Pinned CUDA_VISIBLE_DEVICES to '%s' for LOCAL_RANK=%d", selected, local_rank
-    )
 
-    set_device = getattr(cuda_mod, "set_device", None)
-    if callable(set_device):
-        try:
-            set_device(0)
-        except Exception:
-            logger.debug("Failed to set CUDA device after pinning", exc_info=True)
+    try:
+        os.environ["CUDA_VISIBLE_DEVICES"] = selected
+        logger.debug(
+            "Pinned CUDA_VISIBLE_DEVICES to '%s' for LOCAL_RANK=%d", selected, local_rank
+        )
+
+        set_device = getattr(cuda_mod, "set_device", None)
+        if callable(set_device):
+            try:
+                set_device(0)
+            except Exception:
+                logger.debug("Failed to set CUDA device after pinning", exc_info=True)
+    except Exception:
+        _restore_original_cuda_mask()
+        raise
 
 
 def _visible_cuda_device_count() -> int:
@@ -368,7 +364,8 @@ def is_main_process() -> bool:
 def cleanup() -> None:
     if dist.is_available() and dist.is_initialized():
         dist.destroy_process_group()
-    _restore_original_cuda_mask()
+    while _CUDA_VISIBLE_DEVICE_STACK:
+        _restore_original_cuda_mask()
 
 
 class DistributedSamplerList:

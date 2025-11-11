@@ -26,17 +26,27 @@ ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
 CUDA_EXPECTED=0
 if command -v nvidia-smi >/dev/null 2>&1; then
   nv_output=""
+  nv_status=0
   if ! nv_output=$(nvidia-smi -L 2>&1); then
-    echo "[prepare-env][error] Unable to query NVIDIA devices via nvidia-smi -L."
-    echo "[prepare-env][error] Output: $nv_output"
-    echo "[prepare-env][error] Inspect the host GPU configuration before retrying."
-    exit 1
+    nv_status=$?
   fi
 
   if [ -z "$nv_output" ] || printf '%s\n' "$nv_output" | grep -qiE 'no devices were found'; then
     echo "[prepare-env][error] nvidia-smi reports no accessible GPU devices."
     echo "[prepare-env][error] Ensure a CUDA-capable GPU and matching drivers are available."
+    [ "$nv_status" -ne 0 ] && echo "[prepare-env][error] Output: $nv_output"
     exit 1
+  fi
+
+  if ! printf '%s\n' "$nv_output" | grep -qiE '^GPU [0-9]+:'; then
+    echo "[prepare-env][error] Unable to determine the available GPU devices from nvidia-smi -L."
+    echo "[prepare-env][error] Output: $nv_output"
+    exit 1
+  fi
+
+  if [ "$nv_status" -ne 0 ]; then
+    echo "[prepare-env][warn] nvidia-smi -L exited with status $nv_status; continuing with reported devices."
+    echo "[prepare-env][warn] Output: $nv_output"
   fi
 
   CUDA_EXPECTED=1
