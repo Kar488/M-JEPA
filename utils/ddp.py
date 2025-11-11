@@ -14,6 +14,19 @@ logger = logging.getLogger(__name__)
 _CUDA_VISIBLE_DEVICE_STACK: list[tuple[bool, str]] = []
 
 
+def _restore_cuda_mask_snapshot() -> None:
+    """Ensure the visible CUDA mask matches the latest saved snapshot."""
+
+    if not _CUDA_VISIBLE_DEVICE_STACK:
+        return
+
+    had_env, mask = _CUDA_VISIBLE_DEVICE_STACK[-1]
+    if had_env:
+        os.environ["CUDA_VISIBLE_DEVICES"] = mask
+    else:
+        os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+
+
 def _remember_original_cuda_mask() -> None:
     """Push the current CUDA visibility mask onto a stack."""
 
@@ -125,15 +138,14 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
     if local_world_size <= 1:
         return
 
-    _remember_original_cuda_mask()
+    if _CUDA_VISIBLE_DEVICE_STACK:
+        _restore_cuda_mask_snapshot()
 
     devices, duplicates, raw_mask = _resolve_visible_cuda_devices()
     _remember_original_cuda_mask(devices)
 
     if not devices:
         return None
-
-    _remember_original_cuda_mask()
 
     if len(devices) < local_world_size:
         descriptor = raw_mask or "device_count"
