@@ -142,7 +142,7 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
         _restore_cuda_mask_snapshot()
 
     devices, duplicates, raw_mask = _resolve_visible_cuda_devices()
-    _remember_original_cuda_mask(devices)
+    _remember_original_cuda_mask()
 
     if not devices:
         return None
