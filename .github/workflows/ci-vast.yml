@@ -209,6 +209,28 @@ jobs:
           script: |
             set -euo pipefail
 
+            # 0) Pre-reqs (optional): ensure git-lfs exists if you use LFS
+            command -v git-lfs >/dev/null || (apt-get update && apt-get install -y git-lfs)
+
+            # 1) Write PRIVATE deploy key from secret (must begin with -----BEGIN OPENSSH PRIVATE KEY-----)
+            mkdir -p ~/.ssh
+            # If your secret is raw text:
+            printf '%s\n' "$MJEPA_DEPLOY_KEY" > ~/.ssh/mjepa_deploy_key
+            # If you stored it base64-encoded, use:
+            # echo "$MJEPA_DEPLOY_KEY_B64" | base64 -d > ~/.ssh/mjepa_deploy_key
+            chmod 600 ~/.ssh/mjepa_deploy_key
+
+            # 2) Trust GitHub host key (no prompt)
+            ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts
+
+            # 3) (optional) pin identity for github.com
+            cat >> ~/.ssh/config <<'CFG'
+            Host github.com
+              IdentityFile ~/.ssh/mjepa_deploy_key
+              IdentitiesOnly yes
+            CFG
+            chmod 600 ~/.ssh/config
+
             # Tell git to use the deploy key when connecting to GitHub.
             export GIT_SSH_COMMAND="ssh -i ~/.ssh/mjepa_deploy_key -o StrictHostKeyChecking=no"
             
@@ -233,6 +255,7 @@ jobs:
             fi
 
             # Define a proper LFS endpoint with your PAT
+            git -C "$APP_DIR" lfs install --local
             LFS_URL="https://x-access-token:${DEFAULT_TOKEN}@github.com/${REPO}.git/info/lfs"
             git -C "$APP_DIR" config lfs.url "$LFS_URL"
           
