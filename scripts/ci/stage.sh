@@ -59,6 +59,8 @@ ci_mark_ddp_attempt_if_empty() {
   local path="${DDP_ATTEMPTS_FILE:-}"
   [[ -n "$path" ]] || return 0
 
+  ci_prepare_ddp_attempts_file
+
   ci_touch_file_dir "$path"
   local current=""
   if [[ -f "$path" ]]; then
@@ -1744,6 +1746,10 @@ run_with_timeout() {
     case "$s" in
       finetune|tox21) ddp_stage="$s" ;;
     esac
+
+    if [[ -n "$ddp_stage" ]]; then
+      ci_prepare_ddp_attempts_file
+    fi
 
     local force_cpu_execution=0
 

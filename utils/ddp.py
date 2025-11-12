@@ -12,6 +12,8 @@ from typing import Iterator, Sequence, TYPE_CHECKING
 logger = logging.getLogger(__name__)
 
 _CUDA_VISIBLE_DEVICE_STACK: list[tuple[bool, str]] = []
+_LAST_PINNED_CONTEXT: tuple[int, int] | None = None
+_LAST_PINNED_DEVICE: str | None = None
 
 
 def _restore_cuda_mask_snapshot() -> None:
@@ -49,6 +51,11 @@ def _restore_original_cuda_mask() -> None:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
     else:
         os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+
+    if not _CUDA_VISIBLE_DEVICE_STACK:
+        global _LAST_PINNED_CONTEXT, _LAST_PINNED_DEVICE
+        _LAST_PINNED_CONTEXT = None
+        _LAST_PINNED_DEVICE = None
 
 
 def should_retry_with_gloo(exc: BaseException) -> bool:
@@ -138,6 +145,28 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
     if local_world_size <= 1:
         return
 
+    global _LAST_PINNED_CONTEXT, _LAST_PINNED_DEVICE
+    current_mask = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
+    if (
+        _CUDA_VISIBLE_DEVICE_STACK
+        and _LAST_PINNED_CONTEXT == (local_rank, local_world_size)
+        and _LAST_PINNED_DEVICE
+        and current_mask == _LAST_PINNED_DEVICE
+    ):
+        _remember_original_cuda_mask()
+        set_device = getattr(cuda_mod, "set_device", None)
+        if callable(set_device):
+            try:
+                set_device(0)
+            except Exception:
+                logger.debug(
+                    "Failed to set CUDA device after reusing pinned mask",
+                    exc_info=True,
+                )
+        _LAST_PINNED_CONTEXT = (local_rank, local_world_size)
+        _LAST_PINNED_DEVICE = current_mask
+        return _LAST_PINNED_DEVICE
+
     if _CUDA_VISIBLE_DEVICE_STACK:
         _restore_cuda_mask_snapshot()
 
@@ -187,6 +216,8 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
         _restore_original_cuda_mask()
         raise
 
+    _LAST_PINNED_CONTEXT = (local_rank, local_world_size)
+    _LAST_PINNED_DEVICE = selected
     return selected
 
 
@@ -380,6 +411,9 @@ def cleanup() -> None:
         dist.destroy_process_group()
     while _CUDA_VISIBLE_DEVICE_STACK:
         _restore_original_cuda_mask()
+    global _LAST_PINNED_CONTEXT, _LAST_PINNED_DEVICE
+    _LAST_PINNED_CONTEXT = None
+    _LAST_PINNED_DEVICE = None
 
 
 class DistributedSamplerList:
