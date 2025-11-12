@@ -1754,6 +1754,12 @@ run_with_timeout() {
     fi
 
     local force_cpu_execution=0
+    local preflight_forced_single=0
+    local preflight_reason=""
+    local preflight_marked=0
+    local preflight_fallback_logged=0
+    local requested_devices_numeric=0
+    local fallback_devices_value=""
 
     if [[ -n "$ddp_stage" ]]; then
       local devices_idx=-1
@@ -1789,7 +1795,11 @@ run_with_timeout() {
         esac
       fi
 
-      if [[ "$requested_devices" =~ ^[0-9]+$ && "$requested_devices" -gt 1 ]]; then
+      if [[ "$requested_devices" =~ ^[0-9]+$ ]]; then
+        requested_devices_numeric=$(( requested_devices + 0 ))
+      fi
+
+      if (( requested_devices_numeric > 1 )); then
         local probe_output=""
         local ddp_supported=0
         if probe_output=$("${python_runner_cmd[@]}" - <<'PY'
@@ -1822,7 +1832,7 @@ PY
           ddp_supported=1
         fi
 
-        local effective_devices="$requested_devices"
+        local effective_devices=$requested_devices_numeric
         local available_devices=0
         if (( ddp_supported )); then
           available_devices="${probe_output:-0}"
@@ -1841,13 +1851,21 @@ PY
             echo "[stage:$s] no CUDA devices detected; falling back to single-process execution" >&2
             effective_devices=1
             force_cpu_execution=1
+            preflight_forced_single=1
+            preflight_reason="no_cuda_devices"
           elif (( available_devices < effective_devices )); then
             echo "[stage:$s] requested ${effective_devices} devices but only ${available_devices} visible; clamping" >&2
             effective_devices=$available_devices
+            if (( available_devices <= 1 )); then
+              preflight_forced_single=1
+              preflight_reason="insufficient_cuda:${available_devices}"
+            fi
           fi
         else
           echo "[stage:$s] torch.distributed.run unavailable; falling back to single-process execution" >&2
           effective_devices=1
+          preflight_forced_single=1
+          preflight_reason="ddp_unavailable"
         fi
 
         if (( effective_devices > 1 && ddp_supported )); then
@@ -1867,11 +1885,13 @@ PY
           fi
           ddp_launcher=(-m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
           ddp_enabled=1
+          preflight_forced_single=0
+          preflight_reason=""
         else
           effective_devices=1
         fi
 
-        if (( effective_devices != ${requested_devices} )); then
+        if (( effective_devices != requested_devices_numeric )); then
           if (( devices_idx >= 0 )); then
             if (( devices_joined )); then
               entrypoint_args[$devices_idx]="--devices=${effective_devices}"
@@ -1969,9 +1989,39 @@ PY
         set_arg_value "--device" "cpu"
         set_arg_value "--bf16" "0"
         echo "[stage:$s] warn: CUDA unavailable; forcing CPU execution (devices=1, device=cpu, bf16=0)" >&2
+        preflight_forced_single=1
+        if [[ -z "$preflight_reason" ]]; then
+          preflight_reason="no_cuda_devices"
+        fi
       fi
 
       arr=("${entrypoint_args[@]}")
+
+      if (( preflight_forced_single )) && (( !preflight_marked )) && (( requested_devices_numeric > 1 )); then
+        ci_mark_ddp_attempt_if_empty
+        preflight_marked=1
+      fi
+
+      if (( preflight_forced_single )); then
+        local scan_idx=0
+        fallback_devices_value=""
+        while (( scan_idx < ${#entrypoint_args[@]} )); do
+          local token="${entrypoint_args[$scan_idx]}"
+          if [[ "$token" == "--devices" ]]; then
+            if (( scan_idx + 1 < ${#entrypoint_args[@]} )); then
+              fallback_devices_value="${entrypoint_args[$((scan_idx + 1))]}"
+            fi
+            break
+          elif [[ "$token" == --devices=* ]]; then
+            fallback_devices_value="${token#--devices=}"
+            break
+          fi
+          ((scan_idx+=1))
+        done
+        if [[ -z "$fallback_devices_value" ]]; then
+          fallback_devices_value="1"
+        fi
+      fi
     fi
 
     local build_entrypoint
@@ -1996,6 +2046,38 @@ PY
       if (( ${#stage_cmd[@]} )); then
         printf -v stage_python_cmd_str '%q ' "${stage_cmd[@]}"
         stage_python_cmd_str=${stage_python_cmd_str% }
+      fi
+
+      if (( preflight_forced_single )) && (( !preflight_fallback_logged )); then
+        local fallback_msg="[stage:$s] warn: distributed launch failed"
+        case "$preflight_reason" in
+          no_cuda_devices)
+            fallback_msg+=" (no CUDA devices detected)"
+            ;;
+          ddp_unavailable)
+            fallback_msg+=" (torch.distributed.run unavailable)"
+            ;;
+          insufficient_cuda:*)
+            local avail="${preflight_reason#insufficient_cuda:}"
+            if (( requested_devices_numeric > 1 )); then
+              fallback_msg+=" (requested ${requested_devices_numeric} but only ${avail} visible)"
+            else
+              fallback_msg+=" (only ${avail} CUDA devices visible)"
+            fi
+            ;;
+          "")
+            ;;
+          *)
+            fallback_msg+=" (${preflight_reason})"
+            ;;
+        esac
+        if [[ -n "$fallback_devices_value" ]]; then
+          fallback_msg+="; retrying with --devices ${fallback_devices_value}"
+        else
+          fallback_msg+="; retrying with single-process execution"
+        fi
+        echo "$fallback_msg" >&2
+        preflight_fallback_logged=1
       fi
       echo "[diag] stage python command (stage=${s}): ${stage_python_cmd_str}" >&2
       if (( using_ddp )); then
