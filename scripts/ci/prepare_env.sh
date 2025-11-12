@@ -115,6 +115,21 @@ if ! nvcc --version | grep -q "release 12.8"; then
 fi
 
 # ----------- Torch (CUDA if available) -----------
+# Run nvidia-smi to find usable GPUs
+healthy_gpus=$(nvidia-smi --query-gpu=index,name --format=csv,noheader,nounits 2>/dev/null \
+    | awk '!/Unknown Error/ {print $1}' | paste -sd "," -)
+
+if [ -z "$healthy_gpus" ]; then
+  echo "[prepare-env][warn] No healthy GPUs detected by nvidia-smi; defaulting to all"
+  export CUDA_VISIBLE_DEVICES=0,1
+else
+  echo "[prepare-env] Healthy GPUs detected: $healthy_gpus"
+  export CUDA_VISIBLE_DEVICES="$healthy_gpus"
+fi
+
+# Optional: show for debugging
+echo "[prepare-env] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+
 if ! micromamba run -n "$ENV_NAME" python - <<'PY' >/dev/null 2>&1
 import torch, sys; sys.exit(0 if torch.cuda.is_available() or torch.__version__ else 1)
 PY
