@@ -198,6 +198,7 @@ jobs:
           GIT_LFS_SKIP_SMUDGE: 1
           REPO: Kar488/M-JEPA
           BRANCH: master
+          MJEPA_DEPLOY_KEY: ${{ secrets.VAST_SSH_KEY }}   # PRIVATE key (raw text)
         with:
           host: ${{ secrets.VAST_HOST }}
           username: ${{ secrets.VAST_USER }}
