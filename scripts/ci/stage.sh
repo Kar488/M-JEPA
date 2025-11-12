@@ -1698,48 +1698,50 @@ run_with_timeout() {
     local -a entrypoint=()
     local ddp_enabled=0
 
-    local set_devices_arg
-    set_devices_arg() {
-      local value="$1"
-      local i=0
-      while (( i < ${#entrypoint_args[@]} )); do
-        local token="${entrypoint_args[$i]}"
-        if [[ "$token" == "--devices" ]]; then
-          if (( i + 1 < ${#entrypoint_args[@]} )); then
-            entrypoint_args[$((i + 1))]="$value"
-          else
-            entrypoint_args+=("$value")
-          fi
-          return 0
-        elif [[ "$token" == --devices=* ]]; then
-          entrypoint_args[$i]="--devices=${value}"
-          return 0
-        fi
-        ((++i))
-      done
-      entrypoint_args+=("--devices" "$value")
-    }
-
-    local set_arg_value
-    set_arg_value() {
+    local replace_stage_flag
+    replace_stage_flag() {
       local flag="$1" value="$2"
+      local -a rebuilt=()
+      local replaced=0
       local i=0
       while (( i < ${#entrypoint_args[@]} )); do
         local token="${entrypoint_args[$i]}"
         if [[ "$token" == "$flag" ]]; then
-          if (( i + 1 < ${#entrypoint_args[@]} )); then
-            entrypoint_args[$((i + 1))]="$value"
-          else
-            entrypoint_args+=("$value")
+          if (( ! replaced )); then
+            rebuilt+=("$flag" "$value")
+            replaced=1
           fi
-          return 0
+          if (( i + 1 < ${#entrypoint_args[@]} )); then
+            ((i+=2))
+          else
+            ((i+=1))
+          fi
+          continue
         elif [[ "$token" == ${flag}=* ]]; then
-          entrypoint_args[$i]="${flag}=${value}"
-          return 0
+          if (( ! replaced )); then
+            rebuilt+=("$flag" "$value")
+            replaced=1
+          fi
+          ((++i))
+          continue
         fi
+        rebuilt+=("$token")
         ((++i))
       done
-      entrypoint_args+=("$flag" "$value")
+      if (( ! replaced )); then
+        rebuilt+=("$flag" "$value")
+      fi
+      entrypoint_args=("${rebuilt[@]}")
+    }
+
+    local set_devices_arg
+    set_devices_arg() {
+      replace_stage_flag "--devices" "$1"
+    }
+
+    local set_arg_value
+    set_arg_value() {
+      replace_stage_flag "$1" "$2"
     }
 
     local ddp_stage=""
