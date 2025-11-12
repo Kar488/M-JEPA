@@ -205,7 +205,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          envs: APP_DIR,REPO,BRANCH,DEFAULT_TOKEN
+          envs: APP_DIR,REPO,BRANCH,DEFAULT_TOKEN,MJEPA_DEPLOY_KEY
           script: |
             set -euo pipefail
 
@@ -214,7 +214,8 @@ jobs:
 
             # 1) Write PRIVATE deploy key from secret (must begin with -----BEGIN OPENSSH PRIVATE KEY-----)
             mkdir -p ~/.ssh
-            # If your secret is raw text:
+            # Will error clearly if missing:
+            : "${MJEPA_DEPLOY_KEY:?MJEPA_DEPLOY_KEY missing}" 
             printf '%s\n' "$MJEPA_DEPLOY_KEY" > ~/.ssh/mjepa_deploy_key
             # If you stored it base64-encoded, use:
             # echo "$MJEPA_DEPLOY_KEY_B64" | base64 -d > ~/.ssh/mjepa_deploy_key
@@ -255,9 +256,8 @@ jobs:
             fi
 
             # Define a proper LFS endpoint with your PAT
-            git -C "$APP_DIR" lfs install --local
-            LFS_URL="https://x-access-token:${DEFAULT_TOKEN}@github.com/${REPO}.git/info/lfs"
-            git -C "$APP_DIR" config lfs.url "$LFS_URL"
+            git -C "$APP_DIR" lfs install --local || true
+            git -C "$APP_DIR" config lfs.url "https://x-access-token:${DEFAULT_TOKEN}@github.com/${REPO}.git/info/lfs"
           
             # Fetch and checkout all LFS objects for this branch
             git -C "$APP_DIR" lfs pull origin "$BRANCH"
