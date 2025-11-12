@@ -231,6 +231,11 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
 
       Copy that GH_PAT_RO key value into Git GIT server repository secrets
 
+      i) add deploy key in GitHub - Repo - Deploy keys - VAST_DEPLOY
+
+      Copy the output from Vast server - ssh-keygen -y -f ~/.ssh/mjepa_deploy_key | tee /root/.ssh/mjepa_deploy_key.pub
+      and then add it to the new deploy key 
+
   4) Configure git hub runner on vast so it can see if Vast instance is running
 
     a) Open your repository on GitHub (for example: https://github.com/Kar488/M‑JEPA).
