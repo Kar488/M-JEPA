@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 _CUDA_VISIBLE_DEVICE_STACK: list[tuple[bool, str]] = []
 _LAST_PINNED_CONTEXT: tuple[int, int] | None = None
 _LAST_PINNED_DEVICE: str | None = None
+_LAST_PINNED_DEVICE_CANONICAL: str | None = None
 
 
 def _restore_cuda_mask_snapshot() -> None:
@@ -53,9 +54,29 @@ def _restore_original_cuda_mask() -> None:
         os.environ.pop("CUDA_VISIBLE_DEVICES", None)
 
     if not _CUDA_VISIBLE_DEVICE_STACK:
-        global _LAST_PINNED_CONTEXT, _LAST_PINNED_DEVICE
+        global _LAST_PINNED_CONTEXT, _LAST_PINNED_DEVICE, _LAST_PINNED_DEVICE_CANONICAL
         _LAST_PINNED_CONTEXT = None
         _LAST_PINNED_DEVICE = None
+        _LAST_PINNED_DEVICE_CANONICAL = None
+
+
+def _canonicalize_cuda_mask(mask: str) -> str:
+    """Return a normalised representation of a CUDA visibility mask."""
+
+    if not mask:
+        return ""
+
+    parts: list[str] = []
+    for entry in mask.split(","):
+        token = entry.strip()
+        if not token:
+            continue
+        if ":" in token:
+            prefix, _, suffix = token.partition(":")
+            if prefix.lower() == "cuda":
+                token = suffix.strip()
+        parts.append(token)
+    return ",".join(parts)
 
 
 def should_retry_with_gloo(exc: BaseException) -> bool:
@@ -145,13 +166,20 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
     if local_world_size <= 1:
         return
 
-    global _LAST_PINNED_CONTEXT, _LAST_PINNED_DEVICE
+    global _LAST_PINNED_CONTEXT, _LAST_PINNED_DEVICE, _LAST_PINNED_DEVICE_CANONICAL
+
+    if not _CUDA_VISIBLE_DEVICE_STACK:
+        _LAST_PINNED_CONTEXT = None
+        _LAST_PINNED_DEVICE = None
+        _LAST_PINNED_DEVICE_CANONICAL = None
+
     current_mask = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
+    current_canonical = _canonicalize_cuda_mask(current_mask)
     if (
         _CUDA_VISIBLE_DEVICE_STACK
         and _LAST_PINNED_CONTEXT == (local_rank, local_world_size)
         and _LAST_PINNED_DEVICE
-        and current_mask == _LAST_PINNED_DEVICE
+        and current_canonical == _LAST_PINNED_DEVICE_CANONICAL
     ):
         _remember_original_cuda_mask()
         set_device = getattr(cuda_mod, "set_device", None)
@@ -165,6 +193,7 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
                 )
         _LAST_PINNED_CONTEXT = (local_rank, local_world_size)
         _LAST_PINNED_DEVICE = current_mask
+        _LAST_PINNED_DEVICE_CANONICAL = current_canonical
         return _LAST_PINNED_DEVICE
 
     if _CUDA_VISIBLE_DEVICE_STACK:
@@ -218,6 +247,7 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
 
     _LAST_PINNED_CONTEXT = (local_rank, local_world_size)
     _LAST_PINNED_DEVICE = selected
+    _LAST_PINNED_DEVICE_CANONICAL = _canonicalize_cuda_mask(selected)
     return selected
 
 
@@ -411,9 +441,10 @@ def cleanup() -> None:
         dist.destroy_process_group()
     while _CUDA_VISIBLE_DEVICE_STACK:
         _restore_original_cuda_mask()
-    global _LAST_PINNED_CONTEXT, _LAST_PINNED_DEVICE
+    global _LAST_PINNED_CONTEXT, _LAST_PINNED_DEVICE, _LAST_PINNED_DEVICE_CANONICAL
     _LAST_PINNED_CONTEXT = None
     _LAST_PINNED_DEVICE = None
+    _LAST_PINNED_DEVICE_CANONICAL = None
 
 
 class DistributedSamplerList:
