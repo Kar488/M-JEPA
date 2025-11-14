@@ -283,7 +283,7 @@ jobs:
         (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
       }}
     name: Learn hyperparameters (Custom or WandB)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted #ubuntu-latest
     #timeout-minutes: 740
     needs: [tests_quick,vast_deploy_and_prepare_environment]
     outputs:
@@ -354,7 +354,7 @@ jobs:
         ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb')
       }}
     name: Phase 2 (sweep → recheck → export)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted #ubuntu-latest
     #timeout-minutes: 1860
     needs: vast_learn_hyperparameters
     concurrency:
@@ -468,7 +468,7 @@ jobs:
 
   vast_pretrain:
     name: Pretain Model
-    runs-on: ubuntu-latest
+    runs-on: self-hosted #ubuntu-latest
     needs: [vast_learn_hyperparameters, vast_sweep_phase2]
     if: >
       ${{
@@ -552,7 +552,7 @@ jobs:
 
   vast_tox21_baseline:
     name: Tox21 Baseline
-    runs-on: ubuntu-latest
+    runs-on: self-hosted #ubuntu-latest
     needs: vast_pretrain
     if:
       ${{
@@ -655,7 +655,7 @@ jobs:
 
   vast_finetune:
     name: Fine tune model
-    runs-on: ubuntu-latest
+    runs-on: self-hosted  #ubuntu-latest
     needs: [vast_pretrain, vast_tox21_baseline]
     if:
       ${{
@@ -699,7 +699,7 @@ jobs:
 
   vast_benchmark:
     name: Benchmark
-    runs-on: ubuntu-latest
+    runs-on: self-hosted #ubuntu-latest
     needs: [vast_pretrain, vast_tox21_baseline, vast_finetune]
     if:
       ${{
@@ -745,7 +745,7 @@ jobs:
 
   vast_tox21:
     name: Tox21 Evaluation
-    runs-on: ubuntu-latest
+    runs-on: self-hosted  #ubuntu-latest
     needs: [vast_pretrain, vast_finetune]
     if:
       ${{
@@ -815,7 +815,7 @@ jobs:
 
   vast_report:
     name: Generate reports
-    runs-on: ubuntu-latest
+    runs-on: self-hosted #ubuntu-latest
     needs: [vast_tox21_baseline, vast_benchmark, vast_tox21, vast_finetune]
     if:
       ${{
