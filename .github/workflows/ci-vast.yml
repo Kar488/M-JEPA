@@ -92,7 +92,7 @@ jobs:
     if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_unit_tests') }}
 
     name: Quick tests (no gpu, no slow)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted #ubuntu-latest
     env:
       MAMBA_ROOT_PREFIX: ~/micromamba
     steps:
