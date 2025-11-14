@@ -1814,16 +1814,24 @@ except Exception:
     sys.exit(1)
 
 mask = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
-if mask:
+cuda = getattr(torch, "cuda", None)
+count = 0
+
+is_available = False
+if cuda is not None:
+    try:
+        is_available = bool(callable(getattr(cuda, "is_available", None)) and cuda.is_available())
+    except Exception:
+        is_available = False
+
+if mask and is_available:
     devices = [entry.strip() for entry in mask.split(",") if entry.strip()]
     count = len(devices)
-else:
+elif mask:
+    count = 0
+elif is_available:
     try:
-        cuda = getattr(torch, "cuda", None)
-        if cuda is not None and callable(getattr(cuda, "is_available", None)) and cuda.is_available():
-            count = int(cuda.device_count())
-        else:
-            count = 0
+        count = int(cuda.device_count())
     except Exception:
         count = 0
 print(max(count, 0))
@@ -1939,19 +1947,24 @@ except Exception:
     torch = None
 
 count = 0
+is_available = False
 if torch is not None:
     cuda = getattr(torch, "cuda", None)
     if cuda is not None:
         try:
-            if callable(getattr(cuda, "is_available", None)) and cuda.is_available():
-                try:
-                    count = int(cuda.device_count())
-                except Exception:
-                    count = 0
-            else:
-                count = 0
+            is_callable = callable(getattr(cuda, "is_available", None))
         except Exception:
-            count = 0
+            is_callable = False
+        if is_callable:
+            try:
+                is_available = bool(cuda.is_available())
+            except Exception:
+                is_available = False
+        if is_available:
+            try:
+                count = int(cuda.device_count())
+            except Exception:
+                count = 0
 print(max(count, 0))
 PY
       ); then
