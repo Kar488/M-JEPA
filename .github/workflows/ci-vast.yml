@@ -98,6 +98,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Remove stale micromamba binary
+        run: |
+          rm -f "$HOME/micromamba-bin/micromamba"
       - name: Set up micromamba
         uses: mamba-org/setup-micromamba@v1
         with:
