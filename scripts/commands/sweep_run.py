@@ -3,9 +3,10 @@ import argparse
 import hashlib, json
 import os
 import pathlib
-import pickle
 import time
 from typing import Optional, Dict, Any
+
+from . import dataset_cache
 
 try:
     from utils.wandb_filters import silence_pydantic_field_warnings
@@ -261,19 +262,14 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         augmentations=AugmentationConfig(**aug_kwargs),
     )
     
-    import os, re
+    import os
 
-    def _resolve_env_path(p: str) -> str:
-        # turn ${env:VAR} -> ${VAR} then expand env/user/abspath
-        p = re.sub(r"\$\{env:([^}]+)\}", r"${\1}", p)
-        return os.path.abspath(os.path.expanduser(os.path.expandvars(p)))
-
-    _labeled_dir   = _resolve_env_path(args.labeled_dir)
-    _unlabeled_dir = _resolve_env_path(args.unlabeled_dir)
+    _labeled_dir = dataset_cache.resolve_env_path(args.labeled_dir)
+    _unlabeled_dir = dataset_cache.resolve_env_path(args.unlabeled_dir)
 
     cache_dir = getattr(args, "cache_dir", None)
     if cache_dir:
-        args.cache_dir = _resolve_env_path(str(cache_dir))
+        args.cache_dir = dataset_cache.resolve_env_path(str(cache_dir))
         print(f"[sweep-run] resolved cache_dir={args.cache_dir}", flush=True)
     else:
         print("[sweep-run] cache_dir not provided; using default cache roots", flush=True)
@@ -333,12 +329,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     if args.cache_dir:
         pathlib.Path(args.cache_dir).mkdir(parents=True, exist_ok=True)
 
-    dataset_cache_dir = None
     dataset_cache_enabled = bool(int(getattr(args, "cache_datasets", 0)))
-    if dataset_cache_enabled:
-        base_cache = args.cache_dir or os.path.join("cache", "graphs")
-        dataset_cache_dir = os.path.join(base_cache, "prebuilt_datasets")
-        pathlib.Path(dataset_cache_dir).mkdir(parents=True, exist_ok=True)
+    dataset_cache_dir = dataset_cache.prepare_cache_root(
+        args.cache_dir, enabled=dataset_cache_enabled
+    )
+    if dataset_cache_enabled and dataset_cache_dir:
         print(
             f"[sweep-run] dataset caching enabled (root={dataset_cache_dir})",
             flush=True,
@@ -346,63 +341,16 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     else:
         print("[sweep-run] dataset caching disabled", flush=True)
 
-    DATASET_CACHE_VERSION = "v1"
-
-    def _dataset_cache_path(kind: str, payload: dict) -> Optional[str]:
-        if not dataset_cache_dir:
-            return None
-        cache_key = {
-            "version": DATASET_CACHE_VERSION,
-            **payload,
-        }
-        digest = hashlib.sha1(
-            json.dumps(cache_key, sort_keys=True, default=str).encode("utf-8")
-        ).hexdigest()
-        return os.path.join(dataset_cache_dir, f"{kind}_{digest}.pkl")
-
     def _load_or_build_dataset(kind: str, payload: dict, builder):
-        cache_path = _dataset_cache_path(kind, payload)
-        if cache_path and os.path.exists(cache_path):
-            print(
-                f"[sweep-run] cache hit for {kind} dataset → {cache_path}",
-                flush=True,
-            )
-            try:
-                with open(cache_path, "rb") as fh:
-                    return pickle.load(fh)
-            except Exception as exc:
-                print(
-                    f"[sweep-run] failed to load {kind} cache {cache_path}: {exc}; rebuilding",
-                    flush=True,
-                )
-                try:
-                    os.remove(cache_path)
-                except OSError:
-                    pass
+        log = lambda msg: print(f"[sweep-run] {msg}", flush=True)
 
-        if cache_path and not os.path.exists(cache_path):
-            print(
-                f"[sweep-run] cache miss for {kind} dataset; will store at {cache_path}",
-                flush=True,
-            )
-
-        ds = builder()
-
-        if cache_path:
-            try:
-                with open(cache_path, "wb") as fh:
-                    pickle.dump(ds, fh)
-                print(
-                    f"[sweep-run] cached {kind} dataset at {cache_path}",
-                    flush=True,
-                )
-            except Exception as exc:
-                print(
-                    f"[sweep-run] failed to persist {kind} cache {cache_path}: {exc}",
-                    flush=True,
-                )
-
-        return ds
+        return dataset_cache.load_or_build_dataset(
+            kind,
+            payload,
+            builder,
+            dataset_cache_dir,
+            log=log,
+        )
 
     def _build_unlabeled_dataset(add3d: bool):
         return load_directory_dataset(
