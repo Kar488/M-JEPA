@@ -23,9 +23,21 @@ def _restore_cuda_mask_snapshot() -> None:
     if not _CUDA_VISIBLE_DEVICE_STACK:
         return
 
-    had_env, mask = _CUDA_VISIBLE_DEVICE_STACK[-1]
-    if had_env:
+    # When the stack contains multiple snapshots we want to replay the *original*
+    # visibility mask that existed before any pinning occurred.  Relying on the
+    # most recent entry (which may already reflect a narrowed mask such as a
+    # single GPU) can strand subsequent distributed launches with an artificially
+    # small device list.  That manifests as spurious "only 1 visible" errors
+    # whenever another rank tries to initialise before ``cleanup`` unwinds the
+    # stack.  Restoring the earliest snapshot keeps the caller's view of
+    # ``CUDA_VISIBLE_DEVICES`` aligned with the mask they started with while still
+    # keeping the later snapshots on the stack for ``cleanup`` to pop.
+
+    had_env, mask = _CUDA_VISIBLE_DEVICE_STACK[0]
+    if had_env and mask:
         os.environ["CUDA_VISIBLE_DEVICES"] = mask
+    elif had_env:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
     else:
         os.environ.pop("CUDA_VISIBLE_DEVICES", None)
 

@@ -317,6 +317,50 @@ def test_pin_visible_cuda_device_reuses_snapshot_with_canonical_variants(monkeyp
     assert ddp._CUDA_VISIBLE_DEVICE_STACK == []
 
 
+def test_pin_visible_cuda_device_recovers_full_mask_for_new_rank(monkeypatch):
+    monkeypatch.delenv("DISABLE_DDP", raising=False)
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,5")
+
+    class _FakeCuda:
+        def __init__(self):
+            self.set_calls = []
+
+        def is_available(self):
+            return True
+
+        def device_count(self):
+            return 2
+
+        def set_device(self, idx):
+            self.set_calls.append(idx)
+
+    fake_cuda = _FakeCuda()
+    fake_torch = types.SimpleNamespace(cuda=fake_cuda)
+
+    monkeypatch.setattr(ddp, "torch", fake_torch, raising=False)
+
+    ddp._CUDA_VISIBLE_DEVICE_STACK.clear()
+
+    first = ddp._pin_visible_cuda_device_to_local_rank()
+    assert first == "5"
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "5"
+    assert fake_cuda.set_calls == [0]
+
+    monkeypatch.setenv("LOCAL_RANK", "0")
+
+    second = ddp._pin_visible_cuda_device_to_local_rank()
+    assert second == "4"
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "4"
+    assert fake_cuda.set_calls == [0, 0]
+
+    ddp.cleanup()
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "4,5"
+    assert ddp._CUDA_VISIBLE_DEVICE_STACK == []
+
+
 def test_init_distributed_nccl_requires_visible_cuda(monkeypatch):
     monkeypatch.delenv("DISABLE_DDP", raising=False)
     monkeypatch.setenv("WORLD_SIZE", "2")
