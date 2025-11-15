@@ -18,6 +18,7 @@ wandb
 wandb-workspaces        # optional, needed for W&B Reports API
 matplotlib
 seaborn
+buildamol             # optional, used for interactive 3-D graph visuals
 
 # Data utilities
 #deepchem                # optional, only for MoleculeNet downloads, # done through git workflow
