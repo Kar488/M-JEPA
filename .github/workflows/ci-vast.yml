@@ -290,8 +290,12 @@ jobs:
     timeout-minutes: 480
     needs: [tests_quick, vast_deploy_and_prepare_environment]
     env:
-      CACHE_WARM_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
-      CACHE_WARM_LABELED_DIR: ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
+      # GitHub Actions does not allow referencing the workflow-level ``env``
+      # context while defining job-level ``env`` entries. The YAML parser raises
+      # "Unrecognized named-value: 'env'" otherwise. Duplicate the path literal
+      # instead so the job can start.
+      CACHE_WARM_UNLABELED_DIR: /srv/mjepa/data/ZINC-canonicalized
+      CACHE_WARM_LABELED_DIR: /srv/mjepa/data/katielinkmoleculenet_benchmark/train
       CACHE_WARM_LABEL_COL: "measured log solubility in mols per litre"
       CACHE_WARM_SAMPLE_UNLABELED: 250000
       CACHE_WARM_SAMPLE_LABELED: 5000
@@ -335,8 +339,9 @@ jobs:
     timeout-minutes: 480
     needs: [vast_cache_warm_2d]
     env:
-      CACHE_WARM_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
-      CACHE_WARM_LABELED_DIR: ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
+      # See cache_warm_2d for context.
+      CACHE_WARM_UNLABELED_DIR: /srv/mjepa/data/ZINC-canonicalized
+      CACHE_WARM_LABELED_DIR: /srv/mjepa/data/katielinkmoleculenet_benchmark/train
       CACHE_WARM_LABEL_COL: "measured log solubility in mols per litre"
       CACHE_WARM_SAMPLE_UNLABELED: 250000
       CACHE_WARM_SAMPLE_LABELED: 5000
