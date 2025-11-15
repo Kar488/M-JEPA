@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import sys
+from itertools import cycle, islice
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
 
@@ -102,6 +103,14 @@ except Exception:  # pragma: no cover - fallback when optional deps missing
 GraphData = _RealGraphData or _StubGraphData  # type: ignore[assignment]
 GraphDataset = _RealGraphDataset or _StubGraphDataset  # type: ignore[assignment]
 FALLBACK_GRAPH_DATASET = _StubGraphDataset
+_SYNTHETIC_SMILES = [
+    "C",
+    "CC",
+    "C1=CC=CC=C1",
+    "CCO",
+    "C#N",
+    "CC(=O)O",
+]
 
 _FORCE_FALLBACK_LOADER = os.environ.get("GRAPH_VISUALS_FORCE_FALLBACK", "").strip().lower() in {
     "1",
@@ -195,9 +204,41 @@ def _guess_extension(path: str) -> str:
     )
 
 
+def _synthetic_dataset(limit: Optional[int]) -> Tuple[GraphDataset, str]:
+    target = limit if (limit is not None and limit > 0) else len(_SYNTHETIC_SMILES)
+    target = max(target, 1)
+    smiles = list(islice(cycle(_SYNTHETIC_SMILES), target))
+    logger.warning(
+        "Falling back to %d synthetic molecules for graph visualisation", target
+    )
+    return FALLBACK_GRAPH_DATASET(smiles), "synthetic"
+
+
+def _graph_count(dataset: Any) -> int:
+    graphs = getattr(dataset, "graphs", None)
+    if graphs is None:
+        return 0
+    try:
+        return len(graphs)
+    except Exception:
+        pass
+    try:
+        return int(getattr(dataset, "num_graphs"))
+    except Exception:
+        return 0
+
+
 def _load_dataset(dataset_path: str, limit: Optional[int]) -> Tuple[GraphDataset, str]:
     dataset_path = os.path.abspath(dataset_path)
-    ext = _guess_extension(dataset_path)
+    try:
+        ext = _guess_extension(dataset_path)
+    except Exception as exc:
+        logger.error(
+            "Unable to inspect dataset path %s (%s); using synthetic molecules",
+            dataset_path,
+            exc,
+        )
+        return _synthetic_dataset(limit)
     limit = None if (limit is None or limit <= 0) else limit
     loader_label = "fallback"
     use_fallback = _FORCE_FALLBACK_LOADER or not GRAPH_DATASET_AVAILABLE
@@ -219,7 +260,16 @@ def _load_dataset(dataset_path: str, limit: Optional[int]) -> Tuple[GraphDataset
                 dataset = GraphDataset.from_csv(dataset_path, n_rows=limit)
             else:
                 raise ValueError(f"Unsupported dataset extension: {ext}")
-            return dataset, loader_label
+
+            count = _graph_count(dataset)
+            if count <= 0:
+                logger.warning(
+                    "GraphDataset loader produced zero graphs for %s; falling back to CSV parser",
+                    dataset_path,
+                )
+                use_fallback = True
+            else:
+                return dataset, loader_label
         except Exception as exc:
             logger.warning(
                 "GraphDataset loader failed for %s (%s); falling back to CSV-only parser",
@@ -228,21 +278,33 @@ def _load_dataset(dataset_path: str, limit: Optional[int]) -> Tuple[GraphDataset
             )
             use_fallback = True
     if use_fallback:
-        if os.path.isdir(dataset_path):
-            logger.info("Loading dataset directory %s via fallback loader", dataset_path)
-            dataset = FALLBACK_GRAPH_DATASET.from_directory(
+        try:
+            if os.path.isdir(dataset_path):
+                logger.info(
+                    "Loading dataset directory %s via fallback loader", dataset_path
+                )
+                dataset = FALLBACK_GRAPH_DATASET.from_directory(
+                    dataset_path,
+                    ext=ext,
+                    max_graphs=limit,
+                )
+            elif ext == "csv":
+                logger.info(
+                    "Loading dataset file %s via fallback loader", dataset_path
+                )
+                dataset = FALLBACK_GRAPH_DATASET.from_csv(dataset_path, n_rows=limit)
+            else:
+                raise ValueError(
+                    "Fallback graph loader only supports CSV inputs; set DATASET_DIR to a CSV file"
+                )
+            return dataset, "fallback"
+        except Exception as exc:
+            logger.error(
+                "Fallback graph loader failed for %s (%s); using synthetic molecules",
                 dataset_path,
-                ext=ext,
-                max_graphs=limit,
+                exc,
             )
-        elif ext == "csv":
-            logger.info("Loading dataset file %s via fallback loader", dataset_path)
-            dataset = FALLBACK_GRAPH_DATASET.from_csv(dataset_path, n_rows=limit)
-        else:
-            raise ValueError(
-                "Fallback graph loader only supports CSV inputs; set DATASET_DIR to a CSV file"
-            )
-        return dataset, "fallback"
+            return _synthetic_dataset(limit)
     raise RuntimeError("Unexpected dataset loading state")
 
 
