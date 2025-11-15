@@ -103,10 +103,16 @@ def _canonicalize_cuda_mask(mask: str) -> str:
         return ""
 
     parts: list[str] = []
+    seen: set[str] = set()
     for entry in mask.split(","):
         token = _canonicalize_device_token(entry)
-        if token:
-            parts.append(token)
+        if not token:
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        parts.append(token)
     return ",".join(parts)
 
 
@@ -226,7 +232,7 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
                     exc_info=True,
                 )
         _LAST_PINNED_CONTEXT = (local_rank, local_world_size)
-        _LAST_PINNED_DEVICE_CANONICAL = _canonicalize_device_token(
+        _LAST_PINNED_DEVICE_CANONICAL = _canonicalize_cuda_mask(
             _LAST_PINNED_DEVICE
         )
         return _LAST_PINNED_DEVICE
@@ -282,7 +288,7 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
 
     _LAST_PINNED_CONTEXT = (local_rank, local_world_size)
     _LAST_PINNED_DEVICE = selected
-    _LAST_PINNED_DEVICE_CANONICAL = _canonicalize_device_token(selected)
+    _LAST_PINNED_DEVICE_CANONICAL = _canonicalize_cuda_mask(selected)
     return selected
 
 
@@ -472,8 +478,25 @@ def is_main_process() -> bool:
 
 
 def cleanup() -> None:
-    if dist.is_available() and dist.is_initialized():
-        dist.destroy_process_group()
+    if dist.is_available():
+        try:
+            initialized = dist.is_initialized()
+        except Exception:
+            logger.debug("torch.distributed.is_initialized() failed during cleanup", exc_info=True)
+        else:
+            if initialized:
+                try:
+                    dist.destroy_process_group()
+                except AssertionError:
+                    logger.debug(
+                        "torch.distributed.destroy_process_group raised AssertionError; ignoring",
+                        exc_info=True,
+                    )
+                except Exception:
+                    logger.debug(
+                        "torch.distributed.destroy_process_group failed during cleanup",
+                        exc_info=True,
+                    )
     while _CUDA_VISIBLE_DEVICE_STACK:
         _restore_original_cuda_mask()
     global _LAST_PINNED_CONTEXT, _LAST_PINNED_DEVICE, _LAST_PINNED_DEVICE_CANONICAL
