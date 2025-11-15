@@ -182,6 +182,13 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
         and current_canonical == _LAST_PINNED_DEVICE_CANONICAL
     ):
         _remember_original_cuda_mask()
+
+        try:
+            os.environ["CUDA_VISIBLE_DEVICES"] = _LAST_PINNED_DEVICE
+        except Exception:
+            _restore_original_cuda_mask()
+            raise
+
         set_device = getattr(cuda_mod, "set_device", None)
         if callable(set_device):
             try:
@@ -192,8 +199,7 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
                     exc_info=True,
                 )
         _LAST_PINNED_CONTEXT = (local_rank, local_world_size)
-        _LAST_PINNED_DEVICE = current_mask
-        _LAST_PINNED_DEVICE_CANONICAL = current_canonical
+        _LAST_PINNED_DEVICE_CANONICAL = _canonicalize_cuda_mask(_LAST_PINNED_DEVICE)
         return _LAST_PINNED_DEVICE
 
     if _CUDA_VISIBLE_DEVICE_STACK:
