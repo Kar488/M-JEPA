@@ -171,6 +171,12 @@ Automation & Sweeps
   Tracked W&B sweep templates. Phase‑1 specs compare JEPA vs. contrastive; the
   derived phase‑2 specs live under ``grid/`` so tracked templates remain clean.
 
+``scripts/ci/cache_warm_prebuilt_datasets.py``
+  Pre-builds the hashed ``prebuilt_datasets`` pickles for both unlabeled and
+  labeled corpora. Invoke it twice (``--add-3d`` true/false) on a self-hosted
+  runner so Phase‑1 agents see cache hits immediately and skip the expensive
+  RDKit featurisation loop unless the cache is missing.
+
 ``scripts/ci/run-grid-or-phase1.sh``
   Creates paired sweeps and launches W&B agents. Respects
   ``PHASE1_BACKBONES``/``PHASE1_SEEDS`` to expand the shared backbone/seed grid.
