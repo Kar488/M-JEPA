@@ -19,6 +19,22 @@ ensure_tox21_gate_stub() {
   } >"$gate_path"
 }
 
+run_graph_visuals_helper() {
+  local helper_path
+  helper_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-pretrain-graph-visuals.sh"
+  if [[ ! -f "$helper_path" ]]; then
+    helper_path="scripts/ci/run-pretrain-graph-visuals.sh"
+  fi
+  if [[ ! -f "$helper_path" ]]; then
+    echo "[pretrain] info: graph visuals helper missing at $helper_path" >&2
+    return 1
+  fi
+  if bash "$helper_path"; then
+    return 0
+  fi
+  return 1
+}
+
 ci_pretrain_materialize_manifest() {
   local stage_outputs="$1"
   local expected_manifest="$2"
@@ -252,6 +268,10 @@ PY
     echo "[ci] warn: unable to write pretrain_state.json because no python interpreter was resolved" >&2
   fi
 
+  if ! run_graph_visuals_helper; then
+    echo "::warning::graph visualisation generation failed" >&2
+  fi
+
   ensure_tox21_gate_stub "$pretrain_root"
 
   exit 0
@@ -449,6 +469,10 @@ if legacy_path and os.path.abspath(legacy_path) != os.path.abspath(state_path):
     os.replace(tmp_legacy, legacy_path)
     print(f"[pretrain] synced legacy state to {legacy_path}")
 PY
+
+if ! run_graph_visuals_helper; then
+  echo "::warning::graph visualisation generation failed" >&2
+fi
 
 ensure_tox21_gate_stub "$PRETRAIN_EXPERIMENT_ROOT"
 
