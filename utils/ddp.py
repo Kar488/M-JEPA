@@ -72,6 +72,30 @@ def _restore_original_cuda_mask() -> None:
         _LAST_PINNED_DEVICE_CANONICAL = None
 
 
+def _canonicalize_device_token(token: str) -> str:
+    """Normalise an individual CUDA device token for comparisons."""
+
+    token = token.strip()
+    if not token:
+        return ""
+
+    if ":" in token:
+        prefix, _, suffix = token.partition(":")
+        if prefix.lower() == "cuda":
+            token = suffix.strip()
+        else:
+            token = token.strip()
+
+    if token.isdigit():
+        try:
+            token = str(int(token))
+        except Exception:
+            # Fall back to the stripped representation if int conversion fails.
+            token = token.strip()
+
+    return token
+
+
 def _canonicalize_cuda_mask(mask: str) -> str:
     """Return a normalised representation of a CUDA visibility mask."""
 
@@ -80,14 +104,9 @@ def _canonicalize_cuda_mask(mask: str) -> str:
 
     parts: list[str] = []
     for entry in mask.split(","):
-        token = entry.strip()
-        if not token:
-            continue
-        if ":" in token:
-            prefix, _, suffix = token.partition(":")
-            if prefix.lower() == "cuda":
-                token = suffix.strip()
-        parts.append(token)
+        token = _canonicalize_device_token(entry)
+        if token:
+            parts.append(token)
     return ",".join(parts)
 
 
@@ -126,12 +145,8 @@ def _resolve_visible_cuda_devices() -> tuple[list[str], list[str], str]:
             token = entry.strip()
             if not token:
                 continue
-            canonical = token
-            if ":" in canonical:
-                prefix, _, suffix = canonical.partition(":")
-                if prefix.lower() == "cuda":
-                    canonical = suffix
-            key = canonical.strip().lower()
+            canonical = _canonicalize_device_token(token)
+            key = canonical.lower()
             if key in seen:
                 duplicates.append(token)
                 continue
@@ -211,7 +226,9 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
                     exc_info=True,
                 )
         _LAST_PINNED_CONTEXT = (local_rank, local_world_size)
-        _LAST_PINNED_DEVICE_CANONICAL = _canonicalize_cuda_mask(_LAST_PINNED_DEVICE)
+        _LAST_PINNED_DEVICE_CANONICAL = _canonicalize_device_token(
+            _LAST_PINNED_DEVICE
+        )
         return _LAST_PINNED_DEVICE
 
     if _CUDA_VISIBLE_DEVICE_STACK:
@@ -265,7 +282,7 @@ def _pin_visible_cuda_device_to_local_rank() -> str | None:
 
     _LAST_PINNED_CONTEXT = (local_rank, local_world_size)
     _LAST_PINNED_DEVICE = selected
-    _LAST_PINNED_DEVICE_CANONICAL = _canonicalize_cuda_mask(selected)
+    _LAST_PINNED_DEVICE_CANONICAL = _canonicalize_device_token(selected)
     return selected
 
 
