@@ -18,7 +18,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence, Tuple
 
 import math
 import numbers
@@ -27,70 +27,88 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+class _StubGraphData:
+    def __init__(self, num_nodes: int):
+        self._num_nodes = max(int(num_nodes), 0)
+        self.edge_index: list[list[int]] = [[], []]
+        self.pos = None
+        self.x = None
+
+    def num_nodes(self) -> int:
+        return self._num_nodes
+
+
+class _StubGraphDataset:
+    def __init__(self, smiles: List[str]):
+        self.smiles = smiles
+        self.graphs = [_StubGraphData(max(len(s), 1)) for s in smiles]
+        self.labels = None
+
+    @staticmethod
+    def _read_smiles(path: str, limit: Optional[int]) -> List[str]:
+        smiles: List[str] = []
+        with open(path, "r", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            if not reader.fieldnames or "smiles" not in [name.lower() for name in reader.fieldnames]:
+                raise ValueError("CSV must include a 'smiles' column")
+            canonical = None
+            for name in reader.fieldnames:
+                if name.lower() == "smiles":
+                    canonical = name
+                    break
+            for row in reader:
+                value = row.get(canonical or "smiles")
+                if not value:
+                    continue
+                smiles.append(value.strip())
+                if limit is not None and len(smiles) >= limit:
+                    break
+        if not smiles:
+            raise ValueError(f"No SMILES found in {path}")
+        return smiles
+
+    @classmethod
+    def from_csv(cls, path: str, n_rows: Optional[int] = None) -> "_StubGraphDataset":
+        return cls(cls._read_smiles(path, n_rows))
+
+    @classmethod
+    def from_directory(
+        cls,
+        directory: str,
+        ext: str = "csv",
+        max_graphs: Optional[int] = None,
+    ) -> "_StubGraphDataset":
+        if ext != "csv":
+            raise RuntimeError("Fallback GraphDataset only supports CSV inputs")
+        entries = sorted(entry for entry in os.listdir(directory) if entry.lower().endswith(".csv"))
+        if not entries:
+            raise FileNotFoundError(f"No CSV files found under {directory}")
+        return cls.from_csv(os.path.join(directory, entries[0]), n_rows=max_graphs)
+
+    @classmethod
+    def from_parquet(cls, *_args, **_kwargs):  # pragma: no cover - unsupported in fallback
+        raise RuntimeError("Parquet loading requires optional numpy/pandas dependencies")
+
+
 try:
-    from data.mdataset import GraphData, GraphDataset
+    from data.mdataset import GraphData as _RealGraphData, GraphDataset as _RealGraphDataset
 
     GRAPH_DATASET_AVAILABLE = True
 except Exception:  # pragma: no cover - fallback when optional deps missing
+    _RealGraphDataset = None
+    _RealGraphData = None
     GRAPH_DATASET_AVAILABLE = False
 
-    class GraphData:  # type: ignore[override]
-        def __init__(self, num_nodes: int):
-            self._num_nodes = max(int(num_nodes), 0)
-            self.edge_index: list[list[int]] = [[], []]
-            self.pos = None
-            self.x = None
+GraphData = _RealGraphData or _StubGraphData  # type: ignore[assignment]
+GraphDataset = _RealGraphDataset or _StubGraphDataset  # type: ignore[assignment]
+FALLBACK_GRAPH_DATASET = _StubGraphDataset
 
-        def num_nodes(self) -> int:
-            return self._num_nodes
-
-    class GraphDataset:  # type: ignore[override]
-        def __init__(self, smiles: List[str]):
-            self.smiles = smiles
-            self.graphs = [GraphData(max(len(s), 1)) for s in smiles]
-            self.labels = None
-
-        @staticmethod
-        def _read_smiles(path: str, limit: Optional[int]) -> List[str]:
-            smiles: List[str] = []
-            with open(path, "r", encoding="utf-8") as handle:
-                reader = csv.DictReader(handle)
-                if not reader.fieldnames or "smiles" not in [name.lower() for name in reader.fieldnames]:
-                    raise ValueError("CSV must include a 'smiles' column")
-                canonical = None
-                for name in reader.fieldnames:
-                    if name.lower() == "smiles":
-                        canonical = name
-                        break
-                for row in reader:
-                    value = row.get(canonical or "smiles")
-                    if not value:
-                        continue
-                    smiles.append(value.strip())
-                    if limit is not None and len(smiles) >= limit:
-                        break
-            if not smiles:
-                raise ValueError(f"No SMILES found in {path}")
-            return smiles
-
-        @classmethod
-        def from_csv(cls, path: str, n_rows: Optional[int] = None) -> "GraphDataset":
-            return cls(cls._read_smiles(path, n_rows))
-
-        @classmethod
-        def from_directory(cls, directory: str, ext: str = "csv", max_graphs: Optional[int] = None) -> "GraphDataset":
-            if ext != "csv":
-                raise RuntimeError("Fallback GraphDataset only supports CSV inputs")
-            entries = sorted(
-                entry for entry in os.listdir(directory) if entry.lower().endswith(".csv")
-            )
-            if not entries:
-                raise FileNotFoundError(f"No CSV files found under {directory}")
-            return cls.from_csv(os.path.join(directory, entries[0]), n_rows=max_graphs)
-
-        @classmethod
-        def from_parquet(cls, *_args, **_kwargs):  # pragma: no cover - unsupported in fallback
-            raise RuntimeError("Parquet loading requires optional numpy/pandas dependencies")
+_FORCE_FALLBACK_LOADER = os.environ.get("GRAPH_VISUALS_FORCE_FALLBACK", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 try:  # pragma: no cover - optional dependency in CI
     from rdkit import Chem
@@ -177,24 +195,55 @@ def _guess_extension(path: str) -> str:
     )
 
 
-def _load_dataset(dataset_path: str, limit: Optional[int]) -> GraphDataset:
+def _load_dataset(dataset_path: str, limit: Optional[int]) -> Tuple[GraphDataset, str]:
     dataset_path = os.path.abspath(dataset_path)
     ext = _guess_extension(dataset_path)
     limit = None if (limit is None or limit <= 0) else limit
-    if os.path.isdir(dataset_path):
-        logger.info("Loading dataset directory %s (ext=%s)", dataset_path, ext)
-        return GraphDataset.from_directory(
-            dataset_path,
-            ext=ext,
-            max_graphs=limit,
-        )
-    if ext == "parquet":
-        logger.info("Loading dataset file %s (parquet)", dataset_path)
-        return GraphDataset.from_parquet(dataset_path, n_rows=limit)
-    if ext == "csv":
-        logger.info("Loading dataset file %s (csv)", dataset_path)
-        return GraphDataset.from_csv(dataset_path, n_rows=limit)
-    raise ValueError(f"Unsupported dataset extension: {ext}")
+    loader_label = "fallback"
+    use_fallback = _FORCE_FALLBACK_LOADER or not GRAPH_DATASET_AVAILABLE
+    if not use_fallback:
+        try:
+            loader_label = "graphdataset"
+            if os.path.isdir(dataset_path):
+                logger.info("Loading dataset directory %s (ext=%s)", dataset_path, ext)
+                dataset = GraphDataset.from_directory(
+                    dataset_path,
+                    ext=ext,
+                    max_graphs=limit,
+                )
+            elif ext == "parquet":
+                logger.info("Loading dataset file %s (parquet)", dataset_path)
+                dataset = GraphDataset.from_parquet(dataset_path, n_rows=limit)
+            elif ext == "csv":
+                logger.info("Loading dataset file %s (csv)", dataset_path)
+                dataset = GraphDataset.from_csv(dataset_path, n_rows=limit)
+            else:
+                raise ValueError(f"Unsupported dataset extension: {ext}")
+            return dataset, loader_label
+        except Exception as exc:
+            logger.warning(
+                "GraphDataset loader failed for %s (%s); falling back to CSV-only parser",
+                dataset_path,
+                exc,
+            )
+            use_fallback = True
+    if use_fallback:
+        if os.path.isdir(dataset_path):
+            logger.info("Loading dataset directory %s via fallback loader", dataset_path)
+            dataset = FALLBACK_GRAPH_DATASET.from_directory(
+                dataset_path,
+                ext=ext,
+                max_graphs=limit,
+            )
+        elif ext == "csv":
+            logger.info("Loading dataset file %s via fallback loader", dataset_path)
+            dataset = FALLBACK_GRAPH_DATASET.from_csv(dataset_path, n_rows=limit)
+        else:
+            raise ValueError(
+                "Fallback graph loader only supports CSV inputs; set DATASET_DIR to a CSV file"
+            )
+        return dataset, "fallback"
+    raise RuntimeError("Unexpected dataset loading state")
 
 
 def _select_indices(total: int, limit: int) -> List[int]:
@@ -551,7 +600,7 @@ def _render_sample(record_dir: Path, graph: GraphData, smiles: Optional[str], la
 def main(argv: Optional[Sequence[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="[graph-visuals] %(message)s")
     args = parse_args(argv)
-    dataset = _load_dataset(args.dataset_path, args.num_samples)
+    dataset, loader_label = _load_dataset(args.dataset_path, args.num_samples)
     total = len(dataset.graphs)
     if total == 0:
         logger.warning("Dataset %s contained zero graphs; nothing to render", args.dataset_path)
@@ -574,6 +623,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "output_dir": str(output_dir.resolve()),
         "num_graphs": total,
         "num_rendered": len(indices),
+        "loader": loader_label,
+        "fallback_forced": bool(_FORCE_FALLBACK_LOADER),
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     logger.info("Graph visuals ready under %s", output_dir)
