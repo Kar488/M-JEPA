@@ -151,7 +151,19 @@ micromamba run -n "$ENV_NAME" python -m pip install deepchem==2.8.0
 # ----------- Install CUDA Toolkit 12.8 (for compiling extensions like PyG) -----------
 # Add this block before the Torch section. Assumes Ubuntu 22.04/Debian-based (from your apt-get usage).
 # If on 24.04, swap 'ubuntu2204' for 'ubuntu2404' in the wget URL.
-if ! nvcc --version | grep -q "release 12.8"; then
+need_cuda_install=1
+if command -v nvcc >/dev/null 2>&1; then
+  if nvcc --version | grep -q "release 12.8"; then
+    need_cuda_install=0
+    echo "[prepare-env] CUDA Toolkit 12.8 already detected; skipping install"
+  else
+    echo "[prepare-env] nvcc present but not CUDA 12.8; reinstalling"
+  fi
+else
+  echo "[prepare-env] nvcc not found; installing CUDA Toolkit 12.8"
+fi
+
+if [[ "$need_cuda_install" -eq 1 ]]; then
   echo "[prepare-env] Installing CUDA Toolkit 12.8..."
   need_cuda_keyring_install=1
   if dpkg -s cuda-keyring >/dev/null 2>&1; then
@@ -182,6 +194,8 @@ if ! nvcc --version | grep -q "release 12.8"; then
   echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}' >> ~/.bashrc
   # Verify
   nvcc --version
+else
+  echo "[prepare-env] Skipping CUDA Toolkit install; already satisfied"
 fi
 
 # ----------- Torch (CUDA if available) -----------
