@@ -369,11 +369,6 @@ jobs:
       pretrain_exp_id: ${{ steps.phase1_ids.outputs.pretrain_exp_id }}
     steps:
       - name: Run grid search
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$APP_DIR"
-          bash scripts/ci/run-grid-or-phase1.sh
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
