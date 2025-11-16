@@ -330,6 +330,17 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
         #full details
         stat -c '%U %G %a %n' /srv/mjepa /srv/mjepa/logs
 
+        #instal CUDA key ring
+        sudo -i   # become root
+
+        # Download the keyring deb directly to /tmp
+        cd /tmp
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+
+        # Install it once, system-wide
+        dpkg -i cuda-keyring_1.1-1_all.deb
+        apt-get update
+
   5) After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
 
     From Vast Jupytr notebook terminal 
