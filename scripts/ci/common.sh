@@ -142,36 +142,36 @@ mjepa_sudo_exec() {
 }
 
 mjepa_dir_is_effectively_writable() {
-  echo "8.1.1"
   local path="$1"
-  local target_uid="${MJEPA_DIR_OWNER_UID:-}"
-  local target_gid="${MJEPA_DIR_OWNER_GID:-}"
+  local target_uid=""
+  local target_gid=""
+
+  if [[ ${MJEPA_DIR_OWNER_UID+x} ]]; then
+    target_uid="${MJEPA_DIR_OWNER_UID}"
+  fi
+  if [[ ${MJEPA_DIR_OWNER_GID+x} ]]; then
+    target_gid="${MJEPA_DIR_OWNER_GID}"
+  fi
 
   if [[ -z "$target_uid" && -z "$target_gid" ]]; then
-    echo "8.1.2"
     [[ -w "$path" ]]
     return
   fi
 
   local stat_out="" owner="" group="" perms=""
   if ! stat_out=$(stat -Lc '%u %g %a' "$path" 2>/dev/null); then
-    echo "8.1.3"
     return 1
   fi
   read -r owner group perms <<<"$stat_out"
-  echo "8.1.4"
   if [[ -n "$target_uid" && "$owner" != "$target_uid" ]]; then
-    echo "8.1.5"
     return 1
   fi
   if [[ -n "$target_gid" && "$group" != "$target_gid" ]]; then
-    echo "8.1.6"
     return 1
   fi
 
   local perm_val=$(( 8#$perms ))
   if (( (perm_val & 0200) == 0 )); then
-    echo "8.1.7"
     return 1
   fi
 
@@ -179,60 +179,47 @@ mjepa_dir_is_effectively_writable() {
 }
 
 mjepa_reconcile_dir_owner() {
-  echo "8.1"
   local path="$1" label="${2:-$1}"
-  echo "8.2"
-  local target_uid="${MJEPA_DIR_OWNER_UID:-}"
-  echo "8.3"
-  local target_gid="${MJEPA_DIR_OWNER_GID:-}"
-  echo "8.4"
+  local target_uid=""
+  local target_gid=""
   local desired_mode="${MJEPA_DIR_MODE:-}"
 
+  if [[ ${MJEPA_DIR_OWNER_UID+x} ]]; then
+    target_uid="${MJEPA_DIR_OWNER_UID}"
+  fi
+  if [[ ${MJEPA_DIR_OWNER_GID+x} ]]; then
+    target_gid="${MJEPA_DIR_OWNER_GID}"
+  fi
+
   if [[ -z "$target_uid" && -z "$target_gid" && -z "$desired_mode" ]]; then
-    echo "8.5"
     if [[ -w "$path" ]]; then
-      echo "8.6"
       return 0
     fi
-    echo "8.7"
     return 1
   fi
 
   local need_chown=0 stat_out="" owner="" group="" chown_target=""
-  echo "8.8"
   if [[ -n "$target_uid" || -n "$target_gid" ]]; then
-    echo "8.9"
     if stat_out=$(stat -Lc '%u %g' "$path" 2>/dev/null); then
-      echo "8.10"
       read -r owner group <<<"$stat_out"
-      echo "8.11"
       if [[ -n "$target_uid" && "$owner" != "$target_uid" ]]; then
-        echo "8.12"
         need_chown=1
       fi
       if [[ -n "$target_gid" && "$group" != "$target_gid" ]]; then
-        echo "8.13"
         need_chown=1
       fi
     else
-      echo "8.14" 
       need_chown=1
     fi
 
     if (( need_chown )); then
-      echo "8.15"
       if [[ -n "$target_uid" ]]; then
-        echo "8.16"
         chown_target="$target_uid"
-        echo "8.17"
       fi
       if [[ -n "$target_gid" ]]; then
-        echo "8.18"
         if [[ -n "$chown_target" ]]; then
-          echo "8.19"
           chown_target+=":$target_gid"
         else
-          echo "8.20"
           chown_target=":$target_gid"
         fi
       fi
@@ -242,7 +229,6 @@ mjepa_reconcile_dir_owner() {
       else
         mjepa_log_warn "unable to chown $label to $chown_target"
       fi
-      echo "8.21"
     fi
   fi
 
@@ -250,11 +236,9 @@ mjepa_reconcile_dir_owner() {
     if chmod "$desired_mode" "$path" 2>/dev/null || mjepa_sudo_exec chmod "$desired_mode" "$path"; then
       :
     fi
-    echo "8.22"
   fi
 
   if mjepa_dir_is_effectively_writable "$path"; then
-    echo "8.23"
     return 0
   fi
 
@@ -272,9 +256,7 @@ mjepa_try_dir() {
     return 1
   fi
   if mkdir -p "$path" 2>/dev/null; then
-    echo "8"
     if mjepa_reconcile_dir_owner "$path" "$label"; then
-      echo "9"
       return 0
     fi
   fi
@@ -292,26 +274,20 @@ mjepa_privileged_dir_fix() {
   [[ -n "$path" ]] || return 1
   echo "13"
   local uid gid
-  echo "14"
   uid="${MJEPA_DIR_OWNER_UID:-}"
-  echo "15"
   gid="${MJEPA_DIR_OWNER_GID:-}"
-  echo "16"
+
   if [[ -z "$uid" ]]; then
-    echo "17"
     uid="$(id -u 2>/dev/null)" || return 1
   fi
   if [[ -z "$gid" ]]; then
-    echo "18"
     gid="$(id -g 2>/dev/null)" || gid="$uid"
   fi
 
   if mjepa_sudo_exec mkdir -p "$path" && \
      mjepa_sudo_exec chown "$uid:$gid" "$path"; then
-    echo "19"
     mjepa_sudo_exec chmod "${MJEPA_DIR_MODE}" "$path" || true
     if mjepa_dir_is_effectively_writable "$path"; then
-      echo "20"
       mjepa_log_warn "regained write access to $label via ${MJEPA_SUDO_BIN}"
       return 0
     fi
