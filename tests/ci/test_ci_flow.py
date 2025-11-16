@@ -951,7 +951,7 @@ fi
         diag_stream = getattr(sys, "__stdout__", sys.stdout)
 
         def diag(message: str) -> None:
-            print(message, file=diag_stream, flush=True)
+            print(message, flush=True)
 
         debug_filter = {
             "ARTIFACTS_DIR",
