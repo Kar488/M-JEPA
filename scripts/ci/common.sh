@@ -221,6 +221,47 @@ fi
 
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
+
+need_mamba_root_fix=0
+if [[ -z "${MAMBA_ROOT_PREFIX:-}" ]]; then
+  need_mamba_root_fix=1
+elif ! mjepa_try_dir "${MAMBA_ROOT_PREFIX}"; then
+  need_mamba_root_fix=1
+fi
+
+if (( need_mamba_root_fix )); then
+  current_prefix="${MAMBA_ROOT_PREFIX:-}"
+  if [[ -n "$current_prefix" ]]; then
+    mjepa_log_warn "MAMBA_ROOT_PREFIX=$current_prefix not writable; attempting fallback"
+  fi
+
+  fallback_home=""
+  if [[ -n "${HOME:-}" ]]; then
+    fallback_home="${HOME%/}/micromamba"
+    if mjepa_try_dir "$fallback_home"; then
+      MAMBA_ROOT_PREFIX="$fallback_home"
+    fi
+  fi
+
+  need_tmp_fallback=0
+  if [[ -z "${MAMBA_ROOT_PREFIX:-}" ]]; then
+    need_tmp_fallback=1
+  elif ! mjepa_try_dir "${MAMBA_ROOT_PREFIX}"; then
+    need_tmp_fallback=1
+  fi
+
+  if (( need_tmp_fallback )); then
+    runner_tmp_root="${RUNNER_TEMP:-/tmp}"
+    fallback_tmp="${runner_tmp_root%/}/mjepa/micromamba"
+    if mjepa_try_dir "$fallback_tmp"; then
+      MAMBA_ROOT_PREFIX="$fallback_tmp"
+    else
+      mjepa_log_error "unable to ensure writable MAMBA_ROOT_PREFIX (tried ${current_prefix:-<unset>}, ${fallback_home:-<unset>}, $fallback_tmp)"
+      exit 1
+    fi
+    unset runner_tmp_root fallback_tmp need_tmp_fallback
+  fi
+fi
 : "${PRETRAIN_STATE_FILE_LEGACY:=${EXPERIMENTS_ROOT}/pretrain_state.json}"
 
 export DATA_ROOT
