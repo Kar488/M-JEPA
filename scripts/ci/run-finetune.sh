@@ -75,8 +75,32 @@ else
 fi
 
 if [[ -f "$MET_ENV_FILE" ]]; then
-  while IFS='=' read -r key value; do
+  while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+    line="${raw_line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" ]] && continue
+    [[ "$line" == '#'* ]] && continue
+    case "${line,,}" in
+      export*)
+        line="${line#export}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        ;;
+    esac
+    if [[ "$line" != *'='* ]]; then
+      continue
+    fi
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
     [[ -z "$key" ]] && continue
+    if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "[finetune] ignoring invalid gate entry: ${raw_line}" >&2
+      continue
+    fi
     export "$key"="$value"
   done <"$MET_ENV_FILE"
   if [[ "${MET_BENCHMARK_BASELINE:-false}" == "true" ]]; then

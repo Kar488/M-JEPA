@@ -970,7 +970,12 @@ fi
     # honoured when the reroute signal only exists under the lineage root.
     met_env.unlink()
     pretrain_gate = experiments_root / "pretrain-demo" / "met_benchmark.env"
-    pretrain_gate.write_text("MET_BENCHMARK_BASELINE=false\n", encoding="utf-8")
+    pretrain_gate.write_text(
+        "  # gate summary\r\n"
+        "export MET_BENCHMARK_BASELINE=false\r\n"
+        "MET_GATE_DEBUG=observed value  \r\n",
+        encoding="utf-8",
+    )
 
     capture_three = tmp_path / "env_fallback.txt"
     env["TMP_ENV_CAPTURE"] = str(capture_three)
@@ -982,6 +987,7 @@ fi
     )
     capture_text = capture_three.read_text(encoding="utf-8")
     assert "MET_BENCHMARK_BASELINE=false" in capture_text
+    assert "MET_GATE_DEBUG=observed value" in capture_text
 
 
 def test_run_tox21_exports_full_finetune_when_finetuned(tmp_path):
