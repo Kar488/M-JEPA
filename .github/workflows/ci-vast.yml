@@ -92,7 +92,7 @@ jobs:
     if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_unit_tests') }}
 
     name: Quick tests (no gpu, no slow)
-    runs-on: self-hosted #ubuntu-latest
+    runs-on: ubuntu-latest #self-hosted
     env:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
       MAMBA_ROOT_PREFIX: ~/micromamba
@@ -419,10 +419,10 @@ jobs:
           # W&B sweeps pair runs via PHASE1_BACKBONES/PHASE1_SEEDS; PHASE1_SWEEP_SEED is deprecated.
           PHASE1_BACKBONES: gine,dmpnn,schnet3d
           PHASE1_SEEDS: 1,2,3,4,5
-          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
-          VAST_HOST: ${{ secrets.VAST_HOST }}
-          VAST_USER: ${{ secrets.VAST_USER }}
-          VAST_PORT: ${{ secrets.VAST_PORT }}
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-grid-or-phase1.sh
       - name: Checkout helper scripts
         uses: actions/checkout@v4
         with:
@@ -496,10 +496,10 @@ jobs:
           PHASE2_DIRECTION: min
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
-          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
-          VAST_HOST: ${{ secrets.VAST_HOST }}
-          VAST_USER: ${{ secrets.VAST_USER }}
-          VAST_PORT: ${{ secrets.VAST_PORT }}
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-grid-phase2.sh
 
       # Run on the GitHub runner so helper scripts referenced below are available
       # locally; this does not affect the remote Vast execution.
@@ -615,10 +615,10 @@ jobs:
           PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "8"
           BESTCFG_NO_EPOCHS: "1"
-          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
-          VAST_HOST: ${{ secrets.VAST_HOST }}
-          VAST_USER: ${{ secrets.VAST_USER }}
-          VAST_PORT: ${{ secrets.VAST_PORT }}
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-pretrain.sh
 
       - name: Fetch pretrain state snapshot
         id: pretrain_state
@@ -694,10 +694,10 @@ jobs:
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1"
           TOX21_ENCODER_SOURCE: pretrain_frozen
-          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
-          VAST_HOST: ${{ secrets.VAST_HOST }}
-          VAST_USER: ${{ secrets.VAST_USER }}
-          VAST_PORT: ${{ secrets.VAST_PORT }}
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-tox21.sh
 
       - name: Checkout repository for tox21 baseline artifacts
         if: always()
@@ -796,6 +796,10 @@ jobs:
           PRETRAIN_EPOCHS: "40"
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1"
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-finetune.sh
 
   vast_benchmark:
     name: Benchmark
@@ -820,7 +824,7 @@ jobs:
         run: |
           echo "TOX21_MET_GATE=${{ needs.vast_tox21_baseline.outputs.tox21_gate }}"
 
-      - name: Benchmark on Vast
+      - name: Benchmark
         if: ${{ needs.vast_finetune.result == 'success' }}
         uses: appleboy/ssh-action@v1
         with:
@@ -842,6 +846,10 @@ jobs:
           BENCH_VAL_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/val
           BENCH_TEST_DIR: ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/test
           TOX21_MET_GATE: ${{ needs.vast_tox21_baseline.outputs.tox21_gate }}
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-bench.sh
 
   vast_tox21:
     name: Tox21 Evaluation
@@ -886,6 +894,10 @@ jobs:
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1" # use best config without reloading any epochs
           TOX21_ENCODER_SOURCE: fine_tuned
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-tox21.sh
 
       - name: Checkout repository for tox21 artifacts
         if: always()
@@ -924,7 +936,7 @@ jobs:
     env:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
-      - name: Publish Vast report
+      - name: Publish report
         if: ${{ needs.vast_benchmark.result == 'success' && needs.vast_tox21.result == 'success' }}
         uses: appleboy/ssh-action@v1
         with:
