@@ -64,6 +64,27 @@ if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
   pretrain_met_env="${PRETRAIN_EXPERIMENT_ROOT%/}/met_benchmark.env"
 fi
 
+pretrain_dir_gate=""
+if [[ -n "${PRETRAIN_DIR:-}" ]]; then
+  pretrain_dir_gate="$(dirname "${PRETRAIN_DIR%/}")/met_benchmark.env"
+fi
+
+pretrain_artifacts_gate=""
+if [[ -n "${PRETRAIN_ARTIFACTS_DIR:-}" ]]; then
+  pretrain_artifacts_gate="$(dirname "${PRETRAIN_ARTIFACTS_DIR%/}")/met_benchmark.env"
+fi
+
+# Avoid duplicate logging when derived paths collapse onto the lineage root.
+if [[ -n "$pretrain_met_env" && -n "$pretrain_dir_gate" && "$pretrain_met_env" == "$pretrain_dir_gate" ]]; then
+  pretrain_dir_gate=""
+fi
+if [[ -n "$pretrain_met_env" && -n "$pretrain_artifacts_gate" && "$pretrain_met_env" == "$pretrain_artifacts_gate" ]]; then
+  pretrain_artifacts_gate=""
+fi
+if [[ -n "$pretrain_dir_gate" && -n "$pretrain_artifacts_gate" && "$pretrain_dir_gate" == "$pretrain_artifacts_gate" ]]; then
+  pretrain_artifacts_gate=""
+fi
+
 echo "[finetune][gate] env roots: EXP_ROOT=${EXP_ROOT:-<unset>} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>} FINETUNE_DIR=${FINETUNE_DIR:-<unset>} PRETRAIN_EXPERIMENT_ROOT=${PRETRAIN_EXPERIMENT_ROOT:-<unset>}" >&2
 
 if [[ -n "$local_met_env" ]]; then
@@ -76,24 +97,47 @@ else
   echo "[finetune][gate] candidate local gate path=<unset>" >&2
 fi
 
-if [[ -n "$pretrain_met_env" ]]; then
-  if [[ -f "$pretrain_met_env" ]]; then
-    echo "[finetune][gate] candidate pretrain gate path=$pretrain_met_env (present)" >&2
-  else
-    echo "[finetune][gate] candidate pretrain gate path=$pretrain_met_env (missing)" >&2
+log_pretrain_candidate() {
+  local label="$1" path="$2"
+  if [[ -z "$path" ]]; then
+    echo "[finetune][gate] candidate ${label} gate path=<unset>" >&2
+    return
   fi
-else
-  echo "[finetune][gate] candidate pretrain gate path=<unset>" >&2
-fi
+  if [[ -f "$path" ]]; then
+    echo "[finetune][gate] candidate ${label} gate path=$path (present)" >&2
+  else
+    echo "[finetune][gate] candidate ${label} gate path=$path (missing)" >&2
+  fi
+}
 
-if [[ -n "$local_met_env" && -f "$local_met_env" ]]; then
-  MET_ENV_FILE="$local_met_env"
-elif [[ -n "$pretrain_met_env" && -f "$pretrain_met_env" ]]; then
-  MET_ENV_FILE="$pretrain_met_env"
-elif [[ -n "$local_met_env" ]]; then
-  MET_ENV_FILE="$local_met_env"
-else
-  MET_ENV_FILE="$pretrain_met_env"
+log_pretrain_candidate "pretrain" "$pretrain_met_env"
+log_pretrain_candidate "pretrain (derived from PRETRAIN_DIR)" "$pretrain_dir_gate"
+log_pretrain_candidate "pretrain (derived from PRETRAIN_ARTIFACTS_DIR)" "$pretrain_artifacts_gate"
+
+declare -a gate_candidates=()
+if [[ -n "$local_met_env" ]]; then
+  gate_candidates+=("$local_met_env")
+fi
+for candidate in "$pretrain_met_env" "$pretrain_dir_gate" "$pretrain_artifacts_gate"; do
+  if [[ -n "$candidate" ]]; then
+    gate_candidates+=("$candidate")
+  fi
+done
+
+for candidate in "${gate_candidates[@]}"; do
+  if [[ -n "$candidate" && -f "$candidate" ]]; then
+    MET_ENV_FILE="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$MET_ENV_FILE" ]]; then
+  for candidate in "${gate_candidates[@]}"; do
+    if [[ -n "$candidate" ]]; then
+      MET_ENV_FILE="$candidate"
+      break
+    fi
+  done
 fi
 
 if [[ -n "$MET_ENV_FILE" ]]; then

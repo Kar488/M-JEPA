@@ -989,6 +989,32 @@ fi
     assert "MET_BENCHMARK_BASELINE=false" in capture_text
     assert "MET_GATE_DEBUG=observed value" in capture_text
 
+    # Environments that inject PRETRAIN_DIR/PRETRAIN_ARTIFACTS_DIR without
+    # declaring PRETRAIN_EXP_ID should still locate the lineage gate.
+    env_direct = env.copy()
+    env_direct.update(
+        {
+            "PRETRAIN_EXP_ID": "mismatched-pretrain-id",
+            "PRETRAIN_DIR": str(pretrain_root / "pretrain"),
+            "PRETRAIN_ARTIFACTS_DIR": str(pretrain_root / "artifacts"),
+            "ARTIFACTS_DIR": str(pretrain_root / "artifacts"),
+            "PRETRAIN_MANIFEST": str(pretrain_root / "artifacts" / "encoder_manifest.json"),
+            "PRETRAIN_ENCODER_PATH": str(pretrain_root / "pretrain" / "encoder.pt"),
+        }
+    )
+
+    capture_direct = tmp_path / "env_direct.txt"
+    env_direct["TMP_ENV_CAPTURE"] = str(capture_direct)
+    subprocess.run(
+        ["bash", "scripts/ci/run-finetune.sh"],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env_direct,
+    )
+    capture_text = capture_direct.read_text(encoding="utf-8")
+    assert "MET_BENCHMARK_BASELINE=false" in capture_text
+    assert "MET_GATE_DEBUG=observed value" in capture_text
+
     # Empty or whitespace-only gate files should act like a missing
     # reroute signal and leave the baseline flag marked as unknown.
     pretrain_gate.write_text("\n  \t  # comment only\r\n\t\n", encoding="utf-8")
