@@ -3,11 +3,24 @@ set -euxo pipefail
 
 # ----------- inputs & defaults -----------
 : "${APP_DIR:=/srv/mjepa}"
-: "${MAMBA_ROOT_PREFIX:=~/micromamba}"
-: "${WANDB_DIR:=/data/mjepa/wandb}"
-: "${CACHE_DIR:=/data/mjepa/cache/graphs_250k}"
 : "${RUN_ID:=$(date +%s)}"
-: "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
+export MJEPACI_STAGE="prepare-env"
+: "${EXP_ID:=${RUN_ID}}"
+
+CI_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${CI_SCRIPT_DIR}/common.sh"
+
+if [[ -n "${PIP_CACHE_DIR:-}" ]]; then
+  if mjepa_try_dir "${PIP_CACHE_DIR}"; then
+    export PIP_CACHE_DIR
+  else
+    mjepa_log_warn "PIP_CACHE_DIR=${PIP_CACHE_DIR} not writable; disabling pip cache"
+    unset PIP_CACHE_DIR
+  fi
+fi
+
+EXP_ROOT="${EXPERIMENTS_ROOT%/}/${EXP_ID}"
 ENV_NAME="mjepa"
 : "${PYTORCH_INDEX_URL:=https://download.pytorch.org/whl/cu128}"
 : "${PYTORCH_PACKAGE_SPEC:=torch==2.8.*}"
@@ -18,9 +31,7 @@ ENV_NAME="mjepa"
 : "${BUILD_SCATTER_FROM_SOURCE:=0}"
 
 # ----------- persistent dirs -----------
-mkdir -p /data/mjepa/experiments "$WANDB_DIR" "$CACHE_DIR"
-mkdir -p "$EXP_ROOT"/{grid,pretrain,finetune,bench,tox21,logs}
-ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
+ln -sfn "$EXP_ROOT" "${EXPERIMENTS_ROOT%/}/latest"
 
 # ----------- driver / gpu sanity -----------
 CUDA_EXPECTED=0
@@ -100,9 +111,12 @@ micromamba run -n "$ENV_NAME" python -m pip install deepchem==2.8.0
 # If on 24.04, swap 'ubuntu2204' for 'ubuntu2404' in the wget URL.
 if ! nvcc --version | grep -q "release 12.8"; then
   echo "[prepare-env] Installing CUDA Toolkit 12.8..."
-  wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-  sudo dpkg -i cuda-keyring_1.1-1_all.deb
-  sudo rm cuda-keyring_1.1-1_all.deb  # Cleanup
+  cuda_tmp_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cuda-keyring.XXXXXX")"
+  cuda_keyring_path="${cuda_tmp_dir}/cuda-keyring_1.1-1_all.deb"
+  curl -fsSL -o "$cuda_keyring_path" \
+    https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+  sudo dpkg -i "$cuda_keyring_path"
+  rm -rf "$cuda_tmp_dir"
   sudo apt-get update
   sudo apt-get install -y cuda-toolkit-12-8
   # Add to PATH (persist via ~/.bashrc or eval in script)

@@ -94,6 +94,7 @@ jobs:
     name: Quick tests (no gpu, no slow)
     runs-on: self-hosted #ubuntu-latest
     env:
+      MJEPA_ALLOW_DATA_FALLBACKS: '0'
       MAMBA_ROOT_PREFIX: ~/micromamba
     steps:
       - name: Checkout repository
@@ -160,12 +161,12 @@ jobs:
             print('cuda available:', torch.cuda.is_available())
             PY
 
-  vast_deploy_and_prepare_environment:
+  vast_deploy:
     if: >
       ${{
         (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
       }}
-    name: Deploy + Prepare environment
+    name: Deploy repository to Vast host
     runs-on: ubuntu-latest
     needs: vast_smoke
     steps:
@@ -263,22 +264,23 @@ jobs:
           
             # Fetch and checkout all LFS objects for this branch
             git -C "$APP_DIR" lfs pull origin "$BRANCH"
-      - name: Setup micromamba environment
-        uses: appleboy/ssh-action@v1
-        timeout-minutes: 30        # connection timeout
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          request_pty: true
-          command_timeout: 30m # allow remote script to run for 30 minutes
-          envs: APP_DIR,MAMBA_ROOT_PREFIX,PIP_CACHE_DIR,WANDB_DIR,CACHE_DIR,EXP_ROOT,RUN_ID
-          script: |
-            set -e
-            cd "$APP_DIR"
-            bash scripts/ci/prepare_env.sh
+  vast_prepare_environment:
+    if: >
+      ${{
+        (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
+      }}
+    name: Prepare environment on Vast runner
+    runs-on: self-hosted
+    needs: vast_deploy
+    env:
+      MJEPA_ALLOW_DATA_FALLBACKS: '0'
+    steps:
+      - name: Run prepare_env locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/prepare_env.sh
 
   vast_cache_warm_2d:
     if: >
@@ -288,7 +290,9 @@ jobs:
     name: Warm dataset cache (2D)
     runs-on: self-hosted
     timeout-minutes: 480
-    needs: [tests_quick, vast_deploy_and_prepare_environment]
+    needs: [tests_quick, vast_prepare_environment]
+    env:
+      MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
       - name: Materialise 2D caches locally
         shell: bash
@@ -296,7 +300,11 @@ jobs:
           set -euo pipefail
           cd "$APP_DIR"
 
-          MICROMAMBA_BIN="${MAMBA_ROOT_PREFIX}/bin/micromamba"
+          # Source the shared CI bootstrap so DATA_ROOT / micromamba fallbacks
+          # mirror the behaviour of stage runners.
+          source scripts/ci/common.sh
+          ensure_micromamba
+          MICROMAMBA_BIN="$MMBIN"
           CACHE_WARM_UNLABELED_DIR="${APP_DIR}/data/ZINC-canonicalized"
           CACHE_WARM_LABELED_DIR="${APP_DIR}/data/katielinkmoleculenet_benchmark/train"
           CACHE_WARM_LABEL_COL="measured log solubility in mols per litre"
@@ -327,6 +335,8 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 480
     needs: [vast_cache_warm_2d]
+    env:
+      MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
       - name: Materialise 3D caches locally
         shell: bash
@@ -334,7 +344,11 @@ jobs:
           set -euo pipefail
           cd "$APP_DIR"
 
-          MICROMAMBA_BIN="${MAMBA_ROOT_PREFIX}/bin/micromamba"
+          # Mirror the 2D warmer setup so both stages share the fallback
+          # handling implemented in scripts/ci/common.sh.
+          source scripts/ci/common.sh
+          ensure_micromamba
+          MICROMAMBA_BIN="$MMBIN"
           CACHE_WARM_UNLABELED_DIR="${APP_DIR}/data/ZINC-canonicalized"
           CACHE_WARM_LABELED_DIR="${APP_DIR}/data/katielinkmoleculenet_benchmark/train"
           CACHE_WARM_LABEL_COL="measured log solubility in mols per litre"
@@ -365,7 +379,9 @@ jobs:
     name: Learn hyperparameters (Custom or WandB)
     runs-on: self-hosted #ubuntu-latest
     #timeout-minutes: 740
-    needs: [tests_quick,vast_deploy_and_prepare_environment,vast_cache_warm_2d,vast_cache_warm_3d]
+    needs: [tests_quick,vast_prepare_environment,vast_cache_warm_2d,vast_cache_warm_3d]
+    env:
+      MJEPA_ALLOW_DATA_FALLBACKS: '0'
     outputs:
       grid_exp_id: ${{ steps.phase1_ids.outputs.grid_exp_id }}
       pretrain_exp_id: ${{ steps.phase1_ids.outputs.pretrain_exp_id }}
@@ -384,7 +400,7 @@ jobs:
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,
             GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
             GRID_MODE,WANDB_COUNT,EXPORT_OUT_PATH,EXPORT_PHASE2_PATH,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR,
-            PE_MIN_PRETRAIN_EPOCHS,PE_MIN_FINETUNE_EPOCHS,PE_MIN_PRETRAIN_BATCHES,PHASE1_BACKBONES,PHASE1_SEEDS
+            PE_MIN_PRETRAIN_EPOCHS,PE_MIN_FINETUNE_EPOCHS,PE_MIN_PRETRAIN_BATCHES,PHASE1_BACKBONES,PHASE1_SEEDS,MJEPA_ALLOW_DATA_FALLBACKS
           script: |
             bash "$APP_DIR/scripts/ci/run-grid-or-phase1.sh"
         env:
@@ -448,6 +464,7 @@ jobs:
       PHASE2_SWEEP_WALL_MINS: 920
       PHASE2_RECHECK_WALL_MINS: 180
       PHASE2_EXPORT_WALL_MINS: 30
+      MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
       - name: Run Phase-2 stages on Vast
         uses: appleboy/ssh-action@v1
@@ -464,7 +481,7 @@ jobs:
             GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,RUN_ID,EXP_ID,GRID_EXP_ID,PRETRAIN_EXP_ID,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
             PHASE2_SWEEP_WALL_MINS,PHASE2_RECHECK_WALL_MINS,PHASE2_EXPORT_WALL_MINS,
             GRID_MODE,WANDB_COUNT, TOPK_RECHECK,EXTRA_SEEDS,PHASE2_METRIC,PHASE2_DIRECTION,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR,
-            PHASE2_AGENT_COUNT,CI_FORCE_UNFREEZE_GRID,CI_PHASE2_FORCE_REUSE_PHASE2_IDS
+            PHASE2_AGENT_COUNT,CI_FORCE_UNFREEZE_GRID,CI_PHASE2_FORCE_REUSE_PHASE2_IDS,MJEPA_ALLOW_DATA_FALLBACKS
           script: |
             bash "$APP_DIR/scripts/ci/run-grid-phase2.sh"
         env:
@@ -564,6 +581,7 @@ jobs:
       EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
       GRID_EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.pretrain_exp_id || needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
+      MJEPA_ALLOW_DATA_FALLBACKS: '0'
     outputs:
       exp_id: ${{ steps.pretrain_state.outputs.exp_id }}
       pretrain_root: ${{ steps.pretrain_state.outputs.experiment_root }}
@@ -588,7 +606,7 @@ jobs:
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             GRID_MODE,WANDB_COUNT,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,EXP_ID,GRID_EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,EXPERIMENTS_ROOT
+            BESTCFG_NO_EPOCHS,EXP_ID,GRID_EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,EXPERIMENTS_ROOT,MJEPA_ALLOW_DATA_FALLBACKS
           script: |
             bash "$APP_DIR/scripts/ci/run-pretrain.sh"
         env:
@@ -651,6 +669,7 @@ jobs:
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
+      MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
       - name: Tox21 baseline on Vast
         uses: appleboy/ssh-action@v1
@@ -665,7 +684,7 @@ jobs:
           envs: APP_DIR,GRID_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
-            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
+            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT,MJEPA_ALLOW_DATA_FALLBACKS
           script: |
             bash "$APP_DIR/scripts/ci/run-tox21.sh"
         env:
@@ -753,6 +772,7 @@ jobs:
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
+      MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
       - name: Finetune on Vast
         uses: appleboy/ssh-action@v1
@@ -767,7 +787,7 @@ jobs:
           envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,CKPT_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
+            BESTCFG_NO_EPOCHS,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT,MJEPA_ALLOW_DATA_FALLBACKS
           script: |
             bash "$APP_DIR/scripts/ci/run-finetune.sh"
         env:
@@ -815,7 +835,7 @@ jobs:
             BENCH_VAL_DIR,BENCH_TEST_DIR,PHASE2_LABELED_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,TOX21_MET_GATE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
+            BESTCFG_NO_EPOCHS,TOX21_MET_GATE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT,MJEPA_ALLOW_DATA_FALLBACKS
         env:
           HARD_WALL_MINS: 820
           KILL_AFTER_SECS: 120
@@ -856,7 +876,7 @@ jobs:
           envs: APP_DIR,GRID_DIR,TOX21_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
+            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT,MJEPA_ALLOW_DATA_FALLBACKS
           script: |
             bash "$APP_DIR/scripts/ci/run-tox21.sh"
         env:
@@ -901,6 +921,8 @@ jobs:
       ${{
           always() &&
           ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
+    env:
+      MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
       - name: Publish Vast report
         if: ${{ needs.vast_benchmark.result == 'success' && needs.vast_tox21.result == 'success' }}
@@ -913,6 +935,6 @@ jobs:
           #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           command_timeout: 160m
-          envs: APP_DIR,REPORTS_DIR,REPORTS_CACHE_DIR,LOG_DIR,WANDB_API_KEY,WANDB_ENTITY,WANDB_PROJECT,WANDB_RUN_ID,WANDB_RUN_GROUP,WANDB_RESUME,WANDB_DIR
+          envs: APP_DIR,REPORTS_DIR,REPORTS_CACHE_DIR,LOG_DIR,WANDB_API_KEY,WANDB_ENTITY,WANDB_PROJECT,WANDB_RUN_ID,WANDB_RUN_GROUP,WANDB_RESUME,WANDB_DIR,MJEPA_ALLOW_DATA_FALLBACKS
           script: |
             bash "$APP_DIR/scripts/ci/run-report.sh"
