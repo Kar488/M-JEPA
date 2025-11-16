@@ -628,12 +628,21 @@ try:
 except Exception:
     sys.exit(0)
 
+manifest_dir = os.path.dirname(os.path.abspath(path))
+
 paths = data.get("paths") or {}
 for key in ("encoder", "encoder_symlink"):
     value = paths.get(key)
-    if isinstance(value, str) and value.strip():
-        print(os.path.abspath(value))
-        break
+    if isinstance(value, str):
+        value = value.strip()
+    if not value:
+        continue
+    if os.path.isabs(value):
+        resolved = value
+    else:
+        resolved = os.path.abspath(os.path.join(manifest_dir, value))
+    print(resolved)
+    break
 PY
       )"
     fi
