@@ -89,6 +89,23 @@ mjepa_log_error() {
   echo "[ci] error: $*" >&2
 }
 
+: "${MJEPA_ALLOW_DATA_FALLBACKS:=1}"
+
+mjepa_require_primary_path() {
+  local context="$1"
+  local path_hint="${2:-}"
+  if [[ "${MJEPA_ALLOW_DATA_FALLBACKS}" == "1" ]]; then
+    return 0
+  fi
+  if [[ -n "$path_hint" ]]; then
+    mjepa_log_error "$context (failed path: $path_hint)"
+  else
+    mjepa_log_error "$context"
+  fi
+  mjepa_log_error "fallbacks disabled; fix permissions or set MJEPA_ALLOW_DATA_FALLBACKS=1 to override"
+  exit 1
+}
+
 : "${MJEPA_SUDO_BIN:=sudo}"
 : "${MJEPA_SUDO_ALLOW_TTY_WRAPPER:=1}"
 
@@ -163,6 +180,7 @@ mjepa_detect_data_root() {
       printf '%s\n' "$requested_data"
       return 0
     fi
+    mjepa_require_primary_path "DATA_ROOT=$requested_data not writable" "$requested_data"
     mjepa_log_warn "DATA_ROOT=$requested_data not writable; ignoring"
   fi
 
@@ -180,6 +198,8 @@ mjepa_detect_data_root() {
     printf '%s\n' "$vast_root"
     return 0
   fi
+
+  mjepa_require_primary_path "default DATA_ROOT=$vast_root not writable" "$vast_root"
 
   local runner_tmp="${RUNNER_TEMP:-/tmp}"
   local fallback="${runner_tmp%/}/mjepa"
@@ -223,6 +243,7 @@ if [[ -n "$requested_experiments" ]]; then
   if mjepa_try_dir "$requested_experiments"; then
     EXPERIMENTS_ROOT="$requested_experiments"
   else
+    mjepa_require_primary_path "EXPERIMENTS_ROOT=$requested_experiments not writable" "$requested_experiments"
     mjepa_log_warn "EXPERIMENTS_ROOT=$requested_experiments not writable; falling back"
     unset EXPERIMENTS_ROOT
   fi
@@ -258,6 +279,7 @@ if ! mjepa_try_dir "${EXPERIMENTS_ROOT}"; then
   runner_tmp_root="${RUNNER_TEMP:-/tmp}"
   fallback_experiments="${runner_tmp_root%/}/mjepa/experiments"
   if mjepa_try_dir "$fallback_experiments"; then
+    mjepa_require_primary_path "EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT} not writable" "${EXPERIMENTS_ROOT}"
     mjepa_log_warn "falling back EXPERIMENTS_ROOT=$fallback_experiments"
     EXPERIMENTS_ROOT="$fallback_experiments"
     DATA_ROOT="$(dirname "$fallback_experiments")"
@@ -290,6 +312,7 @@ fi
 if (( need_mamba_root_fix )); then
   current_prefix="${MAMBA_ROOT_PREFIX:-}"
   if [[ -n "$current_prefix" ]]; then
+    mjepa_require_primary_path "MAMBA_ROOT_PREFIX=$current_prefix not writable" "$current_prefix"
     mjepa_log_warn "MAMBA_ROOT_PREFIX=$current_prefix not writable; attempting fallback"
   fi
 
@@ -309,6 +332,10 @@ if (( need_mamba_root_fix )); then
   fi
 
   if (( need_tmp_fallback )); then
+    primary_prefix="${current_prefix:-${fallback_home:-}}"
+    if [[ -n "$primary_prefix" ]]; then
+      mjepa_require_primary_path "MAMBA_ROOT_PREFIX=$primary_prefix not writable" "$primary_prefix"
+    fi
     runner_tmp_root="${RUNNER_TEMP:-/tmp}"
     fallback_tmp="${runner_tmp_root%/}/mjepa/micromamba"
     if mjepa_try_dir "$fallback_tmp"; then
@@ -944,6 +971,12 @@ ensure_dir_var() {
     if mjepa_try_dir "$path"; then
       printf -v "$var_name" '%s' "$path"
       if (( idx > 0 )); then
+        local primary="${attempts[0]:-}"
+        if [[ -n "$primary" ]]; then
+          mjepa_require_primary_path "${var_name} primary path not writable" "$primary"
+        else
+          mjepa_require_primary_path "${var_name} primary path not writable"
+        fi
         mjepa_log_warn "falling back ${var_name}=$path"
       fi
       return 0

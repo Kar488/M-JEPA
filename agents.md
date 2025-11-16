@@ -117,6 +117,10 @@ bootstrap so permission issues surface immediately. ``vast_deploy`` runs on a
 GitHub-hosted runner and syncs the repository plus micromamba into ``$APP_DIR``
 via SSH, while ``vast_prepare_environment`` runs ``scripts/ci/prepare_env.sh``
 directly on the self-hosted runner before cache warmers or sweeps begin.
+Self-hosted stages set ``MJEPA_ALLOW_DATA_FALLBACKS=0`` so ``scripts/ci/common.sh``
+fails fast instead of silently redirecting ``/data/mjepa`` paths into
+``$RUNNER_TEMP``; override this only when intentionally developing on a machine
+without the Vast data volume.
 
 Stage Agents & Responsibilities
 -------------------------------

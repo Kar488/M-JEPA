@@ -318,6 +318,84 @@ def test_common_sh_handles_privileged_fix_when_tty_required(tmp_path):
     assert os.access(target_root, os.W_OK)
 
 
+def test_common_sh_aborts_when_experiments_fallback_disabled(tmp_path):
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir()
+
+    blocked_parent = tmp_path / "blocked_parent"
+    blocked_parent.mkdir()
+    target_root = blocked_parent / "experiments"
+    target_root.write_text("", encoding="utf-8")
+    blocked_parent.chmod(0o555)
+    fake_sudo = shutil.which("false") or "/bin/false"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "EXPERIMENTS_ROOT": str(target_root),
+            "RUNNER_TEMP": str(runner_tmp),
+            "MJEPA_ALLOW_DATA_FALLBACKS": "0",
+            "MJEPA_SUDO_BIN": fake_sudo,
+            "MJEPA_SUDO_ALLOW_TTY_WRAPPER": "0",
+        }
+    )
+
+    cmd = f"set -euo pipefail; source {shlex.quote(str(common_sh))}"
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode != 0
+    assert "fallbacks disabled" in proc.stderr.lower()
+
+
+def test_common_sh_aborts_when_cache_dir_fallback_disabled(tmp_path):
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir()
+
+    data_root = tmp_path / "data"
+    data_root.mkdir(exist_ok=True)
+
+    blocked_parent = tmp_path / "blocked_cache"
+    blocked_parent.mkdir(exist_ok=True)
+    blocked_cache = blocked_parent / "cache"
+    blocked_cache.write_text("", encoding="utf-8")
+    blocked_parent.chmod(0o555)
+    fake_sudo = shutil.which("false") or "/bin/false"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DATA_ROOT": str(data_root),
+            "CACHE_DIR": str(blocked_cache),
+            "RUNNER_TEMP": str(runner_tmp),
+            "MJEPA_ALLOW_DATA_FALLBACKS": "0",
+            "MJEPA_SUDO_BIN": fake_sudo,
+            "MJEPA_SUDO_ALLOW_TTY_WRAPPER": "0",
+        }
+    )
+
+    cmd = f"set -euo pipefail; source {shlex.quote(str(common_sh))}"
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode != 0
+    assert "fallbacks disabled" in proc.stderr.lower()
+
+
 def test_pretrain_materializes_phase2_artifacts(tmp_path):
     experiments_root = tmp_path / "experiments"
     phase2_root = tmp_path / "phase2" / "winner"
