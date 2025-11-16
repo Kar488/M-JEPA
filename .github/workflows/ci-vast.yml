@@ -135,10 +135,7 @@ jobs:
         run: micromamba run -n mjepa python -m pytest -m "not gpu and not slow" -q
 
   vast_smoke:
-    if: >
-      ${{
-        (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
-      }}
+    if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
     name: Smoke on Vast (GPU present?)
     runs-on: ubuntu-latest
     steps:
@@ -162,10 +159,7 @@ jobs:
             PY
 
   vast_deploy:
-    if: >
-      ${{
-        (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
-      }}
+    if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
     name: Deploy repository to Vast host
     runs-on: ubuntu-latest
     needs: vast_smoke
@@ -265,10 +259,7 @@ jobs:
             # Fetch and checkout all LFS objects for this branch
             git -C "$APP_DIR" lfs pull origin "$BRANCH"
   vast_prepare_environment:
-    if: >
-      ${{
-        (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
-      }}
+    if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
     name: Prepare environment on Vast runner
     runs-on: self-hosted
     needs: vast_deploy
@@ -283,10 +274,7 @@ jobs:
           bash scripts/ci/prepare_env.sh
 
   vast_cache_warm_2d:
-    if: >
-      ${{
-        (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
-      }}
+    if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
     name: Warm dataset cache (2D)
     runs-on: self-hosted
     timeout-minutes: 480
@@ -327,10 +315,7 @@ jobs:
             --num-workers "$CACHE_WARM_NUM_WORKERS"
 
   vast_cache_warm_3d:
-    if: >
-      ${{
-        (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
-      }}
+    if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
     name: Warm dataset cache (3D)
     runs-on: self-hosted
     timeout-minutes: 480
@@ -372,10 +357,7 @@ jobs:
             --add-3d
 
   vast_learn_hyperparameters:
-    if: >
-      ${{
-        (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
-      }}
+    if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
     name: Learn hyperparameters (Custom or WandB)
     runs-on: self-hosted #ubuntu-latest
     timeout-minutes: 960
@@ -433,11 +415,7 @@ jobs:
         run: bash scripts/ci/publish_phase1_lineage.sh
   # Option X: keep a single Vast job running sweep → recheck → export sequentially.
   vast_sweep_phase2:
-    if: >
-      ${{
-        ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) &&
-        ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb')
-      }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb') }}
     name: Phase 2 (sweep → recheck → export)
     runs-on: self-hosted #ubuntu-latest
     timeout-minutes: 1860
@@ -545,16 +523,7 @@ jobs:
     runs-on: self-hosted #ubuntu-latest
     timeout-minutes: 960
     needs: [vast_learn_hyperparameters, vast_sweep_phase2]
-    if: >
-      ${{
-          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && (
-            ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb' &&
-             needs.vast_sweep_phase2.result == 'success')
-          ||
-            ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'custom' &&
-             needs.vast_learn_hyperparameters.result == 'success')
-          )
-      }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && ( ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb' && needs.vast_sweep_phase2.result == 'success') || ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'custom' && needs.vast_learn_hyperparameters.result == 'success') ) }}
     env:
       EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
       GRID_EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
@@ -620,10 +589,7 @@ jobs:
     runs-on: self-hosted #ubuntu-latest
     timeout-minutes: 960
     needs: vast_pretrain
-    if:
-      ${{
-          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) &&
-          needs.vast_pretrain.result == 'success' }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_pretrain.result == 'success' }}
     outputs:
       tox21_gate: ${{ steps.tox21_gate.outputs.value }}
     env:
@@ -715,12 +681,7 @@ jobs:
     runs-on: self-hosted  #ubuntu-latest
     timeout-minutes: 920
     needs: [vast_pretrain, vast_tox21_baseline]
-    if:
-      ${{
-          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) &&
-          needs.vast_pretrain.result == 'success' &&
-          needs.vast_tox21_baseline.result == 'success' &&
-          needs.vast_tox21_baseline.outputs.tox21_gate == 'false' }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_pretrain.result == 'success' && needs.vast_tox21_baseline.result == 'success' && needs.vast_tox21_baseline.outputs.tox21_gate == 'false' }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -755,10 +716,7 @@ jobs:
     runs-on: self-hosted #ubuntu-latest
     timeout-minutes: 900
     needs: [vast_pretrain, vast_tox21_baseline, vast_finetune]
-    if:
-      ${{
-          always() &&
-          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -797,10 +755,7 @@ jobs:
     runs-on: self-hosted  #ubuntu-latest
     timeout-minutes: 960
     needs: [vast_pretrain, vast_finetune]
-    if:
-      ${{
-          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) &&
-          needs.vast_finetune.result == 'success' }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_finetune.result == 'success' }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -862,10 +817,7 @@ jobs:
     runs-on: self-hosted #ubuntu-latest
     timeout-minutes: 200
     needs: [vast_tox21_baseline, vast_benchmark, vast_tox21, vast_finetune]
-    if:
-      ${{
-          always() &&
-          ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
     env:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
