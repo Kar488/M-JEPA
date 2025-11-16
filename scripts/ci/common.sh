@@ -23,6 +23,9 @@ normalize_bool() {
 : "${PRETRAIN_EXP_ID:=}"
 : "${PRETRAIN_STATE_ID:=}"
 : "${RUN_ID:=$(date +%s)}"
+: "${MJEPA_DIR_OWNER_UID:=}"
+: "${MJEPA_DIR_OWNER_GID:=}"
+: "${MJEPA_DIR_MODE:=0775}"
 FORCE_UNFREEZE_GRID="$(normalize_bool "${FORCE_UNFREEZE_GRID:-}" 0)"
 CI_FORCE_UNFREEZE_GRID="$(normalize_bool "${CI_FORCE_UNFREEZE_GRID:-}" "${FORCE_UNFREEZE_GRID}")"
 FORCE_UNFREEZE_GRID="$CI_FORCE_UNFREEZE_GRID"
@@ -138,14 +141,106 @@ mjepa_sudo_exec() {
   return 1
 }
 
+mjepa_dir_is_effectively_writable() {
+  local path="$1"
+  local target_uid="${MJEPA_DIR_OWNER_UID:-}"
+  local target_gid="${MJEPA_DIR_OWNER_GID:-}"
+
+  if [[ -z "$target_uid" && -z "$target_gid" ]]; then
+    [[ -w "$path" ]]
+    return
+  fi
+
+  local stat_out="" owner="" group="" perms=""
+  if ! stat_out=$(stat -Lc '%u %g %a' "$path" 2>/dev/null); then
+    return 1
+  fi
+  read -r owner group perms <<<"$stat_out"
+  if [[ -n "$target_uid" && "$owner" != "$target_uid" ]]; then
+    return 1
+  fi
+  if [[ -n "$target_gid" && "$group" != "$target_gid" ]]; then
+    return 1
+  fi
+
+  local perm_val=$(( 8#$perms ))
+  if (( (perm_val & 0200) == 0 )); then
+    return 1
+  fi
+
+  return 0
+}
+
+mjepa_reconcile_dir_owner() {
+  local path="$1" label="${2:-$1}"
+  local target_uid="${MJEPA_DIR_OWNER_UID:-}"
+  local target_gid="${MJEPA_DIR_OWNER_GID:-}"
+  local desired_mode="${MJEPA_DIR_MODE:-}"
+
+  if [[ -z "$target_uid" && -z "$target_gid" && -z "$desired_mode" ]]; then
+    if [[ -w "$path" ]]; then
+      return 0
+    fi
+    return 1
+  fi
+
+  local need_chown=0 stat_out="" owner="" group="" chown_target=""
+  if [[ -n "$target_uid" || -n "$target_gid" ]]; then
+    if stat_out=$(stat -Lc '%u %g' "$path" 2>/dev/null); then
+      read -r owner group <<<"$stat_out"
+      if [[ -n "$target_uid" && "$owner" != "$target_uid" ]]; then
+        need_chown=1
+      fi
+      if [[ -n "$target_gid" && "$group" != "$target_gid" ]]; then
+        need_chown=1
+      fi
+    else
+      need_chown=1
+    fi
+
+    if (( need_chown )); then
+      if [[ -n "$target_uid" ]]; then
+        chown_target="$target_uid"
+      fi
+      if [[ -n "$target_gid" ]]; then
+        if [[ -n "$chown_target" ]]; then
+          chown_target+=":$target_gid"
+        else
+          chown_target=":$target_gid"
+        fi
+      fi
+
+      if chown "$chown_target" "$path" 2>/dev/null || mjepa_sudo_exec chown "$chown_target" "$path"; then
+        :
+      else
+        mjepa_log_warn "unable to chown $label to $chown_target"
+      fi
+    fi
+  fi
+
+  if [[ -n "$desired_mode" ]]; then
+    if chmod "$desired_mode" "$path" 2>/dev/null || mjepa_sudo_exec chmod "$desired_mode" "$path"; then
+      :
+    fi
+  fi
+
+  if mjepa_dir_is_effectively_writable "$path"; then
+    return 0
+  fi
+
+  return 1
+}
+
 mjepa_try_dir() {
   local path="$1" label="${2:-$1}"
   [[ -n "$path" ]] || return 1
   if [[ -e "$path" && ! -d "$path" ]]; then
     return 1
   fi
-  if mkdir -p "$path" 2>/dev/null && [[ -w "$path" ]]; then
-    return 0
+  if mkdir -p "$path" 2>/dev/null; then
+    if mjepa_reconcile_dir_owner "$path" "$label"; then
+      return 0
+    fi
   fi
   if mjepa_privileged_dir_fix "$path" "$label"; then
     return 0
@@ -158,13 +253,20 @@ mjepa_privileged_dir_fix() {
   [[ -n "$path" ]] || return 1
 
   local uid gid
-  uid="$(id -u 2>/dev/null)" || return 1
-  gid="$(id -g 2>/dev/null)" || gid="$uid"
+  uid="${MJEPA_DIR_OWNER_UID:-}"
+  gid="${MJEPA_DIR_OWNER_GID:-}"
+
+  if [[ -z "$uid" ]]; then
+    uid="$(id -u 2>/dev/null)" || return 1
+  fi
+  if [[ -z "$gid" ]]; then
+    gid="$(id -g 2>/dev/null)" || gid="$uid"
+  fi
 
   if mjepa_sudo_exec mkdir -p "$path" && \
      mjepa_sudo_exec chown "$uid:$gid" "$path"; then
-    mjepa_sudo_exec chmod 0775 "$path" || true
-    if [[ -w "$path" ]]; then
+    mjepa_sudo_exec chmod "${MJEPA_DIR_MODE}" "$path" || true
+    if mjepa_dir_is_effectively_writable "$path"; then
       mjepa_log_warn "regained write access to $label via ${MJEPA_SUDO_BIN}"
       return 0
     fi
