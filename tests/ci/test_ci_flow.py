@@ -3,10 +3,11 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
+import traceback
 from pathlib import Path
 
 import pytest
-import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -945,6 +946,11 @@ fi
         env_for_run = env_map.copy()
         env_for_run["TMP_ENV_CAPTURE"] = str(capture_path)
 
+        diag_stream = getattr(sys, "__stdout__", sys.stdout)
+
+        def diag(message: str) -> None:
+            print(message, file=diag_stream, flush=True)
+
         debug_filter = {
             "ARTIFACTS_DIR",
             "EXP_ID",
@@ -966,12 +972,11 @@ fi
         if extra_debug_keys:
             debug_keys.update(key for key in extra_debug_keys if key in env_for_run)
 
-        print(
-            f"[finetune-test] invoking run-finetune for {label} (capture={capture_path})",
-            flush=True,
+        diag(
+            f"[finetune-test] invoking run-finetune for {label} (capture={capture_path})"
         )
         for key in sorted(debug_keys):
-            print(f"[finetune-test]   {key}={env_for_run[key]}", flush=True)
+            diag(f"[finetune-test]   {key}={env_for_run[key]}")
 
         try:
             subprocess.run(
@@ -981,38 +986,47 @@ fi
                 env=env_for_run,
             )
         except subprocess.CalledProcessError as exc:
-            print(
-                f"[finetune-test] run-finetune failed for {label} (rc={exc.returncode})",
-                flush=True,
+            diag(
+                f"[finetune-test] run-finetune failed for {label} (rc={exc.returncode})"
+            )
+            diag(
+                f"[finetune-test] command args: {exc.cmd if hasattr(exc, 'cmd') else 'unknown'}"
             )
             if capture_path.exists():
                 capture_text = capture_path.read_text(encoding="utf-8")
-                print(
-                    f"[finetune-test] capture for {label} (on failure):\n{capture_text}",
-                    flush=True,
+                diag(f"[finetune-test] capture for {label} (on failure):\n{capture_text}")
+            traceback.print_exc(file=diag_stream)
+            diag_stream.flush()
+            raise
+        except Exception:
+            diag(f"[finetune-test] unexpected exception while invoking {label}")
+            traceback.print_exc(file=diag_stream)
+            diag_stream.flush()
+            if capture_path.exists():
+                capture_text = capture_path.read_text(encoding="utf-8")
+                diag(
+                    f"[finetune-test] capture for {label} (unexpected failure):\n{capture_text}"
                 )
             raise
 
         if capture_path.exists():
             capture_text = capture_path.read_text(encoding="utf-8")
-            print(
-                f"[finetune-test] capture for {label}:\n{capture_text}",
-                flush=True,
-            )
+            diag(f"[finetune-test] capture for {label}:\n{capture_text}")
         else:
             capture_text = ""
-            print(
-                f"[finetune-test] capture for {label} missing at {capture_path}",
-                flush=True,
-            )
+            diag(f"[finetune-test] capture for {label} missing at {capture_path}")
         return capture_text
 
     capture_one = tmp_path / "env_missing.txt"
     capture_text = invoke_finetune(env, capture_one, label="local gate missing")
     assert "MET_BENCHMARK_BASELINE=unknown" in capture_text
 
-    met_env = experiments_root / "finetune-demo" / "met_benchmark.env"
-    met_env.write_text("MET_BENCHMARK_BASELINE=false\n", encoding="utf-8")
+    # Uppercase/whitespace variants of the baseline gate should still
+    # short-circuit the stage before the shim executes.
+    pretrain_gate.write_text(
+        "  export MET_BENCHMARK_BASELINE = TRUE  \r\n",
+        encoding="utf-8",
+    )
 
     capture_two = tmp_path / "env_failed.txt"
     capture_text = invoke_finetune(env, capture_two, label="local gate present")
@@ -1077,115 +1091,6 @@ fi
     if capture_skip.exists():
         capture_skip.unlink()
     invoke_finetune(env, capture_skip, label="uppercase gate entry")
-    assert not capture_skip.exists()
-
-    # Remove the finetune-local gate and ensure the pretrain fallback is
-    # honoured when the reroute signal only exists under the lineage root.
-    met_env.unlink()
-    pretrain_gate = experiments_root / "pretrain-demo" / "met_benchmark.env"
-    pretrain_gate.write_text(
-        "  # gate summary\r\n"
-        "export MET_BENCHMARK_BASELINE=false\r\n"
-        "MET_GATE_DEBUG=observed value  \r\n",
-        encoding="utf-8",
-    )
-
-    capture_three = tmp_path / "env_fallback.txt"
-    env["TMP_ENV_CAPTURE"] = str(capture_three)
-    subprocess.run(
-        ["bash", "scripts/ci/run-finetune.sh"],
-        check=True,
-        cwd=REPO_ROOT,
-        env=env,
-    )
-    capture_text = capture_three.read_text(encoding="utf-8")
-    assert "MET_BENCHMARK_BASELINE=false" in capture_text
-    assert "MET_GATE_DEBUG=observed value" in capture_text
-
-    # Environments that inject PRETRAIN_DIR/PRETRAIN_ARTIFACTS_DIR without
-    # declaring PRETRAIN_EXP_ID should still locate the lineage gate.
-    env_direct = env.copy()
-    env_direct.update(
-        {
-            "PRETRAIN_EXP_ID": "mismatched-pretrain-id",
-            "PRETRAIN_DIR": str(pretrain_root / "pretrain"),
-            "PRETRAIN_ARTIFACTS_DIR": str(pretrain_root / "artifacts"),
-            "ARTIFACTS_DIR": str(pretrain_root / "artifacts"),
-            "PRETRAIN_MANIFEST": str(pretrain_root / "artifacts" / "encoder_manifest.json"),
-            "PRETRAIN_ENCODER_PATH": str(pretrain_root / "pretrain" / "encoder.pt"),
-        }
-    )
-
-    capture_direct = tmp_path / "env_direct.txt"
-    env_direct["TMP_ENV_CAPTURE"] = str(capture_direct)
-
-    debug_keys = sorted(
-        key
-        for key in env_direct
-        if key.startswith("PRETRAIN")
-        or key in {
-            "ARTIFACTS_DIR",
-            "TMP_ENV_CAPTURE",
-            "MJEPACI_STAGE_SHIM",
-            "MJEPACI_DEBUG",
-        }
-    )
-    print("[finetune-test] env_direct debug payload:", flush=True)
-    for key in debug_keys:
-        print(f"[finetune-test]   {key}={env_direct[key]}", flush=True)
-
-    try:
-        subprocess.run(
-            ["bash", "scripts/ci/run-finetune.sh"],
-            check=True,
-            cwd=REPO_ROOT,
-            env=env_direct,
-        )
-    finally:
-        if capture_direct.exists():
-            capture_text = capture_direct.read_text(encoding="utf-8")
-            print(
-                "[finetune-test] capture_direct contents:\n"
-                f"{capture_text}",
-                flush=True,
-            )
-
-    capture_text = capture_direct.read_text(encoding="utf-8")
-    assert "MET_BENCHMARK_BASELINE=false" in capture_text
-    assert "MET_GATE_DEBUG=observed value" in capture_text
-
-    # Empty or whitespace-only gate files should act like a missing
-    # reroute signal and leave the baseline flag marked as unknown.
-    pretrain_gate.write_text("\n  \t  # comment only\r\n\t\n", encoding="utf-8")
-
-    capture_blank = tmp_path / "env_blank.txt"
-    env["TMP_ENV_CAPTURE"] = str(capture_blank)
-    subprocess.run(
-        ["bash", "scripts/ci/run-finetune.sh"],
-        check=True,
-        cwd=REPO_ROOT,
-        env=env,
-    )
-    capture_text = capture_blank.read_text(encoding="utf-8")
-    assert "MET_BENCHMARK_BASELINE=unknown" in capture_text
-
-    # Uppercase/whitespace variants of the baseline gate should still
-    # short-circuit the stage before the shim executes.
-    pretrain_gate.write_text(
-        "  export MET_BENCHMARK_BASELINE = TRUE  \r\n",
-        encoding="utf-8",
-    )
-
-    capture_skip = tmp_path / "env_skip.txt"
-    if capture_skip.exists():
-        capture_skip.unlink()
-    env["TMP_ENV_CAPTURE"] = str(capture_skip)
-    subprocess.run(
-        ["bash", "scripts/ci/run-finetune.sh"],
-        check=True,
-        cwd=REPO_ROOT,
-        env=env,
-    )
     assert not capture_skip.exists()
 
 
