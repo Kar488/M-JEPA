@@ -112,14 +112,22 @@ mjepa_require_primary_path() {
 : "${MJEPA_SUDO_BIN:=sudo}"
 : "${MJEPA_SUDO_ALLOW_TTY_WRAPPER:=1}"
 : "${MJEPA_FSOP_TIMEOUT:=20}"
+: "${MJEPA_FSOP_KILL_AFTER:=5}"
 
 mjepa_run_with_timeout() {
   local duration="${MJEPA_FSOP_TIMEOUT:-0}"
+  local kill_after="${MJEPA_FSOP_KILL_AFTER:-0}"
   local timeout_bin
+  local cmd_desc="$*"
   timeout_bin="$(command -v timeout 2>/dev/null || true)"
 
   if [[ -n "$timeout_bin" && "$duration" =~ ^[0-9]+$ && "$duration" -gt 0 ]]; then
-    "$timeout_bin" --preserve-status "$duration" "$@"
+    local -a timeout_args=("--preserve-status")
+    if [[ "$kill_after" =~ ^[0-9]+$ && "$kill_after" -gt 0 ]]; then
+      timeout_args+=("-k" "$kill_after")
+    fi
+    timeout_args+=("$duration" "$@")
+    "$timeout_bin" "${timeout_args[@]}"
     return
   fi
 
@@ -128,10 +136,34 @@ mjepa_run_with_timeout() {
       "$@"
     ) &
     local cmd_pid=$!
+    local kill_delay=0
+    local have_kill_delay=0
+    if [[ "$kill_after" =~ ^[0-9]+$ && "$kill_after" -gt 0 ]]; then
+      kill_delay="$kill_after"
+      have_kill_delay=1
+    fi
     (
-      sleep "$duration" &&
-        kill -0 "$cmd_pid" 2>/dev/null &&
-        kill "$cmd_pid" 2>/dev/null || true
+      sleep "$duration" || exit 0
+      if ! kill -0 "$cmd_pid" 2>/dev/null; then
+        exit 0
+      fi
+      if [[ -n "$cmd_desc" ]]; then
+        mjepa_log_warn "command timed out after ${duration}s: $cmd_desc"
+      else
+        mjepa_log_warn "command timed out after ${duration}s"
+      fi
+      kill "$cmd_pid" 2>/dev/null || true
+      if (( have_kill_delay )); then
+        sleep "$kill_delay" || exit 0
+        if kill -0 "$cmd_pid" 2>/dev/null; then
+          if [[ -n "$cmd_desc" ]]; then
+            mjepa_log_warn "command still running; sending SIGKILL: $cmd_desc"
+          else
+            mjepa_log_warn "command still running; sending SIGKILL"
+          fi
+          kill -9 "$cmd_pid" 2>/dev/null || true
+        fi
+      fi
     ) &
     local timer_pid=$!
     local status=0
@@ -154,7 +186,6 @@ mjepa_sudo_exec() {
   fi
 
   if mjepa_run_with_timeout "$sudo_bin" -n "$@" >/dev/null 2>&1; then
-    echo "c"
     return 0
   fi
 
@@ -166,12 +197,10 @@ mjepa_sudo_exec() {
     fi
 
     if mjepa_run_with_timeout "$tty_wrapper" -q /dev/null -c "$sudo_bin -n${quoted}" >/dev/null 2>&1; then
-      echo "e"
       return 0
     fi
 
     if mjepa_run_with_timeout "$tty_wrapper" -q /dev/null "$sudo_bin" -n "$@" >/dev/null 2>&1; then
-      echo "f"
       return 0
     fi
   fi
