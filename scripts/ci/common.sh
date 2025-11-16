@@ -25,6 +25,26 @@ normalize_bool() {
 : "${RUN_ID:=$(date +%s)}"
 : "${MJEPA_DIR_OWNER_UID:=}"
 : "${MJEPA_DIR_OWNER_GID:=}"
+
+if [[ -z "${MJEPA_DIR_OWNER_UID:-}" ]]; then
+  if [[ -n "${SUDO_UID:-}" ]]; then
+    MJEPA_DIR_OWNER_UID="$SUDO_UID"
+  elif [[ -n "${SUDO_USER:-}" ]]; then
+    if derived_uid=$(id -u "$SUDO_USER" 2>/dev/null); then
+      MJEPA_DIR_OWNER_UID="$derived_uid"
+    fi
+  fi
+fi
+
+if [[ -z "${MJEPA_DIR_OWNER_GID:-}" ]]; then
+  if [[ -n "${SUDO_GID:-}" ]]; then
+    MJEPA_DIR_OWNER_GID="$SUDO_GID"
+  elif [[ -n "${SUDO_USER:-}" ]]; then
+    if derived_gid=$(id -g "$SUDO_USER" 2>/dev/null); then
+      MJEPA_DIR_OWNER_GID="$derived_gid"
+    fi
+  fi
+fi
 : "${MJEPA_DIR_MODE:=0775}"
 FORCE_UNFREEZE_GRID="$(normalize_bool "${FORCE_UNFREEZE_GRID:-}" 0)"
 CI_FORCE_UNFREEZE_GRID="$(normalize_bool "${CI_FORCE_UNFREEZE_GRID:-}" "${FORCE_UNFREEZE_GRID}")"
@@ -111,6 +131,70 @@ mjepa_require_primary_path() {
 
 : "${MJEPA_SUDO_BIN:=sudo}"
 : "${MJEPA_SUDO_ALLOW_TTY_WRAPPER:=1}"
+: "${MJEPA_FSOP_TIMEOUT:=20}"
+: "${MJEPA_FSOP_KILL_AFTER:=5}"
+
+mjepa_run_with_timeout() {
+  local duration="${MJEPA_FSOP_TIMEOUT:-0}"
+  local kill_after="${MJEPA_FSOP_KILL_AFTER:-0}"
+  local timeout_bin
+  local cmd_desc="$*"
+  timeout_bin="$(command -v timeout 2>/dev/null || true)"
+
+  if [[ -n "$timeout_bin" && "$duration" =~ ^[0-9]+$ && "$duration" -gt 0 ]]; then
+    local -a timeout_args=("--preserve-status")
+    if [[ "$kill_after" =~ ^[0-9]+$ && "$kill_after" -gt 0 ]]; then
+      timeout_args+=("-k" "$kill_after")
+    fi
+    timeout_args+=("$duration" "$@")
+    "$timeout_bin" "${timeout_args[@]}"
+    return
+  fi
+
+  if [[ "$duration" =~ ^[0-9]+$ && "$duration" -gt 0 ]]; then
+    (
+      "$@"
+    ) &
+    local cmd_pid=$!
+    local kill_delay=0
+    local have_kill_delay=0
+    if [[ "$kill_after" =~ ^[0-9]+$ && "$kill_after" -gt 0 ]]; then
+      kill_delay="$kill_after"
+      have_kill_delay=1
+    fi
+    (
+      sleep "$duration" || exit 0
+      if ! kill -0 "$cmd_pid" 2>/dev/null; then
+        exit 0
+      fi
+      if [[ -n "$cmd_desc" ]]; then
+        mjepa_log_warn "command timed out after ${duration}s: $cmd_desc"
+      else
+        mjepa_log_warn "command timed out after ${duration}s"
+      fi
+      kill "$cmd_pid" 2>/dev/null || true
+      if (( have_kill_delay )); then
+        sleep "$kill_delay" || exit 0
+        if kill -0 "$cmd_pid" 2>/dev/null; then
+          if [[ -n "$cmd_desc" ]]; then
+            mjepa_log_warn "command still running; sending SIGKILL: $cmd_desc"
+          else
+            mjepa_log_warn "command still running; sending SIGKILL"
+          fi
+          kill -9 "$cmd_pid" 2>/dev/null || true
+        fi
+      fi
+    ) &
+    local timer_pid=$!
+    local status=0
+    wait "$cmd_pid" || status=$?
+    kill "$timer_pid" 2>/dev/null || true
+    wait "$timer_pid" 2>/dev/null || true
+    return "$status"
+  fi
+
+  "$@"
+}
 
 mjepa_sudo_exec() {
   local sudo_bin="${MJEPA_SUDO_BIN:-}" tty_wrapper="${MJEPA_SUDO_TTY_WRAPPER:-script}" allow_tty="${MJEPA_SUDO_ALLOW_TTY_WRAPPER:-1}"
@@ -119,7 +203,7 @@ mjepa_sudo_exec() {
     return 1
   fi
 
-  if "$sudo_bin" -n "$@" >/dev/null 2>&1; then
+  if mjepa_run_with_timeout "$sudo_bin" -n "$@" >/dev/null 2>&1; then
     return 0
   fi
 
@@ -129,11 +213,11 @@ mjepa_sudo_exec() {
       printf -v quoted ' %q' "$@"
     fi
 
-    if "$tty_wrapper" -q /dev/null -c "$sudo_bin -n${quoted}" >/dev/null 2>&1; then
+    if mjepa_run_with_timeout "$tty_wrapper" -q /dev/null -c "$sudo_bin -n${quoted}" >/dev/null 2>&1; then
       return 0
     fi
 
-    if "$tty_wrapper" -q /dev/null "$sudo_bin" -n "$@" >/dev/null 2>&1; then
+    if mjepa_run_with_timeout "$tty_wrapper" -q /dev/null "$sudo_bin" -n "$@" >/dev/null 2>&1; then
       return 0
     fi
   fi
@@ -249,7 +333,8 @@ mjepa_reconcile_dir_owner() {
         fi
       fi
       echo "8.17"
-      if chown "$chown_target" "$path" 2>/dev/null || mjepa_sudo_exec chown "$chown_target" "$path"; then
+      if mjepa_run_with_timeout chown "$chown_target" "$path" 2>/dev/null ||
+         mjepa_sudo_exec chown "$chown_target" "$path"; then
         :
       else
         echo "8.18"
@@ -260,8 +345,27 @@ mjepa_reconcile_dir_owner() {
 
   if [[ -n "$desired_mode" ]]; then
     echo "8.19"
-    if chmod "$desired_mode" "$path" 2>/dev/null || mjepa_sudo_exec chmod "$desired_mode" "$path"; then
-      :
+    local need_chmod=1 current_mode="" desired_fmt="" current_fmt=""
+    if current_mode=$(stat -Lc '%a' "$path" 2>/dev/null); then
+      if [[ "$desired_mode" =~ ^0?[0-7]{3,4}$ && "$current_mode" =~ ^[0-7]{3,4}$ ]]; then
+        printf -v desired_fmt '%04o' "$((8#$desired_mode))"
+        printf -v current_fmt '%04o' "$((8#$current_mode))"
+      else
+        desired_fmt="$desired_mode"
+        current_fmt="$current_mode"
+      fi
+      if [[ "$desired_fmt" == "$current_fmt" ]]; then
+        need_chmod=0
+      fi
+    fi
+
+    if (( need_chmod )); then
+      if mjepa_run_with_timeout chmod "$desired_mode" "$path" 2>/dev/null ||
+         mjepa_sudo_exec chmod "$desired_mode" "$path"; then
+        :
+      else
+        mjepa_log_warn "unable to chmod $label to $desired_mode"
+      fi
     fi
   fi
 
