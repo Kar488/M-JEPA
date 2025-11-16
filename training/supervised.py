@@ -10,13 +10,15 @@ possible. Performance metrics are computed using utilities from
 
 from __future__ import annotations
 
+import csv
 import logging
 import math
 import os
 import random
+import re
 import time as _time
 from types import SimpleNamespace
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 import torch
@@ -29,6 +31,15 @@ from torch.utils.data import DataLoader
 
 from data.mdataset import GraphDataset
 from data.scaffold_split import scaffold_split_indices
+from explain.integrated_gradients import (
+    aggregate_undirected_edge_scores,
+    build_zero_baseline_graph,
+    compute_integrated_gradients,
+    describe_atom_types,
+    describe_bond_types,
+    normalise_attributions,
+    render_molecule_heatmap,
+)
 from models.encoder import GNNEncoder
 from utils.early_stopping import EarlyStopping
 from utils.dataset import SupportsTeardown
@@ -608,6 +619,212 @@ def _pool_batch_embeddings(node_embeddings: torch.Tensor, batch_ptr: torch.Tenso
     graph_emb = graph_emb / denom
     return graph_emb
 
+
+class _IGArtifactLogger:
+    """Manage Integrated Gradients computation and artifact export."""
+
+    def __init__(
+        self,
+        *,
+        dataset: GraphDataset,
+        encoder: nn.Module,
+        head_module: nn.Module,
+        task_type: str,
+        device: torch.device,
+        explain_mode: Optional[str],
+        explain_config: Optional[Dict[str, Any]],
+        stage_config: Optional[Dict[str, Any]],
+    ) -> None:
+        mode = (explain_mode or "").strip().lower()
+        self.enabled = mode == "ig"
+        if not self.enabled:
+            return
+
+        self.dataset = dataset
+        self.encoder = encoder
+        self.head = head_module
+        self.task_type = task_type
+        self.device = device
+        self._seen: Set[int] = set()
+        self._warned_missing_idx = False
+        self.records: List[Dict[str, Any]] = []
+        self.smiles = getattr(dataset, "smiles", None)
+        config = dict(explain_config or {})
+        stage_cfg = dict(stage_config or {})
+
+        try:
+            steps = int(config.get("steps", 50))
+        except Exception:
+            steps = 50
+        self.steps = max(1, steps)
+        self.normalise_mode = str(config.get("normalise", "signed")).strip().lower()
+
+        self.task_name = str(
+            config.get("task_name")
+            or stage_cfg.get("task_name")
+            or stage_cfg.get("task")
+            or "task"
+        )
+
+        base_dir = (
+            config.get("output_dir")
+            or stage_cfg.get("report_dir")
+            or stage_cfg.get("reports_dir")
+            or stage_cfg.get("stage_dir")
+            or os.path.join(os.getcwd(), "reports")
+        )
+        base_dir = os.path.abspath(str(base_dir))
+        self.output_dir = os.path.join(base_dir, "ig_explanations", self.task_name)
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        logger.info("[ig] exporting explanations to %s", self.output_dir)
+
+    def _format_identifier(self, idx: int, smiles: Optional[str]) -> str:
+        base = f"graph_{idx:05d}"
+        if smiles:
+            slug = re.sub(r"[^0-9A-Za-z]+", "_", smiles).strip("_")
+            if slug:
+                slug = slug[:48]
+                return f"{base}_{slug}"
+        return base
+
+    def _direction(self, value: float) -> str:
+        if value > 0:
+            return "positive"
+        if value < 0:
+            return "negative"
+        return "neutral"
+
+    def _model_callable(self) -> Callable[[SimpleNamespace], torch.Tensor]:
+        encoder = self.encoder
+        head = self.head
+        task_type = self.task_type
+
+        def _forward(graph_obj: SimpleNamespace) -> torch.Tensor:
+            node_embeddings = _encode_graph(encoder, graph_obj)
+            ptr = getattr(graph_obj, "graph_ptr", None)
+            if ptr is None:
+                num_nodes = int(graph_obj.x.shape[0])
+                ptr = torch.tensor([0, num_nodes], dtype=torch.long, device=self.device)
+            graph_emb = _pool_batch_embeddings(node_embeddings, ptr)
+            output = head(graph_emb)
+            if task_type == "classification":
+                output = _ensure_binary_classification_logits(output)
+            else:
+                output = output.squeeze(-1)
+            return output.reshape(-1)[0]
+
+        return _forward
+
+    def _write_csv(self, path: str, rows: List[Dict[str, Any]]) -> None:
+        with open(path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["id", "type", "ig_score", "direction"])
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+
+    def _compute_for_index(self, idx: int) -> None:
+        if idx in self._seen:
+            return
+        try:
+            graph = self.dataset.graphs[idx]
+        except Exception:
+            logger.warning("[ig] failed to load graph %d", idx, exc_info=True)
+            return
+
+        baseline = build_zero_baseline_graph(graph)
+        model_fn = self._model_callable()
+
+        try:
+            with torch.enable_grad():
+                node_scores, edge_scores = compute_integrated_gradients(
+                    model_fn,
+                    graph,
+                    baseline_graph=baseline,
+                    m_steps=self.steps,
+                    device=self.device,
+                )
+        except Exception:
+            logger.warning("[ig] attribution failed for graph %d", idx, exc_info=True)
+            return
+
+        self._seen.add(idx)
+        smiles = self.smiles[idx] if self.smiles and idx < len(self.smiles) else None
+        molecule_id = self._format_identifier(idx, smiles)
+
+        node_rows = [
+            {
+                "id": f"{idx}_{node_idx}",
+                "type": atom_type,
+                "ig_score": float(score),
+                "direction": self._direction(float(score)),
+            }
+            for node_idx, (atom_type, score) in enumerate(
+                zip(describe_atom_types(smiles, len(node_scores)), node_scores)
+            )
+        ]
+
+        undirected = aggregate_undirected_edge_scores(getattr(graph, "edge_index", None), edge_scores)
+        bond_pairs = list(undirected.keys())
+        bond_types = describe_bond_types(smiles, bond_pairs)
+        bond_rows = [
+            {
+                "id": f"{i}-{j}",
+                "type": bond_types.get((i, j), f"bond_{i}_{j}"),
+                "ig_score": float(score),
+                "direction": self._direction(float(score)),
+            }
+            for (i, j), score in undirected.items()
+        ]
+
+        atom_csv = os.path.join(self.output_dir, f"{molecule_id}_atoms.csv")
+        bond_csv = os.path.join(self.output_dir, f"{molecule_id}_bonds.csv")
+        heatmap_png = os.path.join(self.output_dir, f"{molecule_id}_heatmap.png")
+
+        self._write_csv(atom_csv, node_rows)
+        self._write_csv(bond_csv, bond_rows)
+
+        atom_norm = normalise_attributions(node_scores, mode=self.normalise_mode)
+        bond_norm: Dict[Tuple[int, int], float] = {}
+        if bond_pairs:
+            bond_norm_values = normalise_attributions(
+                [undirected[pair] for pair in bond_pairs], mode=self.normalise_mode
+            )
+            for pair, value in zip(bond_pairs, bond_norm_values):
+                bond_norm[pair] = float(value)
+
+        render_molecule_heatmap(smiles, atom_norm, bond_norm, heatmap_png)
+
+        self.records.append(
+            {
+                "graph_index": idx,
+                "molecule_id": molecule_id,
+                "atom_csv": atom_csv,
+                "bond_csv": bond_csv,
+                "heatmap_png": heatmap_png,
+            }
+        )
+
+    def process_batch(self, batch_meta: object) -> None:
+        if not self.enabled:
+            return
+        indices = _extract_batch_indices(batch_meta)
+        if not indices:
+            if not self._warned_missing_idx:
+                logger.warning(
+                    "[ig] batch metadata missing dataset indices; skipping explanation export."
+                )
+                self._warned_missing_idx = True
+            return
+        for idx in indices:
+            self._compute_for_index(idx)
+
+    def finalize(self, metrics: Dict[str, Any]) -> None:
+        if not self.enabled or not self.records:
+            return
+        metrics["ig_artifact_root"] = self.output_dir
+        metrics["ig_artifacts"] = [dict(entry) for entry in self.records]
+
 def stratified_split(
     indices: List[int], labels: np.ndarray, train_frac: float, val_frac: float
 ) -> Tuple[List[int], List[int], List[int]]:
@@ -725,6 +942,8 @@ def _train_linear_head_impl(
     stage_config: Optional[Dict[str, Any]] = None,
     pos_weight: Optional[Any] = None,
     class_weight: Optional[Any] = None,
+    explain_mode: Optional[str] = None,
+    explain_config: Optional[Dict[str, Any]] = None,
     **unused,
 ) -> Dict[str, Any]:
     """Train a linear head on a frozen encoder for classification or regression.
@@ -1922,6 +2141,22 @@ def _train_linear_head_impl(
                 )
                 break
 
+    base_encoder_for_ig = (
+        encoder.module if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder
+    )
+    ig_logger: Optional[_IGArtifactLogger] = None
+    if (explain_mode or "").strip().lower() == "ig" and (is_main_process() or not distributed):
+        ig_logger = _IGArtifactLogger(
+            dataset=dataset,
+            encoder=base_encoder_for_ig,
+            head_module=head_module,
+            task_type=task_type,
+            device=device_t,
+            explain_mode=explain_mode,
+            explain_config=explain_config,
+            stage_config=stage_config_local,
+        )
+
     metrics: Dict[str, Any] = {"head": head_param_source}
     if is_main_process() or not distributed:
         encoder.eval()
@@ -1962,6 +2197,8 @@ def _train_linear_head_impl(
 
                 all_preds.append(preds.detach().to(torch.float32).cpu().numpy())
                 all_targets.append(targets.detach().to(torch.float32).cpu().numpy())
+                if ig_logger is not None:
+                    ig_logger.process_batch(batch_meta)
 
         if all_targets and all_preds:
             y_true = np.concatenate(all_targets)
@@ -1983,6 +2220,8 @@ def _train_linear_head_impl(
         metrics["train/batches"] = float(total_batches_done)
         metrics["train/loader_batches"] = float(planned_train_batches)
         metrics["train/epoch_batches"] = float(last_epoch_batches)
+        if ig_logger is not None:
+            ig_logger.finalize(metrics)
 
     if _effective_budget_secs is not None:
         metrics.setdefault("time/budget_secs", float(_effective_budget_secs))
@@ -2044,6 +2283,8 @@ def train_linear_head(
     stage_config: Optional[Dict[str, Any]] = None,
     pos_weight: Optional[Any] = None,
     class_weight: Optional[Any] = None,
+    explain_mode: Optional[str] = None,
+    explain_config: Optional[Dict[str, Any]] = None,
     **unused,
 ) -> Dict[str, Any]:
     """Train a linear head and retry with gloo when NCCL detects duplicates."""
@@ -2088,6 +2329,8 @@ def train_linear_head(
             stage_config=stage_config,
             pos_weight=pos_weight,
             class_weight=class_weight,
+            explain_mode=explain_mode,
+            explain_config=explain_config,
             **unused,
         )
     except Exception as exc:

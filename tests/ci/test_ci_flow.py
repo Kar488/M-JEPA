@@ -61,6 +61,8 @@ if __name__ == "__main__":
 
 def test_pretrain_tox21_dry_run(tmp_path):
     experiments_root = tmp_path / "experiments"
+    dataset_csv = tmp_path / "toy_dataset.csv"
+    dataset_csv.write_text("smiles\nC1=CC=CC=C1\n", encoding="utf-8")
     shim_path = tmp_path / "stage_shim.sh"
     shim_path.write_text("""#!/usr/bin/env bash
 set -euo pipefail
@@ -96,10 +98,18 @@ esac
             "MJEPACI_STAGE_SHIM": str(shim_path),
             "GITHUB_ENV": str(tmp_path / "github_env"),
             "WANDB_API_KEY": "",
+            "DATASET_DIR": str(dataset_csv),
         }
     )
 
     _run(["bash", "scripts/ci/run-pretrain.sh"], env)
+
+    graphs_dir = experiments_root / "1759795103" / "graphs"
+    summary_path = graphs_dir / "summary.json"
+    assert graphs_dir.is_dir(), graphs_dir
+    assert summary_path.is_file(), summary_path
+    assert list(graphs_dir.rglob("*.html")), "expected HTML graph visuals"
+    assert list(graphs_dir.rglob("*.png")), "expected PNG graph visuals"
 
     manifest_path = experiments_root / "1759795103" / "artifacts" / "encoder_manifest.json"
     missing_path = manifest_path.parent / "missing_encoder.pt"
