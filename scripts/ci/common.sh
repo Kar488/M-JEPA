@@ -293,9 +293,27 @@ mjepa_reconcile_dir_owner() {
 
   if [[ -n "$desired_mode" ]]; then
     echo "8.19"
-    if mjepa_run_with_timeout chmod "$desired_mode" "$path" 2>/dev/null ||
-       mjepa_sudo_exec chmod "$desired_mode" "$path"; then
-      :
+    local need_chmod=1 current_mode="" desired_fmt="" current_fmt=""
+    if current_mode=$(stat -Lc '%a' "$path" 2>/dev/null); then
+      if [[ "$desired_mode" =~ ^0?[0-7]{3,4}$ && "$current_mode" =~ ^[0-7]{3,4}$ ]]; then
+        printf -v desired_fmt '%04o' "$((8#$desired_mode))"
+        printf -v current_fmt '%04o' "$((8#$current_mode))"
+      else
+        desired_fmt="$desired_mode"
+        current_fmt="$current_mode"
+      fi
+      if [[ "$desired_fmt" == "$current_fmt" ]]; then
+        need_chmod=0
+      fi
+    fi
+
+    if (( need_chmod )); then
+      if mjepa_run_with_timeout chmod "$desired_mode" "$path" 2>/dev/null ||
+         mjepa_sudo_exec chmod "$desired_mode" "$path"; then
+        :
+      else
+        mjepa_log_warn "unable to chmod $label to $desired_mode"
+      fi
     fi
   fi
 
