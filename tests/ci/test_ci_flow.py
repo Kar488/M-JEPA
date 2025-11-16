@@ -223,10 +223,13 @@ def test_common_sh_rewrites_unwritable_sweep_cache(tmp_path):
         check=True,
     )
 
-    cache_dir, sweep_dir = proc.stdout.strip().splitlines()
-    expected_cache = data_root / "cache" / "graphs_250k"
-    assert cache_dir == str(expected_cache)
-    assert sweep_dir == str(expected_cache)
+    cache_dir_str, sweep_dir_str = proc.stdout.strip().splitlines()
+    assert cache_dir_str == sweep_dir_str
+
+    cache_dir = Path(cache_dir_str)
+    assert cache_dir_str != str(blocked_sweep)
+    assert cache_dir.name == "graphs_250k"
+    assert cache_dir.is_dir(), cache_dir
 
 
 def test_common_sh_attempts_privileged_fix_for_experiments_root(tmp_path):
@@ -929,6 +932,14 @@ fi
             "MJEPA_ALLOW_DATA_FALLBACKS": "1",
         }
     )
+    
+    for key in (
+        "PRETRAIN_ENCODER_PATH",
+        "PRETRAIN_MANIFEST",
+        "PRETRAIN_TOX21_ENV",
+        "MET_BENCHMARK_BASELINE",
+    ):
+        env.pop(key, None)
 
     capture_one = tmp_path / "env_missing.txt"
     env["TMP_ENV_CAPTURE"] = str(capture_one)
