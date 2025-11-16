@@ -264,8 +264,23 @@ jobs:
     runs-on: self-hosted
     needs: vast_deploy
     env:
+      # Preparing the environment must touch /data/mjepa so later stages inherit
+      # the same mounts and permissions. Fail fast instead of redirecting to a
+      # temporary path so we fix the real storage issue immediately.
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
+      - name: Ensure experiments root is writable
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${EXPERIMENTS_ROOT%/}"
+          parent="$(dirname "$target")"
+          if [[ -n "$parent" && "$parent" != "." ]]; then
+            sudo install -d -m 0775 "$parent"
+          fi
+          sudo install -d -m 2775 "$target"
+          sudo chown "$(id -u):$(id -g)" "$target"
+          sudo chmod 2775 "$target"
       - name: Run prepare_env locally
         shell: bash
         run: |
