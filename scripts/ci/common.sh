@@ -104,6 +104,15 @@ mjepa_sudo_exec() {
   fi
 
   if [[ "$allow_tty" == "1" ]] && [[ -n "$tty_wrapper" ]] && command -v "$tty_wrapper" >/dev/null 2>&1; then
+    local quoted=""
+    if (( $# )); then
+      printf -v quoted ' %q' "$@"
+    fi
+
+    if "$tty_wrapper" -q /dev/null -c "$sudo_bin -n${quoted}" >/dev/null 2>&1; then
+      return 0
+    fi
+
     if "$tty_wrapper" -q /dev/null "$sudo_bin" -n "$@" >/dev/null 2>&1; then
       return 0
     fi

@@ -160,12 +160,12 @@ jobs:
             print('cuda available:', torch.cuda.is_available())
             PY
 
-  vast_deploy_and_prepare_environment:
+  vast_deploy:
     if: >
       ${{
         (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
       }}
-    name: Deploy + Prepare environment
+    name: Deploy repository to Vast host
     runs-on: ubuntu-latest
     needs: vast_smoke
     steps:
@@ -263,22 +263,21 @@ jobs:
           
             # Fetch and checkout all LFS objects for this branch
             git -C "$APP_DIR" lfs pull origin "$BRANCH"
-      - name: Setup micromamba environment
-        uses: appleboy/ssh-action@v1
-        timeout-minutes: 30        # connection timeout
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          request_pty: true
-          command_timeout: 30m # allow remote script to run for 30 minutes
-          envs: APP_DIR,MAMBA_ROOT_PREFIX,PIP_CACHE_DIR,WANDB_DIR,CACHE_DIR,EXP_ROOT,RUN_ID
-          script: |
-            set -e
-            cd "$APP_DIR"
-            bash scripts/ci/prepare_env.sh
+  vast_prepare_environment:
+    if: >
+      ${{
+        (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')
+      }}
+    name: Prepare environment on Vast runner
+    runs-on: self-hosted
+    needs: vast_deploy
+    steps:
+      - name: Run prepare_env locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/prepare_env.sh
 
   vast_cache_warm_2d:
     if: >
@@ -288,7 +287,7 @@ jobs:
     name: Warm dataset cache (2D)
     runs-on: self-hosted
     timeout-minutes: 480
-    needs: [tests_quick, vast_deploy_and_prepare_environment]
+    needs: [tests_quick, vast_prepare_environment]
     steps:
       - name: Materialise 2D caches locally
         shell: bash
@@ -373,7 +372,7 @@ jobs:
     name: Learn hyperparameters (Custom or WandB)
     runs-on: self-hosted #ubuntu-latest
     #timeout-minutes: 740
-    needs: [tests_quick,vast_deploy_and_prepare_environment,vast_cache_warm_2d,vast_cache_warm_3d]
+    needs: [tests_quick,vast_prepare_environment,vast_cache_warm_2d,vast_cache_warm_3d]
     outputs:
       grid_exp_id: ${{ steps.phase1_ids.outputs.grid_exp_id }}
       pretrain_exp_id: ${{ steps.phase1_ids.outputs.pretrain_exp_id }}
