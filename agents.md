@@ -112,6 +112,12 @@ stream metrics to Weights & Biases. ``scripts/ci/run-tox21.sh`` grades frozen
 encoders and stamps ``bench/encoder_frozen.ok`` when the lineage is immutable.
 See ``docs/pipeline_overview.rst`` for the complete flow.
 
+The ``ci-vast`` workflow explicitly separates deployment from environment
+bootstrap so permission issues surface immediately. ``vast_deploy`` runs on a
+GitHub-hosted runner and syncs the repository plus micromamba into ``$APP_DIR``
+via SSH, while ``vast_prepare_environment`` runs ``scripts/ci/prepare_env.sh``
+directly on the self-hosted runner before cache warmers or sweeps begin.
+
 Stage Agents & Responsibilities
 -------------------------------
 
