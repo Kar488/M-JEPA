@@ -1021,8 +1021,12 @@ fi
     capture_text = invoke_finetune(env, capture_one, label="local gate missing")
     assert "MET_BENCHMARK_BASELINE=unknown" in capture_text
 
-    met_env = experiments_root / "finetune-demo" / "met_benchmark.env"
-    met_env.write_text("MET_BENCHMARK_BASELINE=false\n", encoding="utf-8")
+    # Uppercase/whitespace variants of the baseline gate should still
+    # short-circuit the stage before the shim executes.
+    pretrain_gate.write_text(
+        "  export MET_BENCHMARK_BASELINE = TRUE  \r\n",
+        encoding="utf-8",
+    )
 
     capture_two = tmp_path / "env_failed.txt"
     capture_text = invoke_finetune(env, capture_two, label="local gate present")
