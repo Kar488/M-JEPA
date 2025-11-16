@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euxo pipefail
+set -euo pipefail
 
 # ----------- inputs & defaults -----------
 : "${APP_DIR:=/srv/mjepa}"
