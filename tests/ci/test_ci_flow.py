@@ -118,7 +118,6 @@ esac
         encoding="utf-8",
     )
     assert not missing_path.exists()
-
     _run(["bash", "scripts/ci/run-tox21.sh"], env)
 
     state_path = experiments_root / "1759795103" / "pretrain_state.json"
@@ -136,6 +135,137 @@ esac
 
     all_paths = {str(p) for p in experiments_root.rglob("*")}
     assert all("18296078427" not in p for p in all_paths)
+
+
+def test_common_sh_falls_back_when_mamba_root_unwritable(tmp_path):
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+
+    data_root = tmp_path / "data"
+    data_root.mkdir(exist_ok=True)
+
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir(exist_ok=True)
+
+    blocked_path = tmp_path / "blocked"
+    blocked_path.write_text("stub", encoding="utf-8")
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir(exist_ok=True)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DATA_ROOT": str(data_root),
+            "RUNNER_TEMP": str(runner_tmp),
+            "HOME": str(fake_home),
+            "MAMBA_ROOT_PREFIX": str(blocked_path),
+        }
+    )
+
+    cmd = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(common_sh))}; "
+        "printf '%s' \"$MAMBA_ROOT_PREFIX\""
+    )
+
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    expected = fake_home / "micromamba"
+    assert proc.stdout.strip() == str(expected)
+
+
+def test_common_sh_rewrites_unwritable_sweep_cache(tmp_path):
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+
+    data_root = tmp_path / "data"
+    data_root.mkdir(exist_ok=True)
+
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir(exist_ok=True)
+
+    blocked_sweep = tmp_path / "blocked_sweep"
+    blocked_sweep.write_text("stub", encoding="utf-8")
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DATA_ROOT": str(data_root),
+            "RUNNER_TEMP": str(runner_tmp),
+            "SWEEP_CACHE_DIR": str(blocked_sweep),
+        }
+    )
+
+    cmd = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(common_sh))}; "
+        "printf '%s\n%s' \"$CACHE_DIR\" \"$SWEEP_CACHE_DIR\""
+    )
+
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    cache_dir, sweep_dir = proc.stdout.strip().splitlines()
+    expected_cache = data_root / "cache" / "graphs_250k"
+    assert cache_dir == str(expected_cache)
+    assert sweep_dir == str(expected_cache)
+
+
+def test_common_sh_attempts_privileged_fix_for_experiments_root(tmp_path):
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+    fake_sudo = REPO_ROOT / "tests" / "ci" / "fake_sudo.sh"
+
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir()
+
+    blocked_parent = tmp_path / "blocked_parent"
+    blocked_parent.mkdir()
+    blocked_parent.chmod(0o555)
+
+    target_root = blocked_parent / "experiments"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "EXPERIMENTS_ROOT": str(target_root),
+            "RUNNER_TEMP": str(runner_tmp),
+            "MJEPA_SUDO_BIN": str(fake_sudo),
+            "MJEPA_FAKE_SUDO_FIX_PATH": str(blocked_parent),
+        }
+    )
+
+    cmd = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(common_sh))}; "
+        "printf '%s\n%s' \"$EXPERIMENTS_ROOT\" \"$DATA_ROOT\""
+    )
+
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    resolved_experiments, resolved_data = proc.stdout.strip().splitlines()
+    assert resolved_experiments == str(target_root)
+    assert resolved_data == str(blocked_parent)
+    assert target_root.is_dir()
+    assert os.access(target_root, os.W_OK)
 
 
 def test_pretrain_materializes_phase2_artifacts(tmp_path):

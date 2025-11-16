@@ -89,12 +89,45 @@ mjepa_log_error() {
   echo "[ci] error: $*" >&2
 }
 
+: "${MJEPA_SUDO_BIN:=sudo}"
+
 mjepa_try_dir() {
-  local path="$1"
+  local path="$1" label="${2:-$1}"
   [[ -n "$path" ]] || return 1
   if mkdir -p "$path" 2>/dev/null && [[ -w "$path" ]]; then
     return 0
   fi
+  if mjepa_privileged_dir_fix "$path" "$label"; then
+    return 0
+  fi
+  return 1
+}
+
+mjepa_privileged_dir_fix() {
+  local path="$1" label="${2:-$1}"
+  local sudo_bin="${MJEPA_SUDO_BIN:-}"
+  [[ -n "$path" ]] || return 1
+  [[ -n "$sudo_bin" ]] || return 1
+  if ! command -v "$sudo_bin" >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! "$sudo_bin" -n true >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local uid gid
+  uid="$(id -u 2>/dev/null)" || return 1
+  gid="$(id -g 2>/dev/null)" || gid="$uid"
+
+  if "$sudo_bin" -n mkdir -p "$path" >/dev/null 2>&1 && \
+     "$sudo_bin" -n chown "$uid:$gid" "$path" >/dev/null 2>&1; then
+    "$sudo_bin" -n chmod 0775 "$path" >/dev/null 2>&1 || true
+    if [[ -w "$path" ]]; then
+      mjepa_log_warn "regained write access to $label via $sudo_bin"
+      return 0
+    fi
+  fi
+
   return 1
 }
 
@@ -221,6 +254,47 @@ fi
 
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
+
+need_mamba_root_fix=0
+if [[ -z "${MAMBA_ROOT_PREFIX:-}" ]]; then
+  need_mamba_root_fix=1
+elif ! mjepa_try_dir "${MAMBA_ROOT_PREFIX}"; then
+  need_mamba_root_fix=1
+fi
+
+if (( need_mamba_root_fix )); then
+  current_prefix="${MAMBA_ROOT_PREFIX:-}"
+  if [[ -n "$current_prefix" ]]; then
+    mjepa_log_warn "MAMBA_ROOT_PREFIX=$current_prefix not writable; attempting fallback"
+  fi
+
+  fallback_home=""
+  if [[ -n "${HOME:-}" ]]; then
+    fallback_home="${HOME%/}/micromamba"
+    if mjepa_try_dir "$fallback_home"; then
+      MAMBA_ROOT_PREFIX="$fallback_home"
+    fi
+  fi
+
+  need_tmp_fallback=0
+  if [[ -z "${MAMBA_ROOT_PREFIX:-}" ]]; then
+    need_tmp_fallback=1
+  elif ! mjepa_try_dir "${MAMBA_ROOT_PREFIX}"; then
+    need_tmp_fallback=1
+  fi
+
+  if (( need_tmp_fallback )); then
+    runner_tmp_root="${RUNNER_TEMP:-/tmp}"
+    fallback_tmp="${runner_tmp_root%/}/mjepa/micromamba"
+    if mjepa_try_dir "$fallback_tmp"; then
+      MAMBA_ROOT_PREFIX="$fallback_tmp"
+    else
+      mjepa_log_error "unable to ensure writable MAMBA_ROOT_PREFIX (tried ${current_prefix:-<unset>}, ${fallback_home:-<unset>}, $fallback_tmp)"
+      exit 1
+    fi
+    unset runner_tmp_root fallback_tmp need_tmp_fallback
+  fi
+fi
 : "${PRETRAIN_STATE_FILE_LEGACY:=${EXPERIMENTS_ROOT}/pretrain_state.json}"
 
 export DATA_ROOT
@@ -917,6 +991,8 @@ ensure_dir_var WANDB_DIR "$default_wandb_root" "${EXP_ID:+experiments/${EXP_ID}/
 if [[ -z "${SWEEP_CACHE_DIR:-}" ]]; then
   SWEEP_CACHE_DIR="$CACHE_DIR"
 fi
+
+ensure_dir_var SWEEP_CACHE_DIR "$CACHE_DIR" "${EXP_ID:+experiments/${EXP_ID}/}cache"
 
 export CACHE_DIR
 export SWEEP_CACHE_DIR
