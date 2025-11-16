@@ -28,6 +28,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+try:
+    from utils import gym_compat
+except Exception:  # pragma: no cover - compatibility helper is optional
+    gym_compat = None
+
 class _StubGraphData:
     def __init__(self, num_nodes: int):
         self._num_nodes = max(int(num_nodes), 0)
@@ -137,6 +142,9 @@ if RDKit_AVAILABLE:  # pragma: no cover - depends on optional rdkit
     _DRAW_COLOR_CLASS = getattr(rdMolDraw2D, "DrawColour", None) or getattr(rdMolDraw2D, "Color", None)
 else:  # pragma: no cover - rdkit unavailable
     _DRAW_COLOR_CLASS = None
+
+if gym_compat is not None:  # pragma: no cover - helper absent when utils unavailable
+    gym_compat.ensure_gymnasium_alias()
 
 try:  # pragma: no cover - optional dependency in CI
     import buildamol
