@@ -966,6 +966,29 @@ fi
     capture_text = capture_two.read_text(encoding="utf-8")
     assert "MET_BENCHMARK_BASELINE=false" in capture_text
 
+    # Remove the finetune-local gate and ensure the pretrain fallback is
+    # honoured when the reroute signal only exists under the lineage root.
+    met_env.unlink()
+    pretrain_gate = experiments_root / "pretrain-demo" / "met_benchmark.env"
+    pretrain_gate.write_text(
+        "  # gate summary\r\n"
+        "export MET_BENCHMARK_BASELINE=false\r\n"
+        "MET_GATE_DEBUG=observed value  \r\n",
+        encoding="utf-8",
+    )
+
+    capture_three = tmp_path / "env_fallback.txt"
+    env["TMP_ENV_CAPTURE"] = str(capture_three)
+    subprocess.run(
+        ["bash", "scripts/ci/run-finetune.sh"],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    capture_text = capture_three.read_text(encoding="utf-8")
+    assert "MET_BENCHMARK_BASELINE=false" in capture_text
+    assert "MET_GATE_DEBUG=observed value" in capture_text
+
 
 def test_run_tox21_exports_full_finetune_when_finetuned(tmp_path):
     experiments_root = tmp_path / "experiments"
