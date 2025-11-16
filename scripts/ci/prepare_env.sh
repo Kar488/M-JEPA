@@ -11,6 +11,48 @@ CI_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${CI_SCRIPT_DIR}/common.sh"
 
+MJEPA_SELF_HOSTED_REASON=""
+is_self_hosted_runner() {
+  local runner_labels="${RUNNER_LABELS:-}"
+  if [[ -n "$runner_labels" ]] && [[ ",${runner_labels}," == *",self-hosted,"* ]]; then
+    MJEPA_SELF_HOSTED_REASON="RUNNER_LABELS=${runner_labels}"
+    return 0
+  fi
+
+  local runner_name="${RUNNER_NAME:-}"
+  if [[ "$runner_name" == self-hosted* ]]; then
+    MJEPA_SELF_HOSTED_REASON="RUNNER_NAME=${runner_name}"
+    return 0
+  fi
+
+  local runner_user="${RUNNER_USER:-}"
+  if [[ "$runner_user" == "github" ]]; then
+    MJEPA_SELF_HOSTED_REASON="RUNNER_USER=${runner_user}"
+    return 0
+  fi
+
+  local current_user
+  current_user="$(id -un 2>/dev/null || true)"
+  if [[ "$current_user" == "github" ]]; then
+    MJEPA_SELF_HOSTED_REASON="whoami=${current_user}"
+    return 0
+  fi
+
+  if [[ -d "/home/github/actions-runner" ]]; then
+    MJEPA_SELF_HOSTED_REASON="runner_root=/home/github/actions-runner"
+    return 0
+  fi
+
+  MJEPA_SELF_HOSTED_REASON=""
+  return 1
+}
+
+MJEPA_IS_SELF_HOSTED_RUNNER=0
+if is_self_hosted_runner; then
+  MJEPA_IS_SELF_HOSTED_RUNNER=1
+  echo "[prepare-env] Detected self-hosted runner context (${MJEPA_SELF_HOSTED_REASON:-heuristic})"
+fi
+
 if [[ -n "${PIP_CACHE_DIR:-}" ]]; then
   if mjepa_try_dir "${PIP_CACHE_DIR}"; then
     export PIP_CACHE_DIR
@@ -111,12 +153,26 @@ micromamba run -n "$ENV_NAME" python -m pip install deepchem==2.8.0
 # If on 24.04, swap 'ubuntu2204' for 'ubuntu2404' in the wget URL.
 if ! nvcc --version | grep -q "release 12.8"; then
   echo "[prepare-env] Installing CUDA Toolkit 12.8..."
-  cuda_tmp_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cuda-keyring.XXXXXX")"
-  cuda_keyring_path="${cuda_tmp_dir}/cuda-keyring_1.1-1_all.deb"
-  curl -fsSL -o "$cuda_keyring_path" \
-    https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-  sudo dpkg -i "$cuda_keyring_path"
-  rm -rf "$cuda_tmp_dir"
+  need_cuda_keyring_install=1
+  if dpkg -s cuda-keyring >/dev/null 2>&1; then
+    need_cuda_keyring_install=0
+    echo "[prepare-env] cuda-keyring already installed; skipping re-install"
+  elif [[ "$MJEPA_IS_SELF_HOSTED_RUNNER" -eq 1 ]]; then
+    need_cuda_keyring_install=0
+    echo "[prepare-env] Skipping cuda-keyring install on self-hosted runner (${MJEPA_SELF_HOSTED_REASON:-unknown})"
+  fi
+
+  if [[ "$need_cuda_keyring_install" -eq 1 ]]; then
+    cuda_tmp_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cuda-keyring.XXXXXX")"
+    cuda_keyring_path="${cuda_tmp_dir}/cuda-keyring_1.1-1_all.deb"
+    curl -fsSL -o "$cuda_keyring_path" \
+      https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+    sudo dpkg -i "$cuda_keyring_path"
+    rm -rf "$cuda_tmp_dir"
+  else
+    echo "[prepare-env] Assuming CUDA apt repository is already configured"
+  fi
+
   sudo apt-get update
   sudo apt-get install -y cuda-toolkit-12-8
   # Add to PATH (persist via ~/.bashrc or eval in script)
