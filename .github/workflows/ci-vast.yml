@@ -273,14 +273,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          sudo_prefix=()
+          if [[ "$(id -u)" -ne 0 ]]; then
+            if command -v sudo >/dev/null 2>&1; then
+              if sudo -n true >/dev/null 2>&1; then
+                sudo_prefix=(sudo -n)
+              else
+                echo "[ci] error: passwordless sudo is required to provision ${EXPERIMENTS_ROOT}" >&2
+                exit 1
+              fi
+            else
+              echo "[ci] error: sudo not available and runner is not root (uid=$(id -u))" >&2
+              exit 1
+            fi
+          fi
+
+          run_privileged() {
+            if [[ ${#sudo_prefix[@]} -gt 0 ]]; then
+              "${sudo_prefix[@]}" "$@"
+            else
+              "$@"
+            fi
+          }
+
           target="${EXPERIMENTS_ROOT%/}"
           parent="$(dirname "$target")"
           if [[ -n "$parent" && "$parent" != "." ]]; then
-            sudo install -d -m 0775 "$parent"
+            run_privileged install -d -m 0775 "$parent"
           fi
-          sudo install -d -m 2775 "$target"
-          sudo chown "$(id -u):$(id -g)" "$target"
-          sudo chmod 2775 "$target"
+          run_privileged install -d -m 2775 "$target"
+          run_privileged chown "$(id -u):$(id -g)" "$target"
+          run_privileged chmod 2775 "$target"
       - name: Run prepare_env locally
         shell: bash
         run: |
