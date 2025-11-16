@@ -64,9 +64,9 @@ fi
 
 EXP_ROOT="${EXPERIMENTS_ROOT%/}/${EXP_ID}"
 ENV_NAME="mjepa"
-: "${PYTORCH_INDEX_URL:=https://download.pytorch.org/whl/cu128}"
+: "${PYTORCH_INDEX_URL:=https://download.pytorch.org/whl/cu129}"
 : "${PYTORCH_PACKAGE_SPEC:=torch==2.8.*}"
-: "${PYTORCH_NIGHTLY_INDEX_URL:=https://download.pytorch.org/whl/nightly/cu128}"
+: "${PYTORCH_NIGHTLY_INDEX_URL:=https://download.pytorch.org/whl/nightly/cu129}"
 : "${PYTORCH_NIGHTLY_PACKAGE_SPEC:=--pre torch}"
 : "${PYTORCH_ALLOW_NIGHTLY_FALLBACK:=1}"
 : "${PYTORCH_FAIL_FAST_ON_BAD_CUDA:=1}"
@@ -148,23 +148,23 @@ fi
 micromamba run -n "$ENV_NAME" python -m pip install -U pip setuptools wheel "numpy<2" ninja cmake
 micromamba run -n "$ENV_NAME" python -m pip install deepchem==2.8.0
 
-# ----------- Install CUDA Toolkit 12.8 (for compiling extensions like PyG) -----------
+# ----------- Install CUDA Toolkit 12.9 (for compiling extensions like PyG) -----------
 # Add this block before the Torch section. Assumes Ubuntu 22.04/Debian-based (from your apt-get usage).
 # If on 24.04, swap 'ubuntu2204' for 'ubuntu2404' in the wget URL.
 need_cuda_install=1
 if command -v nvcc >/dev/null 2>&1; then
-  if nvcc --version | grep -q "release 12.8"; then
+  if nvcc --version | grep -q "release 12.9"; then
     need_cuda_install=0
-    echo "[prepare-env] CUDA Toolkit 12.8 already detected; skipping install"
+    echo "[prepare-env] CUDA Toolkit 12.9 already detected; skipping install"
   else
-    echo "[prepare-env] nvcc present but not CUDA 12.8; reinstalling"
+    echo "[prepare-env] nvcc present but not CUDA 12.9; reinstalling"
   fi
 else
-  echo "[prepare-env] nvcc not found; installing CUDA Toolkit 12.8"
+  echo "[prepare-env] nvcc not found; installing CUDA Toolkit 12.9"
 fi
 
 if [[ "$need_cuda_install" -eq 1 ]]; then
-  echo "[prepare-env] Installing CUDA Toolkit 12.8..."
+  echo "[prepare-env] Installing CUDA Toolkit 12.9..."
   need_cuda_keyring_install=1
   if dpkg -s cuda-keyring >/dev/null 2>&1; then
     need_cuda_keyring_install=0
@@ -186,12 +186,12 @@ if [[ "$need_cuda_install" -eq 1 ]]; then
   fi
 
   sudo apt-get update
-  sudo apt-get install -y cuda-toolkit-12-8
+  sudo apt-get install -y cuda-toolkit-12-9
   # Add to PATH (persist via ~/.bashrc or eval in script)
-  export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}}
-  export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
-  echo 'export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}}' >> ~/.bashrc
-  echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}' >> ~/.bashrc
+  export PATH=/usr/local/cuda-12.9/bin${PATH:+:${PATH}}
+  export LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+  echo 'export PATH=/usr/local/cuda-12.9/bin${PATH:+:${PATH}}' >> ~/.bashrc
+  echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}' >> ~/.bashrc
   # Verify
   nvcc --version
 else
