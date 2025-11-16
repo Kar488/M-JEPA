@@ -232,41 +232,56 @@ mjepa_reconcile_dir_owner() {
 }
 
 mjepa_try_dir() {
+  echo "4"
   local path="$1" label="${2:-$1}"
+  echo "5"
   [[ -n "$path" ]] || return 1
+  echo "6"
   if [[ -e "$path" && ! -d "$path" ]]; then
+    echo "7" 
     return 1
   fi
   if mkdir -p "$path" 2>/dev/null; then
+    echo "8"
     if mjepa_reconcile_dir_owner "$path" "$label"; then
+      echo "9"
       return 0
     fi
   fi
   if mjepa_privileged_dir_fix "$path" "$label"; then
+    echo "10"
     return 0
   fi
   return 1
 }
 
 mjepa_privileged_dir_fix() {
+  echo "11"
   local path="$1" label="${2:-$1}"
+  echo "12"
   [[ -n "$path" ]] || return 1
-
+  echo "13"
   local uid gid
+  echo "14"
   uid="${MJEPA_DIR_OWNER_UID:-}"
+  echo "15"
   gid="${MJEPA_DIR_OWNER_GID:-}"
-
+  echo "16"
   if [[ -z "$uid" ]]; then
+    echo "17"
     uid="$(id -u 2>/dev/null)" || return 1
   fi
   if [[ -z "$gid" ]]; then
+    echo "18"
     gid="$(id -g 2>/dev/null)" || gid="$uid"
   fi
 
   if mjepa_sudo_exec mkdir -p "$path" && \
      mjepa_sudo_exec chown "$uid:$gid" "$path"; then
+    echo "19"
     mjepa_sudo_exec chmod "${MJEPA_DIR_MODE}" "$path" || true
     if mjepa_dir_is_effectively_writable "$path"; then
+      echo "20"
       mjepa_log_warn "regained write access to $label via ${MJEPA_SUDO_BIN}"
       return 0
     fi
