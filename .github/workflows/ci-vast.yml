@@ -274,7 +274,24 @@ jobs:
         run: |
           set -euo pipefail
           cd "$APP_DIR"
-          bash scripts/ci/ensure_experiments_root.sh
+
+          if bash scripts/ci/ensure_experiments_root.sh; then
+            exit 0
+          fi
+
+          if ! command -v sudo >/dev/null 2>&1; then
+            echo "[prepare-env][fatal] unable to fix EXPERIMENTS_ROOT without sudo" >&2
+            exit 1
+          fi
+
+          echo "[prepare-env] retrying ensure_experiments_root.sh with sudo to repair permissions"
+          runner_uid=$(id -u)
+          runner_gid=$(id -g)
+          preserve_vars="APP_DIR,DATA_ROOT,EXPERIMENTS_ROOT,MJEPA_ALLOW_DATA_FALLBACKS,MAMBA_ROOT_PREFIX,PIP_CACHE_DIR,RUN_ID,EXP_ID,GRID_EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_STATE_ID,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_LEGACY"
+          sudo --preserve-env=${preserve_vars},MJEPA_DIR_OWNER_UID,MJEPA_DIR_OWNER_GID \
+            MJEPA_DIR_OWNER_UID="$runner_uid" \
+            MJEPA_DIR_OWNER_GID="$runner_gid" \
+            bash scripts/ci/ensure_experiments_root.sh
       - name: Run prepare_env locally
         shell: bash
         run: |
