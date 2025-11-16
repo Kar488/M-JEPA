@@ -4,7 +4,29 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+def _maybe_inject_repo_root() -> None:
+    """Ensure the repository root is available on ``sys.path``.
+
+    GitHub-hosted runners source ``env.sh`` so ``PYTHONPATH`` already points at
+    the repository root, but self-hosted runners may execute this script directly
+    via an absolute path (e.g. ``/srv/mjepa/scripts/ci/...``). In that scenario
+    Python tries to resolve ``scripts`` relative to ``scripts/ci`` and fails.
+    Injecting the root path mirrors the CI setup without requiring callers to
+    pre-seed ``PYTHONPATH``.
+    """
+
+    repo_root = Path(__file__).resolve().parents[2]
+    repo_root_str = str(repo_root)
+    if repo_root_str not in sys.path:
+        sys.path.insert(0, repo_root_str)
+
+
+_maybe_inject_repo_root()
 
 from scripts.commands import dataset_cache
 
