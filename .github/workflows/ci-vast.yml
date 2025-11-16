@@ -434,11 +434,6 @@ jobs:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
       - name: Run Phase-2 stages on Vast
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$APP_DIR"
-          bash scripts/ci/run-grid-phase2.sh
         env:
           # agent knobs (already have these)
           HARD_WALL_MINS: ${{ env.PHASE2_SWEEP_WALL_MINS }}
@@ -451,6 +446,7 @@ jobs:
           PHASE2_DIRECTION: min
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
+        shell: bash
         run: |
           set -euo pipefail
           cd "$APP_DIR"
@@ -540,17 +536,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Pretrain on Vast
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$APP_DIR"
-          bash scripts/ci/run-pretrain.sh
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "8"
           BESTCFG_NO_EPOCHS: "1"
+        shell: bash
         run: |
           set -euo pipefail
           cd "$APP_DIR"
@@ -606,11 +598,6 @@ jobs:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
       - name: Tox21 baseline on Vast
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$APP_DIR"
-          bash scripts/ci/run-tox21.sh
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
@@ -618,6 +605,7 @@ jobs:
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1"
           TOX21_ENCODER_SOURCE: pretrain_frozen
+        shell: bash
         run: |
           set -euo pipefail
           cd "$APP_DIR"
@@ -695,17 +683,13 @@ jobs:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
       - name: Finetune on Vast
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$APP_DIR"
-          bash scripts/ci/run-finetune.sh
         env:
           HARD_WALL_MINS: 880
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "40"
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1"
+        shell: bash
         run: |
           set -euo pipefail
           cd "$APP_DIR"
@@ -734,17 +718,13 @@ jobs:
 
       - name: Benchmark
         if: ${{ needs.vast_finetune.result == 'success' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$APP_DIR"
-          bash scripts/ci/run-bench.sh
         env:
           HARD_WALL_MINS: 820
           KILL_AFTER_SECS: 120
           BENCH_VAL_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/val
           BENCH_TEST_DIR: ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/test
           TOX21_MET_GATE: ${{ needs.vast_tox21_baseline.outputs.tox21_gate }}
+        shell: bash
         run: |
           set -euo pipefail
           cd "$APP_DIR"
@@ -769,11 +749,6 @@ jobs:
       EXPERIMENTS_ROOT: /data/mjepa/experiments
     steps:
       - name: Tox21 on Vast
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$APP_DIR"
-          bash scripts/ci/run-tox21.sh
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
@@ -781,6 +756,7 @@ jobs:
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1" # use best config without reloading any epochs
           TOX21_ENCODER_SOURCE: fine_tuned
+        shell: bash
         run: |
           set -euo pipefail
           cd "$APP_DIR"
