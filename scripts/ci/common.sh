@@ -251,15 +251,22 @@ mjepa_try_dir() {
   echo "5"
   [[ -n "$path" ]] || return 1
   echo "6"
+
   if [[ -e "$path" && ! -d "$path" ]]; then
-    echo "7" 
+    echo "7"
     return 1
   fi
-  if mkdir -p "$path" 2>/dev/null; then
+
+  if [[ -d "$path" ]]; then
+    if mjepa_reconcile_dir_owner "$path" "$label"; then
+      return 0
+    fi
+  elif mkdir -p "$path" 2>/dev/null; then
     if mjepa_reconcile_dir_owner "$path" "$label"; then
       return 0
     fi
   fi
+
   if mjepa_privileged_dir_fix "$path" "$label"; then
     echo "10"
     return 0
