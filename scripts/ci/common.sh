@@ -111,6 +111,19 @@ mjepa_require_primary_path() {
 
 : "${MJEPA_SUDO_BIN:=sudo}"
 : "${MJEPA_SUDO_ALLOW_TTY_WRAPPER:=1}"
+: "${MJEPA_FSOP_TIMEOUT:=20}"
+
+mjepa_run_with_timeout() {
+  local duration="${MJEPA_FSOP_TIMEOUT:-0}"
+  local timeout_bin
+  timeout_bin="$(command -v timeout 2>/dev/null || true)"
+
+  if [[ -n "$timeout_bin" && "$duration" =~ ^[0-9]+$ && "$duration" -gt 0 ]]; then
+    "$timeout_bin" --preserve-status "$duration" "$@"
+  else
+    "$@"
+  fi
+}
 
 mjepa_sudo_exec() {
   local sudo_bin="${MJEPA_SUDO_BIN:-}" tty_wrapper="${MJEPA_SUDO_TTY_WRAPPER:-script}" allow_tty="${MJEPA_SUDO_ALLOW_TTY_WRAPPER:-1}"
@@ -119,7 +132,7 @@ mjepa_sudo_exec() {
     return 1
   fi
 
-  if "$sudo_bin" -n "$@" >/dev/null 2>&1; then
+  if mjepa_run_with_timeout "$sudo_bin" -n "$@" >/dev/null 2>&1; then
     return 0
   fi
 
@@ -129,11 +142,11 @@ mjepa_sudo_exec() {
       printf -v quoted ' %q' "$@"
     fi
 
-    if "$tty_wrapper" -q /dev/null -c "$sudo_bin -n${quoted}" >/dev/null 2>&1; then
+    if mjepa_run_with_timeout "$tty_wrapper" -q /dev/null -c "$sudo_bin -n${quoted}" >/dev/null 2>&1; then
       return 0
     fi
 
-    if "$tty_wrapper" -q /dev/null "$sudo_bin" -n "$@" >/dev/null 2>&1; then
+    if mjepa_run_with_timeout "$tty_wrapper" -q /dev/null "$sudo_bin" -n "$@" >/dev/null 2>&1; then
       return 0
     fi
   fi
@@ -249,7 +262,8 @@ mjepa_reconcile_dir_owner() {
         fi
       fi
       echo "8.17"
-      if chown "$chown_target" "$path" 2>/dev/null || mjepa_sudo_exec chown "$chown_target" "$path"; then
+      if mjepa_run_with_timeout chown "$chown_target" "$path" 2>/dev/null ||
+         mjepa_sudo_exec chown "$chown_target" "$path"; then
         :
       else
         echo "8.18"
@@ -260,7 +274,8 @@ mjepa_reconcile_dir_owner() {
 
   if [[ -n "$desired_mode" ]]; then
     echo "8.19"
-    if chmod "$desired_mode" "$path" 2>/dev/null || mjepa_sudo_exec chmod "$desired_mode" "$path"; then
+    if mjepa_run_with_timeout chmod "$desired_mode" "$path" 2>/dev/null ||
+       mjepa_sudo_exec chmod "$desired_mode" "$path"; then
       :
     fi
   fi
