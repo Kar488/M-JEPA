@@ -289,45 +289,34 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 480
     needs: [tests_quick, vast_deploy_and_prepare_environment]
-    env:
-      # GitHub Actions does not allow referencing the workflow-level ``env``
-      # context while defining job-level ``env`` entries. The YAML parser raises
-      # "Unrecognized named-value: 'env'" otherwise. Duplicate the path literal
-      # instead so the job can start.
-      CACHE_WARM_UNLABELED_DIR: /srv/mjepa/data/ZINC-canonicalized
-      CACHE_WARM_LABELED_DIR: /srv/mjepa/data/katielinkmoleculenet_benchmark/train
-      CACHE_WARM_LABEL_COL: "measured log solubility in mols per litre"
-      CACHE_WARM_SAMPLE_UNLABELED: 250000
-      CACHE_WARM_SAMPLE_LABELED: 5000
-      CACHE_WARM_NUM_WORKERS: -1
     steps:
-      - name: Materialise 2D caches on Vast
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          request_pty: true
-          command_timeout: 480m
-          envs: APP_DIR,MAMBA_ROOT_PREFIX,SWEEP_CACHE_DIR,CACHE_WARM_UNLABELED_DIR,CACHE_WARM_LABELED_DIR,
-            CACHE_WARM_LABEL_COL,CACHE_WARM_SAMPLE_UNLABELED,CACHE_WARM_SAMPLE_LABELED,CACHE_WARM_NUM_WORKERS
-          script: |
-            set -euo pipefail
-            cd "$APP_DIR"
-            MICROMAMBA_BIN="${MAMBA_ROOT_PREFIX%/}/bin/micromamba"
-            if [ ! -x "$MICROMAMBA_BIN" ]; then
-              echo "[cache-warm][fatal] micromamba not found at $MICROMAMBA_BIN" >&2
-              exit 1
-            fi
-            "$MICROMAMBA_BIN" run -n mjepa python scripts/ci/cache_warm_prebuilt_datasets.py \
-              --unlabeled-dir "${CACHE_WARM_UNLABELED_DIR}" \
-              --labeled-dir "${CACHE_WARM_LABELED_DIR}" \
-              --label-col "${CACHE_WARM_LABEL_COL}" \
-              --cache-dir "${SWEEP_CACHE_DIR}" \
-              --sample-unlabeled "${CACHE_WARM_SAMPLE_UNLABELED}" \
-              --sample-labeled "${CACHE_WARM_SAMPLE_LABELED}" \
-              --num-workers "${CACHE_WARM_NUM_WORKERS}"
+      - name: Materialise 2D caches locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+
+          MICROMAMBA_BIN="${MAMBA_ROOT_PREFIX}/bin/micromamba"
+          CACHE_WARM_UNLABELED_DIR="${APP_DIR}/data/ZINC-canonicalized"
+          CACHE_WARM_LABELED_DIR="${APP_DIR}/data/katielinkmoleculenet_benchmark/train"
+          CACHE_WARM_LABEL_COL="measured log solubility in mols per litre"
+          CACHE_WARM_SAMPLE_UNLABELED=250000
+          CACHE_WARM_SAMPLE_LABELED=5000
+          CACHE_WARM_NUM_WORKERS=-1
+
+          if [ ! -x "$MICROMAMBA_BIN" ]; then
+            echo "[cache-warm][fatal] micromamba not found at $MICROMAMBA_BIN" >&2
+            exit 1
+          fi
+
+          "$MICROMAMBA_BIN" run -n mjepa python scripts/ci/cache_warm_prebuilt_datasets.py \
+            --unlabeled-dir "$CACHE_WARM_UNLABELED_DIR" \
+            --labeled-dir "$CACHE_WARM_LABELED_DIR" \
+            --label-col "$CACHE_WARM_LABEL_COL" \
+            --cache-dir "$SWEEP_CACHE_DIR" \
+            --sample-unlabeled "$CACHE_WARM_SAMPLE_UNLABELED" \
+            --sample-labeled "$CACHE_WARM_SAMPLE_LABELED" \
+            --num-workers "$CACHE_WARM_NUM_WORKERS"
 
   vast_cache_warm_3d:
     if: >
@@ -338,43 +327,35 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 480
     needs: [vast_cache_warm_2d]
-    env:
-      # See cache_warm_2d for context.
-      CACHE_WARM_UNLABELED_DIR: /srv/mjepa/data/ZINC-canonicalized
-      CACHE_WARM_LABELED_DIR: /srv/mjepa/data/katielinkmoleculenet_benchmark/train
-      CACHE_WARM_LABEL_COL: "measured log solubility in mols per litre"
-      CACHE_WARM_SAMPLE_UNLABELED: 250000
-      CACHE_WARM_SAMPLE_LABELED: 5000
-      CACHE_WARM_NUM_WORKERS: -1
     steps:
-      - name: Materialise 3D caches on Vast
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          request_pty: true
-          command_timeout: 480m
-          envs: APP_DIR,MAMBA_ROOT_PREFIX,SWEEP_CACHE_DIR,CACHE_WARM_UNLABELED_DIR,CACHE_WARM_LABELED_DIR,
-            CACHE_WARM_LABEL_COL,CACHE_WARM_SAMPLE_UNLABELED,CACHE_WARM_SAMPLE_LABELED,CACHE_WARM_NUM_WORKERS
-          script: |
-            set -euo pipefail
-            cd "$APP_DIR"
-            MICROMAMBA_BIN="${MAMBA_ROOT_PREFIX%/}/bin/micromamba"
-            if [ ! -x "$MICROMAMBA_BIN" ]; then
-              echo "[cache-warm][fatal] micromamba not found at $MICROMAMBA_BIN" >&2
-              exit 1
-            fi
-            "$MICROMAMBA_BIN" run -n mjepa python scripts/ci/cache_warm_prebuilt_datasets.py \
-              --unlabeled-dir "${CACHE_WARM_UNLABELED_DIR}" \
-              --labeled-dir "${CACHE_WARM_LABELED_DIR}" \
-              --label-col "${CACHE_WARM_LABEL_COL}" \
-              --cache-dir "${SWEEP_CACHE_DIR}" \
-              --sample-unlabeled "${CACHE_WARM_SAMPLE_UNLABELED}" \
-              --sample-labeled "${CACHE_WARM_SAMPLE_LABELED}" \
-              --num-workers "${CACHE_WARM_NUM_WORKERS}" \
-              --add-3d
+      - name: Materialise 3D caches locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+
+          MICROMAMBA_BIN="${MAMBA_ROOT_PREFIX}/bin/micromamba"
+          CACHE_WARM_UNLABELED_DIR="${APP_DIR}/data/ZINC-canonicalized"
+          CACHE_WARM_LABELED_DIR="${APP_DIR}/data/katielinkmoleculenet_benchmark/train"
+          CACHE_WARM_LABEL_COL="measured log solubility in mols per litre"
+          CACHE_WARM_SAMPLE_UNLABELED=250000
+          CACHE_WARM_SAMPLE_LABELED=5000
+          CACHE_WARM_NUM_WORKERS=-1
+
+          if [ ! -x "$MICROMAMBA_BIN" ]; then
+            echo "[cache-warm][fatal] micromamba not found at $MICROMAMBA_BIN" >&2
+            exit 1
+          fi
+
+          "$MICROMAMBA_BIN" run -n mjepa python scripts/ci/cache_warm_prebuilt_datasets.py \
+            --unlabeled-dir "$CACHE_WARM_UNLABELED_DIR" \
+            --labeled-dir "$CACHE_WARM_LABELED_DIR" \
+            --label-col "$CACHE_WARM_LABEL_COL" \
+            --cache-dir "$SWEEP_CACHE_DIR" \
+            --sample-unlabeled "$CACHE_WARM_SAMPLE_UNLABELED" \
+            --sample-labeled "$CACHE_WARM_SAMPLE_LABELED" \
+            --num-workers "$CACHE_WARM_NUM_WORKERS" \
+            --add-3d
 
   vast_learn_hyperparameters:
     if: >
