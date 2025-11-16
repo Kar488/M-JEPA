@@ -25,6 +25,26 @@ normalize_bool() {
 : "${RUN_ID:=$(date +%s)}"
 : "${MJEPA_DIR_OWNER_UID:=}"
 : "${MJEPA_DIR_OWNER_GID:=}"
+
+if [[ -z "${MJEPA_DIR_OWNER_UID:-}" ]]; then
+  if [[ -n "${SUDO_UID:-}" ]]; then
+    MJEPA_DIR_OWNER_UID="$SUDO_UID"
+  elif [[ -n "${SUDO_USER:-}" ]]; then
+    if derived_uid=$(id -u "$SUDO_USER" 2>/dev/null); then
+      MJEPA_DIR_OWNER_UID="$derived_uid"
+    fi
+  fi
+fi
+
+if [[ -z "${MJEPA_DIR_OWNER_GID:-}" ]]; then
+  if [[ -n "${SUDO_GID:-}" ]]; then
+    MJEPA_DIR_OWNER_GID="$SUDO_GID"
+  elif [[ -n "${SUDO_USER:-}" ]]; then
+    if derived_gid=$(id -g "$SUDO_USER" 2>/dev/null); then
+      MJEPA_DIR_OWNER_GID="$derived_gid"
+    fi
+  fi
+fi
 : "${MJEPA_DIR_MODE:=0775}"
 FORCE_UNFREEZE_GRID="$(normalize_bool "${FORCE_UNFREEZE_GRID:-}" 0)"
 CI_FORCE_UNFREEZE_GRID="$(normalize_bool "${CI_FORCE_UNFREEZE_GRID:-}" "${FORCE_UNFREEZE_GRID}")"
