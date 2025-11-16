@@ -23,6 +23,8 @@ normalize_bool() {
 : "${PRETRAIN_EXP_ID:=}"
 : "${PRETRAIN_STATE_ID:=}"
 : "${RUN_ID:=$(date +%s)}"
+: "${MJEPA_DIR_OWNER_UID:=}"
+: "${MJEPA_DIR_OWNER_GID:=}"
 FORCE_UNFREEZE_GRID="$(normalize_bool "${FORCE_UNFREEZE_GRID:-}" 0)"
 CI_FORCE_UNFREEZE_GRID="$(normalize_bool "${CI_FORCE_UNFREEZE_GRID:-}" "${FORCE_UNFREEZE_GRID}")"
 FORCE_UNFREEZE_GRID="$CI_FORCE_UNFREEZE_GRID"
@@ -158,8 +160,15 @@ mjepa_privileged_dir_fix() {
   [[ -n "$path" ]] || return 1
 
   local uid gid
-  uid="$(id -u 2>/dev/null)" || return 1
-  gid="$(id -g 2>/dev/null)" || gid="$uid"
+  uid="${MJEPA_DIR_OWNER_UID:-}"
+  gid="${MJEPA_DIR_OWNER_GID:-}"
+
+  if [[ -z "$uid" ]]; then
+    uid="$(id -u 2>/dev/null)" || return 1
+  fi
+  if [[ -z "$gid" ]]; then
+    gid="$(id -g 2>/dev/null)" || gid="$uid"
+  fi
 
   if mjepa_sudo_exec mkdir -p "$path" && \
      mjepa_sudo_exec chown "$uid:$gid" "$path"; then
