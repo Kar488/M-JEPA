@@ -141,6 +141,9 @@ mjepa_sudo_exec() {
 mjepa_try_dir() {
   local path="$1" label="${2:-$1}"
   [[ -n "$path" ]] || return 1
+  if [[ -e "$path" && ! -d "$path" ]]; then
+    return 1
+  fi
   if mkdir -p "$path" 2>/dev/null && [[ -w "$path" ]]; then
     return 0
   fi
