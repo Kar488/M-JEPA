@@ -997,24 +997,24 @@ fi
             )
 
         try:
-            subprocess.run(
+             result = subprocess.run(
                 ["bash", "scripts/ci/run-finetune.sh"],
                 check=True,
                 cwd=REPO_ROOT,
                 env=env_for_run,
+                text=True,
+                capture_output=True,
             )
         except subprocess.CalledProcessError as exc:
-            diag(
-                f"[finetune-test] run-finetune failed for {label} (rc={exc.returncode})"
-            )
-            diag(
-                f"[finetune-test] command args: {exc.cmd if hasattr(exc, 'cmd') else 'unknown'}"
-            )
-            if capture_path.exists():
-                capture_text = capture_path.read_text(encoding="utf-8")
-                diag(f"[finetune-test] capture for {label} (on failure):\n{capture_text}")
+            diag(f"[finetune-test] run-finetune failed for {label} (rc={exc.returncode})")
+            # print stderr from the failed subprocess, filtered for numeric markers
+            for line in exc.stdout.splitlines():
+                if re.fullmatch(r'\d+(?:\.\d+)*', line.strip()):
+                    diag(f"[finetune-test] out: {line}")
+            for line in exc.stderr.splitlines():
+                if re.fullmatch(r'\d+(?:\.\d+)*', line.strip()):
+                    diag(f"[finetune-test] err: {line}")
             traceback.print_exc(file=diag_stream)
-            diag_stream.flush()
             raise
         except Exception:
             diag(f"[finetune-test] unexpected exception while invoking {label}")
@@ -1026,14 +1026,19 @@ fi
                     f"[finetune-test] capture for {label} (unexpected failure):\n{capture_text}"
                 )
             raise
+        
+        import re
+        # On success, show only the debug markers from stdout/stderr
+        for line in result.stdout.splitlines():
+            if re.fullmatch(r'\d+(?:\.\d+)*', line.strip()):
+                diag(f"[finetune-test] out: {line}")
+        for line in result.stderr.splitlines():
+            if re.fullmatch(r'\d+(?:\.\d+)*', line.strip()):
+                diag(f"[finetune-test] err: {line}")
 
         if capture_path.exists():
-            capture_text = capture_path.read_text(encoding="utf-8")
-            diag(f"[finetune-test] capture for {label}:\n{capture_text}")
-        else:
-            capture_text = ""
-            diag(f"[finetune-test] capture for {label} missing at {capture_path}")
-        return capture_text
+            return capture_path.read_text(encoding="utf-8")
+        return ""
 
     capture_one = tmp_path / "env_missing.txt"
     capture_text = invoke_finetune(env, capture_one, label="local gate missing")
