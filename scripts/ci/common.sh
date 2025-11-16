@@ -90,6 +90,27 @@ mjepa_log_error() {
 }
 
 : "${MJEPA_SUDO_BIN:=sudo}"
+: "${MJEPA_SUDO_ALLOW_TTY_WRAPPER:=1}"
+
+mjepa_sudo_exec() {
+  local sudo_bin="${MJEPA_SUDO_BIN:-}" tty_wrapper="${MJEPA_SUDO_TTY_WRAPPER:-script}" allow_tty="${MJEPA_SUDO_ALLOW_TTY_WRAPPER:-1}"
+  [[ -n "$sudo_bin" ]] || return 1
+  if ! command -v "$sudo_bin" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if "$sudo_bin" -n "$@" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ "$allow_tty" == "1" ]] && [[ -n "$tty_wrapper" ]] && command -v "$tty_wrapper" >/dev/null 2>&1; then
+    if "$tty_wrapper" -q /dev/null "$sudo_bin" -n "$@" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
 
 mjepa_try_dir() {
   local path="$1" label="${2:-$1}"
@@ -105,25 +126,17 @@ mjepa_try_dir() {
 
 mjepa_privileged_dir_fix() {
   local path="$1" label="${2:-$1}"
-  local sudo_bin="${MJEPA_SUDO_BIN:-}"
   [[ -n "$path" ]] || return 1
-  [[ -n "$sudo_bin" ]] || return 1
-  if ! command -v "$sudo_bin" >/dev/null 2>&1; then
-    return 1
-  fi
-  if ! "$sudo_bin" -n true >/dev/null 2>&1; then
-    return 1
-  fi
 
   local uid gid
   uid="$(id -u 2>/dev/null)" || return 1
   gid="$(id -g 2>/dev/null)" || gid="$uid"
 
-  if "$sudo_bin" -n mkdir -p "$path" >/dev/null 2>&1 && \
-     "$sudo_bin" -n chown "$uid:$gid" "$path" >/dev/null 2>&1; then
-    "$sudo_bin" -n chmod 0775 "$path" >/dev/null 2>&1 || true
+  if mjepa_sudo_exec mkdir -p "$path" && \
+     mjepa_sudo_exec chown "$uid:$gid" "$path"; then
+    mjepa_sudo_exec chmod 0775 "$path" || true
     if [[ -w "$path" ]]; then
-      mjepa_log_warn "regained write access to $label via $sudo_bin"
+      mjepa_log_warn "regained write access to $label via ${MJEPA_SUDO_BIN}"
       return 0
     fi
   fi

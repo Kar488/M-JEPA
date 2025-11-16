@@ -6,6 +6,11 @@ if [[ -n "$log_path" ]]; then
   printf '%s\n' "$*" >> "$log_path"
 fi
 
+require_tty="${MJEPA_FAKE_SUDO_REQUIRE_TTY:-0}"
+if [[ "$require_tty" == "1" ]] && [[ ! -t 0 ]]; then
+  exit 1
+fi
+
 args=()
 for arg in "$@"; do
   if [[ "$arg" == "-n" ]]; then

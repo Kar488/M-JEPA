@@ -1,6 +1,7 @@
 import json
 import os
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -243,6 +244,55 @@ def test_common_sh_attempts_privileged_fix_for_experiments_root(tmp_path):
             "RUNNER_TEMP": str(runner_tmp),
             "MJEPA_SUDO_BIN": str(fake_sudo),
             "MJEPA_FAKE_SUDO_FIX_PATH": str(blocked_parent),
+        }
+    )
+
+    cmd = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(common_sh))}; "
+        "printf '%s\n%s' \"$EXPERIMENTS_ROOT\" \"$DATA_ROOT\""
+    )
+
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    resolved_experiments, resolved_data = proc.stdout.strip().splitlines()
+    assert resolved_experiments == str(target_root)
+    assert resolved_data == str(blocked_parent)
+    assert target_root.is_dir()
+    assert os.access(target_root, os.W_OK)
+
+
+def test_common_sh_handles_privileged_fix_when_tty_required(tmp_path):
+    if shutil.which("script") is None:
+        pytest.skip("script command unavailable")
+
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+    fake_sudo = REPO_ROOT / "tests" / "ci" / "fake_sudo.sh"
+
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir()
+
+    blocked_parent = tmp_path / "blocked_parent"
+    blocked_parent.mkdir()
+    blocked_parent.chmod(0o555)
+
+    target_root = blocked_parent / "experiments"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "EXPERIMENTS_ROOT": str(target_root),
+            "RUNNER_TEMP": str(runner_tmp),
+            "MJEPA_SUDO_BIN": str(fake_sudo),
+            "MJEPA_FAKE_SUDO_FIX_PATH": str(blocked_parent),
+            "MJEPA_FAKE_SUDO_REQUIRE_TTY": "1",
         }
     )
 
