@@ -64,6 +64,28 @@ if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
   pretrain_met_env="${PRETRAIN_EXPERIMENT_ROOT%/}/met_benchmark.env"
 fi
 
+echo "[finetune][gate] env roots: EXP_ROOT=${EXP_ROOT:-<unset>} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>} FINETUNE_DIR=${FINETUNE_DIR:-<unset>} PRETRAIN_EXPERIMENT_ROOT=${PRETRAIN_EXPERIMENT_ROOT:-<unset>}" >&2
+
+if [[ -n "$local_met_env" ]]; then
+  if [[ -f "$local_met_env" ]]; then
+    echo "[finetune][gate] candidate local gate path=$local_met_env (present)" >&2
+  else
+    echo "[finetune][gate] candidate local gate path=$local_met_env (missing)" >&2
+  fi
+else
+  echo "[finetune][gate] candidate local gate path=<unset>" >&2
+fi
+
+if [[ -n "$pretrain_met_env" ]]; then
+  if [[ -f "$pretrain_met_env" ]]; then
+    echo "[finetune][gate] candidate pretrain gate path=$pretrain_met_env (present)" >&2
+  else
+    echo "[finetune][gate] candidate pretrain gate path=$pretrain_met_env (missing)" >&2
+  fi
+else
+  echo "[finetune][gate] candidate pretrain gate path=<unset>" >&2
+fi
+
 if [[ -n "$local_met_env" && -f "$local_met_env" ]]; then
   MET_ENV_FILE="$local_met_env"
 elif [[ -n "$pretrain_met_env" && -f "$pretrain_met_env" ]]; then
@@ -74,8 +96,19 @@ else
   MET_ENV_FILE="$pretrain_met_env"
 fi
 
-if [[ -f "$MET_ENV_FILE" ]]; then
-  while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+if [[ -n "$MET_ENV_FILE" ]]; then
+  if [[ -f "$MET_ENV_FILE" ]]; then
+    echo "[finetune][gate] selected gate file=$MET_ENV_FILE (readable)" >&2
+  else
+    echo "[finetune][gate] selected gate file=$MET_ENV_FILE (not found)" >&2
+  fi
+else
+  echo "[finetune][gate] selected gate file=<unset>" >&2
+fi
+
+if [[ -n "$MET_ENV_FILE" && -f "$MET_ENV_FILE" ]]; then
+  raw_line=""
+  while IFS= read -r raw_line || [[ -n "${raw_line:-}" ]]; do
     line="${raw_line%$'\r'}"
     line="${line#"${line%%[![:space:]]*}"}"
     line="${line%"${line##*[![:space:]]}"}"
@@ -103,38 +136,41 @@ if [[ -f "$MET_ENV_FILE" ]]; then
     fi
     export "$key"="$value"
   done <"$MET_ENV_FILE"
-  if [[ "${MET_BENCHMARK_BASELINE:-false}" == "true" ]]; then
-    echo "[finetune] Baseline met benchmark; skipping fine-tune stage."
-    exit 0
-  fi
 fi
 
 # When the gate result is unavailable the reroute logic should no-op.
 # Ensure the flag carries an explicit "unknown" marker instead of
 # inheriting the "false" default from parameter expansion.
+baseline_status="unknown"
 if [[ -z "${MET_BENCHMARK_BASELINE+x}" ]]; then
-  export MET_BENCHMARK_BASELINE="unknown"
+  baseline_status="unknown"
 else
   # Treat blank or whitespace-only values as unknown to avoid false negatives.
   baseline_trimmed="${MET_BENCHMARK_BASELINE//[[:space:]]/}"
   if [[ -z "$baseline_trimmed" ]]; then
-    export MET_BENCHMARK_BASELINE="unknown"
+    baseline_status="unknown"
   else
     baseline_lower="${baseline_trimmed,,}"
     case "$baseline_lower" in
       true|false)
-        export MET_BENCHMARK_BASELINE="$baseline_lower"
+        baseline_status="$baseline_lower"
         ;;
       *)
-        export MET_BENCHMARK_BASELINE="unknown"
+        baseline_status="unknown"
         ;;
     esac
   fi
 fi
+export MET_BENCHMARK_BASELINE="$baseline_status"
 
-baseline_flag="${MET_BENCHMARK_BASELINE:-false}"
-baseline_flag_lc="${baseline_flag,,}"
-if [[ "$baseline_flag_lc" == "false" ]]; then
+echo "[finetune][gate] normalized MET_BENCHMARK_BASELINE=${baseline_status}" >&2
+
+if [[ "$baseline_status" == "true" ]]; then
+  echo "[finetune] Baseline met benchmark; skipping fine-tune stage."
+  exit 0
+fi
+
+if [[ "$baseline_status" == "false" ]]; then
   : "${FINETUNE_LABELED_CSV:=${APP_DIR}/data/tox21/data.csv}"
   if [[ -z "${FINETUNE_LABELED_DIR:-}" ]]; then
     FINETUNE_LABELED_DIR="$(dirname "${FINETUNE_LABELED_CSV}")"
