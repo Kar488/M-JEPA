@@ -149,7 +149,7 @@ mjepa_sudo_exec() {
   echo "a"
   [[ -n "$sudo_bin" ]] || return 1
   if ! command -v "$sudo_bin" >/dev/null 2>&1; then
-    echo
+    echo "b"
     return 1
   fi
 
