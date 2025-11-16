@@ -171,8 +171,16 @@ mjepa_dir_is_effectively_writable() {
   fi
 
   local perm_val=$(( 8#$perms ))
-  if (( (perm_val & 0200) == 0 )); then
-    return 1
+  if [[ -n "$target_uid" ]]; then
+    if (( (perm_val & 0200) == 0 )); then
+      return 1
+    fi
+  fi
+
+  if [[ -z "$target_uid" && -n "$target_gid" ]]; then
+    if (( (perm_val & 0020) == 0 )); then
+      return 1
+    fi
   fi
 
   return 0
