@@ -120,9 +120,15 @@ mjepa_run_with_timeout() {
 
   if [[ -n "$timeout_bin" && "$duration" =~ ^[0-9]+$ && "$duration" -gt 0 ]]; then
     "$timeout_bin" --preserve-status "$duration" "$@"
-  else
-    "$@"
+    return
   fi
+
+  if command -v perl >/dev/null 2>&1 && [[ "$duration" =~ ^[0-9]+$ && "$duration" -gt 0 ]]; then
+    perl -e 'alarm shift; exec @ARGV' "$duration" "$@"
+    return
+  fi
+
+  "$@"
 }
 
 mjepa_sudo_exec() {
