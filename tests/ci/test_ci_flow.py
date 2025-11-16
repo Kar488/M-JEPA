@@ -1005,12 +1005,38 @@ fi
 
     capture_direct = tmp_path / "env_direct.txt"
     env_direct["TMP_ENV_CAPTURE"] = str(capture_direct)
-    subprocess.run(
-        ["bash", "scripts/ci/run-finetune.sh"],
-        check=True,
-        cwd=REPO_ROOT,
-        env=env_direct,
+
+    debug_keys = sorted(
+        key
+        for key in env_direct
+        if key.startswith("PRETRAIN")
+        or key in {
+            "ARTIFACTS_DIR",
+            "TMP_ENV_CAPTURE",
+            "MJEPACI_STAGE_SHIM",
+            "MJEPACI_DEBUG",
+        }
     )
+    print("[finetune-test] env_direct debug payload:", flush=True)
+    for key in debug_keys:
+        print(f"[finetune-test]   {key}={env_direct[key]}", flush=True)
+
+    try:
+        subprocess.run(
+            ["bash", "scripts/ci/run-finetune.sh"],
+            check=True,
+            cwd=REPO_ROOT,
+            env=env_direct,
+        )
+    finally:
+        if capture_direct.exists():
+            capture_text = capture_direct.read_text(encoding="utf-8")
+            print(
+                "[finetune-test] capture_direct contents:\n"
+                f"{capture_text}",
+                flush=True,
+            )
+
     capture_text = capture_direct.read_text(encoding="utf-8")
     assert "MET_BENCHMARK_BASELINE=false" in capture_text
     assert "MET_GATE_DEBUG=observed value" in capture_text
