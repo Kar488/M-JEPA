@@ -8,6 +8,7 @@ import traceback
 from pathlib import Path
 
 import pytest
+import re
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -1027,7 +1028,7 @@ fi
                 )
             raise
         
-        import re
+        
         # On success, show only the debug markers from stdout/stderr
         for line in result.stdout.splitlines():
             if re.fullmatch(r'\d+(?:\.\d+)*', line.strip()):
