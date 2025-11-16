@@ -160,6 +160,10 @@ def test_common_sh_falls_back_when_mamba_root_unwritable(tmp_path):
             "RUNNER_TEMP": str(runner_tmp),
             "HOME": str(fake_home),
             "MAMBA_ROOT_PREFIX": str(blocked_path),
+            # These fallback behaviors are the point of the test, so make
+            # sure global CI settings that disable fallbacks do not bleed
+            # into the test environment.
+            "MJEPA_ALLOW_DATA_FALLBACKS": "1",
         }
     )
 
@@ -200,6 +204,7 @@ def test_common_sh_rewrites_unwritable_sweep_cache(tmp_path):
             "DATA_ROOT": str(data_root),
             "RUNNER_TEMP": str(runner_tmp),
             "SWEEP_CACHE_DIR": str(blocked_sweep),
+            "MJEPA_ALLOW_DATA_FALLBACKS": "1",
         }
     )
 
@@ -921,6 +926,7 @@ fi
             "PRETRAIN_EXP_ID": "pretrain-demo",
             "MJEPACI_STAGE_SHIM": str(shim_path),
             "WANDB_API_KEY": "",
+            "MJEPA_ALLOW_DATA_FALLBACKS": "1",
         }
     )
 

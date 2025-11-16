@@ -246,9 +246,13 @@ mjepa_reconcile_dir_owner() {
 }
 
 mjepa_try_dir() {
+  echo "4"
   local path="$1" label="${2:-$1}"
+  echo "5"
   [[ -n "$path" ]] || return 1
+  echo "6"
   if [[ -e "$path" && ! -d "$path" ]]; then
+    echo "7" 
     return 1
   fi
   if mkdir -p "$path" 2>/dev/null; then
@@ -257,15 +261,18 @@ mjepa_try_dir() {
     fi
   fi
   if mjepa_privileged_dir_fix "$path" "$label"; then
+    echo "10"
     return 0
   fi
   return 1
 }
 
 mjepa_privileged_dir_fix() {
+  echo "11"
   local path="$1" label="${2:-$1}"
+  echo "12"
   [[ -n "$path" ]] || return 1
-
+  echo "13"
   local uid gid
   uid="${MJEPA_DIR_OWNER_UID:-}"
   gid="${MJEPA_DIR_OWNER_GID:-}"

@@ -4,9 +4,15 @@ set -euo pipefail
 : "${APP_DIR:=/srv/mjepa}"
 : "${MJEPACI_STAGE:=prepare-env}"
 
+echo "1"
+
 CI_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "2"
 # shellcheck disable=SC1091
 source "${CI_SCRIPT_DIR}/common.sh"
+
+echo "3"
 
 if [[ -z "${EXPERIMENTS_ROOT:-}" ]]; then
   echo "[ensure-experiments-root][error] EXPERIMENTS_ROOT is not set" >&2
