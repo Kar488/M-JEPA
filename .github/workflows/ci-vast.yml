@@ -378,22 +378,7 @@ jobs:
       pretrain_exp_id: ${{ steps.phase1_ids.outputs.pretrain_exp_id }}
     steps:
       - name: Run grid search
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          request_pty: true
-          command_timeout: 940m
-          envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR,BENCH_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,
-            GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
-            GRID_MODE,WANDB_COUNT,EXPORT_OUT_PATH,EXPORT_PHASE2_PATH,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR,
-            PE_MIN_PRETRAIN_EPOCHS,PE_MIN_FINETUNE_EPOCHS,PE_MIN_PRETRAIN_BATCHES,PHASE1_BACKBONES,PHASE1_SEEDS
-          script: |
-            bash "$APP_DIR/scripts/ci/run-grid-or-phase1.sh"
+        shell: bash
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
@@ -410,10 +395,10 @@ jobs:
           # W&B sweeps pair runs via PHASE1_BACKBONES/PHASE1_SEEDS; PHASE1_SWEEP_SEED is deprecated.
           PHASE1_BACKBONES: gine,dmpnn,schnet3d
           PHASE1_SEEDS: 1,2,3,4,5
-          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
-          VAST_HOST: ${{ secrets.VAST_HOST }}
-          VAST_USER: ${{ secrets.VAST_USER }}
-          VAST_PORT: ${{ secrets.VAST_PORT }}
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-grid-or-phase1.sh
       - name: Checkout helper scripts
         uses: actions/checkout@v4
         with:
@@ -456,24 +441,8 @@ jobs:
       PHASE2_RECHECK_WALL_MINS: 180
       PHASE2_EXPORT_WALL_MINS: 30
     steps:
-      - name: Run Phase-2 stages on Vast
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          request_pty: true
-          command_timeout: 940m
-          envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,
-            GITHUB_RUN_ID,WANDB_ENTITY,CACHE_DIR,SWEEP_CACHE_DIR,RUN_ID,EXP_ID,GRID_EXP_ID,PRETRAIN_EXP_ID,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
-            PHASE2_SWEEP_WALL_MINS,PHASE2_RECHECK_WALL_MINS,PHASE2_EXPORT_WALL_MINS,
-            GRID_MODE,WANDB_COUNT, TOPK_RECHECK,EXTRA_SEEDS,PHASE2_METRIC,PHASE2_DIRECTION,PHASE2_UNLABELED_DIR,PHASE2_LABELED_DIR,
-            PHASE2_AGENT_COUNT,CI_FORCE_UNFREEZE_GRID,CI_PHASE2_FORCE_REUSE_PHASE2_IDS
-          script: |
-            bash "$APP_DIR/scripts/ci/run-grid-phase2.sh"
+      - name: Run Phase-2 stages
+        shell: bash
         env:
           # agent knobs (already have these)
           HARD_WALL_MINS: ${{ env.PHASE2_SWEEP_WALL_MINS }}
@@ -486,10 +455,10 @@ jobs:
           PHASE2_DIRECTION: min
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
-          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
-          VAST_HOST: ${{ secrets.VAST_HOST }}
-          VAST_USER: ${{ secrets.VAST_USER }}
-          VAST_PORT: ${{ secrets.VAST_PORT }}
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-grid-phase2.sh
 
       # Run on the GitHub runner so helper scripts referenced below are available
       # locally; this does not affect the remote Vast execution.
@@ -581,33 +550,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Pretrain on Vast
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          request_pty: true
-          command_timeout: 910m
-          envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,CKPT_DIR,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
-            GRID_MODE,WANDB_COUNT,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
-            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,EXP_ID,GRID_EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,EXPERIMENTS_ROOT
-          script: |
-            bash "$APP_DIR/scripts/ci/run-pretrain.sh"
+      - name: Pretrain
+        shell: bash
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "8"
           BESTCFG_NO_EPOCHS: "1"
-          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
-          VAST_HOST: ${{ secrets.VAST_HOST }}
-          VAST_USER: ${{ secrets.VAST_USER }}
-          VAST_PORT: ${{ secrets.VAST_PORT }}
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-pretrain.sh
 
       - name: Fetch pretrain state snapshot
         id: pretrain_state
@@ -659,22 +613,8 @@ jobs:
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
     steps:
-      - name: Tox21 baseline on Vast
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          request_pty: true
-          command_timeout: 920m
-          envs: APP_DIR,GRID_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
-            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
-            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
-          script: |
-            bash "$APP_DIR/scripts/ci/run-tox21.sh"
+      - name: Run tox21 baseline
+        shell: bash
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
@@ -682,10 +622,10 @@ jobs:
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1"
           TOX21_ENCODER_SOURCE: pretrain_frozen
-          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
-          VAST_HOST: ${{ secrets.VAST_HOST }}
-          VAST_USER: ${{ secrets.VAST_USER }}
-          VAST_PORT: ${{ secrets.VAST_PORT }}
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-tox21.sh
 
       - name: Checkout repository for tox21 baseline artifacts
         if: always()
@@ -761,28 +701,18 @@ jobs:
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
     steps:
-      - name: Finetune on Vast
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          request_pty: true
-          command_timeout: 890m
-          envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,CKPT_DIR,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
-            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
-          script: |
-            bash "$APP_DIR/scripts/ci/run-finetune.sh"
+      - name: Finetune
+        shell: bash
         env:
           HARD_WALL_MINS: 880
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "40"
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1"
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-finetune.sh
 
   vast_benchmark:
     name: Benchmark
@@ -807,28 +737,19 @@ jobs:
         run: |
           echo "TOX21_MET_GATE=${{ needs.vast_tox21_baseline.outputs.tox21_gate }}"
 
-      - name: Benchmark on Vast
+      - name: Benchmark
         if: ${{ needs.vast_finetune.result == 'success' }}
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          request_pty: true
-          command_timeout: 830m
-          envs: APP_DIR,GRID_DIR,PRETRAIN_DIR,FINETUNE_DIR, BENCH_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
-            BENCH_VAL_DIR,BENCH_TEST_DIR,PHASE2_LABELED_DIR,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
-            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,TOX21_MET_GATE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
+        shell: bash
         env:
           HARD_WALL_MINS: 820
           KILL_AFTER_SECS: 120
           BENCH_VAL_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/val
           BENCH_TEST_DIR: ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/test
           TOX21_MET_GATE: ${{ needs.vast_tox21_baseline.outputs.tox21_gate }}
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-bench.sh
 
   vast_tox21:
     name: Tox21 Evaluation
@@ -850,22 +771,8 @@ jobs:
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
     steps:
-      - name: Tox21 on Vast
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          request_pty: true
-          command_timeout: 910m
-          envs: APP_DIR,GRID_DIR,TOX21_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
-            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
-            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT
-          script: |
-            bash "$APP_DIR/scripts/ci/run-tox21.sh"
+      - name: Run tox21 evaluation
+        shell: bash
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
@@ -873,6 +780,10 @@ jobs:
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1" # use best config without reloading any epochs
           TOX21_ENCODER_SOURCE: fine_tuned
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-tox21.sh
 
       - name: Checkout repository for tox21 artifacts
         if: always()
@@ -909,17 +820,10 @@ jobs:
           always() &&
           ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
     steps:
-      - name: Publish Vast report
+      - name: Publish report
         if: ${{ needs.vast_benchmark.result == 'success' && needs.vast_tox21.result == 'success' }}
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VAST_HOST }}
-          username: ${{ secrets.VAST_USER }}
-          port: ${{ secrets.VAST_PORT }}
-          key: ${{ secrets.VAST_SSH_KEY }}
-          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
-          request_pty: true
-          command_timeout: 160m
-          envs: APP_DIR,REPORTS_DIR,REPORTS_CACHE_DIR,LOG_DIR,WANDB_API_KEY,WANDB_ENTITY,WANDB_PROJECT,WANDB_RUN_ID,WANDB_RUN_GROUP,WANDB_RESUME,WANDB_DIR
-          script: |
-            bash "$APP_DIR/scripts/ci/run-report.sh"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/run-report.sh
