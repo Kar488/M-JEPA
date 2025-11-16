@@ -263,6 +263,7 @@ jobs:
           
             # Fetch and checkout all LFS objects for this branch
             git -C "$APP_DIR" lfs pull origin "$BRANCH"
+            
   vast_prepare_environment:
     if: >
       ${{
