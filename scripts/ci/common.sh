@@ -392,26 +392,19 @@ mjepa_privileged_dir_fix() {
   gid="${MJEPA_DIR_OWNER_GID:-}"
 
   if [[ -z "$uid" ]]; then
-    echo "14"
     uid="$(id -u 2>/dev/null)" || return 1
   fi
   if [[ -z "$gid" ]]; then
-    echo "15"
     gid="$(id -g 2>/dev/null)" || gid="$uid"
   fi
-  echo "15.1"
   if mjepa_sudo_exec mkdir -p "$path" && \
      mjepa_sudo_exec chown "$uid:$gid" "$path"; then
-    echo "16"
     mjepa_sudo_exec chmod "${MJEPA_DIR_MODE}" "$path" || true
-    echo "17"
     if mjepa_dir_is_effectively_writable "$path"; then
-      echo "18"
       mjepa_log_warn "regained write access to $label via ${MJEPA_SUDO_BIN}"
       return 0
     fi
   fi
-  echo "15.2"
   return 1
 }
 
