@@ -959,6 +959,8 @@ if [[ -z "${SWEEP_CACHE_DIR:-}" ]]; then
   SWEEP_CACHE_DIR="$CACHE_DIR"
 fi
 
+ensure_dir_var SWEEP_CACHE_DIR "$CACHE_DIR" "${EXP_ID:+experiments/${EXP_ID}/}cache"
+
 export CACHE_DIR
 export SWEEP_CACHE_DIR
 

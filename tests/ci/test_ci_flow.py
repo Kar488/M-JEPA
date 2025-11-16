@@ -181,6 +181,48 @@ def test_common_sh_falls_back_when_mamba_root_unwritable(tmp_path):
     assert proc.stdout.strip() == str(expected)
 
 
+def test_common_sh_rewrites_unwritable_sweep_cache(tmp_path):
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+
+    data_root = tmp_path / "data"
+    data_root.mkdir(exist_ok=True)
+
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir(exist_ok=True)
+
+    blocked_sweep = tmp_path / "blocked_sweep"
+    blocked_sweep.write_text("stub", encoding="utf-8")
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DATA_ROOT": str(data_root),
+            "RUNNER_TEMP": str(runner_tmp),
+            "SWEEP_CACHE_DIR": str(blocked_sweep),
+        }
+    )
+
+    cmd = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(common_sh))}; "
+        "printf '%s\n%s' \"$CACHE_DIR\" \"$SWEEP_CACHE_DIR\""
+    )
+
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    cache_dir, sweep_dir = proc.stdout.strip().splitlines()
+    expected_cache = data_root / "cache" / "graphs_250k"
+    assert cache_dir == str(expected_cache)
+    assert sweep_dir == str(expected_cache)
+
+
 def test_pretrain_materializes_phase2_artifacts(tmp_path):
     experiments_root = tmp_path / "experiments"
     phase2_root = tmp_path / "phase2" / "winner"
