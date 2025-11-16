@@ -279,41 +279,29 @@ mjepa_reconcile_dir_owner() {
   local target_uid=""
   local target_gid=""
   local desired_mode="${MJEPA_DIR_MODE:-}"
-  echo "8.1"
   [[ -n "$path" ]] || return 1
-  echo "8.2"
   if [[ ${MJEPA_DIR_OWNER_UID+x} ]]; then
-    echo "8.3"
     target_uid="${MJEPA_DIR_OWNER_UID}"
   fi
   if [[ ${MJEPA_DIR_OWNER_GID+x} ]]; then
-    echo "8.4"
     target_gid="${MJEPA_DIR_OWNER_GID}"
   fi
 
   if [[ -z "$target_uid" && -z "$target_gid" && -z "$desired_mode" ]]; then
-    echo "8.5"
     if [[ -w "$path" ]]; then
-      echo "8.6"
       return 0
     fi
     return 1
   fi
 
   local need_chown=0 stat_out="" owner="" group="" chown_target=""
-  echo "8.6.1"
   if [[ -n "$target_uid" || -n "$target_gid" ]]; then
-    echo "8.7"
     if stat_out=$(stat -Lc '%u %g' "$path" 2>/dev/null); then
-      echo "8.8"
       read -r owner group <<<"$stat_out"
-      echo "8.9"
       if [[ -n "$target_uid" && "$owner" != "$target_uid" ]]; then
-        echo "8.10"
         need_chown=1
       fi
       if [[ -n "$target_gid" && "$group" != "$target_gid" ]]; then
-        echo "8.11"
         need_chown=1
       fi
     else
@@ -321,34 +309,26 @@ mjepa_reconcile_dir_owner() {
     fi
 
     if (( need_chown )); then
-      echo "8.12" 
       if [[ -n "$target_uid" ]]; then
-        echo "8.13"
         chown_target="$target_uid"
       fi
       if [[ -n "$target_gid" ]]; then
-        echo "8.14"
         if [[ -n "$chown_target" ]]; then
-          echo "8.15"
           chown_target+=":$target_gid"
         else
-          echo "8.16"
           chown_target=":$target_gid"
         fi
       fi
-      echo "8.17"
       if mjepa_run_with_timeout chown "$chown_target" "$path" 2>/dev/null ||
          mjepa_sudo_exec chown "$chown_target" "$path"; then
         :
       else
-        echo "8.18"
         mjepa_log_warn "unable to chown $label to $chown_target"
       fi
     fi
   fi
 
   if [[ -n "$desired_mode" ]]; then
-    echo "8.19"
     local need_chmod=1 current_mode="" desired_fmt="" current_fmt=""
     if current_mode=$(stat -Lc '%a' "$path" 2>/dev/null); then
       if [[ "$desired_mode" =~ ^0?[0-7]{3,4}$ && "$current_mode" =~ ^[0-7]{3,4}$ ]]; then
@@ -374,7 +354,6 @@ mjepa_reconcile_dir_owner() {
   fi
 
   if mjepa_dir_is_effectively_writable "$path"; then
-    echo "8.20"
     return 0
   fi
 
@@ -382,43 +361,32 @@ mjepa_reconcile_dir_owner() {
 }
 
 mjepa_try_dir() {
-  echo "4"
   local path="$1" label="${2:-$1}"
-  echo "5"
   [[ -n "$path" ]] || return 1
-  echo "6"
 
   if [[ -e "$path" && ! -d "$path" ]]; then
-    echo "7"
     return 1
   fi
 
   if [[ -d "$path" ]]; then
-    echo "8"
     if mjepa_reconcile_dir_owner "$path" "$label"; then
-      echo "9"
       return 0
     fi
   elif mkdir -p "$path" 2>/dev/null; then
     if mjepa_reconcile_dir_owner "$path" "$label"; then
-      echo "10"
       return 0
     fi
   fi
 
   if mjepa_privileged_dir_fix "$path" "$label"; then
-    echo "11"
     return 0
   fi
   return 1
 }
 
 mjepa_privileged_dir_fix() {
-  echo "11"
   local path="$1" label="${2:-$1}"
-  echo "12"
   [[ -n "$path" ]] || return 1
-  echo "13"
   local uid gid
   uid="${MJEPA_DIR_OWNER_UID:-}"
   gid="${MJEPA_DIR_OWNER_GID:-}"
