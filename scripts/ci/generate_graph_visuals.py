@@ -28,6 +28,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+try:
+    from utils import gym_compat
+except Exception:  # pragma: no cover - compatibility helper is optional
+    gym_compat = None
+
 class _StubGraphData:
     def __init__(self, num_nodes: int):
         self._num_nodes = max(int(num_nodes), 0)
@@ -132,6 +137,14 @@ except Exception:  # pragma: no cover - gracefully degrade in environments w/o R
     rdDepictor = None  # type: ignore
     rdMolDraw2D = None  # type: ignore
     RDKit_AVAILABLE = False
+
+if RDKit_AVAILABLE:  # pragma: no cover - depends on optional rdkit
+    _DRAW_COLOR_CLASS = getattr(rdMolDraw2D, "DrawColour", None) or getattr(rdMolDraw2D, "Color", None)
+else:  # pragma: no cover - rdkit unavailable
+    _DRAW_COLOR_CLASS = None
+
+if gym_compat is not None:  # pragma: no cover - helper absent when utils unavailable
+    gym_compat.ensure_gymnasium_alias()
 
 try:  # pragma: no cover - optional dependency in CI
     import buildamol
@@ -369,8 +382,10 @@ def _prepare_highlight_colors(mol: "Chem.Mol"):
             bond = mol.GetBondBetweenAtoms(start, end)
             if bond is not None:
                 highlight_bonds.add(bond.GetIdx())
-    atom_colors = {idx: rdMolDraw2D.Color(0.99, 0.42, 0.09) for idx in highlight_atoms}
-    bond_colors = {idx: rdMolDraw2D.Color(0.13, 0.57, 0.27) for idx in highlight_bonds}
+    if not _DRAW_COLOR_CLASS:
+        return highlight_atoms, highlight_bonds, {}, {}
+    atom_colors = {idx: _DRAW_COLOR_CLASS(0.99, 0.42, 0.09) for idx in highlight_atoms}
+    bond_colors = {idx: _DRAW_COLOR_CLASS(0.13, 0.57, 0.27) for idx in highlight_bonds}
     return highlight_atoms, highlight_bonds, atom_colors, bond_colors
 
 
