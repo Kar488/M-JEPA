@@ -269,6 +269,12 @@ jobs:
       # temporary path so we fix the real storage issue immediately.
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
+      - name: Debug runner identity
+        run: |
+          echo "whoami: $(whoami)"
+          echo "UID: $(id -u)"
+          echo "GID: $(id -g)"
+          echo "GROUP: $(id -gn)"
       - name: Ensure experiments root is writable
         shell: bash
         run: |
