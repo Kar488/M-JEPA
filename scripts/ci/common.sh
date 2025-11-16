@@ -123,9 +123,22 @@ mjepa_run_with_timeout() {
     return
   fi
 
-  if command -v perl >/dev/null 2>&1 && [[ "$duration" =~ ^[0-9]+$ && "$duration" -gt 0 ]]; then
-    perl -e 'alarm shift; exec @ARGV' "$duration" "$@"
-    return
+  if [[ "$duration" =~ ^[0-9]+$ && "$duration" -gt 0 ]]; then
+    (
+      "$@"
+    ) &
+    local cmd_pid=$!
+    (
+      sleep "$duration" &&
+        kill -0 "$cmd_pid" 2>/dev/null &&
+        kill "$cmd_pid" 2>/dev/null || true
+    ) &
+    local timer_pid=$!
+    local status=0
+    wait "$cmd_pid" || status=$?
+    kill "$timer_pid" 2>/dev/null || true
+    wait "$timer_pid" 2>/dev/null || true
+    return "$status"
   fi
 
   "$@"
