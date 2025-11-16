@@ -49,7 +49,31 @@ if [[ ! -f "$manifest_path" ]]; then
 fi
 
 # Skip fine-tuning if baseline evaluation already met benchmark
-MET_ENV_FILE="${EXP_ROOT}/met_benchmark.env"
+MET_ENV_FILE=""
+local_met_env=""
+if [[ -n "${EXP_ROOT:-}" ]]; then
+  local_met_env="${EXP_ROOT%/}/met_benchmark.env"
+elif [[ -n "${EXPERIMENT_DIR:-}" ]]; then
+  local_met_env="${EXPERIMENT_DIR%/}/met_benchmark.env"
+elif [[ -n "${FINETUNE_DIR:-}" ]]; then
+  local_met_env="${FINETUNE_DIR%/}/met_benchmark.env"
+fi
+
+pretrain_met_env=""
+if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+  pretrain_met_env="${PRETRAIN_EXPERIMENT_ROOT%/}/met_benchmark.env"
+fi
+
+if [[ -n "$local_met_env" && -f "$local_met_env" ]]; then
+  MET_ENV_FILE="$local_met_env"
+elif [[ -n "$pretrain_met_env" && -f "$pretrain_met_env" ]]; then
+  MET_ENV_FILE="$pretrain_met_env"
+elif [[ -n "$local_met_env" ]]; then
+  MET_ENV_FILE="$local_met_env"
+else
+  MET_ENV_FILE="$pretrain_met_env"
+fi
+
 if [[ -f "$MET_ENV_FILE" ]]; then
   while IFS='=' read -r key value; do
     [[ -z "$key" ]] && continue
