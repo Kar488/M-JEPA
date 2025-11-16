@@ -146,30 +146,36 @@ mjepa_run_with_timeout() {
 
 mjepa_sudo_exec() {
   local sudo_bin="${MJEPA_SUDO_BIN:-}" tty_wrapper="${MJEPA_SUDO_TTY_WRAPPER:-script}" allow_tty="${MJEPA_SUDO_ALLOW_TTY_WRAPPER:-1}"
+  echo "a"
   [[ -n "$sudo_bin" ]] || return 1
   if ! command -v "$sudo_bin" >/dev/null 2>&1; then
+    echo
     return 1
   fi
 
   if mjepa_run_with_timeout "$sudo_bin" -n "$@" >/dev/null 2>&1; then
+    echo "c"
     return 0
   fi
 
   if [[ "$allow_tty" == "1" ]] && [[ -n "$tty_wrapper" ]] && command -v "$tty_wrapper" >/dev/null 2>&1; then
     local quoted=""
+    echo "d"
     if (( $# )); then
       printf -v quoted ' %q' "$@"
     fi
 
     if mjepa_run_with_timeout "$tty_wrapper" -q /dev/null -c "$sudo_bin -n${quoted}" >/dev/null 2>&1; then
+      echo "e"
       return 0
     fi
 
     if mjepa_run_with_timeout "$tty_wrapper" -q /dev/null "$sudo_bin" -n "$@" >/dev/null 2>&1; then
+      echo "f"
       return 0
     fi
   fi
-
+  echo "g"
   return 1
 }
 
@@ -375,7 +381,7 @@ mjepa_privileged_dir_fix() {
     echo "15"
     gid="$(id -g 2>/dev/null)" || gid="$uid"
   fi
-
+  echo "15.1"
   if mjepa_sudo_exec mkdir -p "$path" && \
      mjepa_sudo_exec chown "$uid:$gid" "$path"; then
     echo "16"
@@ -387,7 +393,7 @@ mjepa_privileged_dir_fix() {
       return 0
     fi
   fi
-
+  echo "15.2"
   return 1
 }
 
