@@ -89,12 +89,45 @@ mjepa_log_error() {
   echo "[ci] error: $*" >&2
 }
 
+: "${MJEPA_SUDO_BIN:=sudo}"
+
 mjepa_try_dir() {
-  local path="$1"
+  local path="$1" label="${2:-$1}"
   [[ -n "$path" ]] || return 1
   if mkdir -p "$path" 2>/dev/null && [[ -w "$path" ]]; then
     return 0
   fi
+  if mjepa_privileged_dir_fix "$path" "$label"; then
+    return 0
+  fi
+  return 1
+}
+
+mjepa_privileged_dir_fix() {
+  local path="$1" label="${2:-$1}"
+  local sudo_bin="${MJEPA_SUDO_BIN:-}"
+  [[ -n "$path" ]] || return 1
+  [[ -n "$sudo_bin" ]] || return 1
+  if ! command -v "$sudo_bin" >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! "$sudo_bin" -n true >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local uid gid
+  uid="$(id -u 2>/dev/null)" || return 1
+  gid="$(id -g 2>/dev/null)" || gid="$uid"
+
+  if "$sudo_bin" -n mkdir -p "$path" >/dev/null 2>&1 && \
+     "$sudo_bin" -n chown "$uid:$gid" "$path" >/dev/null 2>&1; then
+    "$sudo_bin" -n chmod 0775 "$path" >/dev/null 2>&1 || true
+    if [[ -w "$path" ]]; then
+      mjepa_log_warn "regained write access to $label via $sudo_bin"
+      return 0
+    fi
+  fi
+
   return 1
 }
 
