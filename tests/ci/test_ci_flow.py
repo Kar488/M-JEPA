@@ -933,6 +933,8 @@ fi
             "MJEPA_ALLOW_DATA_FALLBACKS": "1",
         }
     )
+
+    met_env = experiments_root / env["EXP_ID"] / "met_benchmark.env"
     
     for key in (
         "PRETRAIN_ENCODER_PATH",
@@ -978,6 +980,22 @@ fi
         for key in sorted(debug_keys):
             diag(f"[finetune-test]   {key}={env_for_run[key]}")
 
+        required_env_keys = {
+            "PRETRAIN_DIR",
+            "PRETRAIN_ARTIFACTS_DIR",
+            "PRETRAIN_MANIFEST",
+            "PRETRAIN_ENCODER_PATH",
+            "PRETRAIN_EXPERIMENT_ROOT",
+            "PRETRAIN_TOX21_ENV",
+            "FINETUNE_DIR",
+        }
+        missing_env = sorted(key for key in required_env_keys if key not in env_for_run)
+        if missing_env:
+            diag(
+                "[finetune-test]   missing_env_keys="
+                + ", ".join(missing_env)
+            )
+
         try:
             subprocess.run(
                 ["bash", "scripts/ci/run-finetune.sh"],
@@ -1021,10 +1039,10 @@ fi
     capture_text = invoke_finetune(env, capture_one, label="local gate missing")
     assert "MET_BENCHMARK_BASELINE=unknown" in capture_text
 
-    # Uppercase/whitespace variants of the baseline gate should still
-    # short-circuit the stage before the shim executes.
-    pretrain_gate.write_text(
-        "  export MET_BENCHMARK_BASELINE = TRUE  \r\n",
+    # Uppercase/whitespace variants of the reroute flag should still be
+    # parsed correctly when they evaluate to "false".
+    met_env.write_text(
+        "  export MET_BENCHMARK_BASELINE = FALSE  \r\n",
         encoding="utf-8",
     )
 
@@ -1034,7 +1052,7 @@ fi
 
     # Remove the finetune-local gate and ensure the pretrain fallback is
     # honoured when the reroute signal only exists under the lineage root.
-    met_env.unlink()
+    met_env.unlink(missing_ok=True)
     pretrain_gate = experiments_root / "pretrain-demo" / "met_benchmark.env"
     pretrain_gate.write_text(
         "  # gate summary\r\n"
@@ -1082,7 +1100,7 @@ fi
 
     # Uppercase/whitespace variants of the baseline gate should still
     # short-circuit the stage before the shim executes.
-    pretrain_gate.write_text(
+    met_env.write_text(
         "  export MET_BENCHMARK_BASELINE = TRUE  \r\n",
         encoding="utf-8",
     )
