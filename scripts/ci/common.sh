@@ -218,12 +218,10 @@ mjepa_sudo_exec() {
     fi
 
     if mjepa_run_with_timeout "$tty_wrapper" -q /dev/null -c "$sudo_bin -n${quoted}" >/dev/null 2>&1; then
-      echo "f"
       return 0
     fi
 
     if mjepa_run_with_timeout "$tty_wrapper" -q /dev/null "$sudo_bin" -n "$@" >/dev/null 2>&1; then
-      echo "g"
       return 0
     fi
   fi
