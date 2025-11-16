@@ -966,6 +966,63 @@ fi
     capture_text = capture_two.read_text(encoding="utf-8")
     assert "MET_BENCHMARK_BASELINE=false" in capture_text
 
+    # Remove the finetune-local gate and ensure the pretrain fallback is
+    # honoured when the reroute signal only exists under the lineage root.
+    met_env.unlink()
+    pretrain_gate = experiments_root / "pretrain-demo" / "met_benchmark.env"
+    pretrain_gate.write_text(
+        "  # gate summary\r\n"
+        "export MET_BENCHMARK_BASELINE=false\r\n"
+        "MET_GATE_DEBUG=observed value  \r\n",
+        encoding="utf-8",
+    )
+
+    capture_three = tmp_path / "env_fallback.txt"
+    env["TMP_ENV_CAPTURE"] = str(capture_three)
+    subprocess.run(
+        ["bash", "scripts/ci/run-finetune.sh"],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    capture_text = capture_three.read_text(encoding="utf-8")
+    assert "MET_BENCHMARK_BASELINE=false" in capture_text
+    assert "MET_GATE_DEBUG=observed value" in capture_text
+
+    # Empty or whitespace-only gate files should act like a missing
+    # reroute signal and leave the baseline flag marked as unknown.
+    pretrain_gate.write_text("\n  \t  # comment only\r\n\t\n", encoding="utf-8")
+
+    capture_blank = tmp_path / "env_blank.txt"
+    env["TMP_ENV_CAPTURE"] = str(capture_blank)
+    subprocess.run(
+        ["bash", "scripts/ci/run-finetune.sh"],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    capture_text = capture_blank.read_text(encoding="utf-8")
+    assert "MET_BENCHMARK_BASELINE=unknown" in capture_text
+
+    # Uppercase/whitespace variants of the baseline gate should still
+    # short-circuit the stage before the shim executes.
+    pretrain_gate.write_text(
+        "  export MET_BENCHMARK_BASELINE = TRUE  \r\n",
+        encoding="utf-8",
+    )
+
+    capture_skip = tmp_path / "env_skip.txt"
+    if capture_skip.exists():
+        capture_skip.unlink()
+    env["TMP_ENV_CAPTURE"] = str(capture_skip)
+    subprocess.run(
+        ["bash", "scripts/ci/run-finetune.sh"],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    assert not capture_skip.exists()
+
 
 def test_run_tox21_exports_full_finetune_when_finetuned(tmp_path):
     experiments_root = tmp_path / "experiments"
