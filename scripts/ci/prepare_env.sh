@@ -3,11 +3,15 @@ set -euxo pipefail
 
 # ----------- inputs & defaults -----------
 : "${APP_DIR:=/srv/mjepa}"
-: "${MAMBA_ROOT_PREFIX:=~/micromamba}"
-: "${WANDB_DIR:=/data/mjepa/wandb}"
-: "${CACHE_DIR:=/data/mjepa/cache/graphs_250k}"
 : "${RUN_ID:=$(date +%s)}"
-: "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
+export MJEPACI_STAGE="prepare-env"
+: "${EXP_ID:=${RUN_ID}}"
+
+CI_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${CI_SCRIPT_DIR}/common.sh"
+
+EXP_ROOT="${EXPERIMENTS_ROOT%/}/${EXP_ID}"
 ENV_NAME="mjepa"
 : "${PYTORCH_INDEX_URL:=https://download.pytorch.org/whl/cu128}"
 : "${PYTORCH_PACKAGE_SPEC:=torch==2.8.*}"
@@ -18,9 +22,7 @@ ENV_NAME="mjepa"
 : "${BUILD_SCATTER_FROM_SOURCE:=0}"
 
 # ----------- persistent dirs -----------
-mkdir -p /data/mjepa/experiments "$WANDB_DIR" "$CACHE_DIR"
-mkdir -p "$EXP_ROOT"/{grid,pretrain,finetune,bench,tox21,logs}
-ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
+ln -sfn "$EXP_ROOT" "${EXPERIMENTS_ROOT%/}/latest"
 
 # ----------- driver / gpu sanity -----------
 CUDA_EXPECTED=0
