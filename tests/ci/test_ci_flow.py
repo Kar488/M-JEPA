@@ -948,7 +948,7 @@ fi
         env_for_run = env_map.copy()
         env_for_run["TMP_ENV_CAPTURE"] = str(capture_path)
 
-        diag_stream = getattr(sys, "__stdout__", sys.stdout)
+        diag_stream = sys.stderr
 
         def diag(message: str) -> None:
             print(message, flush=True)
