@@ -616,33 +616,99 @@ resolve_encoder_checkpoint() {
   if [[ -n "$manifest" && -f "$manifest" ]]; then
     local py resolved=""
     if py=$(python_bin 2>/dev/null); then
-      resolved="$("$py" - "$manifest" <<'PY'
+      resolved="$("$py" - "$manifest" \
+        "${PRETRAIN_DIR:-}" \
+        "${PRETRAIN_ARTIFACTS_DIR:-}" \
+        "${PRETRAIN_EXPERIMENT_ROOT:-}" \
+        "${EXPERIMENTS_ROOT:-}" \
+        "${ARTIFACTS_DIR:-}" <<'PY'
 import json
 import os
 import sys
 
-path = sys.argv[1]
-try:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh) or {}
-except Exception:
+manifest_path = sys.argv[1]
+
+def _arg(idx):
+    try:
+        return sys.argv[idx]
+    except IndexError:
+        return ""
+
+pretrain_dir = _arg(2)
+pretrain_artifacts = _arg(3)
+pretrain_root = _arg(4)
+experiments_root = _arg(5)
+artifacts_dir = _arg(6)
+
+def _load_manifest(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh) or {}
+    except Exception:
+        return {}
+
+payload = _load_manifest(manifest_path)
+candidate_value = None
+if isinstance(payload, dict):
+    paths = payload.get("paths")
+    if isinstance(paths, dict):
+        for key in ("encoder", "encoder_symlink"):
+            value = paths.get(key)
+            if isinstance(value, str):
+                value = value.strip()
+            if value:
+                candidate_value = value
+                break
+    if not candidate_value:
+        fallback = payload.get("encoder_checkpoint")
+        if isinstance(fallback, str):
+            fallback = fallback.strip()
+        if fallback:
+            candidate_value = fallback
+
+if not candidate_value:
     sys.exit(0)
 
-manifest_dir = os.path.dirname(os.path.abspath(path))
+manifest_dir = os.path.dirname(os.path.abspath(manifest_path))
+search_roots = [
+    manifest_dir,
+    pretrain_dir,
+    pretrain_artifacts,
+    pretrain_root,
+    experiments_root,
+    artifacts_dir,
+]
 
-paths = data.get("paths") or {}
-for key in ("encoder", "encoder_symlink"):
-    value = paths.get(key)
-    if isinstance(value, str):
-        value = value.strip()
-    if not value:
-        continue
-    if os.path.isabs(value):
-        resolved = value
+def _collect_candidates(raw):
+    results = []
+    seen = set()
+
+    def add(path):
+        if not path:
+            return
+        abs_path = os.path.abspath(path)
+        if abs_path in seen:
+            return
+        seen.add(abs_path)
+        results.append(abs_path)
+
+    if os.path.isabs(raw):
+        add(raw)
     else:
-        resolved = os.path.abspath(os.path.join(manifest_dir, value))
-    print(resolved)
-    break
+        for base in search_roots:
+            if base:
+                add(os.path.join(base, raw))
+    add(raw)
+    return results
+
+raw_candidates = _collect_candidates(candidate_value)
+for candidate in raw_candidates:
+    if os.path.isfile(candidate):
+        print(candidate)
+        break
+else:
+    if raw_candidates:
+        print(raw_candidates[0])
 PY
       )"
     fi
