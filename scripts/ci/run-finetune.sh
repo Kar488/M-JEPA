@@ -9,6 +9,18 @@ export MJEPACI_STAGE="finetune"
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
 
+# Some CI tests only provide EXPERIMENTS_ROOT and PRETRAIN_EXP_ID. Derive the
+# lineage directories early so resolve_encoder_checkpoint sees the same defaults
+# as downstream CI jobs and so tests that stub encoder.pt files behave like the
+# real pipeline.
+if [[ -n "${PRETRAIN_EXP_ID:-}" && -n "${EXPERIMENTS_ROOT:-}" ]]; then
+  : "${PRETRAIN_EXPERIMENT_ROOT:=${EXPERIMENTS_ROOT%/}/${PRETRAIN_EXP_ID}}"
+  : "${PRETRAIN_DIR:=${PRETRAIN_EXPERIMENT_ROOT%/}/pretrain}"
+  : "${PRETRAIN_ARTIFACTS_DIR:=${PRETRAIN_EXPERIMENT_ROOT%/}/artifacts}"
+  : "${PRETRAIN_MANIFEST:=${PRETRAIN_ARTIFACTS_DIR%/}/encoder_manifest.json}"
+  : "${PRETRAIN_ENCODER_PATH:=${PRETRAIN_DIR%/}/encoder.pt}"
+fi
+
 ci_print_env_diag
 
 : "${LINEAR_HEAD_SOFT_TIMEOUT_EXIT:=86}"

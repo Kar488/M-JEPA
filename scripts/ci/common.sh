@@ -719,6 +719,16 @@ PY
     fi
   fi
 
+  if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+    local root_search=""
+    if root_search=$(find "${PRETRAIN_EXPERIMENT_ROOT}" -name 'encoder.pt' -type f -print -quit 2>/dev/null); then
+      if [[ -n "$root_search" ]]; then
+        printf '%s\n' "$root_search"
+        return 0
+      fi
+    fi
+  fi
+
   if [[ -n "$candidate" ]]; then
     printf '%s\n' "$candidate"
   fi
