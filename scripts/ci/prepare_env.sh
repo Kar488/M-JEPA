@@ -71,6 +71,8 @@ ENV_NAME="mjepa"
 : "${PYTORCH_ALLOW_NIGHTLY_FALLBACK:=1}"
 : "${PYTORCH_FAIL_FAST_ON_BAD_CUDA:=1}"
 : "${BUILD_SCATTER_FROM_SOURCE:=0}"
+: "${MJEPA_ASSUME_SELF_HOSTED_CUDA_REPO:=0}"
+MJEPA_ASSUME_SELF_HOSTED_CUDA_REPO="$(normalize_bool "${MJEPA_ASSUME_SELF_HOSTED_CUDA_REPO}" 0)"
 
 # ----------- persistent dirs -----------
 ln -sfn "$EXP_ROOT" "${EXPERIMENTS_ROOT%/}/latest"
@@ -165,22 +167,34 @@ fi
 
 if [[ "$need_cuda_install" -eq 1 ]]; then
   echo "[prepare-env] Installing CUDA Toolkit 12.9..."
+
+  install_cuda_keyring() {
+    local cuda_tmp_dir
+    cuda_tmp_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cuda-keyring.XXXXXX")"
+    local cuda_keyring_path="${cuda_tmp_dir}/cuda-keyring_1.1-1_all.deb"
+    curl -fsSL -o "$cuda_keyring_path" \
+      https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+    sudo dpkg -i "$cuda_keyring_path"
+    rm -rf "$cuda_tmp_dir"
+  }
+
   need_cuda_keyring_install=1
   if dpkg -s cuda-keyring >/dev/null 2>&1; then
     need_cuda_keyring_install=0
     echo "[prepare-env] cuda-keyring already installed; skipping re-install"
   elif [[ "$MJEPA_IS_SELF_HOSTED_RUNNER" -eq 1 ]]; then
-    need_cuda_keyring_install=0
-    echo "[prepare-env] Skipping cuda-keyring install on self-hosted runner (${MJEPA_SELF_HOSTED_REASON:-unknown})"
+    if [[ "$MJEPA_ASSUME_SELF_HOSTED_CUDA_REPO" -eq 1 ]]; then
+      need_cuda_keyring_install=0
+      echo "[prepare-env] Skipping cuda-keyring install on self-hosted runner (${MJEPA_SELF_HOSTED_REASON:-unknown}); explicit override provided"
+    else
+      echo "[prepare-env] Self-hosted runner detected but cuda-keyring missing; installing keyring"
+      install_cuda_keyring
+      need_cuda_keyring_install=0
+    fi
   fi
 
   if [[ "$need_cuda_keyring_install" -eq 1 ]]; then
-    cuda_tmp_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cuda-keyring.XXXXXX")"
-    cuda_keyring_path="${cuda_tmp_dir}/cuda-keyring_1.1-1_all.deb"
-    curl -fsSL -o "$cuda_keyring_path" \
-      https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-    sudo dpkg -i "$cuda_keyring_path"
-    rm -rf "$cuda_tmp_dir"
+    install_cuda_keyring
   else
     echo "[prepare-env] Assuming CUDA apt repository is already configured"
   fi
