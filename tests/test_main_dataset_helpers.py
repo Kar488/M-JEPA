@@ -5,6 +5,8 @@ import types
 import numpy as np
 import pytest
 
+from data import mdataset
+
 # Provide minimal stubs for heavy optional dependencies
 try:  # pragma: no cover - optional dependency
     import rdkit  # noqa: F401
@@ -64,6 +66,12 @@ except Exception:  # pragma: no cover
             "pyarrow or fastparquet is required for parquet tests",
             allow_module_level=True,
         )
+
+
+def test_resolve_worker_count_tracks_cpu_budget(monkeypatch):
+    monkeypatch.setattr(mdataset.os, "cpu_count", lambda: 32)
+    assert mdataset._resolve_worker_count(-1) == 31
+    assert mdataset._resolve_worker_count(4) == 4
 
 
 def test_build_unlabeled_dataset_fallback(monkeypatch):
