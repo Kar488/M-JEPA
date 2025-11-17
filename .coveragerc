@@ -11,6 +11,7 @@ omit =
     */dist-packages/*
     */envs/*/lib/python*/*
     */.mamba-root/*
+    reports/*
 
 [report]
 fail_under = 70
