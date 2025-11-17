@@ -60,7 +60,7 @@ def _resolve_worker_count(num_workers: int) -> int:
         return 0
     if num_workers < 0:
         cpu_budget = max(1, (os.cpu_count() or 2) - 1)
-        return max(1, min(cpu_budget, 8))
+        return max(1, cpu_budget)
     return int(num_workers)
 
 
