@@ -5,8 +5,6 @@ import types
 import numpy as np
 import pytest
 
-from data import mdataset
-
 # Provide minimal stubs for heavy optional dependencies
 try:  # pragma: no cover - optional dependency
     import rdkit  # noqa: F401
@@ -47,6 +45,7 @@ except Exception:  # pragma: no cover
     sys.modules["sklearn"] = sklearn_stub
     sys.modules["sklearn.metrics"] = metrics_stub
 
+from data import mdataset
 from data.mdataset import GraphData, GraphDataset
 from main import (
     _build_unlabeled_dataset_from_smiles,
