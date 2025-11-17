@@ -935,6 +935,23 @@ fi
         }
     )
 
+    # Strip host-provided cache overrides so run-finetune derives paths from the
+    # temporary experiments root created by the test.  Some CI environments set
+    # these variables globally (e.g., to /data/mjepa/cache/*), which causes the
+    # stage wrapper to look for encoder artifacts outside of the test fixture
+    # and fail immediately.
+    for key in (
+        "CACHE_DIR",
+        "SWEEP_CACHE_DIR",
+        "FINETUNE_CACHE_DIR",
+        "BENCH_CACHE_DIR",
+        "TOX21_CACHE_DIR",
+        "REPORTS_CACHE_DIR",
+        "GRID_CACHE_DIR",
+        "PRETRAIN_CACHE_DIR",
+    ):
+        env.pop(key, None)
+
     met_env = experiments_root / env["EXP_ID"] / "met_benchmark.env"
     
     for key in (
