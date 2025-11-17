@@ -10,6 +10,8 @@ import torch
 class GraphData:
     x: np.ndarray
     edge_index: np.ndarray
+    edge_attr: np.ndarray | None = None
+    pos: np.ndarray | None = None
 
 
 class GraphDataset:
