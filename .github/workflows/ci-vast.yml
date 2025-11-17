@@ -132,7 +132,7 @@ jobs:
           print('torch_geometric', torch_geometric.__version__)
           PY
       - name: Run tests
-        run: micromamba run -n mjepa python -m pytest -m "not gpu and not slow" -q
+        run: micromamba run -n mjepa python -m pytest -m "not gpu and not slow" --capture=tee-sys -q
 
   vast_smoke:
     if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}

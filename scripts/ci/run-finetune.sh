@@ -35,31 +35,6 @@ export BESTCFG_SKIP
 export WANDB_NAME="finetune"
 export WANDB_JOB_TYPE="finetune"
 
-manifest_path="${PRETRAIN_MANIFEST}"
-encoder_ckpt="$(resolve_encoder_checkpoint)"
-
-echo "[finetune] using pretrain experiment id=${PRETRAIN_EXP_ID} checkpoint=${encoder_ckpt}" >&2
-echo "[finetune] encoder manifest=${manifest_path}" >&2
-
-if [[ -z "$encoder_ckpt" ]]; then
-  echo "[ci] error: missing pretrain checkpoint for finetune (PRETRAIN_ENCODER_PATH=${PRETRAIN_ENCODER_PATH:-<unset>}). Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain." >&2
-  exit 1
-fi
-
-if [[ -n "${PRETRAIN_ENCODER_PATH:-}" && "$encoder_ckpt" != "${PRETRAIN_ENCODER_PATH:-}" ]]; then
-  echo "[finetune] PRETRAIN_ENCODER_PATH pointed to ${PRETRAIN_ENCODER_PATH}; using manifest-derived path ${encoder_ckpt}" >&2
-fi
-
-if [[ ! -f "$encoder_ckpt" ]]; then
-  echo "[ci] error: expected ${encoder_ckpt} but it was not found. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain." >&2
-  exit 1
-fi
-
-if [[ ! -f "$manifest_path" ]]; then
-  echo "[ci] error: expected ${manifest_path} but it was not found. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain." >&2
-  exit 1
-fi
-
 # Skip fine-tuning if baseline evaluation already met benchmark
 MET_ENV_FILE=""
 local_met_env=""
@@ -224,6 +199,31 @@ echo "[finetune][gate] normalized MET_BENCHMARK_BASELINE=${baseline_status}" >&2
 if [[ "$baseline_status" == "true" ]]; then
   echo "[finetune] Baseline met benchmark; skipping fine-tune stage."
   exit 0
+fi
+
+manifest_path="${PRETRAIN_MANIFEST}"
+encoder_ckpt="$(resolve_encoder_checkpoint)"
+
+echo "[finetune] using pretrain experiment id=${PRETRAIN_EXP_ID} checkpoint=${encoder_ckpt}" >&2
+echo "[finetune] encoder manifest=${manifest_path}" >&2
+
+if [[ -z "$encoder_ckpt" ]]; then
+  echo "[ci] error: missing pretrain checkpoint for finetune (PRETRAIN_ENCODER_PATH=${PRETRAIN_ENCODER_PATH:-<unset>}). Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain." >&2
+  exit 1
+fi
+
+if [[ -n "${PRETRAIN_ENCODER_PATH:-}" && "$encoder_ckpt" != "${PRETRAIN_ENCODER_PATH:-}" ]]; then
+  echo "[finetune] PRETRAIN_ENCODER_PATH pointed to ${PRETRAIN_ENCODER_PATH}; using manifest-derived path ${encoder_ckpt}" >&2
+fi
+
+if [[ ! -f "$encoder_ckpt" ]]; then
+  echo "[ci] error: expected ${encoder_ckpt} but it was not found. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain." >&2
+  exit 1
+fi
+
+if [[ ! -f "$manifest_path" ]]; then
+  echo "[ci] error: expected ${manifest_path} but it was not found. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain." >&2
+  exit 1
 fi
 
 if [[ "$baseline_status" == "false" ]]; then
