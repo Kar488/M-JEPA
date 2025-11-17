@@ -1,10 +1,11 @@
 import types
 
-import types
-
 import pytest
 
+np = pytest.importorskip("numpy")
 torch = pytest.importorskip("torch")
+
+from data.mdataset import GraphData
 
 import training.unsupervised as unsup
 
@@ -54,4 +55,37 @@ def test_maybe_pin_returns_tensor():
     assert isinstance(pinned, torch.Tensor)
     with_device = unsup._maybe_pin(tensor, device="cpu")
     assert with_device.device.type == "cpu"
+
+
+def test_maybe_pin_handles_type_error(monkeypatch):
+    tensor = torch.ones(1)
+    outputs = []
+
+    def fake_pin(self, *args, **kwargs):
+        outputs.append(kwargs)
+        if kwargs:
+            raise TypeError("unexpected kwargs")
+        return torch.zeros_like(self)
+
+    monkeypatch.setattr(torch.Tensor, "pin_memory", fake_pin, raising=False)
+    pinned = unsup._maybe_pin(tensor, device="cuda")
+    assert torch.equal(pinned, torch.zeros_like(tensor))
+    assert outputs[0] == {"device": "cuda"}
+
+
+def test_graph_serialisation_roundtrip():
+    graph = GraphData(
+        x=np.ones((2, 3), dtype=float),
+        edge_index=np.array([[0, 1], [1, 0]], dtype=np.int64),
+        edge_attr=np.ones((2, 1), dtype=float),
+        pos=np.zeros((2, 3), dtype=float),
+    )
+    graph.custom = torch.tensor([1.0, 2.0])
+
+    state = unsup._graph_to_serialisable(graph)
+    assert state["extras"]["custom"].tolist() == [1.0, 2.0]
+
+    restored = unsup._graph_from_serialisable(state)
+    assert np.array_equal(np.asarray(restored.edge_index), graph.edge_index)
+    assert getattr(restored, "custom").tolist() == [1.0, 2.0]
 

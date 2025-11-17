@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.ci import generate_graph_visuals as graph_visuals
 
 
@@ -92,3 +94,40 @@ def test_generate_graph_visuals_synthesizes_dataset_when_source_missing(tmp_path
     summary = _assert_visuals(output_dir)
     assert summary.get("loader") == "synthetic"
     assert summary.get("num_graphs", 0) >= 1
+
+
+def test_guess_extension_requires_supported_entries(tmp_path):
+    directory = tmp_path / "dataset"
+    directory.mkdir()
+    (directory / "readme.txt").write_text("hi", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        graph_visuals._guess_extension(str(directory))
+
+    csv_path = directory / "toy.csv"
+    csv_path.write_text("smiles\nC\n", encoding="utf-8")
+    assert graph_visuals._guess_extension(str(directory)) == "csv"
+    assert graph_visuals._guess_extension(str(csv_path)) == "csv"
+
+
+def test_select_indices_even_spacing():
+    assert graph_visuals._select_indices(total=0, limit=5) == []
+    assert graph_visuals._select_indices(total=3, limit=5) == [0, 1, 2]
+    assert graph_visuals._select_indices(total=5, limit=3) == [0, 2, 4]
+    assert graph_visuals._select_indices(total=10, limit=1) == [0]
+
+
+def test_graph_positions_and_edges_fallbacks():
+    graph = graph_visuals._StubGraphData(num_nodes=4)
+    graph.edge_index = [[0, 1, 1, 2], [1, 0, 2, 2]]
+    positions = graph_visuals._graph_positions(graph)
+    assert len(positions) == 4
+    assert positions[0][2] == pytest.approx(-0.5)
+
+    edges = graph_visuals._unique_edges(graph)
+    assert set(edges) == {(0, 1), (1, 2)}
+
+
+def test_normalise_matrix_handles_iterables():
+    assert graph_visuals._normalise_matrix([[1, 2], (3, 4)]) == [[1.0, 2.0], [3.0, 4.0]]
+    assert graph_visuals._normalise_matrix(None) is None
