@@ -323,6 +323,12 @@ jobs:
     env:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
+      - name: Ensure experiments root available
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/ensure_experiments_root.sh
       - name: Materialise 2D caches locally
         shell: bash
         run: |
@@ -364,6 +370,12 @@ jobs:
     env:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
+      - name: Ensure experiments root available
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/ensure_experiments_root.sh
       - name: Materialise 3D caches locally
         shell: bash
         run: |
@@ -409,6 +421,12 @@ jobs:
       grid_exp_id: ${{ steps.phase1_ids.outputs.grid_exp_id }}
       pretrain_exp_id: ${{ steps.phase1_ids.outputs.pretrain_exp_id }}
     steps:
+      - name: Ensure experiments root available
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/ensure_experiments_root.sh
       - name: Run grid search
         env:
           HARD_WALL_MINS: 900
@@ -469,6 +487,12 @@ jobs:
       PHASE2_EXPORT_WALL_MINS: 30
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
+      - name: Ensure experiments root available
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/ensure_experiments_root.sh
       - name: Run Phase-2 stages on Vast
         env:
           # agent knobs (already have these)
@@ -568,6 +592,12 @@ jobs:
       pretrain_encoder: ${{ steps.pretrain_state.outputs.encoder_path }}
       pretrain_tox21_env: ${{ steps.pretrain_state.outputs.tox21_env }}
     steps:
+      - name: Ensure experiments root available
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/ensure_experiments_root.sh
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -633,6 +663,12 @@ jobs:
       EXPERIMENTS_ROOT: /data/mjepa/experiments
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
+      - name: Ensure experiments root available
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/ensure_experiments_root.sh
       - name: Tox21 baseline on Vast
         env:
           HARD_WALL_MINS: 900
@@ -718,6 +754,12 @@ jobs:
       EXPERIMENTS_ROOT: /data/mjepa/experiments
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
+      - name: Ensure experiments root available
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/ensure_experiments_root.sh
       - name: Finetune on Vast
         env:
           HARD_WALL_MINS: 880
@@ -748,6 +790,12 @@ jobs:
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
     steps:
+      - name: Ensure experiments root available
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/ensure_experiments_root.sh
       - name: Summarise tox21 gate outcome
         run: |
           echo "TOX21_MET_GATE=${{ needs.vast_tox21_baseline.outputs.tox21_gate }}"
@@ -784,6 +832,12 @@ jobs:
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
     steps:
+      - name: Ensure experiments root available
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/ensure_experiments_root.sh
       - name: Tox21 on Vast
         env:
           HARD_WALL_MINS: 900
@@ -833,6 +887,12 @@ jobs:
     env:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
+      - name: Ensure experiments root available
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          bash scripts/ci/ensure_experiments_root.sh
       - name: Publish report
         if: ${{ needs.vast_benchmark.result == 'success' && needs.vast_tox21.result == 'success' }}
         shell: bash
