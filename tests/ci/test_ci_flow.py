@@ -1032,11 +1032,11 @@ fi
             for line in exc.stderr.splitlines():
                 if re.fullmatch(r'\d+(?:\.\d+)*', line.strip()):
                     diag(f"[finetune-test] err: {line}")
-            traceback.print_exc(file=diag_stream)
+            #traceback.print_exc(file=diag_stream)
             raise
         except Exception:
             diag(f"[finetune-test] unexpected exception while invoking {label}")
-            traceback.print_exc(file=diag_stream)
+            #traceback.print_exc(file=diag_stream)
             diag_stream.flush()
             if capture_path.exists():
                 capture_text = capture_path.read_text(encoding="utf-8")
