@@ -9,7 +9,7 @@ import hashlib
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import repeat
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 try:  # pragma: no cover - optional dependency
@@ -53,12 +53,12 @@ def _cache_schema_suffix(add_3d: bool) -> str:
     return f"{GRAPH_CACHE_VERSION}_3d{int(add_3d)}_e{edge_dim}_{GRAPH_SCHEMA_VERSION}"
 
 
-def _resolve_worker_count(num_workers: int) -> int:
-    """Map negative worker counts to an automatic CPU-friendly budget."""
+def _resolve_worker_count(num_workers: Optional[int]) -> int:
+    """Map worker counts to an automatic CPU-friendly budget when unset."""
 
     if num_workers is None:
-        return 0
-    if num_workers < 0:
+        num_workers = -1
+    if num_workers <= 0:
         cpu_budget = max(1, (os.cpu_count() or 2) - 1)
         return max(1, cpu_budget)
     return int(num_workers)
@@ -258,6 +258,53 @@ def _safe_smiles_to_graph(
         return None
 
     return _graph_to_state(graph)
+
+
+def _recommended_chunksize(num_items: int, worker_budget: int) -> int:
+    """Return a coarse-grained chunksize for ``ProcessPoolExecutor.map``."""
+
+    if num_items <= 0 or worker_budget <= 0:
+        return 1
+    target = max(64, num_items // max(1, worker_budget * 4))
+    return min(2048, target)
+
+
+def _iter_graph_states(
+    smiles: Sequence[str],
+    *,
+    add_3d: bool,
+    random_seed: Optional[int],
+    worker_budget: int,
+    cls_module: str,
+    cls_qualname: str,
+) -> Iterator[Tuple[int, Optional[GraphDataState]]]:
+    """Yield ``(index, GraphDataState | None)`` for each SMILES string."""
+
+    if worker_budget > 0 and smiles:
+        chunksize = _recommended_chunksize(len(smiles), worker_budget)
+        with ProcessPoolExecutor(max_workers=worker_budget) as ex:
+            iterator = ex.map(
+                _safe_smiles_to_graph,
+                smiles,
+                repeat(add_3d),
+                repeat(random_seed),
+                repeat(cls_module),
+                repeat(cls_qualname),
+                chunksize=chunksize,
+            )
+            for idx, g_state in enumerate(iterator):
+                yield idx, g_state
+    else:
+        dataset_cls = _resolve_graphdataset_cls(cls_module, cls_qualname)
+        for idx, sm in enumerate(smiles):
+            try:
+                graph = dataset_cls.smiles_to_graph(
+                    sm, add_3d=add_3d, random_seed=random_seed
+                )
+            except Exception:
+                yield idx, None
+                continue
+            yield idx, _graph_to_state(graph)
 
 class GraphDataset:
     def __init__(
@@ -1007,31 +1054,18 @@ class GraphDataset:
         cls_qualname = cls.__qualname__
 
         worker_budget = _resolve_worker_count(num_workers)
-        if worker_budget > 0:
-            with ProcessPoolExecutor(max_workers=worker_budget) as ex:
-                iterator = ex.map(
-                    _safe_smiles_to_graph,
-                    smiles,
-                    repeat(add_3d),
-                    repeat(random_seed),
-                    repeat(cls_module),
-                    repeat(cls_qualname),
-                )
-                for i, g_state in enumerate(iterator):
-                    if g_state is not None:
-                        graphs.append(_graph_from_state(g_state))
-                        smiles_out.append(smiles[i])
-                        valid_indices.append(i)
-        else:
-            for i, sm in enumerate(smiles):
-                try:
-                    graph = cls.smiles_to_graph(
-                        sm, add_3d=add_3d, random_seed=random_seed
-                    )
-                except Exception:
-                    continue
-                graphs.append(graph)
-                smiles_out.append(sm)
+        state_iter = _iter_graph_states(
+            smiles,
+            add_3d=add_3d,
+            random_seed=random_seed,
+            worker_budget=worker_budget,
+            cls_module=cls_module,
+            cls_qualname=cls_qualname,
+        )
+        for i, g_state in state_iter:
+            if g_state is not None:
+                graphs.append(_graph_from_state(g_state))
+                smiles_out.append(smiles[i])
                 valid_indices.append(i)
         # Filter labels to match valid graphs
         if labels is not None:
@@ -1110,30 +1144,19 @@ class GraphDataset:
         cls_module = cls.__module__
         cls_qualname = cls.__qualname__
 
-        worker_budget = _resolve_worker_count(num_workers if num_workers is not None else 0)
-        if worker_budget > 0:
-            with ProcessPoolExecutor(max_workers=worker_budget) as ex:
-                iterator = ex.map(
-                    _safe_smiles_to_graph,
-                    smiles,
-                    repeat(add_3d),
-                    repeat(random_seed),
-                    repeat(cls_module),
-                    repeat(cls_qualname),
-                )
-                for idx, g_state in enumerate(iterator):
-                    if g_state is not None:
-                        graphs.append(_graph_from_state(g_state))
-                        smiles_out.append(smiles[idx])
-                        valid_indices.append(idx)
-        else:
-            for idx, sm in enumerate(smiles):
-                try:
-                    g = cls.smiles_to_graph(sm, add_3d=add_3d, random_seed=random_seed)
-                except Exception:
-                    continue
-                graphs.append(g)
-                smiles_out.append(sm)
+        worker_budget = _resolve_worker_count(num_workers if num_workers is not None else -1)
+        state_iter = _iter_graph_states(
+            smiles,
+            add_3d=add_3d,
+            random_seed=random_seed,
+            worker_budget=worker_budget,
+            cls_module=cls_module,
+            cls_qualname=cls_qualname,
+        )
+        for idx, g_state in state_iter:
+            if g_state is not None:
+                graphs.append(_graph_from_state(g_state))
+                smiles_out.append(smiles[idx])
                 valid_indices.append(idx)
 
         labels = None
