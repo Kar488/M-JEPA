@@ -7,11 +7,26 @@ import os
 import pathlib
 import pickle
 import re
-from typing import Any, Callable, Dict, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional
+
+import numpy as np
+
+from data import mdataset as _mdataset
 
 DATASET_CACHE_VERSION = "v1"
+SHARDED_CACHE_FORMAT = "graph_shards_v1"
+SHARDED_CACHE_VERSION = 1
 
 LogFn = Optional[Callable[[str], None]]
+
+
+@dataclass
+class DatasetBuilderResult:
+    """Wrapper indicating that the builder already persisted the dataset."""
+
+    data: Any = None
+    already_persisted: bool = False
 
 
 def resolve_env_path(path: str) -> str:
@@ -62,6 +77,48 @@ def _default_log(msg: str) -> None:
     print(msg, flush=True)
 
 
+def _is_sharded_payload(payload: Any) -> bool:
+    return bool(
+        isinstance(payload, dict)
+        and payload.get("__dataset_cache_format__") == SHARDED_CACHE_FORMAT
+    )
+
+
+def _materialise_sharded_cache(payload: Dict[str, Any], cache_path: str):
+    GraphDataset = _mdataset.GraphDataset
+    graphs: List[_mdataset.GraphData] = []  # type: ignore[attr-defined]
+    smiles: List[str] = []
+    labels_acc: Optional[List[Any]] = None
+    for shard in payload.get("shards", []):
+        shard_rel = shard.get("path")
+        if not shard_rel:
+            continue
+        shard_path = (
+            shard_rel
+            if os.path.isabs(shard_rel)
+            else os.path.join(os.path.dirname(cache_path), shard_rel)
+        )
+        if not os.path.exists(shard_path):
+            raise FileNotFoundError(
+                f"Shard {shard_path} referenced by {cache_path} is missing"
+            )
+        with open(shard_path, "rb") as fh:
+            shard_payload = pickle.load(fh)
+        shard_graphs = shard_payload.get("graphs") or []
+        for state in shard_graphs:
+            graphs.append(_mdataset._graph_from_state(state))
+        shard_smiles = shard_payload.get("smiles") or []
+        smiles.extend(shard_smiles)
+        shard_labels = shard_payload.get("labels")
+        if shard_labels is not None:
+            if labels_acc is None:
+                labels_acc = []
+            labels_acc.extend(shard_labels)
+    labels = np.asarray(labels_acc) if labels_acc is not None else None
+    smiles_out = smiles if smiles else None
+    return GraphDataset(graphs, labels, smiles_out)
+
+
 def _build_dataset_cache(
     kind: str,
     payload: Dict[str, Any],
@@ -82,7 +139,10 @@ def _build_dataset_cache(
         if load_existing:
             try:
                 with open(cache_path, "rb") as fh:
-                    return pickle.load(fh)
+                    payload = pickle.load(fh)
+                if _is_sharded_payload(payload):
+                    return _materialise_sharded_cache(payload, cache_path)
+                return payload
             except Exception as exc:
                 log_fn(
                     f"failed to load {kind} cache {cache_path}: {exc}; rebuilding"
@@ -99,13 +159,22 @@ def _build_dataset_cache(
         else:
             log_fn(f"force rebuilding {kind} dataset cache at {cache_path}")
 
-    dataset = builder()
-    try:
-        with open(cache_path, "wb") as fh:
-            pickle.dump(dataset, fh)
-        log_fn(f"cached {kind} dataset at {cache_path}")
-    except Exception as exc:
-        log_fn(f"failed to persist {kind} cache {cache_path}: {exc}")
+    builder_result = builder()
+    dataset = builder_result
+    already_persisted = False
+    if isinstance(builder_result, DatasetBuilderResult):
+        dataset = builder_result.data
+        already_persisted = bool(builder_result.already_persisted)
+
+    if not already_persisted:
+        try:
+            with open(cache_path, "wb") as fh:
+                pickle.dump(dataset, fh)
+            log_fn(f"cached {kind} dataset at {cache_path}")
+        except Exception as exc:
+            log_fn(f"failed to persist {kind} cache {cache_path}: {exc}")
+    else:
+        log_fn(f"{kind} dataset persisted via streaming builder at {cache_path}")
     return dataset
 
 
