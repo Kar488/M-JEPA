@@ -1096,6 +1096,21 @@ fi
     assert "MET_BENCHMARK_BASELINE=false" in capture_text
     assert "MET_GATE_DEBUG=observed value" in capture_text
 
+    # Force the resolver to rely solely on the manifest entry when the
+    # advertised PRETRAIN_ENCODER_PATH is missing so relative manifest entries
+    # are interpreted relative to the pretrain lineage.
+    env_manifest_only = env.copy()
+    env_manifest_only["PRETRAIN_ENCODER_PATH"] = str(
+        experiments_root / "finetune-demo" / "artifacts" / "missing_encoder.pt"
+    )
+    capture_manifest = tmp_path / "env_manifest_relative.txt"
+    capture_text = invoke_finetune(
+        env_manifest_only,
+        capture_manifest,
+        label="manifest relative encoder",
+    )
+    assert "MET_BENCHMARK_BASELINE=false" in capture_text
+
     # Empty or whitespace-only gate files should act like a missing
     # reroute signal and leave the baseline flag marked as unknown.
     pretrain_gate.write_text("\n  \t  # comment only\r\n\t\n", encoding="utf-8")
