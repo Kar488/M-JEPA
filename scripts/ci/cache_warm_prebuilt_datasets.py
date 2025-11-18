@@ -11,6 +11,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
+from utils.dataset import load_directory_dataset
+
 
 def _maybe_inject_repo_root() -> None:
     """Ensure the repository root is available on ``sys.path``."""
@@ -91,8 +93,6 @@ def _list_dataset_files(dirpath: str) -> List[Tuple[str, str]]:
         ext = os.path.splitext(fname)[1].lower()
         if ext in {".parquet", ".csv"}:
             files.append((path, ext))
-    if not files:
-        raise FileNotFoundError(f"No supported dataset files found in {dirpath}")
     return files
 
 
@@ -241,6 +241,8 @@ def _stream_directory_to_cache(
     resume_offset = processed
     graphs_emitted = processed
     files = _list_dataset_files(dirpath)
+    if not files:
+        raise FileNotFoundError(f"No supported dataset files found in {dirpath}")
     for path, ext in files:
         if max_graphs is not None and graphs_emitted >= max_graphs:
             break
@@ -314,20 +316,33 @@ def _make_streaming_builder(
     force: bool,
     log: Callable[[str], None],
 ) -> Callable[[], dataset_cache.DatasetBuilderResult]:
-    def _builder() -> dataset_cache.DatasetBuilderResult:
+    def _builder() -> dataset_cache.DatasetBuilderResult | "_mdataset.GraphDataset":  # type: ignore[name-defined]
         cache_path = dataset_cache.dataset_cache_path(kind, payload, cache_root)
         if cache_path is None:
             raise RuntimeError(f"unable to resolve cache path for {kind}")
-        _stream_directory_to_cache(
-            dirpath=dirpath,
-            cache_path=cache_path,
-            label_col=label_col,
-            add_3d=add_3d,
-            sample=sample,
-            num_workers=num_workers,
-            force=force,
-            log=log,
-        )
+        try:
+            _stream_directory_to_cache(
+                dirpath=dirpath,
+                cache_path=cache_path,
+                label_col=label_col,
+                add_3d=add_3d,
+                sample=sample,
+                num_workers=num_workers,
+                force=force,
+                log=log,
+            )
+        except FileNotFoundError:
+            log(
+                "directory lacks parquet/csv files; falling back to load_directory_dataset"
+            )
+            max_graphs = sample if sample > 0 else None
+            return load_directory_dataset(
+                dirpath,
+                label_col=label_col,
+                add_3d=add_3d,
+                max_graphs=max_graphs,
+                num_workers=num_workers,
+            )
         return dataset_cache.DatasetBuilderResult(data=None, already_persisted=True)
 
     return _builder

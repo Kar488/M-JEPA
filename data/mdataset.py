@@ -240,24 +240,34 @@ __all__ = [
 ]
 
 
-def _safe_smiles_to_graph(
-    smiles: str,
-    add_3d: bool,
-    random_seed: Optional[int],
-    cls_module: str,
-    cls_qualname: str,
-) -> Optional[GraphDataState]:
-    """Helper for multiprocessing to convert a SMILES string into a graph."""
+class _SmilesGraphWorker:
+    """Callable wrapper that survives pickling across ``spawn`` workers."""
 
-    try:
-        dataset_cls = _resolve_graphdataset_cls(cls_module, cls_qualname)
-        graph = dataset_cls.smiles_to_graph(
-            smiles, add_3d=add_3d, random_seed=random_seed
-        )
-    except Exception:
-        return None
+    def __call__(
+        self,
+        smiles: str,
+        add_3d: bool,
+        random_seed: Optional[int],
+        cls_module: str,
+        cls_qualname: str,
+    ) -> Optional[GraphDataState]:
+        try:
+            dataset_cls = _resolve_graphdataset_cls(cls_module, cls_qualname)
+            graph = dataset_cls.smiles_to_graph(
+                smiles, add_3d=add_3d, random_seed=random_seed
+            )
+        except Exception:
+            return None
 
-    return _graph_to_state(graph)
+        return _graph_to_state(graph)
+
+    def __reduce__(self):
+        """Rebuild via the class constructor to keep pickling deterministic."""
+
+        return (self.__class__, ())
+
+
+_SMILES_GRAPH_WORKER = _SmilesGraphWorker()
 
 
 def _recommended_chunksize(num_items: int, worker_budget: int) -> int:
@@ -282,9 +292,10 @@ def _iter_graph_states(
 
     if worker_budget > 0 and smiles:
         chunksize = _recommended_chunksize(len(smiles), worker_budget)
+        worker = _SMILES_GRAPH_WORKER
         with ProcessPoolExecutor(max_workers=worker_budget) as ex:
             iterator = ex.map(
-                _safe_smiles_to_graph,
+                worker,
                 smiles,
                 repeat(add_3d),
                 repeat(random_seed),
