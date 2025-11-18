@@ -62,7 +62,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         def AugmentationConfig(**kwargs):  # type: ignore
             return SimpleNamespace(**kwargs)
 
-    from wandb_safety import wb_get_or_init as _wb_get_or_init
     from wandb_safety import wb_summary_update as _wb_summary_update
     from wandb_safety import wb_finish_safely as _wb_finish_safely
 
@@ -95,12 +94,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     sweep_cfg = {}
     if wandb is not None and _as_bool(getattr(args, "use_wandb", 1)):
         wb = getattr(wandb, "run", None)
-        if wb is None:
-            try:
-                wb = _wb_get_or_init(args)
-            except Exception:
-                wb = None
-
         for cfg_src in (getattr(wb, "config", None), getattr(wandb, "config", None)):
             if cfg_src is None:
                 continue
@@ -290,10 +283,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     else:
         print("[sweep-run] cache_dir not provided; using default cache roots", flush=True)
         
-    # NOTE: run already initialized; do NOT re-init here. If a prior path closed it,
-    # the agent will re-launch this process with a fresh sweep context.
-    wb = wandb.run if wandb is not None else None
-    
     mr = getattr(args, "mask_ratio", None)
     if mr is not None:
         mr = round(float(mr), 6)
@@ -346,8 +335,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         if "add_3d" not in sweep_cfg:
             upd["add_3d"] = int(add_3d)  # ensure Phase-2 sees the gated value
         config_payload = {k: v for k, v in upd.items() if v is not None}
-        config_updated = _update_run_config(wb, config_payload)
-    _wb_summary_update({"pair_id": pair_id})
 
     import time as _t
     _deadline = None
@@ -533,27 +520,30 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     best_step = _infer_best_step(payload)
     payload["best_step"] = best_step
 
-    _wb_get_or_init(args)  # re-open if an inner path finished it
     try:
         silence_pydantic_field_warnings()
         import wandb as _wandb_mod  # type: ignore
     except Exception:
         _wandb_mod = None
-    if _wandb_mod is not None:
-        run = getattr(_wandb_mod, "run", None)
+    run = getattr(_wandb_mod, "run", None) if _wandb_mod is not None else None
+    if run is not None:
+        if val_rmse is not None:
+            run.summary["val_rmse"] = float(val_rmse)
+        run.summary["best_step"] = int(best_step)
+        if pair_id is not None:
+            try:
+                run.summary["pair_id"] = pair_id
+            except Exception:
+                pass
+        if run_name and getattr(run, "name", None) != run_name:
+            try:
+                run.name = run_name
+                run.save()
+            except Exception:
+                pass
+    if using_wandb and config_payload:
         if run is not None:
-            if val_rmse is not None:
-                run.summary["val_rmse"] = float(val_rmse)
-            run.summary["best_step"] = int(best_step)
-            if run_name and getattr(run, "name", None) != run_name:
-                try:
-                    run.name = run_name
-                    run.save()
-                except Exception:
-                    pass
-    if using_wandb and not config_updated and config_payload:
-        run = getattr(_wandb_mod, "run", None) if _wandb_mod is not None else None
-        config_updated = _update_run_config(run, config_payload)
+            config_updated = _update_run_config(run, config_payload)
         if not config_updated:
             print("⚠️ W&B is disabled or failed to init, skipping config update", flush=True)
 
