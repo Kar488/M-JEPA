@@ -331,6 +331,54 @@ def _iter_graph_states(
                 continue
             yield idx, _graph_to_state(graph)
 
+
+def _build_graphs_from_smiles(
+    smiles: Sequence[str],
+    *,
+    add_3d: bool,
+    random_seed: Optional[int],
+    worker_budget: int,
+    cls_module: str,
+    cls_qualname: str,
+) -> Tuple[List[GraphData], List[str], List[int]]:
+    """Materialise graphs from SMILES strings with graceful fallbacks."""
+
+    def _run(budget: int) -> Tuple[List[GraphData], List[str], List[int]]:
+        local_graphs: List[GraphData] = []
+        local_smiles: List[str] = []
+        valid_idx: List[int] = []
+        state_iter = _iter_graph_states(
+            smiles,
+            add_3d=add_3d,
+            random_seed=random_seed,
+            worker_budget=budget,
+            cls_module=cls_module,
+            cls_qualname=cls_qualname,
+        )
+        for idx, g_state in state_iter:
+            if g_state is None:
+                continue
+            local_graphs.append(_graph_from_state(g_state))
+            local_smiles.append(smiles[idx])
+            valid_idx.append(idx)
+        return local_graphs, local_smiles, valid_idx
+
+    graphs, smiles_out, valid_indices = _run(worker_budget)
+    if graphs or not smiles or worker_budget <= 0:
+        return graphs, smiles_out, valid_indices
+
+    logger.warning(
+        "Process pool featurisation returned no graphs for %d SMILES; retrying sequentially",
+        len(smiles),
+    )
+    graphs, smiles_out, valid_indices = _run(0)
+    if not graphs and smiles:
+        logger.warning(
+            "Sequential featurisation failed to materialise any graphs for %d SMILES",
+            len(smiles),
+        )
+    return graphs, smiles_out, valid_indices
+
 class GraphDataset:
     def __init__(
         self,
@@ -1069,17 +1117,13 @@ class GraphDataset:
             else None
         )
 
-        graphs: List[GraphData] = []
-        smiles_out: List[str] = []
-        valid_indices: List[int] = []
-
         # Resolve the dataset class lazily in worker processes to avoid
         # pickling GraphData/GraphDataset objects when spawning the pool.
         cls_module = cls.__module__
         cls_qualname = cls.__qualname__
 
         worker_budget = _resolve_worker_count(num_workers)
-        state_iter = _iter_graph_states(
+        graphs, smiles_out, valid_indices = _build_graphs_from_smiles(
             smiles,
             add_3d=add_3d,
             random_seed=random_seed,
@@ -1087,11 +1131,6 @@ class GraphDataset:
             cls_module=cls_module,
             cls_qualname=cls_qualname,
         )
-        for i, g_state in state_iter:
-            if g_state is not None:
-                graphs.append(_graph_from_state(g_state))
-                smiles_out.append(smiles[i])
-                valid_indices.append(i)
         # Filter labels to match valid graphs
         if labels is not None:
             labels = labels[valid_indices]
@@ -1162,15 +1201,11 @@ class GraphDataset:
             else None
         )
 
-        graphs: List[GraphData] = []
-        smiles_out: List[str] = []
-        valid_indices: List[int] = []
-
         cls_module = cls.__module__
         cls_qualname = cls.__qualname__
 
         worker_budget = _resolve_worker_count(num_workers if num_workers is not None else -1)
-        state_iter = _iter_graph_states(
+        graphs, smiles_out, valid_indices = _build_graphs_from_smiles(
             smiles,
             add_3d=add_3d,
             random_seed=random_seed,
@@ -1178,11 +1213,6 @@ class GraphDataset:
             cls_module=cls_module,
             cls_qualname=cls_qualname,
         )
-        for idx, g_state in state_iter:
-            if g_state is not None:
-                graphs.append(_graph_from_state(g_state))
-                smiles_out.append(smiles[idx])
-                valid_indices.append(idx)
 
         labels = None
         if labels_raw is not None:
@@ -1281,6 +1311,8 @@ class GraphDataset:
             if ds.labels is not None:
                 labels_present = True
                 labels_all.extend(ds.labels.tolist())
+            if max_graphs is not None and len(graphs_all) >= max_graphs:
+                break
 
         if max_graphs is not None:
             graphs_all = graphs_all[:max_graphs]
