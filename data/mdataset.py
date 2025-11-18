@@ -240,34 +240,27 @@ __all__ = [
 ]
 
 
-class _SmilesGraphWorker:
-    """Callable wrapper that survives pickling across ``spawn`` workers."""
+def _smiles_graph_worker(
+    smiles: str,
+    add_3d: bool,
+    random_seed: Optional[int],
+    cls_module: str,
+    cls_qualname: str,
+) -> Optional[GraphDataState]:
+    """Stateless helper used by ``ProcessPoolExecutor`` workers."""
 
-    def __call__(
-        self,
-        smiles: str,
-        add_3d: bool,
-        random_seed: Optional[int],
-        cls_module: str,
-        cls_qualname: str,
-    ) -> Optional[GraphDataState]:
-        try:
-            dataset_cls = _resolve_graphdataset_cls(cls_module, cls_qualname)
-            graph = dataset_cls.smiles_to_graph(
-                smiles, add_3d=add_3d, random_seed=random_seed
-            )
-        except Exception:
-            return None
+    try:
+        dataset_cls = _resolve_graphdataset_cls(cls_module, cls_qualname)
+        graph = dataset_cls.smiles_to_graph(
+            smiles, add_3d=add_3d, random_seed=random_seed
+        )
+    except Exception:
+        return None
 
-        return _graph_to_state(graph)
-
-    def __reduce__(self):
-        """Rebuild via the class constructor to keep pickling deterministic."""
-
-        return (self.__class__, ())
+    return _graph_to_state(graph)
 
 
-_SMILES_GRAPH_WORKER = _SmilesGraphWorker()
+_SMILES_GRAPH_WORKER = _smiles_graph_worker
 
 
 def _recommended_chunksize(num_items: int, worker_budget: int) -> int:
