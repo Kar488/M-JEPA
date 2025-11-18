@@ -4,12 +4,13 @@ import importlib
 import logging
 import os
 import pickle
+import sys
 from concurrent.futures import ProcessPoolExecutor
 import hashlib
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import repeat
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 try:  # pragma: no cover - optional dependency
@@ -39,6 +40,7 @@ import pandas as pd
 from ._graph_pickle import register_graph_class, rebuild_graph_data
 
 logger = logging.getLogger(__name__)
+_MODULE_ANCHOR = sys.modules[__name__]
 
 EDGE_BASE_DIM = 7
 EDGE_GEOM_DIM = 10
@@ -260,7 +262,26 @@ def _smiles_graph_worker(
     return _graph_to_state(graph)
 
 
-_SMILES_GRAPH_WORKER = _smiles_graph_worker
+def _resolve_smiles_worker() -> Callable[[str, bool, Optional[int], str, str], Optional[GraphDataState]]:
+    """Return a stable reference to ``_smiles_graph_worker``.
+
+    Some tests replace ``sys.modules["data.mdataset"]`` with lightweight stubs.
+    ``ForkingPickler`` resolves worker functions by importing the module named in
+    ``worker.__module__`` and expecting to find an attribute with the same
+    identity.  If the ``data.mdataset`` entry has been replaced, the attribute is
+    missing (or points at a different function object) and multiprocessing raises
+    ``PicklingError``.  Anchoring the worker on the original module and copying
+    the attribute onto any replacement keeps the reference stable.
+    """
+
+    module = sys.modules.get(__name__)
+    worker = getattr(_MODULE_ANCHOR, "_smiles_graph_worker")
+    if module is None:
+        return worker
+    current = getattr(module, "_smiles_graph_worker", None)
+    if current is not worker:
+        setattr(module, "_smiles_graph_worker", worker)
+    return worker
 
 
 def _recommended_chunksize(num_items: int, worker_budget: int) -> int:
@@ -285,7 +306,7 @@ def _iter_graph_states(
 
     if worker_budget > 0 and smiles:
         chunksize = _recommended_chunksize(len(smiles), worker_budget)
-        worker = _SMILES_GRAPH_WORKER
+        worker = _resolve_smiles_worker()
         with ProcessPoolExecutor(max_workers=worker_budget) as ex:
             iterator = ex.map(
                 worker,
