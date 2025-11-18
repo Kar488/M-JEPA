@@ -46,6 +46,23 @@ experiment identifiers and artifact hand-offs.
   Python through the project environment (`resolve_ci_python`) instead of a bare
   `python` binary.
 
+## Git runner vs. appleboy
+
+* Vast jobs still execute on a dedicated GPU tenant rather than the
+  self-hosted GitHub runner. The runner ("git runner") exists purely to launch
+  workflows and sync artifacts; it has no GPUs and no access to the Vast mount
+  points used by training scripts.
+* Because of that split, `.github/workflows/ci-vast.yml` continues to call
+  `appleboy/ssh-action@v1` for every stage that needs GPUs. The action connects
+  to the Vast host, forwards the environment (e.g., `APP_DIR`,
+  `TOX21_EXPLAIN_MODE`), and executes the same shell scripts the runner would
+  have invoked locally.
+* Removing appleboy would require co-locating the GitHub runner with the Vast
+  tenant (or exposing the GPU filesystem over the network), neither of which is
+  feasible under the current security policy. Keeping the SSH hop isolates the
+  control plane from long-running training jobs while still letting CI stream
+  logs and collect artifacts.
+
 ## Acceptance checks
 
 * `tests/ci/test_ci_flow.py` performs a shimmed dry-run to verify the pretrain

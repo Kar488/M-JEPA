@@ -1387,6 +1387,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Tox21 evaluation policy: frozen pretrain baseline, frozen finetuned encoder, or end-to-end fine-tuned model",
     )
     tox.add_argument(
+        "--explain-mode",
+        dest="explain_mode",
+        default=case_cfg.get("explain_mode"),
+        help="Optional explanation mode (e.g., ig) to enable attribution logging during evaluation",
+    )
+    tox.add_argument(
+        "--explain-steps",
+        dest="explain_steps",
+        type=int,
+        default=case_cfg.get("explain_steps"),
+        help="Number of interpolation steps to use for explanation methods",
+    )
+    tox.add_argument(
         "--strict-encoder-config",
         dest="strict_encoder_config",
         action="store_true",
