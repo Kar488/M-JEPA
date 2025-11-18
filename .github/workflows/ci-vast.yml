@@ -696,11 +696,6 @@ jobs:
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1"
           TOX21_ENCODER_SOURCE: pretrain_frozen
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$APP_DIR"
-          bash scripts/ci/run-tox21.sh
 
       - name: Checkout repository for tox21 baseline artifacts
         if: always()
@@ -880,11 +875,6 @@ jobs:
           FINETUNE_EPOCHS: "18"
           BESTCFG_NO_EPOCHS: "1" # use best config without reloading any epochs
           TOX21_ENCODER_SOURCE: fine_tuned
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$APP_DIR"
-          bash scripts/ci/run-tox21.sh
 
       - name: Checkout repository for tox21 artifacts
         if: always()
