@@ -41,6 +41,44 @@ def test_tox21_case_study_smoke(monkeypatch):
     assert isinstance(primary.baseline_means, dict)
 
 
+def test_tox21_case_study_passes_explain_kwargs(monkeypatch, tmp_path):
+
+    unsup = types.ModuleType("training.unsupervised")
+    unsup.train_jepa = lambda *args, **kwargs: {}
+    monkeypatch.setitem(sys.modules, "training.unsupervised", unsup)
+
+    captured: Dict[str, Any] = {}
+    sup = types.ModuleType("training.supervised")
+
+    def train_linear_head(*, dataset, encoder, task_type, epochs, lr, batch_size, device, patience, explain_mode=None, explain_config=None, **kwargs):
+        head = torch.nn.Linear(encoder.hidden_dim, 1)
+        captured["mode"] = explain_mode
+        captured["config"] = explain_config
+        return {"head": head}
+
+    sup.train_linear_head = train_linear_head
+    monkeypatch.setitem(sys.modules, "training.supervised", sup)
+
+    import importlib
+    import experiments.case_study as case_study
+
+    importlib.reload(case_study)
+
+    result = case_study.run_tox21_case_study(
+        csv_path="samples/tox21_mini.csv",
+        task_name="NR-AR",
+        pretrain_epochs=1,
+        finetune_epochs=1,
+        triage_pct=0.0,
+        explain_mode="ig",
+        explain_config={"output_dir": str(tmp_path)},
+    )
+    assert result.evaluations, "Expected an evaluation payload"
+    assert captured.get("mode") == "ig"
+    assert captured.get("config", {}).get("output_dir") == str(tmp_path)
+    assert captured.get("config", {}).get("task_name") == "NR-AR"
+
+
 def test_evaluate_case_study_handles_probability_mismatch(monkeypatch):
     import experiments.case_study as case_study
 

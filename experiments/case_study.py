@@ -1296,6 +1296,8 @@ def run_tox21_case_study(
     head_ensemble_size: int = 1,
     head_scheduler: Optional[str] = None,
     cache_dir: Optional[str] = None,
+    explain_mode: Optional[str] = None,
+    explain_config: Optional[Dict[str, Any]] = None,
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
 
@@ -2567,6 +2569,13 @@ def run_tox21_case_study(
             elif "class_weight" in inspect.signature(linear_train_fn).parameters:
                 extra_args["class_weight"] = {0: 1.0, 1: float(n_neg / max(1, n_pos))}
 
+    explain_mode_norm = str(explain_mode).strip() if explain_mode else None
+    explain_cfg_payload: Optional[Dict[str, Any]] = None
+    if explain_config:
+        explain_cfg_payload = dict(explain_config)
+    if explain_cfg_payload is not None:
+        explain_cfg_payload.setdefault("task_name", task_name)
+
     clf_metrics: Dict[str, Any]
     if train_probe:
         # Linear-probe modes train a fresh classifier on top of a frozen encoder to
@@ -2596,6 +2605,8 @@ def run_tox21_case_study(
             "test_indices": test_idx,
             "enable_batch_autoscale": False,
             "unfreeze_top_layers": int(unfreeze_top_layers),
+            "explain_mode": explain_mode_norm,
+            "explain_config": explain_cfg_payload,
             **extra_args,
         }
         if full_finetune_effective:

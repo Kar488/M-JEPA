@@ -799,6 +799,31 @@ def _run_tox21_single_task(
 
     allow_shape_flag = getattr(args, "allow_shape_coercion", None)
 
+    explain_mode = getattr(args, "explain_mode", None)
+    if not explain_mode:
+        env_mode = os.environ.get("TOX21_EXPLAIN_MODE")
+        if env_mode:
+            explain_mode = env_mode
+    explain_steps = getattr(args, "explain_steps", None)
+    if explain_steps is None:
+        env_steps = os.environ.get("TOX21_EXPLAIN_STEPS")
+        if env_steps:
+            try:
+                explain_steps = int(env_steps)
+            except Exception:
+                explain_steps = None
+    explain_config_payload: Optional[Dict[str, Any]] = None
+    if explain_mode:
+        explain_config_payload = {
+            "task_name": task_name,
+            "output_dir": report_dir,
+        }
+        if explain_steps is not None:
+            try:
+                explain_config_payload["steps"] = int(explain_steps)
+            except Exception:
+                pass
+
     base_encoder_checkpoint = getattr(args, "encoder_checkpoint", None)
     task_encoder_checkpoint, task_encoder_info = _resolve_task_encoder_checkpoint(
         base_encoder_checkpoint,
@@ -907,6 +932,8 @@ def _run_tox21_single_task(
         "tox21_head_batch_size": int(getattr(args, "tox21_head_batch_size", 256) or 256),
         "head_ensemble_size": head_ensemble_value,
         "head_scheduler": getattr(args, "head_scheduler", None),
+        "explain_mode": explain_mode,
+        "explain_config": explain_config_payload,
     }
 
     def _invoke_case_study(allow_shape_value: Optional[bool]) -> Any:
@@ -1920,6 +1947,8 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
     parser.add_argument("--encoder-manifest")
     parser.add_argument("--encoder-source")
     parser.add_argument("--evaluation-mode")
+    parser.add_argument("--explain-mode", dest="explain_mode")
+    parser.add_argument("--explain-steps", dest="explain_steps", type=int)
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--patience", type=int)
     parser.add_argument("--head-lr", type=float, dest="head_lr")

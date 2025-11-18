@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
+import os
 import sys
 import types
 
@@ -286,3 +288,107 @@ def test_module_main_standalone_parser_accepts_legacy_task(monkeypatch, tmp_path
     assert rc == 0
     assert captured["task"] == "NR-AR"
     assert captured["tasks"] == []
+
+def test_tox21_evaluation_emits_ig_artifacts(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    import numpy as np
+    import torch.nn as nn
+
+    from data.mdataset import GraphData, GraphDataset
+    import training.supervised as supervised_mod
+
+    class TinyEncoder(nn.Module):
+        def __init__(self, dim: int):
+            super().__init__()
+            self.hidden_dim = dim
+            self.linear = nn.Linear(dim, dim, bias=False)
+            with torch.no_grad():
+                self.linear.weight.copy_(torch.eye(dim))
+
+        def forward(self, x, adj):  # noqa: ARG002 - match encoder signature
+            return self.linear(x)
+
+    graphs: list[GraphData] = []
+    labels: list[float] = []
+    smiles: list[str] = []
+    for i in range(4):
+        x = np.full((3, 2), float(i + 1), dtype=np.float32)
+        edge_index = np.array([[0, 1, 1, 2], [1, 0, 2, 1]], dtype=np.int64)
+        edge_attr = np.ones((edge_index.shape[1], 1), dtype=np.float32)
+        graphs.append(GraphData(x=x, edge_index=edge_index, edge_attr=edge_attr))
+        labels.append(float(i % 2))
+        smiles.append("C" * (i + 1))
+
+    dataset = GraphDataset(graphs, labels, smiles)
+    encoder = TinyEncoder(dataset.node_dim)
+    train_idx = [0, 1]
+    val_idx = [2]
+    test_idx = [3]
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    stage_config = {"report_dir": str(report_dir), "task_name": "nr-ar"}
+    supervised_mod.set_stage_config(stage_config)
+
+    torch.manual_seed(42)
+    baseline_metrics = supervised_mod.train_linear_head(
+        dataset,
+        encoder,
+        "classification",
+        epochs=0,
+        batch_size=2,
+        lr=1e-3,
+        patience=0,
+        device="cpu",
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        train_indices=train_idx,
+        val_indices=val_idx,
+        test_indices=test_idx,
+        stage_config=stage_config,
+    )
+
+    torch.manual_seed(42)
+    metrics = supervised_mod.train_linear_head(
+        dataset,
+        encoder,
+        "classification",
+        epochs=0,
+        batch_size=2,
+        lr=1e-3,
+        patience=0,
+        device="cpu",
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        train_indices=train_idx,
+        val_indices=val_idx,
+        test_indices=test_idx,
+        stage_config=stage_config,
+        explain_mode="ig",
+        explain_config={"steps": 4, "task_name": "nr-ar"},
+    )
+
+    assert (
+        metrics["roc_auc"] == baseline_metrics["roc_auc"]
+        or (math.isnan(metrics["roc_auc"]) and math.isnan(baseline_metrics["roc_auc"]))
+    )
+
+    ig_dir = report_dir / "ig_explanations" / "nr-ar"
+    assert ig_dir.is_dir()
+    atom_csvs = sorted(ig_dir.glob("*_atoms.csv"))
+    bond_csvs = sorted(ig_dir.glob("*_bonds.csv"))
+    heatmaps = sorted(ig_dir.glob("*_heatmap.png"))
+    assert len(atom_csvs) == len(test_idx)
+    assert len(bond_csvs) == len(test_idx)
+    assert len(heatmaps) == len(test_idx)
+    assert "ig_score" in atom_csvs[0].read_text(encoding="utf-8")
+    assert metrics.get("ig_artifacts")
+    for entry in metrics["ig_artifacts"]:
+        assert os.path.exists(entry["atom_csv"])  # type: ignore[index]
+        assert os.path.exists(entry["bond_csv"])  # type: ignore[index]
+        assert os.path.exists(entry["heatmap_png"])  # type: ignore[index]
+
+    supervised_mod.set_stage_config({})
