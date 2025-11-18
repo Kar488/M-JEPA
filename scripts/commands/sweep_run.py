@@ -525,7 +525,28 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         import wandb as _wandb_mod  # type: ignore
     except Exception:
         _wandb_mod = None
-    run = getattr(_wandb_mod, "run", None) if _wandb_mod is not None else None
+
+    _wandb_wait_timeout = float(os.getenv("WANDB_SWEEP_INIT_TIMEOUT", 20.0))
+
+    def _wait_for_wandb_run(timeout_s: float = _wandb_wait_timeout) -> Optional[Any]:
+        if _wandb_mod is None:
+            return None
+        run_obj = getattr(_wandb_mod, "run", None)
+        if run_obj is not None or not using_wandb:
+            return run_obj
+        poll_interval = 0.5
+        deadline = time.perf_counter() + float(timeout_s)
+        while run_obj is None and time.perf_counter() < deadline:
+            time.sleep(poll_interval)
+            run_obj = getattr(_wandb_mod, "run", None)
+        return run_obj
+
+    run = _wait_for_wandb_run()
+    if run is None and using_wandb:
+        print(
+            "[sweep-run] wandb.run not initialised yet; delaying summary sync",
+            flush=True,
+        )
     if run is not None:
         if val_rmse is not None:
             run.summary["val_rmse"] = float(val_rmse)
@@ -542,12 +563,25 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             except Exception:
                 pass
     if using_wandb and config_payload:
+        if run is None:
+            run = _wait_for_wandb_run()
         if run is not None:
             config_updated = _update_run_config(run, config_payload)
         if not config_updated:
             print("⚠️ W&B is disabled or failed to init, skipping config update", flush=True)
 
-    _wb_summary_update(payload)
+    should_publish_summary = True
+    if using_wandb:
+        if run is None:
+            run = _wait_for_wandb_run()
+        if run is None:
+            should_publish_summary = False
+            print(
+                "⚠️ W&B run never became active; canonical summary metrics were not synced",
+                flush=True,
+            )
+    if should_publish_summary:
+        _wb_summary_update(payload)
 
     result_path = _local_result_file(exp_id, config_idx, seed_idx)
     if result_path is not None:
