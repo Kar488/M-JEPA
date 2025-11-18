@@ -315,7 +315,27 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         flush=True,
     )
 
-    if wb is not None:
+    def _update_run_config(run, payload):
+        if run is None or not payload:
+            return False
+        config_obj = getattr(run, "config", None)
+        if config_obj is None:
+            return False
+        try:
+            config_obj.update(payload, allow_val_change=True)
+            return True
+        except Exception:
+            try:
+                for key, value in payload.items():
+                    config_obj[key] = value
+            except Exception:
+                return False
+            return True
+
+    using_wandb = bool(int(getattr(args, "use_wandb", 1)))
+    config_updated = False
+    config_payload = {}
+    if using_wandb:
         upd = {"pair_id": pair_id}
         if "training_method" not in sweep_cfg:
             upd["training_method"] = args.training_method
@@ -325,11 +345,9 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             upd["gnn_type"] = gnn
         if "add_3d" not in sweep_cfg:
             upd["add_3d"] = int(add_3d)  # ensure Phase-2 sees the gated value
-        if upd:
-            wb.config.update(upd, allow_val_change=True)
-        _wb_summary_update({"pair_id": pair_id})
-    else:
-        print("⚠️ W&B is disabled or failed to init, skipping config update")
+        config_payload = {k: v for k, v in upd.items() if v is not None}
+        config_updated = _update_run_config(wb, config_payload)
+    _wb_summary_update({"pair_id": pair_id})
 
     import time as _t
     _deadline = None
@@ -533,6 +551,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                     run.save()
                 except Exception:
                     pass
+    if using_wandb and not config_updated and config_payload:
+        run = getattr(_wandb_mod, "run", None) if _wandb_mod is not None else None
+        config_updated = _update_run_config(run, config_payload)
+        if not config_updated:
+            print("⚠️ W&B is disabled or failed to init, skipping config update", flush=True)
 
     _wb_summary_update(payload)
 
