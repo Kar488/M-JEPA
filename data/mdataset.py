@@ -242,6 +242,58 @@ __all__ = [
 ]
 
 
+def _coerce_smiles_text(smiles: Any) -> str:
+    """Best-effort conversion of SMILES payloads into printable strings."""
+
+    if isinstance(smiles, str):
+        return smiles
+    try:
+        return str(smiles)
+    except Exception:
+        return "<unprintable_smiles>"
+
+
+def _safe_smiles_state(
+    dataset_cls: "type[GraphDataset]",
+    smiles: Any,
+    *,
+    add_3d: bool,
+    random_seed: Optional[int],
+) -> Optional[GraphDataState]:
+    """Convert a SMILES entry into a serialisable graph state.
+
+    ``GraphDataset.smiles_to_graph`` already tries to fall back to a synthetic graph
+    when RDKit fails, but third-party subclasses (and edge cases such as non-string
+    payloads) may still raise.  Instead of discarding those entries outright, build
+    a deterministic fallback graph per SMILES so the surrounding dataset keeps the
+    successfully featurised molecules.
+    """
+
+    try:
+        graph = dataset_cls.smiles_to_graph(
+            smiles, add_3d=add_3d, random_seed=random_seed
+        )
+    except Exception as exc:
+        smiles_txt = _coerce_smiles_text(smiles)
+        logger.debug("SMILES %r failed (%s); using fallback graph", smiles_txt, exc)
+        try:
+            graph = _fallback_graph_from_string(smiles_txt, add_pos=add_3d)
+        except Exception as fallback_exc:
+            logger.warning(
+                "Fallback graph generation failed for %r: %s",
+                smiles_txt,
+                fallback_exc,
+            )
+            return None
+
+    try:
+        return _graph_to_state(graph)
+    except Exception as exc:
+        smiles_txt = _coerce_smiles_text(smiles)
+        logger.warning("Serialising graph for %r failed: %s", smiles_txt, exc)
+        return None
+
+
 def _smiles_graph_worker(
     smiles: str,
     add_3d: bool,
@@ -253,13 +305,18 @@ def _smiles_graph_worker(
 
     try:
         dataset_cls = _resolve_graphdataset_cls(cls_module, cls_qualname)
-        graph = dataset_cls.smiles_to_graph(
-            smiles, add_3d=add_3d, random_seed=random_seed
+    except Exception as exc:
+        logger.warning(
+            "Worker failed to resolve dataset class %s.%s: %s",
+            cls_module,
+            cls_qualname,
+            exc,
         )
-    except Exception:
         return None
 
-    return _graph_to_state(graph)
+    return _safe_smiles_state(
+        dataset_cls, smiles, add_3d=add_3d, random_seed=random_seed
+    )
 
 
 def _resolve_smiles_worker() -> Callable[[str, bool, Optional[int], str, str], Optional[GraphDataState]]:
@@ -301,6 +358,7 @@ def _iter_graph_states(
     worker_budget: int,
     cls_module: str,
     cls_qualname: str,
+    dataset_cls: Optional[type["GraphDataset"]] = None,
 ) -> Iterator[Tuple[int, Optional[GraphDataState]]]:
     """Yield ``(index, GraphDataState | None)`` for each SMILES string."""
 
@@ -320,16 +378,12 @@ def _iter_graph_states(
             for idx, g_state in enumerate(iterator):
                 yield idx, g_state
     else:
-        dataset_cls = _resolve_graphdataset_cls(cls_module, cls_qualname)
+        if dataset_cls is None:
+            dataset_cls = _resolve_graphdataset_cls(cls_module, cls_qualname)
         for idx, sm in enumerate(smiles):
-            try:
-                graph = dataset_cls.smiles_to_graph(
-                    sm, add_3d=add_3d, random_seed=random_seed
-                )
-            except Exception:
-                yield idx, None
-                continue
-            yield idx, _graph_to_state(graph)
+            yield idx, _safe_smiles_state(
+                dataset_cls, sm, add_3d=add_3d, random_seed=random_seed
+            )
 
 
 def _build_graphs_from_smiles(
@@ -340,42 +394,46 @@ def _build_graphs_from_smiles(
     worker_budget: int,
     cls_module: str,
     cls_qualname: str,
+    dataset_cls: Optional[type["GraphDataset"]] = None,
 ) -> Tuple[List[GraphData], List[str], List[int]]:
     """Materialise graphs from SMILES strings with graceful fallbacks."""
+
+    smiles_list = list(smiles)
 
     def _run(budget: int) -> Tuple[List[GraphData], List[str], List[int]]:
         local_graphs: List[GraphData] = []
         local_smiles: List[str] = []
         valid_idx: List[int] = []
         state_iter = _iter_graph_states(
-            smiles,
+            smiles_list,
             add_3d=add_3d,
             random_seed=random_seed,
             worker_budget=budget,
             cls_module=cls_module,
             cls_qualname=cls_qualname,
+            dataset_cls=dataset_cls,
         )
         for idx, g_state in state_iter:
             if g_state is None:
                 continue
             local_graphs.append(_graph_from_state(g_state))
-            local_smiles.append(smiles[idx])
+            local_smiles.append(smiles_list[idx])
             valid_idx.append(idx)
         return local_graphs, local_smiles, valid_idx
 
     graphs, smiles_out, valid_indices = _run(worker_budget)
-    if graphs or not smiles or worker_budget <= 0:
+    if graphs or not smiles_list or worker_budget <= 0:
         return graphs, smiles_out, valid_indices
 
     logger.warning(
         "Process pool featurisation returned no graphs for %d SMILES; retrying sequentially",
-        len(smiles),
+        len(smiles_list),
     )
     graphs, smiles_out, valid_indices = _run(0)
-    if not graphs and smiles:
+    if not graphs and smiles_list:
         logger.warning(
             "Sequential featurisation failed to materialise any graphs for %d SMILES",
-            len(smiles),
+            len(smiles_list),
         )
     return graphs, smiles_out, valid_indices
 
@@ -1130,6 +1188,7 @@ class GraphDataset:
             worker_budget=worker_budget,
             cls_module=cls_module,
             cls_qualname=cls_qualname,
+            dataset_cls=cls,
         )
         # Filter labels to match valid graphs
         if labels is not None:
@@ -1212,6 +1271,7 @@ class GraphDataset:
             worker_budget=worker_budget,
             cls_module=cls_module,
             cls_qualname=cls_qualname,
+            dataset_cls=cls,
         )
 
         labels = None
