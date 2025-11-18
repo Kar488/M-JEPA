@@ -413,3 +413,177 @@ def test_cmd_sweep_run_keeps_wandb_run_active_for_summary(monkeypatch, tmp_path)
     assert "pair_id" in active_run.summary
     assert active_run.summary.get("training_method") == "jepa"
     assert pytest.approx(active_run.summary.get("val_rmse"), rel=1e-6) == 0.42
+
+
+def _sweep_args(tmp_path, **overrides):
+    params = dict(
+        add_3d=0,
+        contiguity=0,
+        mask_ratio=0.1,
+        hidden_dim=32,
+        num_layers=2,
+        gnn_type="gcn",
+        ema_decay=0.99,
+        pretrain_batch_size=1,
+        finetune_batch_size=1,
+        pretrain_epochs=1,
+        finetune_epochs=1,
+        learning_rate=0.001,
+        temperature=0.1,
+        training_method="jepa",
+        labeled_dir=str(tmp_path),
+        unlabeled_dir=str(tmp_path),
+        label_col="y",
+        sample_unlabeled=0,
+        sample_labeled=0,
+        task_type="regression",
+        seed=0,
+        max_pretrain_batches=1,
+        max_finetune_batches=1,
+        num_workers=0,
+        cache_dir=None,
+        use_wandb=1,
+        cache_datasets=0,
+        devices=0,
+    )
+    params.update(overrides)
+    return argparse.Namespace(**params)
+
+
+def _prepare_sweep_module(monkeypatch, tmp_path, *, result_payload):
+    import importlib
+
+    def fake_loader(dirpath, **kwargs):
+        return DummyDataset(f"ds:{dirpath}")
+
+    monkeypatch.setattr(tj, "load_directory_dataset", fake_loader)
+    monkeypatch.setattr(tj, "resolve_device", lambda *_a, **_k: "cpu")
+
+    dataset_cache = types.SimpleNamespace()
+    dataset_cache.resolve_env_path = lambda path: os.path.abspath(str(path))
+    dataset_cache.prepare_cache_root = lambda base, enabled=True: str(tmp_path / "cache") if enabled else None
+    dataset_cache.load_or_build_dataset = (
+        lambda _kind, _payload, builder, _cache_root=None, **__: builder()
+    )
+
+    sweep_mod = importlib.import_module("scripts.commands.sweep_run")
+    monkeypatch.setattr(sweep_mod, "dataset_cache", dataset_cache, raising=False)
+
+    class DummyConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class DummyAugConfig:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    def fake_run_one_config_method(**kwargs):
+        return dict(result_payload)
+
+    grid_mod = types.ModuleType("experiments.grid_search")
+    grid_mod.Config = DummyConfig
+    grid_mod.AugmentationConfig = DummyAugConfig
+    grid_mod._run_one_config_method = fake_run_one_config_method
+    monkeypatch.setitem(sys.modules, "experiments.grid_search", grid_mod)
+
+    return sweep_mod
+
+
+def test_cmd_sweep_run_initializes_wandb_run_when_missing(monkeypatch, tmp_path):
+    _prepare_sweep_module(
+        monkeypatch,
+        tmp_path,
+        result_payload={"rmse_mean": 0.42, "best_step": 9},
+    )
+
+    fake_wandb = types.ModuleType("wandb")
+    fake_wandb.run = None
+    fake_wandb.config = {}
+    fake_wandb.finish = lambda **kwargs: None
+    fake_wandb.log = lambda payload: payload
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+
+    import importlib
+
+    wandb_safety = importlib.import_module("scripts.wandb_safety")
+
+    class FakeRun:
+        def __init__(self):
+            self.summary = {}
+            self.name = None
+
+        def save(self):
+            return None
+
+    init_calls = []
+
+    def fake_get_or_init(args):
+        run = FakeRun()
+        fake_wandb.run = run
+        init_calls.append(args)
+        return run
+
+    stub_ws = types.ModuleType("wandb_safety")
+    stub_ws.wb_get_or_init = fake_get_or_init
+    stub_ws.wb_summary_update = wandb_safety.wb_summary_update
+    stub_ws.wb_finish_safely = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "wandb_safety", stub_ws)
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+
+    args = _sweep_args(tmp_path)
+    tj.cmd_sweep_run(args)
+
+    assert init_calls, "sweep-run should initialize a W&B run when none exists"
+    assert fake_wandb.run is not None
+    assert "pair_id" in fake_wandb.run.summary
+    assert pytest.approx(fake_wandb.run.summary.get("val_rmse"), rel=1e-6) == 0.42
+
+
+def test_phase2_sweep_waits_for_wandb_run_before_summary(monkeypatch, tmp_path):
+    _prepare_sweep_module(
+        monkeypatch,
+        tmp_path,
+        result_payload={"val_auc": 0.88, "best_step": 5},
+    )
+
+    fake_wandb = types.ModuleType("wandb")
+    fake_wandb.run = None
+    fake_wandb.finish = lambda **kwargs: None
+    fake_wandb.log = lambda payload: payload
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+
+    class FakeRun:
+        def __init__(self):
+            self.summary = {}
+            self.name = None
+
+    init_calls = []
+
+    def fake_get_or_init(args):
+        run = FakeRun()
+        fake_wandb.run = run
+        init_calls.append(args)
+        return run
+
+    def guarded_summary_update(payload):
+        assert fake_wandb.run is not None, "summary update should only occur when a run is active"
+        fake_wandb.run.summary.update(payload)
+
+    stub_ws = types.ModuleType("wandb_safety")
+    stub_ws.wb_get_or_init = fake_get_or_init
+    stub_ws.wb_summary_update = guarded_summary_update
+    stub_ws.wb_finish_safely = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "wandb_safety", stub_ws)
+    monkeypatch.setenv("MJEPACI_STAGE", "phase2")
+
+    args = _sweep_args(
+        tmp_path,
+        training_method="contrastive",
+        task_type="classification",
+    )
+    tj.cmd_sweep_run(args)
+
+    assert init_calls, "phase-2 sweeps should initialize W&B before logging"
+    assert fake_wandb.run is not None
+    assert "pair_id" in fake_wandb.run.summary
+    assert pytest.approx(fake_wandb.run.summary.get("val_auc"), rel=1e-6) == 0.88

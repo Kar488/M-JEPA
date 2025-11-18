@@ -62,6 +62,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         def AugmentationConfig(**kwargs):  # type: ignore
             return SimpleNamespace(**kwargs)
 
+    from wandb_safety import wb_get_or_init as _wb_get_or_init
     from wandb_safety import wb_summary_update as _wb_summary_update
     from wandb_safety import wb_finish_safely as _wb_finish_safely
 
@@ -322,6 +323,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             return True
 
     using_wandb = bool(int(getattr(args, "use_wandb", 1)))
+    if using_wandb:
+        try:
+            _wb_get_or_init(args)
+        except Exception:
+            pass
     config_updated = False
     config_payload = {}
     if using_wandb:
