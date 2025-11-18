@@ -446,6 +446,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         persistent_workers=bool(int(getattr(args, "persistent_workers", 0))),
         prefetch_factor=int(getattr(args, "prefetch_factor", 2)),
         bf16=bool(int(getattr(args, "bf16", 0))),
+        # Keep the W&B run alive until wb_summary_update publishes the pairing
+        # metadata; train_jepa/train_contrastive would otherwise call
+        # wandb.finish() before this function can emit the canonical summary
+        # payload (pair_id, val_rmse, etc.), leaving wandb.run unset.
+        defer_wandb_finish=True,
     )
 
     # --- normalize result into a payload dict for W&B summary update ---

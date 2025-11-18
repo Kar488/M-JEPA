@@ -510,6 +510,7 @@ def _run_one_config_method(
     persistent_workers: bool = True,
     prefetch_factor: int = 4,
     bf16: bool = False,
+    defer_wandb_finish: bool = False,
 ) -> Dict[str, Any]:
     logger.info("Running method %s with config %s", method, asdict(cfg))
 
@@ -687,6 +688,7 @@ def _run_one_config_method(
                     persistent_workers=persistent_workers,
                     prefetch_factor=prefetch_factor,
                     bf16=bf16,
+                    defer_wandb_finish=defer_wandb_finish,
                 )
             except TypeError:
                 # Backward-compatible call
@@ -703,6 +705,7 @@ def _run_one_config_method(
                     lr=cfg.lr,
                     device=device,
                     reg_lambda=1e-4,
+                    defer_wandb_finish=defer_wandb_finish,
                 )
 
             remaining = time_left() if time_left is not None else float("inf")
@@ -821,6 +824,7 @@ def _run_one_config_method(
                     persistent_workers=persistent_workers,
                     prefetch_factor=prefetch_factor,
                     bf16=bf16,
+                    defer_wandb_finish=defer_wandb_finish,
                 )
             except TypeError:
                 # older signature without extra knobs
@@ -834,6 +838,7 @@ def _run_one_config_method(
                     lr=cfg.lr,
                     temperature=cfg.temperature,
                     device=device,
+                    defer_wandb_finish=defer_wandb_finish,
                     random_rotate=_rot,
                     mask_angle=_ang,
                     perturb_dihedral=_dih,
