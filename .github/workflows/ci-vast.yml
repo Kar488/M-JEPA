@@ -661,7 +661,7 @@ jobs:
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
-      MJEPA_ALLOW_DATA_FALLBACKS: '0'
+      TOX21_EXPLAIN_MODE: ig
     steps:
       - name: Ensure experiments root available
         shell: bash
@@ -670,6 +670,21 @@ jobs:
           cd "$APP_DIR"
           bash scripts/ci/ensure_experiments_root.sh
       - name: Tox21 baseline on Vast
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          request_pty: true
+          command_timeout: 920m
+          envs: APP_DIR,GRID_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
+            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
+            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT,TOX21_EXPLAIN_MODE,TOX21_EXPLAIN_STEPS
+          script: |
+            bash "$APP_DIR/scripts/ci/run-tox21.sh"
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
@@ -752,7 +767,7 @@ jobs:
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
-      MJEPA_ALLOW_DATA_FALLBACKS: '0'
+      TOX21_EXPLAIN_MODE: ig
     steps:
       - name: Ensure experiments root available
         shell: bash
@@ -839,6 +854,21 @@ jobs:
           cd "$APP_DIR"
           bash scripts/ci/ensure_experiments_root.sh
       - name: Tox21 on Vast
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          username: ${{ secrets.VAST_USER }}
+          port: ${{ secrets.VAST_PORT }}
+          key: ${{ secrets.VAST_SSH_KEY }}
+          #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
+          request_pty: true
+          command_timeout: 910m
+          envs: APP_DIR,GRID_DIR,TOX21_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
+            WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
+            PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
+            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT,TOX21_EXPLAIN_MODE,TOX21_EXPLAIN_STEPS
+          script: |
+            bash "$APP_DIR/scripts/ci/run-tox21.sh"
         env:
           HARD_WALL_MINS: 900
           KILL_AFTER_SECS: 120
