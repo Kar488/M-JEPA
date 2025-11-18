@@ -112,6 +112,16 @@ stream metrics to Weights & Biases. ``scripts/ci/run-tox21.sh`` grades frozen
 encoders and stamps ``bench/encoder_frozen.ok`` when the lineage is immutable.
 See ``docs/pipeline_overview.rst`` for the complete flow.
 
+The ``ci-vast`` workflow explicitly separates deployment from environment
+bootstrap so permission issues surface immediately. ``vast_deploy`` runs on a
+GitHub-hosted runner and syncs the repository plus micromamba into ``$APP_DIR``
+via SSH, while ``vast_prepare_environment`` runs ``scripts/ci/prepare_env.sh``
+directly on the self-hosted runner before cache warmers or sweeps begin.
+Self-hosted stages set ``MJEPA_ALLOW_DATA_FALLBACKS=0`` so ``scripts/ci/common.sh``
+fails fast instead of silently redirecting ``/data/mjepa`` paths into
+``$RUNNER_TEMP``; override this only when intentionally developing on a machine
+without the Vast data volume.
+
 Stage Agents & Responsibilities
 -------------------------------
 
@@ -170,6 +180,12 @@ Automation & Sweeps
 ``sweeps/``
   Tracked W&B sweep templates. Phase‑1 specs compare JEPA vs. contrastive; the
   derived phase‑2 specs live under ``grid/`` so tracked templates remain clean.
+
+``scripts/ci/cache_warm_prebuilt_datasets.py``
+  Pre-builds the hashed ``prebuilt_datasets`` pickles for both unlabeled and
+  labeled corpora. Invoke it twice (``--add-3d`` true/false) on a self-hosted
+  runner so Phase‑1 agents see cache hits immediately and skip the expensive
+  RDKit featurisation loop unless the cache is missing.
 
 ``scripts/ci/run-grid-or-phase1.sh``
   Creates paired sweeps and launches W&B agents. Respects

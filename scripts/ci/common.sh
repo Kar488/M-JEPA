@@ -23,6 +23,29 @@ normalize_bool() {
 : "${PRETRAIN_EXP_ID:=}"
 : "${PRETRAIN_STATE_ID:=}"
 : "${RUN_ID:=$(date +%s)}"
+: "${MJEPA_DIR_OWNER_UID:=}"
+: "${MJEPA_DIR_OWNER_GID:=}"
+
+if [[ -z "${MJEPA_DIR_OWNER_UID:-}" ]]; then
+  if [[ -n "${SUDO_UID:-}" ]]; then
+    MJEPA_DIR_OWNER_UID="$SUDO_UID"
+  elif [[ -n "${SUDO_USER:-}" ]]; then
+    if derived_uid=$(id -u "$SUDO_USER" 2>/dev/null); then
+      MJEPA_DIR_OWNER_UID="$derived_uid"
+    fi
+  fi
+fi
+
+if [[ -z "${MJEPA_DIR_OWNER_GID:-}" ]]; then
+  if [[ -n "${SUDO_GID:-}" ]]; then
+    MJEPA_DIR_OWNER_GID="$SUDO_GID"
+  elif [[ -n "${SUDO_USER:-}" ]]; then
+    if derived_gid=$(id -g "$SUDO_USER" 2>/dev/null); then
+      MJEPA_DIR_OWNER_GID="$derived_gid"
+    fi
+  fi
+fi
+: "${MJEPA_DIR_MODE:=0775}"
 FORCE_UNFREEZE_GRID="$(normalize_bool "${FORCE_UNFREEZE_GRID:-}" 0)"
 CI_FORCE_UNFREEZE_GRID="$(normalize_bool "${CI_FORCE_UNFREEZE_GRID:-}" "${FORCE_UNFREEZE_GRID}")"
 FORCE_UNFREEZE_GRID="$CI_FORCE_UNFREEZE_GRID"
@@ -89,11 +112,293 @@ mjepa_log_error() {
   echo "[ci] error: $*" >&2
 }
 
-mjepa_try_dir() {
-  local path="$1"
-  [[ -n "$path" ]] || return 1
-  if mkdir -p "$path" 2>/dev/null && [[ -w "$path" ]]; then
+: "${MJEPA_ALLOW_DATA_FALLBACKS:=1}"
+
+mjepa_require_primary_path() {
+  local context="$1"
+  local path_hint="${2:-}"
+  if [[ "${MJEPA_ALLOW_DATA_FALLBACKS}" == "1" ]]; then
     return 0
+  fi
+  if [[ -n "$path_hint" ]]; then
+    mjepa_log_error "$context (failed path: $path_hint)"
+  else
+    mjepa_log_error "$context"
+  fi
+  mjepa_log_error "fallbacks disabled; fix permissions or set MJEPA_ALLOW_DATA_FALLBACKS=1 to override"
+  exit 1
+}
+
+: "${MJEPA_SUDO_BIN:=sudo}"
+: "${MJEPA_SUDO_ALLOW_TTY_WRAPPER:=1}"
+: "${MJEPA_FSOP_TIMEOUT:=20}"
+: "${MJEPA_FSOP_KILL_AFTER:=5}"
+
+mjepa_run_with_timeout() {
+  local duration="${MJEPA_FSOP_TIMEOUT:-0}"
+  local kill_after="${MJEPA_FSOP_KILL_AFTER:-0}"
+  local timeout_bin
+  local cmd_desc="$*"
+  timeout_bin="$(command -v timeout 2>/dev/null || true)"
+
+  if [[ -n "$timeout_bin" && "$duration" =~ ^[0-9]+$ && "$duration" -gt 0 ]]; then
+    local -a timeout_args=("--preserve-status")
+    if [[ "$kill_after" =~ ^[0-9]+$ && "$kill_after" -gt 0 ]]; then
+      timeout_args+=("-k" "$kill_after")
+    fi
+    timeout_args+=("$duration" "$@")
+    "$timeout_bin" "${timeout_args[@]}"
+    return
+  fi
+
+  if [[ "$duration" =~ ^[0-9]+$ && "$duration" -gt 0 ]]; then
+    (
+      "$@"
+    ) &
+    local cmd_pid=$!
+    local kill_delay=0
+    local have_kill_delay=0
+    if [[ "$kill_after" =~ ^[0-9]+$ && "$kill_after" -gt 0 ]]; then
+      kill_delay="$kill_after"
+      have_kill_delay=1
+    fi
+    (
+      sleep "$duration" || exit 0
+      if ! kill -0 "$cmd_pid" 2>/dev/null; then
+        exit 0
+      fi
+      if [[ -n "$cmd_desc" ]]; then
+        mjepa_log_warn "command timed out after ${duration}s: $cmd_desc"
+      else
+        mjepa_log_warn "command timed out after ${duration}s"
+      fi
+      kill "$cmd_pid" 2>/dev/null || true
+      if (( have_kill_delay )); then
+        sleep "$kill_delay" || exit 0
+        if kill -0 "$cmd_pid" 2>/dev/null; then
+          if [[ -n "$cmd_desc" ]]; then
+            mjepa_log_warn "command still running; sending SIGKILL: $cmd_desc"
+          else
+            mjepa_log_warn "command still running; sending SIGKILL"
+          fi
+          kill -9 "$cmd_pid" 2>/dev/null || true
+        fi
+      fi
+    ) &
+    local timer_pid=$!
+    local status=0
+    wait "$cmd_pid" || status=$?
+    kill "$timer_pid" 2>/dev/null || true
+    wait "$timer_pid" 2>/dev/null || true
+    return "$status"
+  fi
+
+  "$@"
+}
+
+mjepa_sudo_exec() {
+  local sudo_bin="${MJEPA_SUDO_BIN:-}" tty_wrapper="${MJEPA_SUDO_TTY_WRAPPER:-script}" allow_tty="${MJEPA_SUDO_ALLOW_TTY_WRAPPER:-1}"
+  [[ -n "$sudo_bin" ]] || return 1
+  if ! command -v "$sudo_bin" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if mjepa_run_with_timeout "$sudo_bin" -n "$@" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ "$allow_tty" == "1" ]] && [[ -n "$tty_wrapper" ]] && command -v "$tty_wrapper" >/dev/null 2>&1; then
+    local quoted=""
+    if (( $# )); then
+      printf -v quoted ' %q' "$@"
+    fi
+
+    if mjepa_run_with_timeout "$tty_wrapper" -q /dev/null -c "$sudo_bin -n${quoted}" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    if mjepa_run_with_timeout "$tty_wrapper" -q /dev/null "$sudo_bin" -n "$@" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+mjepa_dir_is_effectively_writable() {
+  local path="$1"
+  local target_uid=""
+  local target_gid=""
+
+  if [[ ${MJEPA_DIR_OWNER_UID+x} ]]; then
+    target_uid="${MJEPA_DIR_OWNER_UID}"
+  fi
+  if [[ ${MJEPA_DIR_OWNER_GID+x} ]]; then
+    target_gid="${MJEPA_DIR_OWNER_GID}"
+  fi
+
+  if [[ -z "$target_uid" && -z "$target_gid" ]]; then
+    [[ -w "$path" ]]
+    return
+  fi
+
+  local stat_out="" owner="" group="" perms=""
+  if ! stat_out=$(stat -Lc '%u %g %a' "$path" 2>/dev/null); then
+    return 1
+  fi
+  read -r owner group perms <<<"$stat_out"
+  if [[ -n "$target_uid" && "$owner" != "$target_uid" ]]; then
+    return 1
+  fi
+  if [[ -n "$target_gid" && "$group" != "$target_gid" ]]; then
+    return 1
+  fi
+
+  local perm_val=$(( 8#$perms ))
+  if [[ -n "$target_uid" ]]; then
+    if (( (perm_val & 0200) == 0 )); then
+      return 1
+    fi
+  fi
+
+  if [[ -z "$target_uid" && -n "$target_gid" ]]; then
+    if (( (perm_val & 0020) == 0 )); then
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
+mjepa_reconcile_dir_owner() {
+  local path="$1" label="${2:-$1}"
+  local target_uid=""
+  local target_gid=""
+  local desired_mode="${MJEPA_DIR_MODE:-}"
+  [[ -n "$path" ]] || return 1
+  if [[ ${MJEPA_DIR_OWNER_UID+x} ]]; then
+    target_uid="${MJEPA_DIR_OWNER_UID}"
+  fi
+  if [[ ${MJEPA_DIR_OWNER_GID+x} ]]; then
+    target_gid="${MJEPA_DIR_OWNER_GID}"
+  fi
+
+  if [[ -z "$target_uid" && -z "$target_gid" && -z "$desired_mode" ]]; then
+    if [[ -w "$path" ]]; then
+      return 0
+    fi
+    return 1
+  fi
+
+  local need_chown=0 stat_out="" owner="" group="" chown_target=""
+  if [[ -n "$target_uid" || -n "$target_gid" ]]; then
+    if stat_out=$(stat -Lc '%u %g' "$path" 2>/dev/null); then
+      read -r owner group <<<"$stat_out"
+      if [[ -n "$target_uid" && "$owner" != "$target_uid" ]]; then
+        need_chown=1
+      fi
+      if [[ -n "$target_gid" && "$group" != "$target_gid" ]]; then
+        need_chown=1
+      fi
+    else
+      need_chown=1
+    fi
+
+    if (( need_chown )); then
+      if [[ -n "$target_uid" ]]; then
+        chown_target="$target_uid"
+      fi
+      if [[ -n "$target_gid" ]]; then
+        if [[ -n "$chown_target" ]]; then
+          chown_target+=":$target_gid"
+        else
+          chown_target=":$target_gid"
+        fi
+      fi
+      if mjepa_run_with_timeout chown "$chown_target" "$path" 2>/dev/null ||
+         mjepa_sudo_exec chown "$chown_target" "$path"; then
+        :
+      else
+        mjepa_log_warn "unable to chown $label to $chown_target"
+      fi
+    fi
+  fi
+
+  if [[ -n "$desired_mode" ]]; then
+    local need_chmod=1 current_mode="" desired_fmt="" current_fmt=""
+    if current_mode=$(stat -Lc '%a' "$path" 2>/dev/null); then
+      if [[ "$desired_mode" =~ ^0?[0-7]{3,4}$ && "$current_mode" =~ ^[0-7]{3,4}$ ]]; then
+        printf -v desired_fmt '%04o' "$((8#$desired_mode))"
+        printf -v current_fmt '%04o' "$((8#$current_mode))"
+      else
+        desired_fmt="$desired_mode"
+        current_fmt="$current_mode"
+      fi
+      if [[ "$desired_fmt" == "$current_fmt" ]]; then
+        need_chmod=0
+      fi
+    fi
+
+    if (( need_chmod )); then
+      if mjepa_run_with_timeout chmod "$desired_mode" "$path" 2>/dev/null ||
+         mjepa_sudo_exec chmod "$desired_mode" "$path"; then
+        :
+      else
+        mjepa_log_warn "unable to chmod $label to $desired_mode"
+      fi
+    fi
+  fi
+
+  if mjepa_dir_is_effectively_writable "$path"; then
+    return 0
+  fi
+
+  return 1
+}
+
+mjepa_try_dir() {
+  local path="$1" label="${2:-$1}"
+  [[ -n "$path" ]] || return 1
+
+  if [[ -e "$path" && ! -d "$path" ]]; then
+    return 1
+  fi
+
+  if [[ -d "$path" ]]; then
+    if mjepa_reconcile_dir_owner "$path" "$label"; then
+      return 0
+    fi
+  elif mkdir -p "$path" 2>/dev/null; then
+    if mjepa_reconcile_dir_owner "$path" "$label"; then
+      return 0
+    fi
+  fi
+
+  if mjepa_privileged_dir_fix "$path" "$label"; then
+    return 0
+  fi
+  return 1
+}
+
+mjepa_privileged_dir_fix() {
+  local path="$1" label="${2:-$1}"
+  [[ -n "$path" ]] || return 1
+  local uid gid
+  uid="${MJEPA_DIR_OWNER_UID:-}"
+  gid="${MJEPA_DIR_OWNER_GID:-}"
+
+  if [[ -z "$uid" ]]; then
+    uid="$(id -u 2>/dev/null)" || return 1
+  fi
+  if [[ -z "$gid" ]]; then
+    gid="$(id -g 2>/dev/null)" || gid="$uid"
+  fi
+  if mjepa_sudo_exec mkdir -p "$path" && \
+     mjepa_sudo_exec chown "$uid:$gid" "$path"; then
+    mjepa_sudo_exec chmod "${MJEPA_DIR_MODE}" "$path" || true
+    if mjepa_dir_is_effectively_writable "$path"; then
+      mjepa_log_warn "regained write access to $label via ${MJEPA_SUDO_BIN}"
+      return 0
+    fi
   fi
   return 1
 }
@@ -105,6 +410,7 @@ mjepa_detect_data_root() {
       printf '%s\n' "$requested_data"
       return 0
     fi
+    mjepa_require_primary_path "DATA_ROOT=$requested_data not writable" "$requested_data"
     mjepa_log_warn "DATA_ROOT=$requested_data not writable; ignoring"
   fi
 
@@ -122,6 +428,8 @@ mjepa_detect_data_root() {
     printf '%s\n' "$vast_root"
     return 0
   fi
+
+  mjepa_require_primary_path "default DATA_ROOT=$vast_root not writable" "$vast_root"
 
   local runner_tmp="${RUNNER_TEMP:-/tmp}"
   local fallback="${runner_tmp%/}/mjepa"
@@ -165,6 +473,7 @@ if [[ -n "$requested_experiments" ]]; then
   if mjepa_try_dir "$requested_experiments"; then
     EXPERIMENTS_ROOT="$requested_experiments"
   else
+    mjepa_require_primary_path "EXPERIMENTS_ROOT=$requested_experiments not writable" "$requested_experiments"
     mjepa_log_warn "EXPERIMENTS_ROOT=$requested_experiments not writable; falling back"
     unset EXPERIMENTS_ROOT
   fi
@@ -200,6 +509,7 @@ if ! mjepa_try_dir "${EXPERIMENTS_ROOT}"; then
   runner_tmp_root="${RUNNER_TEMP:-/tmp}"
   fallback_experiments="${runner_tmp_root%/}/mjepa/experiments"
   if mjepa_try_dir "$fallback_experiments"; then
+    mjepa_require_primary_path "EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT} not writable" "${EXPERIMENTS_ROOT}"
     mjepa_log_warn "falling back EXPERIMENTS_ROOT=$fallback_experiments"
     EXPERIMENTS_ROOT="$fallback_experiments"
     DATA_ROOT="$(dirname "$fallback_experiments")"
@@ -221,6 +531,52 @@ fi
 
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
 : "${MAMBA_ROOT_PREFIX:=${DATA_ROOT}/micromamba}"
+
+need_mamba_root_fix=0
+if [[ -z "${MAMBA_ROOT_PREFIX:-}" ]]; then
+  need_mamba_root_fix=1
+elif ! mjepa_try_dir "${MAMBA_ROOT_PREFIX}"; then
+  need_mamba_root_fix=1
+fi
+
+if (( need_mamba_root_fix )); then
+  current_prefix="${MAMBA_ROOT_PREFIX:-}"
+  if [[ -n "$current_prefix" ]]; then
+    mjepa_require_primary_path "MAMBA_ROOT_PREFIX=$current_prefix not writable" "$current_prefix"
+    mjepa_log_warn "MAMBA_ROOT_PREFIX=$current_prefix not writable; attempting fallback"
+  fi
+
+  fallback_home=""
+  if [[ -n "${HOME:-}" ]]; then
+    fallback_home="${HOME%/}/micromamba"
+    if mjepa_try_dir "$fallback_home"; then
+      MAMBA_ROOT_PREFIX="$fallback_home"
+    fi
+  fi
+
+  need_tmp_fallback=0
+  if [[ -z "${MAMBA_ROOT_PREFIX:-}" ]]; then
+    need_tmp_fallback=1
+  elif ! mjepa_try_dir "${MAMBA_ROOT_PREFIX}"; then
+    need_tmp_fallback=1
+  fi
+
+  if (( need_tmp_fallback )); then
+    primary_prefix="${current_prefix:-${fallback_home:-}}"
+    if [[ -n "$primary_prefix" ]]; then
+      mjepa_require_primary_path "MAMBA_ROOT_PREFIX=$primary_prefix not writable" "$primary_prefix"
+    fi
+    runner_tmp_root="${RUNNER_TEMP:-/tmp}"
+    fallback_tmp="${runner_tmp_root%/}/mjepa/micromamba"
+    if mjepa_try_dir "$fallback_tmp"; then
+      MAMBA_ROOT_PREFIX="$fallback_tmp"
+    else
+      mjepa_log_error "unable to ensure writable MAMBA_ROOT_PREFIX (tried ${current_prefix:-<unset>}, ${fallback_home:-<unset>}, $fallback_tmp)"
+      exit 1
+    fi
+    unset runner_tmp_root fallback_tmp need_tmp_fallback
+  fi
+fi
 : "${PRETRAIN_STATE_FILE_LEGACY:=${EXPERIMENTS_ROOT}/pretrain_state.json}"
 
 export DATA_ROOT
@@ -260,24 +616,99 @@ resolve_encoder_checkpoint() {
   if [[ -n "$manifest" && -f "$manifest" ]]; then
     local py resolved=""
     if py=$(python_bin 2>/dev/null); then
-      resolved="$("$py" - "$manifest" <<'PY'
+      resolved="$("$py" - "$manifest" \
+        "${PRETRAIN_DIR:-}" \
+        "${PRETRAIN_ARTIFACTS_DIR:-}" \
+        "${PRETRAIN_EXPERIMENT_ROOT:-}" \
+        "${EXPERIMENTS_ROOT:-}" \
+        "${ARTIFACTS_DIR:-}" <<'PY'
 import json
 import os
 import sys
 
-path = sys.argv[1]
-try:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh) or {}
-except Exception:
+manifest_path = sys.argv[1]
+
+def _arg(idx):
+    try:
+        return sys.argv[idx]
+    except IndexError:
+        return ""
+
+pretrain_dir = _arg(2)
+pretrain_artifacts = _arg(3)
+pretrain_root = _arg(4)
+experiments_root = _arg(5)
+artifacts_dir = _arg(6)
+
+def _load_manifest(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh) or {}
+    except Exception:
+        return {}
+
+payload = _load_manifest(manifest_path)
+candidate_value = None
+if isinstance(payload, dict):
+    paths = payload.get("paths")
+    if isinstance(paths, dict):
+        for key in ("encoder", "encoder_symlink"):
+            value = paths.get(key)
+            if isinstance(value, str):
+                value = value.strip()
+            if value:
+                candidate_value = value
+                break
+    if not candidate_value:
+        fallback = payload.get("encoder_checkpoint")
+        if isinstance(fallback, str):
+            fallback = fallback.strip()
+        if fallback:
+            candidate_value = fallback
+
+if not candidate_value:
     sys.exit(0)
 
-paths = data.get("paths") or {}
-for key in ("encoder", "encoder_symlink"):
-    value = paths.get(key)
-    if isinstance(value, str) and value.strip():
-        print(os.path.abspath(value))
+manifest_dir = os.path.dirname(os.path.abspath(manifest_path))
+search_roots = [
+    manifest_dir,
+    pretrain_dir,
+    pretrain_artifacts,
+    pretrain_root,
+    experiments_root,
+    artifacts_dir,
+]
+
+def _collect_candidates(raw):
+    results = []
+    seen = set()
+
+    def add(path):
+        if not path:
+            return
+        abs_path = os.path.abspath(path)
+        if abs_path in seen:
+            return
+        seen.add(abs_path)
+        results.append(abs_path)
+
+    if os.path.isabs(raw):
+        add(raw)
+    else:
+        for base in search_roots:
+            if base:
+                add(os.path.join(base, raw))
+    add(raw)
+    return results
+
+raw_candidates = _collect_candidates(candidate_value)
+for candidate in raw_candidates:
+    if os.path.isfile(candidate):
+        print(candidate)
         break
+else:
+    if raw_candidates:
+        print(raw_candidates[0])
 PY
       )"
     fi
@@ -285,6 +716,16 @@ PY
     if [[ -n "$resolved" ]]; then
       printf '%s\n' "$resolved"
       return 0
+    fi
+  fi
+
+  if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+    local root_search=""
+    if root_search=$(find "${PRETRAIN_EXPERIMENT_ROOT}" -name 'encoder.pt' -type f -print -quit 2>/dev/null); then
+      if [[ -n "$root_search" ]]; then
+        printf '%s\n' "$root_search"
+        return 0
+      fi
     fi
   fi
 
@@ -845,6 +1286,12 @@ ensure_dir_var() {
     if mjepa_try_dir "$path"; then
       printf -v "$var_name" '%s' "$path"
       if (( idx > 0 )); then
+        local primary="${attempts[0]:-}"
+        if [[ -n "$primary" ]]; then
+          mjepa_require_primary_path "${var_name} primary path not writable" "$primary"
+        else
+          mjepa_require_primary_path "${var_name} primary path not writable"
+        fi
         mjepa_log_warn "falling back ${var_name}=$path"
       fi
       return 0
@@ -917,6 +1364,8 @@ ensure_dir_var WANDB_DIR "$default_wandb_root" "${EXP_ID:+experiments/${EXP_ID}/
 if [[ -z "${SWEEP_CACHE_DIR:-}" ]]; then
   SWEEP_CACHE_DIR="$CACHE_DIR"
 fi
+
+ensure_dir_var SWEEP_CACHE_DIR "$CACHE_DIR" "${EXP_ID:+experiments/${EXP_ID}/}cache"
 
 export CACHE_DIR
 export SWEEP_CACHE_DIR

@@ -4,12 +4,13 @@ import importlib
 import logging
 import os
 import pickle
+import sys
 from concurrent.futures import ProcessPoolExecutor
 import hashlib
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import repeat
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 try:  # pragma: no cover - optional dependency
@@ -39,6 +40,7 @@ import pandas as pd
 from ._graph_pickle import register_graph_class, rebuild_graph_data
 
 logger = logging.getLogger(__name__)
+_MODULE_ANCHOR = sys.modules[__name__]
 
 EDGE_BASE_DIM = 7
 EDGE_GEOM_DIM = 10
@@ -53,14 +55,14 @@ def _cache_schema_suffix(add_3d: bool) -> str:
     return f"{GRAPH_CACHE_VERSION}_3d{int(add_3d)}_e{edge_dim}_{GRAPH_SCHEMA_VERSION}"
 
 
-def _resolve_worker_count(num_workers: int) -> int:
-    """Map negative worker counts to an automatic CPU-friendly budget."""
+def _resolve_worker_count(num_workers: Optional[int]) -> int:
+    """Map worker counts to an automatic CPU-friendly budget when unset."""
 
     if num_workers is None:
-        return 0
-    if num_workers < 0:
+        num_workers = -1
+    if num_workers <= 0:
         cpu_budget = max(1, (os.cpu_count() or 2) - 1)
-        return max(1, min(cpu_budget, 8))
+        return max(1, cpu_budget)
     return int(num_workers)
 
 
@@ -240,24 +242,200 @@ __all__ = [
 ]
 
 
-def _safe_smiles_to_graph(
+def _coerce_smiles_text(smiles: Any) -> str:
+    """Best-effort conversion of SMILES payloads into printable strings."""
+
+    if isinstance(smiles, str):
+        return smiles
+    try:
+        return str(smiles)
+    except Exception:
+        return "<unprintable_smiles>"
+
+
+def _safe_smiles_state(
+    dataset_cls: "type[GraphDataset]",
+    smiles: Any,
+    *,
+    add_3d: bool,
+    random_seed: Optional[int],
+) -> Optional[GraphDataState]:
+    """Convert a SMILES entry into a serialisable graph state.
+
+    ``GraphDataset.smiles_to_graph`` already tries to fall back to a synthetic graph
+    when RDKit fails, but third-party subclasses (and edge cases such as non-string
+    payloads) may still raise.  Instead of discarding those entries outright, build
+    a deterministic fallback graph per SMILES so the surrounding dataset keeps the
+    successfully featurised molecules.
+    """
+
+    try:
+        graph = dataset_cls.smiles_to_graph(
+            smiles, add_3d=add_3d, random_seed=random_seed
+        )
+    except Exception as exc:
+        smiles_txt = _coerce_smiles_text(smiles)
+        logger.debug("SMILES %r failed (%s); using fallback graph", smiles_txt, exc)
+        try:
+            graph = _fallback_graph_from_string(smiles_txt, add_pos=add_3d)
+        except Exception as fallback_exc:
+            logger.warning(
+                "Fallback graph generation failed for %r: %s",
+                smiles_txt,
+                fallback_exc,
+            )
+            return None
+
+    try:
+        return _graph_to_state(graph)
+    except Exception as exc:
+        smiles_txt = _coerce_smiles_text(smiles)
+        logger.warning("Serialising graph for %r failed: %s", smiles_txt, exc)
+        return None
+
+
+def _smiles_graph_worker(
     smiles: str,
     add_3d: bool,
     random_seed: Optional[int],
     cls_module: str,
     cls_qualname: str,
 ) -> Optional[GraphDataState]:
-    """Helper for multiprocessing to convert a SMILES string into a graph."""
+    """Stateless helper used by ``ProcessPoolExecutor`` workers."""
 
     try:
         dataset_cls = _resolve_graphdataset_cls(cls_module, cls_qualname)
-        graph = dataset_cls.smiles_to_graph(
-            smiles, add_3d=add_3d, random_seed=random_seed
+    except Exception as exc:
+        logger.warning(
+            "Worker failed to resolve dataset class %s.%s: %s",
+            cls_module,
+            cls_qualname,
+            exc,
         )
-    except Exception:
         return None
 
-    return _graph_to_state(graph)
+    return _safe_smiles_state(
+        dataset_cls, smiles, add_3d=add_3d, random_seed=random_seed
+    )
+
+
+def _resolve_smiles_worker() -> Callable[[str, bool, Optional[int], str, str], Optional[GraphDataState]]:
+    """Return a stable reference to ``_smiles_graph_worker``.
+
+    Some tests replace ``sys.modules["data.mdataset"]`` with lightweight stubs.
+    ``ForkingPickler`` resolves worker functions by importing the module named in
+    ``worker.__module__`` and expecting to find an attribute with the same
+    identity.  If the ``data.mdataset`` entry has been replaced, the attribute is
+    missing (or points at a different function object) and multiprocessing raises
+    ``PicklingError``.  Anchoring the worker on the original module and copying
+    the attribute onto any replacement keeps the reference stable.
+    """
+
+    module = sys.modules.get(__name__)
+    worker = getattr(_MODULE_ANCHOR, "_smiles_graph_worker")
+    if module is None:
+        return worker
+    current = getattr(module, "_smiles_graph_worker", None)
+    if current is not worker:
+        setattr(module, "_smiles_graph_worker", worker)
+    return worker
+
+
+def _recommended_chunksize(num_items: int, worker_budget: int) -> int:
+    """Return a coarse-grained chunksize for ``ProcessPoolExecutor.map``."""
+
+    if num_items <= 0 or worker_budget <= 0:
+        return 1
+    target = max(64, num_items // max(1, worker_budget * 4))
+    return min(2048, target)
+
+
+def _iter_graph_states(
+    smiles: Sequence[str],
+    *,
+    add_3d: bool,
+    random_seed: Optional[int],
+    worker_budget: int,
+    cls_module: str,
+    cls_qualname: str,
+    dataset_cls: Optional[type["GraphDataset"]] = None,
+) -> Iterator[Tuple[int, Optional[GraphDataState]]]:
+    """Yield ``(index, GraphDataState | None)`` for each SMILES string."""
+
+    if worker_budget > 0 and smiles:
+        chunksize = _recommended_chunksize(len(smiles), worker_budget)
+        worker = _resolve_smiles_worker()
+        with ProcessPoolExecutor(max_workers=worker_budget) as ex:
+            iterator = ex.map(
+                worker,
+                smiles,
+                repeat(add_3d),
+                repeat(random_seed),
+                repeat(cls_module),
+                repeat(cls_qualname),
+                chunksize=chunksize,
+            )
+            for idx, g_state in enumerate(iterator):
+                yield idx, g_state
+    else:
+        if dataset_cls is None:
+            dataset_cls = _resolve_graphdataset_cls(cls_module, cls_qualname)
+        for idx, sm in enumerate(smiles):
+            yield idx, _safe_smiles_state(
+                dataset_cls, sm, add_3d=add_3d, random_seed=random_seed
+            )
+
+
+def _build_graphs_from_smiles(
+    smiles: Sequence[str],
+    *,
+    add_3d: bool,
+    random_seed: Optional[int],
+    worker_budget: int,
+    cls_module: str,
+    cls_qualname: str,
+    dataset_cls: Optional[type["GraphDataset"]] = None,
+) -> Tuple[List[GraphData], List[str], List[int]]:
+    """Materialise graphs from SMILES strings with graceful fallbacks."""
+
+    smiles_list = list(smiles)
+
+    def _run(budget: int) -> Tuple[List[GraphData], List[str], List[int]]:
+        local_graphs: List[GraphData] = []
+        local_smiles: List[str] = []
+        valid_idx: List[int] = []
+        state_iter = _iter_graph_states(
+            smiles_list,
+            add_3d=add_3d,
+            random_seed=random_seed,
+            worker_budget=budget,
+            cls_module=cls_module,
+            cls_qualname=cls_qualname,
+            dataset_cls=dataset_cls,
+        )
+        for idx, g_state in state_iter:
+            if g_state is None:
+                continue
+            local_graphs.append(_graph_from_state(g_state))
+            local_smiles.append(smiles_list[idx])
+            valid_idx.append(idx)
+        return local_graphs, local_smiles, valid_idx
+
+    graphs, smiles_out, valid_indices = _run(worker_budget)
+    if graphs or not smiles_list or worker_budget <= 0:
+        return graphs, smiles_out, valid_indices
+
+    logger.warning(
+        "Process pool featurisation returned no graphs for %d SMILES; retrying sequentially",
+        len(smiles_list),
+    )
+    graphs, smiles_out, valid_indices = _run(0)
+    if not graphs and smiles_list:
+        logger.warning(
+            "Sequential featurisation failed to materialise any graphs for %d SMILES",
+            len(smiles_list),
+        )
+    return graphs, smiles_out, valid_indices
 
 class GraphDataset:
     def __init__(
@@ -997,42 +1175,21 @@ class GraphDataset:
             else None
         )
 
-        graphs: List[GraphData] = []
-        smiles_out: List[str] = []
-        valid_indices: List[int] = []
-
         # Resolve the dataset class lazily in worker processes to avoid
         # pickling GraphData/GraphDataset objects when spawning the pool.
         cls_module = cls.__module__
         cls_qualname = cls.__qualname__
 
         worker_budget = _resolve_worker_count(num_workers)
-        if worker_budget > 0:
-            with ProcessPoolExecutor(max_workers=worker_budget) as ex:
-                iterator = ex.map(
-                    _safe_smiles_to_graph,
-                    smiles,
-                    repeat(add_3d),
-                    repeat(random_seed),
-                    repeat(cls_module),
-                    repeat(cls_qualname),
-                )
-                for i, g_state in enumerate(iterator):
-                    if g_state is not None:
-                        graphs.append(_graph_from_state(g_state))
-                        smiles_out.append(smiles[i])
-                        valid_indices.append(i)
-        else:
-            for i, sm in enumerate(smiles):
-                try:
-                    graph = cls.smiles_to_graph(
-                        sm, add_3d=add_3d, random_seed=random_seed
-                    )
-                except Exception:
-                    continue
-                graphs.append(graph)
-                smiles_out.append(sm)
-                valid_indices.append(i)
+        graphs, smiles_out, valid_indices = _build_graphs_from_smiles(
+            smiles,
+            add_3d=add_3d,
+            random_seed=random_seed,
+            worker_budget=worker_budget,
+            cls_module=cls_module,
+            cls_qualname=cls_qualname,
+            dataset_cls=cls,
+        )
         # Filter labels to match valid graphs
         if labels is not None:
             labels = labels[valid_indices]
@@ -1103,38 +1260,19 @@ class GraphDataset:
             else None
         )
 
-        graphs: List[GraphData] = []
-        smiles_out: List[str] = []
-        valid_indices: List[int] = []
-
         cls_module = cls.__module__
         cls_qualname = cls.__qualname__
 
-        worker_budget = _resolve_worker_count(num_workers if num_workers is not None else 0)
-        if worker_budget > 0:
-            with ProcessPoolExecutor(max_workers=worker_budget) as ex:
-                iterator = ex.map(
-                    _safe_smiles_to_graph,
-                    smiles,
-                    repeat(add_3d),
-                    repeat(random_seed),
-                    repeat(cls_module),
-                    repeat(cls_qualname),
-                )
-                for idx, g_state in enumerate(iterator):
-                    if g_state is not None:
-                        graphs.append(_graph_from_state(g_state))
-                        smiles_out.append(smiles[idx])
-                        valid_indices.append(idx)
-        else:
-            for idx, sm in enumerate(smiles):
-                try:
-                    g = cls.smiles_to_graph(sm, add_3d=add_3d, random_seed=random_seed)
-                except Exception:
-                    continue
-                graphs.append(g)
-                smiles_out.append(sm)
-                valid_indices.append(idx)
+        worker_budget = _resolve_worker_count(num_workers if num_workers is not None else -1)
+        graphs, smiles_out, valid_indices = _build_graphs_from_smiles(
+            smiles,
+            add_3d=add_3d,
+            random_seed=random_seed,
+            worker_budget=worker_budget,
+            cls_module=cls_module,
+            cls_qualname=cls_qualname,
+            dataset_cls=cls,
+        )
 
         labels = None
         if labels_raw is not None:
@@ -1233,6 +1371,8 @@ class GraphDataset:
             if ds.labels is not None:
                 labels_present = True
                 labels_all.extend(ds.labels.tolist())
+            if max_graphs is not None and len(graphs_all) >= max_graphs:
+                break
 
         if max_graphs is not None:
             graphs_all = graphs_all[:max_graphs]

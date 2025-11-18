@@ -1,26 +1,81 @@
 #!/usr/bin/env bash
-set -euxo pipefail
+set -euo pipefail
 
 # ----------- inputs & defaults -----------
 : "${APP_DIR:=/srv/mjepa}"
-: "${MAMBA_ROOT_PREFIX:=~/micromamba}"
-: "${WANDB_DIR:=/data/mjepa/wandb}"
-: "${CACHE_DIR:=/data/mjepa/cache/graphs_250k}"
 : "${RUN_ID:=$(date +%s)}"
-: "${EXP_ROOT:=/data/mjepa/experiments/${RUN_ID}}"
+export MJEPACI_STAGE="prepare-env"
+: "${EXP_ID:=${RUN_ID}}"
+
+CI_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${CI_SCRIPT_DIR}/common.sh"
+
+MJEPA_SELF_HOSTED_REASON=""
+is_self_hosted_runner() {
+  local runner_labels="${RUNNER_LABELS:-}"
+  if [[ -n "$runner_labels" ]] && [[ ",${runner_labels}," == *",self-hosted,"* ]]; then
+    MJEPA_SELF_HOSTED_REASON="RUNNER_LABELS=${runner_labels}"
+    return 0
+  fi
+
+  local runner_name="${RUNNER_NAME:-}"
+  if [[ "$runner_name" == self-hosted* ]]; then
+    MJEPA_SELF_HOSTED_REASON="RUNNER_NAME=${runner_name}"
+    return 0
+  fi
+
+  local runner_user="${RUNNER_USER:-}"
+  if [[ "$runner_user" == "github" ]]; then
+    MJEPA_SELF_HOSTED_REASON="RUNNER_USER=${runner_user}"
+    return 0
+  fi
+
+  local current_user
+  current_user="$(id -un 2>/dev/null || true)"
+  if [[ "$current_user" == "github" ]]; then
+    MJEPA_SELF_HOSTED_REASON="whoami=${current_user}"
+    return 0
+  fi
+
+  if [[ -d "/home/github/actions-runner" ]]; then
+    MJEPA_SELF_HOSTED_REASON="runner_root=/home/github/actions-runner"
+    return 0
+  fi
+
+  MJEPA_SELF_HOSTED_REASON=""
+  return 1
+}
+
+MJEPA_IS_SELF_HOSTED_RUNNER=0
+if is_self_hosted_runner; then
+  MJEPA_IS_SELF_HOSTED_RUNNER=1
+  echo "[prepare-env] Detected self-hosted runner context (${MJEPA_SELF_HOSTED_REASON:-heuristic})"
+fi
+
+if [[ -n "${PIP_CACHE_DIR:-}" ]]; then
+  if mjepa_try_dir "${PIP_CACHE_DIR}"; then
+    export PIP_CACHE_DIR
+  else
+    mjepa_log_warn "PIP_CACHE_DIR=${PIP_CACHE_DIR} not writable; disabling pip cache"
+    unset PIP_CACHE_DIR
+  fi
+fi
+
+EXP_ROOT="${EXPERIMENTS_ROOT%/}/${EXP_ID}"
 ENV_NAME="mjepa"
-: "${PYTORCH_INDEX_URL:=https://download.pytorch.org/whl/cu128}"
+: "${PYTORCH_INDEX_URL:=https://download.pytorch.org/whl/cu129}"
 : "${PYTORCH_PACKAGE_SPEC:=torch==2.8.*}"
-: "${PYTORCH_NIGHTLY_INDEX_URL:=https://download.pytorch.org/whl/nightly/cu128}"
+: "${PYTORCH_NIGHTLY_INDEX_URL:=https://download.pytorch.org/whl/nightly/cu129}"
 : "${PYTORCH_NIGHTLY_PACKAGE_SPEC:=--pre torch}"
 : "${PYTORCH_ALLOW_NIGHTLY_FALLBACK:=1}"
 : "${PYTORCH_FAIL_FAST_ON_BAD_CUDA:=1}"
 : "${BUILD_SCATTER_FROM_SOURCE:=0}"
+: "${MJEPA_ASSUME_SELF_HOSTED_CUDA_REPO:=0}"
+MJEPA_ASSUME_SELF_HOSTED_CUDA_REPO="$(normalize_bool "${MJEPA_ASSUME_SELF_HOSTED_CUDA_REPO}" 0)"
 
 # ----------- persistent dirs -----------
-mkdir -p /data/mjepa/experiments "$WANDB_DIR" "$CACHE_DIR"
-mkdir -p "$EXP_ROOT"/{grid,pretrain,finetune,bench,tox21,logs}
-ln -sfn "$EXP_ROOT" /data/mjepa/experiments/latest
+ln -sfn "$EXP_ROOT" "${EXPERIMENTS_ROOT%/}/latest"
 
 # ----------- driver / gpu sanity -----------
 CUDA_EXPECTED=0
@@ -95,23 +150,66 @@ fi
 micromamba run -n "$ENV_NAME" python -m pip install -U pip setuptools wheel "numpy<2" ninja cmake
 micromamba run -n "$ENV_NAME" python -m pip install deepchem==2.8.0
 
-# ----------- Install CUDA Toolkit 12.8 (for compiling extensions like PyG) -----------
+# ----------- Install CUDA Toolkit 12.9 (for compiling extensions like PyG) -----------
 # Add this block before the Torch section. Assumes Ubuntu 22.04/Debian-based (from your apt-get usage).
 # If on 24.04, swap 'ubuntu2204' for 'ubuntu2404' in the wget URL.
-if ! nvcc --version | grep -q "release 12.8"; then
-  echo "[prepare-env] Installing CUDA Toolkit 12.8..."
-  wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-  sudo dpkg -i cuda-keyring_1.1-1_all.deb
-  sudo rm cuda-keyring_1.1-1_all.deb  # Cleanup
+need_cuda_install=1
+if command -v nvcc >/dev/null 2>&1; then
+  if nvcc --version | grep -q "release 12.9"; then
+    need_cuda_install=0
+    echo "[prepare-env] CUDA Toolkit 12.9 already detected; skipping install"
+  else
+    echo "[prepare-env] nvcc present but not CUDA 12.9; reinstalling"
+  fi
+else
+  echo "[prepare-env] nvcc not found; installing CUDA Toolkit 12.9"
+fi
+
+if [[ "$need_cuda_install" -eq 1 ]]; then
+  echo "[prepare-env] Installing CUDA Toolkit 12.9..."
+
+  install_cuda_keyring() {
+    local cuda_tmp_dir
+    cuda_tmp_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cuda-keyring.XXXXXX")"
+    local cuda_keyring_path="${cuda_tmp_dir}/cuda-keyring_1.1-1_all.deb"
+    curl -fsSL -o "$cuda_keyring_path" \
+      https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+    sudo dpkg -i "$cuda_keyring_path"
+    rm -rf "$cuda_tmp_dir"
+  }
+
+  need_cuda_keyring_install=1
+  if dpkg -s cuda-keyring >/dev/null 2>&1; then
+    need_cuda_keyring_install=0
+    echo "[prepare-env] cuda-keyring already installed; skipping re-install"
+  elif [[ "$MJEPA_IS_SELF_HOSTED_RUNNER" -eq 1 ]]; then
+    if [[ "$MJEPA_ASSUME_SELF_HOSTED_CUDA_REPO" -eq 1 ]]; then
+      need_cuda_keyring_install=0
+      echo "[prepare-env] Skipping cuda-keyring install on self-hosted runner (${MJEPA_SELF_HOSTED_REASON:-unknown}); explicit override provided"
+    else
+      echo "[prepare-env] Self-hosted runner detected but cuda-keyring missing; installing keyring"
+      install_cuda_keyring
+      need_cuda_keyring_install=0
+    fi
+  fi
+
+  if [[ "$need_cuda_keyring_install" -eq 1 ]]; then
+    install_cuda_keyring
+  else
+    echo "[prepare-env] Assuming CUDA apt repository is already configured"
+  fi
+
   sudo apt-get update
-  sudo apt-get install -y cuda-toolkit-12-8
+  sudo apt-get install -y cuda-toolkit-12-9
   # Add to PATH (persist via ~/.bashrc or eval in script)
-  export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}}
-  export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
-  echo 'export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}}' >> ~/.bashrc
-  echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}' >> ~/.bashrc
+  export PATH=/usr/local/cuda-12.9/bin${PATH:+:${PATH}}
+  export LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+  echo 'export PATH=/usr/local/cuda-12.9/bin${PATH:+:${PATH}}' >> ~/.bashrc
+  echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.9/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}' >> ~/.bashrc
   # Verify
   nvcc --version
+else
+  echo "[prepare-env] Skipping CUDA Toolkit install; already satisfied"
 fi
 
 # ----------- Torch (CUDA if available) -----------

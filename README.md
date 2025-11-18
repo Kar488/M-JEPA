@@ -301,6 +301,45 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
         ```bash
         ssh-keyscan github.com >> ~/.ssh/known_hosts
         ```
+  4.1) if deploy fails due to lack of ownership on experiments folder, do this
+
+        # sanity check current ownership
+        ls -ld /data /data/mjepa /data/mjepa/experiments
+
+        # now fix it
+        chown -R github:github /data/mjepa
+        chmod -R 0775 /data/mjepa
+
+        # verify
+        ls -ld /data/mjepa /data/mjepa/experiments
+        # expect something like:
+        # drwxrwxr-x 7 github github ...
+        # drwxrwxr-x 5 github github .
+
+        # Give ownership to the GitHub Actions runner user
+        chown -R github:github /srv/mjepa
+
+        # Give group/owner write permission
+        chmod -R 0775 /srv/mjepa
+
+        ls -ld /srv/mjepa /srv/mjepa/logs
+        # Should show something like:
+        # drwxrwxr-x github github ...
+        # drwxrwxr-x github github ...
+
+        #full details
+        stat -c '%U %G %a %n' /srv/mjepa /srv/mjepa/logs
+
+        #instal CUDA key ring
+        sudo -i   # become root
+
+        # Download the keyring deb directly to /tmp
+        cd /tmp
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+
+        # Install it once, system-wide
+        dpkg -i cuda-keyring_1.1-1_all.deb
+        apt-get update
 
   5) After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
 

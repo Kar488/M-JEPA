@@ -1,14 +1,12 @@
 from __future__ import annotations
 
+import importlib
 import os
 from typing import Optional, Protocol, runtime_checkable
 
-try:  # pragma: no cover - optional dependency
-    from data.mdataset import GraphDataset  # type: ignore
-    _GRAPH_DATASET_IMPORT_ERROR: Optional[Exception] = None
-except Exception as e:  # pragma: no cover - import-time failure path
-    GraphDataset = None  # type: ignore[assignment]
-    _GRAPH_DATASET_IMPORT_ERROR = e
+GraphDataset = None  # type: ignore[assignment]
+_GRAPH_DATASET_IMPORT_ERROR: Optional[Exception] = None
+_GRAPH_DATASET_MODULE: Optional[object] = None
 
 
 @runtime_checkable
@@ -21,10 +19,21 @@ class SupportsTeardown(Protocol):
 
 def _ensure_graphdataset() -> "GraphDataset":  # type: ignore
     """Return GraphDataset or raise an informative ImportError."""
-    if GraphDataset is None:
+
+    global GraphDataset, _GRAPH_DATASET_MODULE, _GRAPH_DATASET_IMPORT_ERROR
+
+    if GraphDataset is not None:
+        return GraphDataset
+
+    try:
+        _GRAPH_DATASET_MODULE = importlib.import_module("data.mdataset")
+        GraphDataset = getattr(_GRAPH_DATASET_MODULE, "GraphDataset")
+    except Exception as exc:  # pragma: no cover - import failure path
+        _GRAPH_DATASET_IMPORT_ERROR = exc
         raise ImportError(
             "GraphDataset is unavailable. Ensure `data.mdataset.GraphDataset` can be imported."
-        ) from _GRAPH_DATASET_IMPORT_ERROR
+        ) from exc
+
     return GraphDataset
 
 

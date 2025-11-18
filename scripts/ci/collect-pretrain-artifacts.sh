@@ -60,6 +60,18 @@ exit 1
 EOS
 }
 
+remote_path_exists() {
+  local remote_path="$1"
+  "${SSH_CMD[@]}" "$REMOTE" bash -s -- "$remote_path" <<'EOS' >/dev/null 2>&1
+set -euo pipefail
+path="${1:-}"
+if [[ -e "$path" ]]; then
+  exit 0
+fi
+exit 1
+EOS
+}
+
 sync_optional_file() {
   local remote_path="$1"
   local label="$2"
@@ -90,6 +102,19 @@ if [[ -z "$tox21_remote" && -n "$PRETRAIN_EXPERIMENT_ROOT" ]]; then
   tox21_remote="${PRETRAIN_EXPERIMENT_ROOT%/}/tox21_gate.env"
 fi
 sync_optional_file "$tox21_remote" "tox21_gate.env" "$DEST_DIR"
+
+if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+  graphs_remote="${PRETRAIN_EXPERIMENT_ROOT%/}/graphs"
+  if remote_path_exists "$graphs_remote"; then
+    if "${RSYNC[@]}" "$REMOTE:$graphs_remote" "$DEST_DIR"; then
+      echo "[collect] fetched graph visuals from $graphs_remote" >&2
+    else
+      echo "::warning::rsync failed for graph visuals at $graphs_remote" >&2
+    fi
+  else
+    echo "[collect] info: graph visuals not found at $graphs_remote; skipping" >&2
+  fi
+fi
 
 required=(
   "$DEST_DIR/encoder.pt"

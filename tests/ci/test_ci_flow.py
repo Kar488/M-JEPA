@@ -1,11 +1,14 @@
 import json
 import os
 import shlex
+import shutil
 import subprocess
+import sys
+import traceback
 from pathlib import Path
 
 import pytest
-import sys
+import re
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -61,6 +64,8 @@ if __name__ == "__main__":
 
 def test_pretrain_tox21_dry_run(tmp_path):
     experiments_root = tmp_path / "experiments"
+    dataset_csv = tmp_path / "toy_dataset.csv"
+    dataset_csv.write_text("smiles\nC1=CC=CC=C1\n", encoding="utf-8")
     shim_path = tmp_path / "stage_shim.sh"
     shim_path.write_text("""#!/usr/bin/env bash
 set -euo pipefail
@@ -96,10 +101,18 @@ esac
             "MJEPACI_STAGE_SHIM": str(shim_path),
             "GITHUB_ENV": str(tmp_path / "github_env"),
             "WANDB_API_KEY": "",
+            "DATASET_DIR": str(dataset_csv),
         }
     )
 
     _run(["bash", "scripts/ci/run-pretrain.sh"], env)
+
+    graphs_dir = experiments_root / "1759795103" / "graphs"
+    summary_path = graphs_dir / "summary.json"
+    assert graphs_dir.is_dir(), graphs_dir
+    assert summary_path.is_file(), summary_path
+    assert list(graphs_dir.rglob("*.html")), "expected HTML graph visuals"
+    assert list(graphs_dir.rglob("*.png")), "expected PNG graph visuals"
 
     manifest_path = experiments_root / "1759795103" / "artifacts" / "encoder_manifest.json"
     missing_path = manifest_path.parent / "missing_encoder.pt"
@@ -108,7 +121,6 @@ esac
         encoding="utf-8",
     )
     assert not missing_path.exists()
-
     _run(["bash", "scripts/ci/run-tox21.sh"], env)
 
     state_path = experiments_root / "1759795103" / "pretrain_state.json"
@@ -126,6 +138,272 @@ esac
 
     all_paths = {str(p) for p in experiments_root.rglob("*")}
     assert all("18296078427" not in p for p in all_paths)
+
+
+def test_common_sh_falls_back_when_mamba_root_unwritable(tmp_path):
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+
+    data_root = tmp_path / "data"
+    data_root.mkdir(exist_ok=True)
+
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir(exist_ok=True)
+
+    blocked_path = tmp_path / "blocked"
+    blocked_path.write_text("stub", encoding="utf-8")
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir(exist_ok=True)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DATA_ROOT": str(data_root),
+            "RUNNER_TEMP": str(runner_tmp),
+            "HOME": str(fake_home),
+            "MAMBA_ROOT_PREFIX": str(blocked_path),
+            # These fallback behaviors are the point of the test, so make
+            # sure global CI settings that disable fallbacks do not bleed
+            # into the test environment.
+            "MJEPA_ALLOW_DATA_FALLBACKS": "1",
+        }
+    )
+
+    cmd = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(common_sh))}; "
+        "printf '%s' \"$MAMBA_ROOT_PREFIX\""
+    )
+
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    expected = fake_home / "micromamba"
+    assert proc.stdout.strip() == str(expected)
+
+
+def test_common_sh_rewrites_unwritable_sweep_cache(tmp_path):
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+
+    data_root = tmp_path / "data"
+    data_root.mkdir(exist_ok=True)
+
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir(exist_ok=True)
+
+    blocked_sweep = tmp_path / "blocked_sweep"
+    blocked_sweep.write_text("stub", encoding="utf-8")
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DATA_ROOT": str(data_root),
+            "RUNNER_TEMP": str(runner_tmp),
+            "SWEEP_CACHE_DIR": str(blocked_sweep),
+            "MJEPA_ALLOW_DATA_FALLBACKS": "1",
+        }
+    )
+
+    cmd = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(common_sh))}; "
+        "printf '%s\n%s' \"$CACHE_DIR\" \"$SWEEP_CACHE_DIR\""
+    )
+
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    cache_dir_str, sweep_dir_str = proc.stdout.strip().splitlines()
+    assert cache_dir_str == sweep_dir_str
+
+    cache_dir = Path(cache_dir_str)
+    assert cache_dir_str != str(blocked_sweep)
+    assert cache_dir.name == "graphs_250k"
+    assert cache_dir.is_dir(), cache_dir
+
+
+def test_common_sh_attempts_privileged_fix_for_experiments_root(tmp_path):
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+    fake_sudo = REPO_ROOT / "tests" / "ci" / "fake_sudo.sh"
+
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir()
+
+    blocked_parent = tmp_path / "blocked_parent"
+    blocked_parent.mkdir()
+    blocked_parent.chmod(0o555)
+
+    target_root = blocked_parent / "experiments"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "EXPERIMENTS_ROOT": str(target_root),
+            "RUNNER_TEMP": str(runner_tmp),
+            "MJEPA_SUDO_BIN": str(fake_sudo),
+            "MJEPA_FAKE_SUDO_FIX_PATH": str(blocked_parent),
+        }
+    )
+
+    cmd = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(common_sh))}; "
+        "printf '%s\n%s' \"$EXPERIMENTS_ROOT\" \"$DATA_ROOT\""
+    )
+
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    resolved_experiments, resolved_data = proc.stdout.strip().splitlines()
+    assert resolved_experiments == str(target_root)
+    assert resolved_data == str(blocked_parent)
+    assert target_root.is_dir()
+    assert os.access(target_root, os.W_OK)
+
+
+def test_common_sh_handles_privileged_fix_when_tty_required(tmp_path):
+    if shutil.which("script") is None:
+        pytest.skip("script command unavailable")
+
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+    fake_sudo = REPO_ROOT / "tests" / "ci" / "fake_sudo.sh"
+
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir()
+
+    blocked_parent = tmp_path / "blocked_parent"
+    blocked_parent.mkdir()
+    blocked_parent.chmod(0o555)
+
+    target_root = blocked_parent / "experiments"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "EXPERIMENTS_ROOT": str(target_root),
+            "RUNNER_TEMP": str(runner_tmp),
+            "MJEPA_SUDO_BIN": str(fake_sudo),
+            "MJEPA_FAKE_SUDO_FIX_PATH": str(blocked_parent),
+            "MJEPA_FAKE_SUDO_REQUIRE_TTY": "1",
+        }
+    )
+
+    cmd = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(common_sh))}; "
+        "printf '%s\n%s' \"$EXPERIMENTS_ROOT\" \"$DATA_ROOT\""
+    )
+
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    resolved_experiments, resolved_data = proc.stdout.strip().splitlines()
+    assert resolved_experiments == str(target_root)
+    assert resolved_data == str(blocked_parent)
+    assert target_root.is_dir()
+    assert os.access(target_root, os.W_OK)
+
+
+def test_common_sh_aborts_when_experiments_fallback_disabled(tmp_path):
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir()
+
+    blocked_parent = tmp_path / "blocked_parent"
+    blocked_parent.mkdir()
+    target_root = blocked_parent / "experiments"
+    target_root.write_text("", encoding="utf-8")
+    blocked_parent.chmod(0o555)
+    fake_sudo = shutil.which("false") or "/bin/false"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "EXPERIMENTS_ROOT": str(target_root),
+            "RUNNER_TEMP": str(runner_tmp),
+            "MJEPA_ALLOW_DATA_FALLBACKS": "0",
+            "MJEPA_SUDO_BIN": fake_sudo,
+            "MJEPA_SUDO_ALLOW_TTY_WRAPPER": "0",
+        }
+    )
+
+    cmd = f"set -euo pipefail; source {shlex.quote(str(common_sh))}"
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode != 0
+    assert "fallbacks disabled" in proc.stderr.lower()
+
+
+def test_common_sh_aborts_when_cache_dir_fallback_disabled(tmp_path):
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+    runner_tmp = tmp_path / "runner"
+    runner_tmp.mkdir()
+
+    data_root = tmp_path / "data"
+    data_root.mkdir(exist_ok=True)
+
+    blocked_parent = tmp_path / "blocked_cache"
+    blocked_parent.mkdir(exist_ok=True)
+    blocked_cache = blocked_parent / "cache"
+    blocked_cache.write_text("", encoding="utf-8")
+    blocked_parent.chmod(0o555)
+    fake_sudo = shutil.which("false") or "/bin/false"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DATA_ROOT": str(data_root),
+            "CACHE_DIR": str(blocked_cache),
+            "RUNNER_TEMP": str(runner_tmp),
+            "MJEPA_ALLOW_DATA_FALLBACKS": "0",
+            "MJEPA_SUDO_BIN": fake_sudo,
+            "MJEPA_SUDO_ALLOW_TTY_WRAPPER": "0",
+        }
+    )
+
+    cmd = f"set -euo pipefail; source {shlex.quote(str(common_sh))}"
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode != 0
+    assert "fallbacks disabled" in proc.stderr.lower()
 
 
 def test_pretrain_materializes_phase2_artifacts(tmp_path):
@@ -653,33 +931,223 @@ fi
             "PRETRAIN_EXP_ID": "pretrain-demo",
             "MJEPACI_STAGE_SHIM": str(shim_path),
             "WANDB_API_KEY": "",
+            "MJEPA_ALLOW_DATA_FALLBACKS": "1",
         }
     )
 
+    # Strip host-provided cache overrides so run-finetune derives paths from the
+    # temporary experiments root created by the test.  Some CI environments set
+    # these variables globally (e.g., to /data/mjepa/cache/*), which causes the
+    # stage wrapper to look for encoder artifacts outside of the test fixture
+    # and fail immediately.
+    for key in (
+        "CACHE_DIR",
+        "SWEEP_CACHE_DIR",
+        "FINETUNE_CACHE_DIR",
+        "BENCH_CACHE_DIR",
+        "TOX21_CACHE_DIR",
+        "REPORTS_CACHE_DIR",
+        "GRID_CACHE_DIR",
+        "PRETRAIN_CACHE_DIR",
+    ):
+        env.pop(key, None)
+
+    met_env = experiments_root / env["EXP_ID"] / "met_benchmark.env"
+    
+    for key in (
+        "PRETRAIN_ENCODER_PATH",
+        "PRETRAIN_MANIFEST",
+        "PRETRAIN_TOX21_ENV",
+        "MET_BENCHMARK_BASELINE",
+    ):
+        env.pop(key, None)
+
+    def invoke_finetune(env_map, capture_path, *, label, extra_debug_keys=None):
+        env_for_run = env_map.copy()
+        env_for_run["TMP_ENV_CAPTURE"] = str(capture_path)
+
+        diag_stream = sys.stderr
+
+        def diag(message: str) -> None:
+            print(message, flush=True)
+
+        debug_filter = {
+            "ARTIFACTS_DIR",
+            "EXP_ID",
+            "EXP_ROOT",
+            "EXPERIMENT_DIR",
+            "EXPERIMENTS_ROOT",
+            "FINETUNE_DIR",
+            "MJEPACI_DEBUG",
+            "MJEPACI_STAGE_SHIM",
+            "TMP_ENV_CAPTURE",
+        }
+        debug_keys = {
+            key
+            for key in env_for_run
+            if key.startswith("PRETRAIN")
+            or key.startswith("FINETUNE")
+            or key in debug_filter
+        }
+        if extra_debug_keys:
+            debug_keys.update(key for key in extra_debug_keys if key in env_for_run)
+
+        diag(
+            f"[finetune-test] invoking run-finetune for {label} (capture={capture_path})"
+        )
+        for key in sorted(debug_keys):
+            diag(f"[finetune-test]   {key}={env_for_run[key]}")
+
+        required_env_keys = {
+            "PRETRAIN_DIR",
+            "PRETRAIN_ARTIFACTS_DIR",
+            "PRETRAIN_MANIFEST",
+            "PRETRAIN_ENCODER_PATH",
+            "PRETRAIN_EXPERIMENT_ROOT",
+            "PRETRAIN_TOX21_ENV",
+            "FINETUNE_DIR",
+        }
+        missing_env = sorted(key for key in required_env_keys if key not in env_for_run)
+        if missing_env:
+            diag(
+                "[finetune-test]   missing_env_keys="
+                + ", ".join(missing_env)
+            )
+
+        try:
+             result = subprocess.run(
+                ["bash", "scripts/ci/run-finetune.sh"],
+                check=True,
+                cwd=REPO_ROOT,
+                env=env_for_run,
+                text=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            diag(f"[finetune-test] run-finetune failed for {label} (rc={exc.returncode})")
+            # print stderr from the failed subprocess, filtered for numeric markers
+            for line in exc.stdout.splitlines():
+                if re.fullmatch(r'\d+(?:\.\d+)*', line.strip()):
+                    diag(f"[finetune-test] out: {line}")
+            for line in exc.stderr.splitlines():
+                if re.fullmatch(r'\d+(?:\.\d+)*', line.strip()):
+                    diag(f"[finetune-test] err: {line}")
+            #traceback.print_exc(file=diag_stream)
+            raise
+        except Exception:
+            diag(f"[finetune-test] unexpected exception while invoking {label}")
+            #traceback.print_exc(file=diag_stream)
+            diag_stream.flush()
+            if capture_path.exists():
+                capture_text = capture_path.read_text(encoding="utf-8")
+                diag(
+                    f"[finetune-test] capture for {label} (unexpected failure):\n{capture_text}"
+                )
+            raise
+        
+        
+        # On success, show only the debug markers from stdout/stderr
+        for line in result.stdout.splitlines():
+            if re.fullmatch(r'\d+(?:\.\d+)*', line.strip()):
+                diag(f"[finetune-test] out: {line}")
+        for line in result.stderr.splitlines():
+            if re.fullmatch(r'\d+(?:\.\d+)*', line.strip()):
+                diag(f"[finetune-test] err: {line}")
+
+        if capture_path.exists():
+            return capture_path.read_text(encoding="utf-8")
+        return ""
+
     capture_one = tmp_path / "env_missing.txt"
-    env["TMP_ENV_CAPTURE"] = str(capture_one)
-    subprocess.run(
-        ["bash", "scripts/ci/run-finetune.sh"],
-        check=True,
-        cwd=REPO_ROOT,
-        env=env,
-    )
-    capture_text = capture_one.read_text(encoding="utf-8")
+    capture_text = invoke_finetune(env, capture_one, label="local gate missing")
     assert "MET_BENCHMARK_BASELINE=unknown" in capture_text
 
-    met_env = experiments_root / "finetune-demo" / "met_benchmark.env"
-    met_env.write_text("MET_BENCHMARK_BASELINE=false\n", encoding="utf-8")
+    # Uppercase/whitespace variants of the reroute flag should still be
+    # parsed correctly when they evaluate to "false".
+    met_env.write_text(
+        "  export MET_BENCHMARK_BASELINE = FALSE  \r\n",
+        encoding="utf-8",
+    )
 
     capture_two = tmp_path / "env_failed.txt"
-    env["TMP_ENV_CAPTURE"] = str(capture_two)
-    subprocess.run(
-        ["bash", "scripts/ci/run-finetune.sh"],
-        check=True,
-        cwd=REPO_ROOT,
-        env=env,
-    )
-    capture_text = capture_two.read_text(encoding="utf-8")
+    capture_text = invoke_finetune(env, capture_two, label="local gate present")
     assert "MET_BENCHMARK_BASELINE=false" in capture_text
+
+    # Remove the finetune-local gate and ensure the pretrain fallback is
+    # honoured when the reroute signal only exists under the lineage root.
+    met_env.unlink(missing_ok=True)
+    pretrain_gate = experiments_root / "pretrain-demo" / "met_benchmark.env"
+    pretrain_gate.write_text(
+        "  # gate summary\r\n"
+        "export MET_BENCHMARK_BASELINE=false\r\n"
+        "MET_GATE_DEBUG=observed value  \r\n",
+        encoding="utf-8",
+    )
+
+    capture_three = tmp_path / "env_fallback.txt"
+    capture_text = invoke_finetune(env, capture_three, label="pretrain gate fallback")
+    assert "MET_BENCHMARK_BASELINE=false" in capture_text
+    assert "MET_GATE_DEBUG=observed value" in capture_text
+
+    # Environments that inject PRETRAIN_DIR/PRETRAIN_ARTIFACTS_DIR without
+    # declaring PRETRAIN_EXP_ID should still locate the lineage gate.
+    env_direct = env.copy()
+    env_direct.update(
+        {
+            "PRETRAIN_EXP_ID": "mismatched-pretrain-id",
+            "PRETRAIN_DIR": str(pretrain_root / "pretrain"),
+            "PRETRAIN_ARTIFACTS_DIR": str(pretrain_root / "artifacts"),
+            "ARTIFACTS_DIR": str(pretrain_root / "artifacts"),
+            "PRETRAIN_MANIFEST": str(pretrain_root / "artifacts" / "encoder_manifest.json"),
+            "PRETRAIN_ENCODER_PATH": str(pretrain_root / "pretrain" / "encoder.pt"),
+        }
+    )
+
+    capture_direct = tmp_path / "env_direct.txt"
+    capture_text = invoke_finetune(
+        env_direct,
+        capture_direct,
+        label="pretrain env_direct reroute",
+        extra_debug_keys={"ARTIFACTS_DIR"},
+    )
+    assert "MET_BENCHMARK_BASELINE=false" in capture_text
+    assert "MET_GATE_DEBUG=observed value" in capture_text
+
+    # Force the resolver to rely solely on the manifest entry when the
+    # advertised PRETRAIN_ENCODER_PATH is missing so relative manifest entries
+    # are interpreted relative to the pretrain lineage.
+    env_manifest_only = env.copy()
+    env_manifest_only["PRETRAIN_ENCODER_PATH"] = str(
+        experiments_root / "finetune-demo" / "artifacts" / "missing_encoder.pt"
+    )
+    capture_manifest = tmp_path / "env_manifest_relative.txt"
+    capture_text = invoke_finetune(
+        env_manifest_only,
+        capture_manifest,
+        label="manifest relative encoder",
+    )
+    assert "MET_BENCHMARK_BASELINE=false" in capture_text
+
+    # Empty or whitespace-only gate files should act like a missing
+    # reroute signal and leave the baseline flag marked as unknown.
+    pretrain_gate.write_text("\n  \t  # comment only\r\n\t\n", encoding="utf-8")
+
+    capture_blank = tmp_path / "env_blank.txt"
+    capture_text = invoke_finetune(env, capture_blank, label="blank pretrain gate")
+    assert "MET_BENCHMARK_BASELINE=unknown" in capture_text
+
+    # Uppercase/whitespace variants of the baseline gate should still
+    # short-circuit the stage before the shim executes.
+    met_env.write_text(
+        "  export MET_BENCHMARK_BASELINE = TRUE  \r\n",
+        encoding="utf-8",
+    )
+
+    capture_skip = tmp_path / "env_skip.txt"
+    if capture_skip.exists():
+        capture_skip.unlink()
+    invoke_finetune(env, capture_skip, label="uppercase gate entry")
+    assert not capture_skip.exists()
 
 
 def test_run_tox21_exports_full_finetune_when_finetuned(tmp_path):

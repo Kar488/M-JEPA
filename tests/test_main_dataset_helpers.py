@@ -45,6 +45,7 @@ except Exception:  # pragma: no cover
     sys.modules["sklearn"] = sklearn_stub
     sys.modules["sklearn.metrics"] = metrics_stub
 
+from data import mdataset
 from data.mdataset import GraphData, GraphDataset
 from main import (
     _build_unlabeled_dataset_from_smiles,
@@ -64,6 +65,12 @@ except Exception:  # pragma: no cover
             "pyarrow or fastparquet is required for parquet tests",
             allow_module_level=True,
         )
+
+
+def test_resolve_worker_count_tracks_cpu_budget(monkeypatch):
+    monkeypatch.setattr(mdataset.os, "cpu_count", lambda: 32)
+    assert mdataset._resolve_worker_count(-1) == 31
+    assert mdataset._resolve_worker_count(4) == 4
 
 
 def test_build_unlabeled_dataset_fallback(monkeypatch):
