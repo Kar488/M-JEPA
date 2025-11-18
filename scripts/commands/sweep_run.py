@@ -5,6 +5,7 @@ import os
 import pathlib
 import time
 from typing import Optional, Dict, Any
+from venv import logger
 
 from . import dataset_cache
 
@@ -591,8 +592,20 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                 "⚠️ W&B run never became active; canonical summary metrics were not synced",
                 flush=True,
             )
-    if should_publish_summary:
-        _wb_summary_update(payload)
+    # Publish canonical summary metrics directly to the run if we have one
+    if run is not None:
+        # update summary with all metrics (val_rmse, mae_mean, rmse_mean, pair_id, etc.)
+        for key, value in payload.items():
+            try:
+                run.summary[key] = value
+            except Exception as exc:
+                logger.warning(f"[sweep-run] failed to update summary key {key}: {exc}")
+    else:
+        # no active run; skip summary update instead of calling wb_summary_update
+        logger.warning("[sweep-run] no active wandb run, summary metrics will not be synced")
+
+    #if should_publish_summary:
+    #    _wb_summary_update(payload)
 
     result_path = _local_result_file(exp_id, config_idx, seed_idx)
     if result_path is not None:
