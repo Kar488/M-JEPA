@@ -324,6 +324,13 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             return True
 
     using_wandb = bool(int(getattr(args, "use_wandb", 1)))
+    if not using_wandb:
+        # Downstream helpers use WANDB_DISABLED/WANDB_MODE to decide whether
+        # warnings should be emitted.  When the CLI explicitly disables W&B we
+        # set the canonical env toggles so helpers such as wandb_safety know the
+        # absence of a run is expected and should not be noisy.
+        os.environ.setdefault("WANDB_DISABLED", "1")
+        os.environ.setdefault("WANDB_MODE", "disabled")
     if using_wandb:
         try:
             _wb_get_or_init(args)
@@ -601,11 +608,23 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             except Exception as exc:
                 logger.warning(f"[sweep-run] failed to update summary key {key}: {exc}")
     else:
-        # no active run; skip summary update instead of calling wb_summary_update
-        logger.warning("[sweep-run] no active wandb run, summary metrics will not be synced")
+        # No active run.  When W&B is enabled this is unexpected, so emit a
+        # warning to preserve the previous behaviour.  Otherwise log at INFO to
+        # avoid spurious warnings during offline test runs.
+        msg = "[sweep-run] no active wandb run, summary metrics will not be synced"
+        if using_wandb:
+            logger.warning(msg)
+        else:
+            logger.info(msg)
 
-    #if should_publish_summary:
-    #    _wb_summary_update(payload)
+    if should_publish_summary:
+        try:
+            _wb_summary_update(payload)
+        except Exception as exc:
+            print(
+                f"[sweep-run] failed to publish canonical summary metrics: {exc}",
+                flush=True,
+            )
 
     result_path = _local_result_file(exp_id, config_idx, seed_idx)
     if result_path is not None:

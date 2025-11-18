@@ -17,6 +17,17 @@ DEBUG = os.getenv("WBS_DEBUG", "1") == "1"
 def _dbg(*a):
     if DEBUG: print("[wandb_safety]", *a)
 
+
+def _persist_payload(payload: Dict[str, Any]) -> None:
+    """Best-effort write of the latest summary payload for offline debugging."""
+    try:
+        log_dir = os.getenv("LOG_DIR") or "./logs"
+        pathlib.Path(log_dir).mkdir(parents=True, exist_ok=True)
+        with open(os.path.join(log_dir, "wb_last_payload.json"), "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, default=str)
+    except Exception as exc:
+        _dbg("could not write wb_last_payload.json:", exc)
+
 def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
     """Ensure there is an active wandb run for sweep-run. Returns a run or None."""
     silence_pydantic_field_warnings()
@@ -74,19 +85,18 @@ METRIC_CANDIDATES = ("val_rmse", "rmse_mean", "rmse", "probe_rmse_mean", "metric
 def wb_summary_update(payload: Dict[str, Any]) -> None:
     """Safe summary update: only writes if a run exists; never throws."""
     silence_pydantic_field_warnings()
-    import wandb
-    run = getattr(wandb, "run", None)
-    if run is None:
-        _dbg("wb_summary_update: no active run; skipping. keys=", list(payload.keys()))
-        return
-    # persist last payload to help debugging
     try:
-        log_dir = os.getenv("LOG_DIR") or "./logs"
-        pathlib.Path(log_dir).mkdir(parents=True, exist_ok=True)
-        with open(os.path.join(log_dir, "wb_last_payload.json"), "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, default=str)
-    except Exception as e:
-        _dbg("could not write wb_last_payload.json:", e)
+        import wandb  # type: ignore
+    except Exception:
+        wandb = None  # type: ignore
+    run = getattr(wandb, "run", None) if wandb is not None else None
+    wandb_disabled = os.getenv("WANDB_MODE") == "disabled" or os.getenv("WANDB_DISABLED") in {"1", "true", "True"}
+    # persist last payload to help debugging/offline export even when wandb is disabled
+    _persist_payload(payload)
+    if run is None:
+        if not wandb_disabled:
+            _dbg("wb_summary_update: no active run; skipping. keys=", list(payload.keys()))
+        return
 
     try:
         # resolve RMSE candidate
@@ -125,7 +135,10 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
                 "logging metrics:",
                 {k: log_payload[k] for k in sorted(log_payload)},
             )
-            wandb.log(log_payload)
+            try:
+                wandb.log(log_payload)
+            except Exception as exc:
+                _dbg("wandb.log failed:", exc)
         elif any(k in payload for k in METRIC_CANDIDATES):
             _dbg("no RMSE candidate in payload; keys=", list(payload.keys()))
 
