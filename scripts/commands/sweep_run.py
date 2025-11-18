@@ -617,7 +617,10 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         else:
             logger.info(msg)
 
-    if should_publish_summary:
+    # Only use wb_summary_update in the offline / use_wandb=0 case.
+    # When using W&B sweeps, we either updated run.summary directly above
+    # or skipped because no run ever became active.
+    if not using_wandb and should_publish_summary:
         try:
             _wb_summary_update(payload)
         except Exception as exc:
