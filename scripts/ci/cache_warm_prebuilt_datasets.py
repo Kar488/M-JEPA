@@ -11,9 +11,6 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
-from utils.dataset import load_directory_dataset
-
-
 def _maybe_inject_repo_root() -> None:
     """Ensure the repository root is available on ``sys.path``."""
 
@@ -30,6 +27,8 @@ def _load_graph_module():
 
 
 _maybe_inject_repo_root()
+
+from utils.dataset import load_directory_dataset
 
 _mdataset = _load_graph_module()
 
