@@ -2144,12 +2144,17 @@ def _train_linear_head_impl(
     base_encoder_for_ig = (
         encoder.module if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder
     )
+    base_head_for_ig = (
+        head_module.module
+        if isinstance(head_module, nn.parallel.DistributedDataParallel)
+        else head_module
+    )
     ig_logger: Optional[_IGArtifactLogger] = None
     if (explain_mode or "").strip().lower() == "ig" and (is_main_process() or not distributed):
         ig_logger = _IGArtifactLogger(
             dataset=dataset,
             encoder=base_encoder_for_ig,
-            head_module=head_module,
+            head_module=base_head_for_ig,
             task_type=task_type,
             device=device_t,
             explain_mode=explain_mode,
