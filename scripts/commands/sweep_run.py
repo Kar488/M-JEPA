@@ -604,8 +604,14 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         # no active run; skip summary update instead of calling wb_summary_update
         logger.warning("[sweep-run] no active wandb run, summary metrics will not be synced")
 
-    #if should_publish_summary:
-    #    _wb_summary_update(payload)
+    if should_publish_summary:
+        try:
+            _wb_summary_update(payload)
+        except Exception as exc:
+            print(
+                f"[sweep-run] failed to publish canonical summary metrics: {exc}",
+                flush=True,
+            )
 
     result_path = _local_result_file(exp_id, config_idx, seed_idx)
     if result_path is not None:
