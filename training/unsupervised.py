@@ -116,7 +116,9 @@ logger = logging.getLogger(__name__)
 from utils.schedule import cosine_with_warmup
 
 
-def _make_wandb_handlers(wb: Any) -> Tuple[Callable[..., None], Callable[[], None]]:
+def _make_wandb_handlers(
+    wb: Any, *, finish_on_exit: bool = True
+) -> Tuple[Callable[..., None], Callable[[], None]]:
     """Return safe ``(log_fn, finish_fn)`` closures for W&B runs."""
 
     wandb_active = bool(wb)
@@ -148,6 +150,8 @@ def _make_wandb_handlers(wb: Any) -> Tuple[Callable[..., None], Callable[[], Non
     def _finish() -> None:
         nonlocal wandb_active
         if not wandb_active or not is_main_process():
+            return
+        if not finish_on_exit:
             return
         finish_fn = getattr(wb, "finish", None)
         if callable(finish_fn):
@@ -1240,10 +1244,11 @@ def train_jepa(
     time_budget_mins: int = 0,
     disable_tqdm: bool = False,
     num_workers: int = -1,
-    pin_memory=True, 
-    persistent_workers=True, 
-    prefetch_factor=4, 
+    pin_memory=True,
+    persistent_workers=True,
+    prefetch_factor=4,
     bf16=False,
+    defer_wandb_finish: bool = False,
     compile_models: bool = True,
     **unused
 ) -> List[float]:
@@ -1454,7 +1459,9 @@ def train_jepa(
         config=dict(method="jepa", lr=lr, mask_ratio=mask_ratio, contiguous=contiguous),
         tags=wandb_tags,
     )
-    wb_log, wb_finish = _make_wandb_handlers(wb)
+    wb_log, wb_finish = _make_wandb_handlers(
+        wb, finish_on_exit=not bool(defer_wandb_finish)
+    )
 
     start_epoch = 1
     ckpt: Optional[Dict[str, Any]] = None
@@ -1855,10 +1862,11 @@ def train_contrastive(
     time_budget_mins: int = 0,
     disable_tqdm: bool = False,
     num_workers: int = -1,
-    pin_memory=True, 
-    persistent_workers=True, 
-    prefetch_factor=4, 
-    bf16=False, 
+    pin_memory=True,
+    persistent_workers=True,
+    prefetch_factor=4,
+    bf16=False,
+    defer_wandb_finish: bool = False,
     **unused
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
@@ -2025,7 +2033,9 @@ def train_contrastive(
         config=dict(method="contrastive", lr=lr, mask_ratio=mask_ratio),
         tags=wandb_tags,
     )
-    wb_log, wb_finish = _make_wandb_handlers(wb)
+    wb_log, wb_finish = _make_wandb_handlers(
+        wb, finish_on_exit=not bool(defer_wandb_finish)
+    )
 
     if resume_from and os.path.exists(resume_from):
         ckpt = load_checkpoint(resume_from)
