@@ -600,40 +600,9 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                 flush=True,
             )
 
-    import sys
-    # Publish canonical summary metrics directly to the run if we have one
-    if run is not None:
-        # update summary with all metrics (val_rmse, mae_mean, rmse_mean, pair_id, etc.)
-        for key, value in payload.items():
-            try:
-                run.summary[key] = value
-            except Exception as exc:
-                logger.warning(f"[sweep-run] failed to update summary key {key}: {exc}")
-    else:
-        if not using_wandb:
-            # offline/test mode → use the monkey‑patched wb_summary_update from sys.modules
-            ws = sys.modules.get("wandb_safety")
-            if ws and hasattr(ws, "wb_summary_update"):
-                ws.wb_summary_update(payload)
-            else:
-                import importlib
-                ws = importlib.import_module("wandb_safety")
-                ws.wb_summary_update(payload)
-        else:
-            # W&B enabled but no run ever started → log warning only
-            logger.warning("[sweep-run] no active wandb run, summary metrics will not be synced")
-        
-    # Publish canonical summary metrics directly to the run if we have one
-    if run is not None:
-        # update summary with all metrics (val_rmse, mae_mean, rmse_mean, pair_id, etc.)
-        for key, value in payload.items():
-            try:
-                run.summary[key] = value
-            except Exception as exc:
-                logger.warning(f"[sweep-run] failed to update summary key {key}: {exc}")
-
-    # Always publish the canonical metrics via wandb_safety helper if required.
-    # This ensures tests that stub wb_summary_update capture the payload.
+    # Let wandb_safety write the canonical summary.
+    # This handles both online (use_wandb=1) and offline (use_wandb=0) cases,
+    # logging metrics via wandb.log and updating the run summary.
     if should_publish_summary:
         try:
             _wb_summary_update(payload)
