@@ -610,10 +610,17 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     else:
         # No active run.
         if not using_wandb and should_publish_summary:
-            # Offline/test mode: let wb_summary_update handle it (tests patch this).
+            # Offline/test mode: re-import wandb_safety so monkeypatches take effect.
             try:
-                _wb_summary_update(payload)
+                import importlib
+                ws = importlib.import_module("wandb_safety")
+                ws.wb_summary_update(payload)
             except Exception as exc:
+                # Fallback to the originally imported helper if re-import fails
+                try:
+                    _wb_summary_update(payload)
+                except Exception:
+                    pass
                 print(
                     f"[sweep-run] failed to publish canonical summary metrics: {exc}",
                     flush=True,
@@ -621,7 +628,10 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         else:
             # W&B was supposed to be active but never produced a run.
             msg = "[sweep-run] no active wandb run, summary metrics will not be synced"
-            logger.warning(msg)
+            if using_wandb:
+                logger.warning(msg)
+            else:
+                logger.info(msg)
 
     result_path = _local_result_file(exp_id, config_idx, seed_idx)
     if result_path is not None:
