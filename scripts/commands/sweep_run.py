@@ -613,12 +613,16 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             # Offline/test mode: re-import wandb_safety so monkeypatches take effect.
             try:
                 import importlib
+                # Offline/test mode → use the monkey‑patched wb_summary_update from sys.modules
                 ws = importlib.import_module("wandb_safety")
-                ws.wb_summary_update(payload)
+                if ws is not None and hasattr(ws, "wb_summary_update"):
+                    ws.wb_summary_update(payload)
             except Exception as exc:
                 # Fallback to the originally imported helper if re-import fails
                 try:
-                    _wb_summary_update(payload)
+                    import importlib
+                    ws = importlib.import_module("wandb_safety")
+                    ws._wb_summary_update(payload)
                 except Exception:
                     pass
                 print(
