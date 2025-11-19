@@ -82,100 +82,130 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
         _dbg("wandb.init raised; using wandb.run if present")
         return getattr(wandb, "run", None)
 
-METRIC_CANDIDATES = ("val_rmse", "rmse_mean", "rmse", "probe_rmse_mean", "metric")
+RMSE_CANDIDATES = ("val_rmse", "rmse_mean", "rmse", "probe_rmse_mean", "metric")
+AUC_CANDIDATES = ("val_auc", "auc", "roc_auc", "pr_auc")
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _wait_for_run(module, timeout_s: float) -> Optional["Run"]:
+    run = getattr(module, "run", None)
+    if run is not None:
+        return run
+    poll_interval = 0.5
+    deadline = time.time() + float(timeout_s)
+    while run is None and time.time() < deadline:
+        time.sleep(poll_interval)
+        run = getattr(module, "run", None)
+    return run
 
 
 def wb_summary_update(payload: Dict[str, Any]) -> None:
-    """Safe summary update: only writes if a run exists; never throws."""
+    """Safe summary update: waits for an active run and logs canonical metrics."""
     silence_pydantic_field_warnings()
+    wandb_disabled = os.getenv("WANDB_MODE") == "disabled" or os.getenv("WANDB_DISABLED") in {
+        "1",
+        "true",
+        "True",
+    }
+    # persist last payload to help debugging/offline export even when wandb is disabled
+    _persist_payload(payload)
+
     try:
         import wandb  # type: ignore
     except Exception:
         wandb = None  # type: ignore
-    run = getattr(wandb, "run", None) if wandb is not None else None
-    wandb_disabled = os.getenv("WANDB_MODE") == "disabled" or os.getenv("WANDB_DISABLED") in {"1", "true", "True"}
-    # persist last payload to help debugging/offline export even when wandb is disabled
-    _persist_payload(payload)
+
+    if wandb is None:
+        if not wandb_disabled:
+            _dbg("wb_summary_update: wandb import failed; skipping summary sync")
+        return
+
+    timeout = float(os.getenv("WANDB_SWEEP_INIT_TIMEOUT", 20.0))
+    run = getattr(wandb, "run", None)
+    if run is None and not wandb_disabled:
+        run = _wait_for_run(wandb, timeout)
     if run is None:
         if not wandb_disabled:
             _dbg("wb_summary_update: no active run; skipping. keys=", list(payload.keys()))
         return
 
     try:
-        # resolve RMSE candidate
-        v_key = None
-        v = payload.get("val_rmse")
-        if v is None:
-            for k in METRIC_CANDIDATES:
-                if k == "val_rmse":
+        val_rmse = _coerce_float(payload.get("val_rmse"))
+        if val_rmse is None:
+            for key in RMSE_CANDIDATES:
+                if key == "val_rmse":
                     continue
-                if payload.get(k) is not None:
-                    try:
-                        v = float(payload[k])
-                    except Exception:
-                        continue
-                    v_key = k
+                candidate = _coerce_float(payload.get(key))
+                if candidate is not None:
+                    val_rmse = candidate
                     break
-        else:
-            try:
-                v = float(v)
-            except Exception:
-                v = None
 
-        best_step_val = payload.get("best_step")
-        try:
-            best_step = int(best_step_val) if best_step_val is not None else None
-        except Exception:
-            best_step = None
+        val_auc = _coerce_float(payload.get("val_auc"))
+        if val_auc is None:
+            for key in AUC_CANDIDATES:
+                if key == "val_auc":
+                    continue
+                candidate = _coerce_float(payload.get(key))
+                if candidate is not None:
+                    val_auc = candidate
+                    break
+
+        best_step = _coerce_int(payload.get("best_step"))
 
         log_payload = {}
-        if v is not None:
-            log_payload["val_rmse"] = float(v)
+        if val_rmse is not None:
+            log_payload["val_rmse"] = val_rmse
+        if val_auc is not None:
+            log_payload["val_auc"] = val_auc
         if best_step is not None:
-            log_payload["best_step"] = int(best_step)
+            log_payload["best_step"] = best_step
         if log_payload:
-            _dbg(
-                "logging metrics:",
-                {k: log_payload[k] for k in sorted(log_payload)},
-            )
+            _dbg("logging metrics:", {k: log_payload[k] for k in sorted(log_payload)})
             try:
                 wandb.log(log_payload)
             except Exception as exc:
                 _dbg("wandb.log failed:", exc)
-        elif any(k in payload for k in METRIC_CANDIDATES):
-            _dbg("no RMSE candidate in payload; keys=", list(payload.keys()))
 
-        if v is not None:
-            run.summary["val_rmse"] = float(v)
+        summary_payload = dict(payload)
+        if val_rmse is not None:
+            summary_payload["val_rmse"] = val_rmse
+        if val_auc is not None:
+            summary_payload["val_auc"] = val_auc
         if best_step is not None:
-            run.summary["best_step"] = int(best_step)
-
-        # val_mae aliasing
-        if "val_mae" not in payload and payload.get("mae_mean") is not None:
-            run.summary["val_mae"] = float(payload["mae_mean"])
-
-
-        # classification: alias AUC candidates
-        if "val_auc" not in run.summary:
-            for k in ("val_auc", "auc", "roc_auc", "pr_auc"):
-                if payload.get(k) is not None:
-                    try:
-                        run.summary["val_auc"] = float(payload[k])
-                    except Exception:
-                        pass
-                    break
+            summary_payload["best_step"] = best_step
+        if "val_mae" not in summary_payload and payload.get("mae_mean") is not None:
+            mae_val = _coerce_float(payload.get("mae_mean"))
+            if mae_val is not None:
+                summary_payload["val_mae"] = mae_val
 
         try:
-            run.summary.update(payload)
-        except Exception as e:
-            _dbg("wb_summary_update update() exception:", e)
-            for key, value in payload.items():
+            run.summary.update(summary_payload)
+        except Exception as exc:
+            _dbg("wb_summary_update summary.update failed:", exc)
+            for key, value in summary_payload.items():
                 try:
                     run.summary[key] = value
                 except Exception as inner:
                     _dbg(f"failed to set summary[{key!r}]:", inner)
-    except Exception as e:
-        _dbg("wb_summary_update exception:", e)
+    except Exception as exc:
+        _dbg("wb_summary_update exception:", exc)
 
 def wb_finish_safely(timeout: float = 30.0) -> None:
     try:

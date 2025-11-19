@@ -566,21 +566,13 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             "[sweep-run] wandb.run not initialised yet; delaying summary sync",
             flush=True,
         )
-    if run is not None:
-        if val_rmse is not None:
-            run.summary["val_rmse"] = float(val_rmse)
-        run.summary["best_step"] = int(best_step)
-        if pair_id is not None:
-            try:
-                run.summary["pair_id"] = pair_id
-            except Exception:
-                pass
-        if run_name and getattr(run, "name", None) != run_name:
-            try:
-                run.name = run_name
-                run.save()
-            except Exception:
-                pass
+    if run is not None and run_name and getattr(run, "name", None) != run_name:
+        try:
+            run.name = run_name
+            run.save()
+        except Exception:
+            pass
+
     if using_wandb and config_payload:
         if run is None:
             run = _wait_for_wandb_run()
