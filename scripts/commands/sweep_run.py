@@ -608,26 +608,20 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             except Exception as exc:
                 logger.warning(f"[sweep-run] failed to update summary key {key}: {exc}")
     else:
-        # No active run.  When W&B is enabled this is unexpected, so emit a
-        # warning to preserve the previous behaviour.  Otherwise log at INFO to
-        # avoid spurious warnings during offline test runs.
-        msg = "[sweep-run] no active wandb run, summary metrics will not be synced"
-        if using_wandb:
-            logger.warning(msg)
+        # No active run.
+        if not using_wandb and should_publish_summary:
+            # Offline/test mode: let wb_summary_update handle it (tests patch this).
+            try:
+                _wb_summary_update(payload)
+            except Exception as exc:
+                print(
+                    f"[sweep-run] failed to publish canonical summary metrics: {exc}",
+                    flush=True,
+                )
         else:
-            logger.info(msg)
-
-    # Only use wb_summary_update in the offline / use_wandb=0 case.
-    # When using W&B sweeps, we either updated run.summary directly above
-    # or skipped because no run ever became active.
-    if not using_wandb and should_publish_summary:
-        try:
-            _wb_summary_update(payload)
-        except Exception as exc:
-            print(
-                f"[sweep-run] failed to publish canonical summary metrics: {exc}",
-                flush=True,
-            )
+            # W&B was supposed to be active but never produced a run.
+            msg = "[sweep-run] no active wandb run, summary metrics will not be synced"
+            logger.warning(msg)
 
     result_path = _local_result_file(exp_id, config_idx, seed_idx)
     if result_path is not None:
