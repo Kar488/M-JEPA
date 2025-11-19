@@ -37,10 +37,7 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
     if run is not None:
         return run
 
-    # respect disable flags
-    if os.getenv("WANDB_MODE") == "disabled" or os.getenv("WANDB_DISABLED") in {"true", "1"}:
-        _dbg("WANDB disabled by env; skipping init")
-        return None
+    wandb_disabled = os.getenv("WANDB_MODE") == "disabled" or os.getenv("WANDB_DISABLED") in {"true", "1", "True"}
 
     # prefer shared helper if present
     try:
@@ -49,35 +46,41 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
         maybe_init_wandb = None
 
     if maybe_init_wandb is not None:
-        run = maybe_init_wandb(
-            enable=True,
+        maybe_init_wandb(
+            enable=not wandb_disabled,
             project=os.getenv("WANDB_PROJECT", "m-jepa"),
             config=vars(args) if args is not None else None,
             group=os.getenv("WANDB_RUN_GROUP"),
             job_type="sweep-run",
             tags=["sweep-run"],
-            api_key=os.getenv("WANDB_API_KEY"),   
+            api_key=os.getenv("WANDB_API_KEY"),
         )
-        return getattr(wandb, "run", None)
-        
-    # hard fallback
-    if run is None:
-        _dbg("fallback wandb.init(...)")
-        try:
-            run = wandb.init(
-                project=os.getenv("WANDB_PROJECT", "m-jepa"),
-                entity=os.getenv("WANDB_ENTITY"),
-                name=os.getenv("WANDB_NAME"),
-                group=os.getenv("WANDB_RUN_GROUP"),
-                job_type="sweep-run",
-                config=vars(args) if args is not None else None,
-                reinit=True,
-            )
-            _dbg("wandb.init -> run id:", getattr(run, "id", None))
+        run = getattr(wandb, "run", None)
+        if run is not None:
             return run
-        except Exception:
-            _dbg("wandb.init raised; using wandb.run if present")
-            return getattr(wandb, "run", None)
+
+    # respect disable flags once helper had a chance to opt-in
+    if wandb_disabled:
+        _dbg("WANDB disabled by env; skipping init")
+        return None
+
+    # hard fallback
+    _dbg("fallback wandb.init(...)")
+    try:
+        run = wandb.init(
+            project=os.getenv("WANDB_PROJECT", "m-jepa"),
+            entity=os.getenv("WANDB_ENTITY"),
+            name=os.getenv("WANDB_NAME"),
+            group=os.getenv("WANDB_RUN_GROUP"),
+            job_type="sweep-run",
+            config=vars(args) if args is not None else None,
+            reinit=True,
+        )
+        _dbg("wandb.init -> run id:", getattr(run, "id", None))
+        return run
+    except Exception:
+        _dbg("wandb.init raised; using wandb.run if present")
+        return getattr(wandb, "run", None)
 
 METRIC_CANDIDATES = ("val_rmse", "rmse_mean", "rmse", "probe_rmse_mean", "metric")
 
