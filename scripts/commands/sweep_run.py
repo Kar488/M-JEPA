@@ -94,8 +94,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     except Exception:
         wandb = None
     sweep_cfg = {}
-    if wandb is not None and _as_bool(getattr(args, "use_wandb", 1)):
-        wb = getattr(wandb, "run", None)
+    wandb_run = getattr(wandb, "run", None) if wandb is not None else None
+    wandb_enabled = _as_bool(getattr(args, "use_wandb", 1)) or wandb_run is not None
+
+    if wandb is not None and wandb_enabled:
+        wb = wandb_run
         for cfg_src in (getattr(wb, "config", None), getattr(wandb, "config", None)):
             if cfg_src is None:
                 continue
@@ -323,7 +326,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                 return False
             return True
 
-    using_wandb = bool(int(getattr(args, "use_wandb", 1)))
+    using_wandb = bool(int(getattr(args, "use_wandb", 1))) or wandb_run is not None
     if not using_wandb:
         # Downstream helpers use WANDB_DISABLED/WANDB_MODE to decide whether
         # warnings should be emitted.  When the CLI explicitly disables W&B we
@@ -547,6 +550,30 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     _wandb_wait_timeout = float(os.getenv("WANDB_SWEEP_INIT_TIMEOUT", 20.0))
 
+    def _log_wandb_links(run_obj: Any, *, when: str) -> None:
+        if run_obj is None:
+            return
+        run_url = getattr(run_obj, "url", None)
+        sweep_url = getattr(run_obj, "sweep_url", None)
+        sweep_url = sweep_url or getattr(getattr(run_obj, "sweep", None), "url", None)
+        project_url = None
+        try:
+            entity = getattr(run_obj, "entity", None)
+            project = getattr(run_obj, "project", None)
+            if entity and project:
+                project_url = f"https://wandb.ai/{entity}/{project}"
+        except Exception:
+            project_url = None
+        parts = []
+        if sweep_url:
+            parts.append(f"sweep={sweep_url}")
+        if run_url:
+            parts.append(f"run={run_url}")
+        if project_url:
+            parts.append(f"project={project_url}")
+        if parts:
+            print(f"[sweep-run][wandb] {when}: " + " | ".join(parts), flush=True)
+
     def _wait_for_wandb_run(timeout_s: float = _wandb_wait_timeout) -> Optional[Any]:
         if _wandb_mod is None:
             return None
@@ -561,6 +588,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         return run_obj
 
     run = _wait_for_wandb_run()
+    _log_wandb_links(run, when="run ready")
     if run is None and using_wandb:
         print(
             "[sweep-run] wandb.run not initialised yet; delaying summary sync",
@@ -586,7 +614,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         if run is None:
             run = _wait_for_wandb_run()
         if run is None:
-            should_publish_summary = False
             print(
                 "⚠️ W&B run never became active; canonical summary metrics were not synced",
                 flush=True,
@@ -623,5 +650,8 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         except Exception as exc:
             print(f"[sweep-run] unable to write fallback metrics to {result_path}: {exc}", flush=True)
 
+    if run is None:
+        run = _wait_for_wandb_run()
+    _log_wandb_links(run, when="finishing run")
     _wb_finish_safely()
 
