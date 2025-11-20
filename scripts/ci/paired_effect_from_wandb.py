@@ -728,8 +728,19 @@ def main():
 
     while True:
         attempt += 1
-        runs_iter = api.runs(project_path, filters=filters)
-        runs_list = list(runs_iter)
+        try:
+            runs_iter = api.runs(project_path, filters=filters)
+            runs_list = list(runs_iter)
+        except (requests.exceptions.RequestException, Exception) as exc:  # noqa: BLE001
+            if attempt >= max_attempts:
+                raise
+            print(
+                f"[paired-effect] failed to fetch runs (attempt {attempt}/{max_attempts}): {exc}; "
+                f"retrying in {retry_delay:.1f}s",
+                flush=True,
+            )
+            time.sleep(retry_delay)
+            continue
         if not runs_list:
             break
 
