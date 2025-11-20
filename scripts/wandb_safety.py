@@ -139,9 +139,23 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
 
     timeout = float(os.getenv("WANDB_SWEEP_INIT_TIMEOUT", 20.0))
     run = getattr(wandb, "run", None)
+    api_run = None
     if run is None and not wandb_disabled:
         run = _wait_for_run(wandb, timeout)
-    if run is None:
+
+    if run is None and not wandb_disabled:
+        run_id = os.getenv("WANDB_RUN_ID")
+        entity = os.getenv("WANDB_ENTITY")
+        project = os.getenv("WANDB_PROJECT") or "m-jepa"
+        target = "/".join([p for p in (entity, project, run_id) if p]) if run_id else None
+        if target:
+            try:
+                api_run = wandb.Api().run(target)
+            except Exception as exc:  # pragma: no cover - API availability varies in CI
+                _dbg("wb_summary_update: wandb.Api lookup failed:", exc)
+
+    run_like = run or api_run
+    if run_like is None:
         if not wandb_disabled:
             _dbg("wb_summary_update: no active run; skipping. keys=", list(payload.keys()))
         return
@@ -176,7 +190,7 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
             log_payload["val_auc"] = val_auc
         if best_step is not None:
             log_payload["best_step"] = best_step
-        if log_payload:
+        if log_payload and run is not None:
             _dbg("logging metrics:", {k: log_payload[k] for k in sorted(log_payload)})
             try:
                 wandb.log(log_payload)
@@ -196,12 +210,12 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
                 summary_payload["val_mae"] = mae_val
 
         try:
-            run.summary.update(summary_payload)
+            run_like.summary.update(summary_payload)
         except Exception as exc:
             _dbg("wb_summary_update summary.update failed:", exc)
             for key, value in summary_payload.items():
                 try:
-                    run.summary[key] = value
+                    run_like.summary[key] = value
                 except Exception as inner:
                     _dbg(f"failed to set summary[{key!r}]:", inner)
     except Exception as exc:

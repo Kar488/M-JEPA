@@ -1,10 +1,12 @@
 import json
 import sys
+import time
 import types
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pytest
+import requests
 
 yaml = pytest.importorskip("yaml")
 
@@ -771,6 +773,57 @@ def test_paired_effect_reads_summary_json_dict(monkeypatch, tmp_path):
     payload = json.loads(out.read_text())
     assert payload["winner"] == "jepa"
     assert payload["pairs"] == 1
+
+
+def test_paired_effect_retries_on_http_error(monkeypatch, tmp_path):
+    """Transient HTTP errors when listing runs should be retried."""
+
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setattr(time, "sleep", lambda *_: None)
+
+    flaky_runs: List[FakeRun] = [
+        FakeRun("jepa", {"training_method": "jepa", "pair_id": "pid"}, {"val_rmse": 0.4}),
+        FakeRun(
+            "contrastive",
+            {"training_method": "contrastive", "pair_id": "pid"},
+            {"val_rmse": 0.6},
+        ),
+    ]
+
+    class Api:
+        def __init__(self):
+            self.calls = 0
+
+        def runs(self, path, filters=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise requests.exceptions.HTTPError("502 Bad Gateway")
+            return flaky_runs
+
+    api = Api()
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: api))
+
+    out = tmp_path / "pe_retry.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+            "--strict",
+        ],
+    )
+
+    pe.main()
+
+    assert api.calls == 2
+    payload = json.loads(out.read_text())
+    assert payload["winner"] == "jepa"
 
 
 def test_paired_effect_handles_summary_items_attribute_error(monkeypatch, tmp_path):

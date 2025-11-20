@@ -30,6 +30,35 @@ def test_wb_summary_update_no_run(monkeypatch):
     ws.wb_summary_update({"val_rmse": 0.5})
 
 
+def test_wb_summary_update_uses_api_when_run_missing(monkeypatch):
+    summary = {}
+
+    class DummyApiRun:
+        def __init__(self):
+            self.summary = summary
+
+    class DummyApi:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, path):
+            self.calls.append(path)
+            return DummyApiRun()
+
+    dummy_api = DummyApi()
+    dummy_wandb = types.SimpleNamespace(run=None, Api=lambda: dummy_api)
+    monkeypatch.setitem(sys.modules, "wandb", dummy_wandb)
+    monkeypatch.setenv("WANDB_RUN_ID", "rid")
+    monkeypatch.setenv("WANDB_PROJECT", "proj")
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+
+    ws = importlib.reload(importlib.import_module("scripts.wandb_safety"))
+    ws.wb_summary_update({"val_rmse": 0.5})
+
+    assert summary["val_rmse"] == 0.5
+    assert dummy_api.calls == ["ent/proj/rid"]
+
+
 def test_wb_get_or_init_respects_disable(monkeypatch):
     calls = {"init": 0}
 
