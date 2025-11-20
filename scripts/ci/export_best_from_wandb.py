@@ -334,6 +334,10 @@ RMSE_KEYS: Tuple[str, ...] = (
     "val_rmse",
     "validation.rmse",
     "metrics/val_rmse",
+    "rmse",
+    "metrics/rmse",
+    "rmse_mean",
+    "metrics/rmse_mean",
 )
 
 R2_KEYS: Tuple[str, ...] = (
@@ -414,9 +418,14 @@ def _write_records_csv(path: str, records: Sequence[Dict[str, Any]]) -> int:
 
     return len(records)
 
+def _has_any_metric(runs, names: Sequence[str]) -> bool:
+    return any(metric(r, name) is not None for name in names for r in runs)
+
+
 def detect_task(runs) -> str:
-    have_auc = any(metric(r, "val_auc") is not None for r in runs)
-    have_rmse = any(metric(r, "val_rmse") is not None for r in runs)
+    auc_keys = ("val_auc", "metrics/val_auc", "validation.auc")
+    have_auc = _has_any_metric(runs, auc_keys)
+    have_rmse = _has_any_metric(runs, RMSE_KEYS)
     if have_auc and not have_rmse:
         return "classification"
     if have_rmse and not have_auc:
@@ -827,21 +836,54 @@ def uniq_vals(arr: List[Any]) -> List[Any]:
         s.add(norm)
     return sorted(s, key=lambda x: (str(type(x)), str(x)))
 
+def _primary_preferences(task: str, args: Any) -> List[Tuple[Tuple[str, ...], bool]]:
+    def _prepend_override(pref_list: List[Tuple[Tuple[str, ...], bool]], name: Optional[str], maximize: bool) -> None:
+        token = (name or "").strip()
+        if token:
+            pref_list.insert(0, ((token,), maximize))
+
+    if task == "regression":
+        prefs: List[Tuple[Tuple[str, ...], bool]] = [
+            (("val_rmse", "metrics/val_rmse", "validation.rmse"), False),
+            (("rmse", "metrics/rmse"), False),
+            (("rmse_mean", "metrics/rmse_mean"), False),
+            (("probe_rmse_mean",), False),
+            (("metric",), False),
+        ]
+        _prepend_override(prefs, getattr(args, "reg_primary", None), False)
+        return prefs
+
+    prefs = [
+        (("val_auc", "metrics/val_auc", "validation.auc"), True),
+        (("pr_auc", "metrics/pr_auc", "validation.pr_auc"), True),
+        (("roc_auc", "metrics/roc_auc"), True),
+        (("metric",), True),
+    ]
+    _prepend_override(prefs, getattr(args, "clf_primary", None), True)
+    return prefs
+
+
+def _find_present_metric(runs, names: Sequence[str]) -> Optional[str]:
+    for name in names:
+        if any(metric(r, name) is not None for r in runs):
+            return name
+    return None
+
+
 # Task + metric plan (robust to missing val_rmse)
 def pick_primary_metric(runs, task: str, args) -> Tuple[str, bool]:
-    # (name, maximize?) ordered by preference
-    if task == "regression":
-        prefs = [("val_rmse", False), ("rmse", False), ("rmse_mean", False),
-                    ("probe_rmse_mean", False), ("metric", False)]
-    else:
-        prefs = [("val_auc", True), ("pr_auc", True), ("roc_auc", True),
-                    ("metric", True)]
-    for name, mx in prefs:
-        if any(metric(r, name) is not None for r in runs):
-            return name, mx
+    prefs = _primary_preferences(task, args)
+
+    for names, mx in prefs:
+        found = _find_present_metric(runs, names)
+        if found:
+            return found, mx
+
     # fallback to the task default even if empty; choose_best will raise
-    return (args.reg_primary if task=="regression" else args.clf_primary,
-            False if task=="regression" else True)
+    return (
+        args.reg_primary if task == "regression" else args.clf_primary,
+        False if task == "regression" else True,
+    )
 
 # ---------- main ----------
 

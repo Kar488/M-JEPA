@@ -80,6 +80,23 @@ def test_metric_supports_nested_keys_from_summary_metrics():
     assert eb.metric(run, "validation.rmse") == 0.43
 
 
+def test_pick_primary_metric_handles_nested_aliases():
+    args = types.SimpleNamespace(
+        reg_primary="val_rmse",
+        clf_primary="val_auc",
+        reg_tb1=None,
+        clf_tb1=None,
+        clf_tb2=None,
+    )
+
+    run = FakeRun("nested", config={}, summary={"metrics": {"rmse_mean": 0.37}})
+
+    primary, maximize = eb.pick_primary_metric([run], "regression", args)
+
+    assert primary == "metrics/rmse_mean"
+    assert maximize is False
+
+
 def test_paired_effect_accepts_serialized_config(monkeypatch, tmp_path):
     monkeypatch.setenv("WANDB_ENTITY", "ent")
 
