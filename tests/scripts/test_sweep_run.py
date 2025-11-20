@@ -489,6 +489,50 @@ def _prepare_sweep_module(monkeypatch, tmp_path, *, result_payload):
     return sweep_mod
 
 
+def test_sweep_run_promotes_nested_training_method(monkeypatch, tmp_path):
+    sweep_mod = _prepare_sweep_module(
+        monkeypatch, tmp_path, result_payload={"rmse_mean": 0.42, "best_step": 3}
+    )
+
+    import importlib
+
+    # Capture the method passed into the grid runner so we can assert the nested
+    # sweep config overrides the CLI default.
+    calls = {}
+
+    def tracking_run_one_config_method(**kwargs):
+        calls["method"] = kwargs.get("method")
+        return {"rmse_mean": 0.42, "best_step": 3}
+
+    grid_mod = importlib.import_module("experiments.grid_search")
+    grid_mod._run_one_config_method = tracking_run_one_config_method
+
+    class FakeConfig(dict):
+        def as_dict(self):
+            return dict(self)
+
+    fake_wandb = types.ModuleType("wandb")
+    fake_run = types.SimpleNamespace(
+        config=FakeConfig({"training_method": {"value": "jepa"}}), summary={}, sweep=None
+    )
+    fake_wandb.run = fake_run
+    fake_wandb.config = fake_run.config
+    fake_wandb.finish = lambda **kwargs: None
+    fake_wandb.log = lambda payload: payload
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+
+    stub_ws = types.ModuleType("wandb_safety")
+    stub_ws.wb_get_or_init = lambda *a, **k: fake_run
+    stub_ws.wb_summary_update = lambda payload: fake_run.summary.update(payload)
+    stub_ws.wb_finish_safely = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "wandb_safety", stub_ws)
+
+    args = _sweep_args(tmp_path, training_method="contrastive", use_wandb=1)
+    sweep_mod.cmd_sweep_run(args)
+
+    assert calls.get("method") == "jepa"
+
+
 def test_cmd_sweep_run_initializes_wandb_run_when_missing(monkeypatch, tmp_path):
     _prepare_sweep_module(
         monkeypatch,
