@@ -12,7 +12,7 @@ parameters:
   cache-datasets: {value: 1}
   cache-dir:      {value: "${env:SWEEP_CACHE_DIR}"}
 
-  training_method: jepa
+  training_method: {value: jepa}
 
   # model + hparams - JEPA specific
   mask_ratio:           {values: [0.15, 0.25]}
