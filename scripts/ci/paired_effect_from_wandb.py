@@ -724,6 +724,8 @@ def main():
     raw_pair_ids: Dict[str, Set[str]] = defaultdict(set)
     eligible_pair_ids: Dict[str, Set[str]] = defaultdict(set)
 
+    retried_without_group = False
+
     while True:
         attempt += 1
         runs_iter = api.runs(project_path, filters=filters)
@@ -859,6 +861,25 @@ def main():
             total_comparable_runs_local > 0
             and skipped_by_threshold_local == total_comparable_runs_local
         )
+
+        methods_present = {m for m, count in raw_method_counts_local.items() if count}
+        if (
+            filters
+            and not retried_without_group
+            and methods_present
+            and len(methods_present) < 2
+        ):
+            filter_note = f"group={filters.get('group')}" if isinstance(filters, dict) else str(filters)
+            print(
+                f"[paired-effect] only found methods {sorted(methods_present)} with filter {filter_note}; "
+                "retrying without filters to search for missing pairs",
+                flush=True,
+            )
+            filters = None
+            retried_without_group = True
+            attempt = 0
+            time.sleep(retry_delay)
+            continue
 
         if available_metrics_local or all_blocked or attempt >= max_attempts:
             break
