@@ -97,6 +97,46 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     wandb_run = getattr(wandb, "run", None) if wandb is not None else None
     wandb_enabled = _as_bool(getattr(args, "use_wandb", 1)) or wandb_run is not None
 
+    _wandb_mod = wandb
+    _wandb_wait_timeout = float(os.getenv("WANDB_SWEEP_INIT_TIMEOUT", 20.0))
+
+    def _log_wandb_links(run_obj: Any, *, when: str) -> None:
+        if run_obj is None:
+            return
+        run_url = getattr(run_obj, "url", None)
+        sweep_url = getattr(run_obj, "sweep_url", None)
+        sweep_url = sweep_url or getattr(getattr(run_obj, "sweep", None), "url", None)
+        project_url = None
+        try:
+            entity = getattr(run_obj, "entity", None)
+            project = getattr(run_obj, "project", None)
+            if entity and project:
+                project_url = f"https://wandb.ai/{entity}/{project}"
+        except Exception:
+            project_url = None
+        parts = []
+        if sweep_url:
+            parts.append(f"sweep={sweep_url}")
+        if run_url:
+            parts.append(f"run={run_url}")
+        if project_url:
+            parts.append(f"project={project_url}")
+        if parts:
+            print(f"[sweep-run][wandb] {when}: " + " | ".join(parts), flush=True)
+
+    def _wait_for_wandb_run(timeout_s: float = _wandb_wait_timeout) -> Optional[Any]:
+        if _wandb_mod is None:
+            return None
+        run_obj = getattr(_wandb_mod, "run", None)
+        if run_obj is not None or not wandb_enabled:
+            return run_obj
+        poll_interval = 0.5
+        deadline = time.perf_counter() + float(timeout_s)
+        while run_obj is None and time.perf_counter() < deadline:
+            time.sleep(poll_interval)
+            run_obj = getattr(_wandb_mod, "run", None)
+        return run_obj
+
     if wandb is not None and wandb_enabled:
         wb = wandb_run
         for cfg_src in (getattr(wb, "config", None), getattr(wandb, "config", None)):
@@ -117,6 +157,12 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         for k, v in (d or {}).items():
             nk = f"{parent_key}{sep}{k}" if parent_key else str(k)
             if isinstance(v, dict):
+                # Promote common sweep shapes like {"value": "foo"} to the
+                # parent key so single-key dicts are still discoverable via
+                # short-hand lookups (e.g., "training_method").
+                if "value" in v:
+                    out[k] = v["value"]
+                    out[nk] = v["value"]
                 out.update(_flatten(v, nk, sep))
             else:
                 out[nk] = v
@@ -166,6 +212,16 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _apply_any(
         ["gnn_type", "model.gnn_type", "model/gnn_type", "backbone", "model.backbone"],
         "gnn_type",
+        lambda s: str(s).lower(),
+    )
+    _apply_any(
+        [
+            "training_method",
+            "training_method.value",
+            "parameters.training_method",
+            "parameters.training_method.value",
+        ],
+        "training_method",
         lambda s: str(s).lower(),
     )
     _apply_any(
@@ -225,7 +281,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     gnn = str(getattr(args, "gnn_type", "")).lower()
     add_3d = gnn in ("schnet3d", "schnet")
 
-    import os
     if os.environ.get("SWEEP_DUMP", "0") == "1":
         print(
             f"[sweep-run] gnn_type={gnn} hidden_dim={args.hidden_dim} num_layers={args.num_layers} "
@@ -276,8 +331,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         augmentations=AugmentationConfig(**aug_kwargs),
     )
     
-    import os
-
     _labeled_dir = dataset_cache.resolve_env_path(args.labeled_dir)
     _unlabeled_dir = dataset_cache.resolve_env_path(args.unlabeled_dir)
 
@@ -339,6 +392,8 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             _wb_get_or_init(args)
         except Exception:
             pass
+    run = _wait_for_wandb_run()
+    _log_wandb_links(run, when="run initialised")
     config_updated = False
     config_payload = {}
     if using_wandb:
@@ -541,51 +596,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     best_step = _infer_best_step(payload)
     payload["best_step"] = best_step
-
-    try:
-        silence_pydantic_field_warnings()
-        import wandb as _wandb_mod  # type: ignore
-    except Exception:
-        _wandb_mod = None
-
-    _wandb_wait_timeout = float(os.getenv("WANDB_SWEEP_INIT_TIMEOUT", 20.0))
-
-    def _log_wandb_links(run_obj: Any, *, when: str) -> None:
-        if run_obj is None:
-            return
-        run_url = getattr(run_obj, "url", None)
-        sweep_url = getattr(run_obj, "sweep_url", None)
-        sweep_url = sweep_url or getattr(getattr(run_obj, "sweep", None), "url", None)
-        project_url = None
-        try:
-            entity = getattr(run_obj, "entity", None)
-            project = getattr(run_obj, "project", None)
-            if entity and project:
-                project_url = f"https://wandb.ai/{entity}/{project}"
-        except Exception:
-            project_url = None
-        parts = []
-        if sweep_url:
-            parts.append(f"sweep={sweep_url}")
-        if run_url:
-            parts.append(f"run={run_url}")
-        if project_url:
-            parts.append(f"project={project_url}")
-        if parts:
-            print(f"[sweep-run][wandb] {when}: " + " | ".join(parts), flush=True)
-
-    def _wait_for_wandb_run(timeout_s: float = _wandb_wait_timeout) -> Optional[Any]:
-        if _wandb_mod is None:
-            return None
-        run_obj = getattr(_wandb_mod, "run", None)
-        if run_obj is not None or not using_wandb:
-            return run_obj
-        poll_interval = 0.5
-        deadline = time.perf_counter() + float(timeout_s)
-        while run_obj is None and time.perf_counter() < deadline:
-            time.sleep(poll_interval)
-            run_obj = getattr(_wandb_mod, "run", None)
-        return run_obj
 
     run = _wait_for_wandb_run()
     _log_wandb_links(run, when="run ready")
