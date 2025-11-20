@@ -220,13 +220,7 @@ def wb_finish_safely(timeout: float = 30.0) -> None:
 
     start = time.time()
     try:
-        try:
-            finish(quiet=True)
-        except TypeError:
-            # Older mocks (and some unit tests) expose finish() without a
-            # ``quiet`` keyword. Retry without the argument so the call still
-            # happens and errors are surfaced for callers.
-            finish()
+        finish()
     except Exception:
         pass
 
