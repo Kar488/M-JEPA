@@ -94,6 +94,53 @@ def _init_wandb_api(*, max_attempts: int = 3, timeout: int = 60) -> wandb.Api:
     raise SystemExit(1)
 
 
+def _extract_run_config(run: Any, *, max_attempts: int = 3, retry_delay: float = 5.0) -> Dict[str, Any]:
+    """Load a run's config, retrying on transient API errors.
+
+    The public ``run.config`` property may perform an on-demand fetch which can
+    time out under heavy load.  Prefer the cached ``_attrs`` payload when
+    available, otherwise fall back to repeated attempts to materialise the
+    config.  Failures are logged and the run is skipped instead of aborting the
+    entire paired-effect job.
+    """
+
+    try:
+        attrs = getattr(run, "_attrs", None)
+        if isinstance(attrs, Mapping) and attrs.get("config"):
+            cached = _coerce_config(attrs.get("config"))
+            if cached:
+                return cached
+    except Exception:
+        pass
+
+    last_error: Optional[Exception] = None
+    attempts = max(1, max_attempts)
+    for attempt in range(1, attempts + 1):
+        try:
+            return _coerce_config(getattr(run, "config", {}))
+        except (requests.exceptions.RequestException, wandb.errors.CommError) as exc:
+            last_error = exc
+            if attempt < attempts:
+                print(
+                    f"[paired-effect] failed to load run config (attempt {attempt}/{attempts}): {exc}; "
+                    f"retrying in {retry_delay:.1f}s",
+                    flush=True,
+                )
+                time.sleep(retry_delay)
+                continue
+        except Exception as exc:  # noqa: BLE001 - best-effort extraction
+            last_error = exc
+            break
+
+    if last_error:
+        print(
+            f"[paired-effect] unable to load run config for run {getattr(run, 'id', '<unknown>')}: {last_error}; "
+            "skipping run",
+            flush=True,
+        )
+    return {}
+
+
 def _coerce_config(config: Any) -> Dict[str, Any]:
     """Normalize a run config into a plain dictionary."""
 
@@ -704,6 +751,8 @@ def main():
 
     max_attempts = max(1, int(os.getenv("PE_FETCH_MAX_ATTEMPTS", "5")))
     retry_delay = float(os.getenv("PE_FETCH_RETRY_DELAY", "15"))
+    run_config_attempts = max(1, int(os.getenv("PE_RUN_CONFIG_MAX_ATTEMPTS", "3")))
+    run_config_retry_delay = float(os.getenv("PE_RUN_CONFIG_RETRY_DELAY", "10"))
 
     runs_list: List[Any] = []
     metric_store: MetricStore = ({}, {}, {})
@@ -762,7 +811,9 @@ def main():
 
 
         for r in runs_list:
-            run_config = _coerce_config(getattr(r, "config", {}))
+            run_config = _extract_run_config(
+                r, max_attempts=run_config_attempts, retry_delay=run_config_retry_delay
+            )
             summary = _extract_summary_payload(r)
             mid_raw = _unwrap_config_value(run_config.get("training_method"))
             pid_raw = _unwrap_config_value(run_config.get("pair_id"))
