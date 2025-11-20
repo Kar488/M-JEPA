@@ -140,19 +140,20 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
     timeout = float(os.getenv("WANDB_SWEEP_INIT_TIMEOUT", 20.0))
     run = getattr(wandb, "run", None)
     api_run = None
-    if run is None and not wandb_disabled:
-        run = _wait_for_run(wandb, timeout)
+    run_id = os.getenv("WANDB_RUN_ID")
+    entity = os.getenv("WANDB_ENTITY")
+    project = os.getenv("WANDB_PROJECT") or "m-jepa"
+    target = "/".join([p for p in (entity, project, run_id) if p]) if run_id else None
 
-    if run is None and not wandb_disabled:
-        run_id = os.getenv("WANDB_RUN_ID")
-        entity = os.getenv("WANDB_ENTITY")
-        project = os.getenv("WANDB_PROJECT") or "m-jepa"
-        target = "/".join([p for p in (entity, project, run_id) if p]) if run_id else None
-        if target:
-            try:
-                api_run = wandb.Api().run(target)
-            except Exception as exc:  # pragma: no cover - API availability varies in CI
+    if run is None and target:
+        try:
+            api_run = wandb.Api().run(target)
+        except Exception as exc:  # pragma: no cover - API availability varies in CI
+            if not wandb_disabled:
                 _dbg("wb_summary_update: wandb.Api lookup failed:", exc)
+
+    if run is None and api_run is None and not wandb_disabled:
+        run = _wait_for_run(wandb, timeout)
 
     run_like = run or api_run
     if run_like is None:
