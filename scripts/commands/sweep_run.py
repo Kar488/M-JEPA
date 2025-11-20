@@ -5,6 +5,7 @@ import os
 import pathlib
 import time
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 from venv import logger
 
 from . import dataset_cache
@@ -24,6 +25,31 @@ def _env_int(name: str) -> Optional[int]:
         return int(str(raw))
     except Exception:
         return None
+
+
+def _resolve_wandb_app_base() -> str:
+    """Return a W&B app base URL derived from environment hints.
+
+    Prefer explicit overrides (``WANDB_APP_URL``), fall back to ``WANDB_BASE_URL``
+    with common ``/api`` or ``api.`` prefixes stripped, and default to the public
+    cloud host otherwise.
+    """
+
+    base = os.getenv("WANDB_APP_URL") or os.getenv("WANDB_BASE_URL")
+    if not base:
+        return "https://wandb.ai"
+
+    parsed = urlparse(base)
+    if parsed.scheme and parsed.netloc:
+        netloc = parsed.netloc
+        if netloc.startswith("api."):
+            netloc = netloc[len("api.") :]
+        path = parsed.path
+        if path.strip("/") == "api":
+            path = ""
+        base = parsed._replace(netloc=netloc, path=path).geturl()
+
+    return base.rstrip("/")
 
 
 def _infer_best_step(payload: Dict[str, Any]) -> int:
@@ -114,19 +140,45 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         return run_obj
 
     def _print_wandb_links(run_obj: Any, *, prefix: str) -> None:
-        if run_obj is None:
-            return
-        sweep_link = getattr(getattr(run_obj, "sweep", None), "url", None) or getattr(
-            run_obj, "sweep_url", None
+        base_url = _resolve_wandb_app_base()
+        entity = getattr(run_obj, "entity", None) if run_obj is not None else None
+        project = getattr(run_obj, "project", None) if run_obj is not None else None
+        sweep_id = None
+        sweep_link = None
+        run_link = getattr(run_obj, "url", None) if run_obj is not None else None
+
+        sweep_obj = getattr(run_obj, "sweep", None) if run_obj is not None else None
+        if sweep_obj is not None:
+            sweep_id = getattr(sweep_obj, "id", None)
+            sweep_link = getattr(sweep_obj, "url", None)
+        if sweep_link is None:
+            sweep_link = getattr(run_obj, "sweep_url", None) if run_obj is not None else None
+
+        # Fall back to environment hints when the run object is unavailable or
+        # lacks URLs (common when wandb.run is None during slow agent startup).
+        if entity is None:
+            entity = os.getenv("WANDB_ENTITY")
+        if project is None:
+            project = os.getenv("WANDB_PROJECT")
+        if sweep_id is None:
+            sweep_id = os.getenv("WANDB_SWEEP_ID") or os.getenv("SWEEP_ID")
+        if run_link is None:
+            run_id = os.getenv("WANDB_RUN_ID")
+            if entity and project and run_id:
+                run_link = f"{base_url}/{entity}/{project}/runs/{run_id}"
+
+        if sweep_link is None and entity and project and sweep_id:
+            sweep_link = f"{base_url}/{entity}/{project}/sweeps/{sweep_id}"
+
+        project_url = (
+            f"{base_url}/{entity}/{project}" if entity and project else "(unknown)"
         )
+
         print(
             f"[sweep-run] {prefix} sweep link: {sweep_link if sweep_link else '(none)'}",
             flush=True,
         )
-        print(f"[sweep-run] {prefix} run link:   {getattr(run_obj, 'url', None)}", flush=True)
-        entity = getattr(run_obj, "entity", None)
-        project = getattr(run_obj, "project", None)
-        project_url = f"https://wandb.ai/{entity}/{project}" if entity and project else "(unknown)"
+        print(f"[sweep-run] {prefix} run link:   {run_link if run_link else '(none)'}", flush=True)
         print(
             f"[sweep-run] {prefix} project:    {project_url}",
             flush=True,
