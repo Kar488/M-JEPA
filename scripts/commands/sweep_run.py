@@ -100,30 +100,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _wandb_mod = wandb
     _wandb_wait_timeout = float(os.getenv("WANDB_SWEEP_INIT_TIMEOUT", 20.0))
 
-    def _log_wandb_links(run_obj: Any, *, when: str) -> None:
-        if run_obj is None:
-            return
-        run_url = getattr(run_obj, "url", None)
-        sweep_url = getattr(run_obj, "sweep_url", None)
-        sweep_url = sweep_url or getattr(getattr(run_obj, "sweep", None), "url", None)
-        project_url = None
-        try:
-            entity = getattr(run_obj, "entity", None)
-            project = getattr(run_obj, "project", None)
-            if entity and project:
-                project_url = f"https://wandb.ai/{entity}/{project}"
-        except Exception:
-            project_url = None
-        parts = []
-        if sweep_url:
-            parts.append(f"sweep={sweep_url}")
-        if run_url:
-            parts.append(f"run={run_url}")
-        if project_url:
-            parts.append(f"project={project_url}")
-        if parts:
-            print(f"[sweep-run][wandb] {when}: " + " | ".join(parts), flush=True)
-
     def _wait_for_wandb_run(timeout_s: float = _wandb_wait_timeout) -> Optional[Any]:
         if _wandb_mod is None:
             return None
@@ -136,6 +112,25 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             time.sleep(poll_interval)
             run_obj = getattr(_wandb_mod, "run", None)
         return run_obj
+
+    def _print_wandb_links(run_obj: Any, *, prefix: str) -> None:
+        if run_obj is None:
+            return
+        sweep_link = getattr(getattr(run_obj, "sweep", None), "url", None) or getattr(
+            run_obj, "sweep_url", None
+        )
+        print(
+            f"[sweep-run] {prefix} sweep link: {sweep_link if sweep_link else '(none)'}",
+            flush=True,
+        )
+        print(f"[sweep-run] {prefix} run link:   {getattr(run_obj, 'url', None)}", flush=True)
+        entity = getattr(run_obj, "entity", None)
+        project = getattr(run_obj, "project", None)
+        project_url = f"https://wandb.ai/{entity}/{project}" if entity and project else "(unknown)"
+        print(
+            f"[sweep-run] {prefix} project:    {project_url}",
+            flush=True,
+        )
 
     if wandb is not None and wandb_enabled:
         wb = wandb_run
@@ -161,8 +156,13 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                 # parent key so single-key dicts are still discoverable via
                 # short-hand lookups (e.g., "training_method").
                 if "value" in v:
+                    # Promote nested sweep shapes such as
+                    # {"training_method": {"value": "jepa"}} so callers can
+                    # look up both "training_method" and "training_method.value".
                     out[k] = v["value"]
                     out[nk] = v["value"]
+                    out.update(_flatten(v, nk, sep))
+                    continue
                 out.update(_flatten(v, nk, sep))
             else:
                 out[nk] = v
@@ -387,13 +387,22 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         # absence of a run is expected and should not be noisy.
         os.environ.setdefault("WANDB_DISABLED", "1")
         os.environ.setdefault("WANDB_MODE", "disabled")
+
+    # Ensure a W&B run exists so URL logging is stable regardless of when the
+    # agent is invoked (before or after a sweep agent spawns wandb.run).
+    run = None
     if using_wandb:
         try:
-            _wb_get_or_init(args)
+            run = getattr(wandb, "run", None) if wandb is not None else None
+            if run is None:
+                run = _wb_get_or_init(args)
         except Exception:
-            pass
-    run = _wait_for_wandb_run()
-    _log_wandb_links(run, when="run initialised")
+            run = getattr(wandb, "run", None)
+    else:
+        run = getattr(wandb, "run", None)
+    if run is None:
+        run = _wait_for_wandb_run()
+    _print_wandb_links(run, prefix="start")
     config_updated = False
     config_payload = {}
     if using_wandb:
@@ -598,7 +607,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     payload["best_step"] = best_step
 
     run = _wait_for_wandb_run()
-    _log_wandb_links(run, when="run ready")
+    _print_wandb_links(run, prefix="ready")
     if run is None and using_wandb:
         print(
             "[sweep-run] wandb.run not initialised yet; delaying summary sync",
@@ -662,6 +671,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     if run is None:
         run = _wait_for_wandb_run()
-    _log_wandb_links(run, when="finishing run")
+    _print_wandb_links(run, prefix="finish")
     _wb_finish_safely()
 
