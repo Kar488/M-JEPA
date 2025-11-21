@@ -550,6 +550,102 @@ def test_paired_effect_winner_and_no_pairs(monkeypatch, tmp_path, capsys):
     assert data3["winner"] == "jepa"
 
 
+def test_paired_effect_retries_when_configs_flaky(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setenv("PE_FETCH_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("PE_FETCH_RETRY_DELAY", "0")
+    monkeypatch.setenv("PE_RUN_CONFIG_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("PE_RUN_CONFIG_RETRY_DELAY", "0")
+    monkeypatch.setattr(pe.time, "sleep", lambda _: None)
+
+    class FlakyRun:
+        def __init__(
+            self,
+            name: str,
+            config: Dict[str, Any],
+            summary: Dict[str, Any],
+            failures: int,
+            run_id: str,
+        ) -> None:
+            self.name = name
+            self._config = config
+            self.summary = summary
+            self.summary_metrics: Dict[str, Any] = {}
+            self._history = None
+            self._attrs = {}
+            self._failures = failures
+            self.id = run_id
+
+        @property
+        def config(self):  # pragma: no cover - exercised via paired_effect
+            if self._failures > 0:
+                self._failures -= 1
+                raise requests.exceptions.RequestException("temporary config fetch failure")
+            return self._config
+
+        @config.setter
+        def config(self, value):
+            self._config = value
+
+        def history(self, **kwargs):  # pragma: no cover - passthrough
+            return []
+
+    flaky_run = FlakyRun(
+        "flaky_jepa",
+        {"training_method": "jepa", "pair_id": "pid"},
+        {"val_rmse": 0.5},
+        failures=3,
+        run_id="flaky",
+    )
+
+    stable_runs = [
+        FakeRun("jepa", {"training_method": "jepa", "pair_id": "pid"}, {"val_rmse": 0.4}),
+        FakeRun("contrastive", {"training_method": "contrastive", "pair_id": "pid"}, {"val_rmse": 0.6}),
+    ]
+
+    class FlakyApi:
+        def __init__(self):
+            self.calls = 0
+
+        def runs(self, path, filters=None):  # pragma: no cover - passthrough
+            self.calls += 1
+            if self.calls == 1:
+                return [flaky_run, stable_runs[1]]
+            return stable_runs
+
+    monkeypatch.setattr(
+        pe,
+        "wandb",
+        types.SimpleNamespace(
+            Api=lambda: FlakyApi(),
+            errors=types.SimpleNamespace(CommError=Exception, AuthenticationError=Exception),
+        ),
+    )
+
+    out = tmp_path / "pe_flaky.json"
+    capsys.readouterr()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--out",
+            str(out),
+            "--strict",
+        ],
+    )
+
+    pe.main()
+    output = capsys.readouterr().out
+    assert "encountered 1 run config error" in output
+    data = json.loads(out.read_text())
+    assert data["winner"] == "jepa"
+
+
 def test_paired_effect_missing_threshold_keys(monkeypatch, tmp_path):
     """Runs lacking the threshold config keys should not be discarded entirely."""
 
