@@ -94,14 +94,16 @@ def _init_wandb_api(*, max_attempts: int = 3, timeout: int = 60) -> wandb.Api:
     raise SystemExit(1)
 
 
-def _extract_run_config(run: Any, *, max_attempts: int = 3, retry_delay: float = 5.0) -> Dict[str, Any]:
+def _extract_run_config(
+    run: Any, *, max_attempts: int = 3, retry_delay: float = 5.0
+) -> Tuple[Dict[str, Any], Optional[Exception]]:
     """Load a run's config, retrying on transient API errors.
 
     The public ``run.config`` property may perform an on-demand fetch which can
     time out under heavy load.  Prefer the cached ``_attrs`` payload when
     available, otherwise fall back to repeated attempts to materialise the
-    config.  Failures are logged and the run is skipped instead of aborting the
-    entire paired-effect job.
+    config.  Failures are logged and surfaced to the caller instead of silently
+    skipping the run so upstream logic can re-run the fetch cycle.
     """
 
     try:
@@ -109,7 +111,7 @@ def _extract_run_config(run: Any, *, max_attempts: int = 3, retry_delay: float =
         if isinstance(attrs, Mapping) and attrs.get("config"):
             cached = _coerce_config(attrs.get("config"))
             if cached:
-                return cached
+                return cached, None
     except Exception:
         pass
 
@@ -117,7 +119,7 @@ def _extract_run_config(run: Any, *, max_attempts: int = 3, retry_delay: float =
     attempts = max(1, max_attempts)
     for attempt in range(1, attempts + 1):
         try:
-            return _coerce_config(getattr(run, "config", {}))
+            return _coerce_config(getattr(run, "config", {})), None
         except (requests.exceptions.RequestException, wandb.errors.CommError) as exc:
             last_error = exc
             if attempt < attempts:
@@ -138,7 +140,7 @@ def _extract_run_config(run: Any, *, max_attempts: int = 3, retry_delay: float =
             "skipping run",
             flush=True,
         )
-    return {}
+    return {}, last_error
 
 
 def _coerce_config(config: Any) -> Dict[str, Any]:
@@ -808,12 +810,15 @@ def main():
         eligible_method_counts_local: Dict[str, int] = defaultdict(int)
         raw_pair_ids_local: Dict[str, Set[str]] = defaultdict(set)
         eligible_pair_ids_local: Dict[str, Set[str]] = defaultdict(set)
+        config_errors = 0
 
 
         for r in runs_list:
-            run_config = _extract_run_config(
+            run_config, run_config_error = _extract_run_config(
                 r, max_attempts=run_config_attempts, retry_delay=run_config_retry_delay
             )
+            if run_config_error:
+                config_errors += 1
             summary = _extract_summary_payload(r)
             mid_raw = _unwrap_config_value(run_config.get("training_method"))
             pid_raw = _unwrap_config_value(run_config.get("pair_id"))
@@ -904,6 +909,27 @@ def main():
                     continue
                 _ensure_metric_store(metric_key, metric_store)
                 by_metric_pair_seed[metric_key][pid][seed][mid].append(metric_val)
+
+        if config_errors:
+            if attempt >= max_attempts:
+                print(
+                    "[paired-effect] run config errors persist after maximum attempts; "
+                    "proceeding with any available runs",
+                    flush=True,
+                )
+            else:
+                print(
+                    "[paired-effect] encountered {count} run config error(s); "
+                    "retrying fetch cycle in {delay:.1f}s (attempt {attempt}/{max_attempts})".format(
+                        count=config_errors,
+                        delay=retry_delay,
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                    ),
+                    flush=True,
+                )
+                time.sleep(retry_delay)
+                continue
 
         available_metrics_local = {key for key, vals in by_metric_pair_vals.items() if vals}
 
