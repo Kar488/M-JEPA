@@ -224,6 +224,8 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
       --aggregate pair-seed \
       --seed "${CI_SEED:-42}" \
       --strict \
+      --sweep "$JEPA_ID" \
+      --sweep "$CONTRAST_ID" \
       "${PE_FILTER_FLAGS[@]}" \
     2>&1 | tee "${LOG_DIR:-$APP_DIR/logs}/paired_effect.log"
 

@@ -2197,9 +2197,9 @@ PY
     if [[ $rc -eq 0 ]]; then
       :
     elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
-      echo "[INFO][wandb_agent] graceful stop (rc=$rc); letting agent flush."
+      echo "[ERROR][wandb_agent] agent hit timeout/interrupt (rc=$rc); marking graceful stop and failing" >&2
       mark_graceful_stop "$s"
-      return 0
+      exit $rc
     else
       echo "[ERROR][wandb_agent] wandb agent failed with exit code $rc" >&2
       exit $rc
