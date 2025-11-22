@@ -726,6 +726,12 @@ def main():
     )
     ap.add_argument("--project", default=os.getenv("WANDB_PROJECT","mjepa"))
     ap.add_argument("--group",   default=os.getenv("WANDB_RUN_GROUP"))
+    ap.add_argument(
+        "--sweep",
+        action="append",
+        default=[],
+        help="Limit run fetches to one or more sweep ids (can be passed multiple times).",
+    )
     ap.add_argument("--out", default=os.path.join(os.getenv("GRID_DIR", "."), "paired_effect.json"))
     ap.add_argument("--seed", type=int, default=None, help="Seed for bootstrap reproducibility")
     ap.add_argument("--aggregate", choices=["pair-seed","mean","median","best"], default="pair-seed",
@@ -747,7 +753,16 @@ def main():
     api_init_attempts = max(1, int(os.getenv("PE_API_INIT_ATTEMPTS", "3")))
     api_timeout = int(os.getenv("PE_API_INIT_TIMEOUT", "60"))
     api = _init_wandb_api(max_attempts=api_init_attempts, timeout=api_timeout)
-    filters = {"group": args.group} if args.group else None
+    sweeps = [s.strip() for s in args.sweep if s and str(s).strip()]
+    sweep_filter = {"sweep": {"$in": sweeps}} if sweeps else None
+
+    filters: Optional[Dict[str, Any]] = None
+    if sweep_filter or args.group:
+        filters = {}
+        if sweep_filter:
+            filters.update(sweep_filter)
+        if args.group:
+            filters["group"] = args.group
     entity = os.getenv("WANDB_ENTITY")
     project_path = f"{entity}/{args.project}" if entity else args.project
 
@@ -951,19 +966,19 @@ def main():
         )
 
         methods_present = {m for m, count in raw_method_counts_local.items() if count}
-        if (
-            filters
-            and not retried_without_group
-            and methods_present
-            and len(methods_present) < 2
-        ):
-            filter_note = f"group={filters.get('group')}" if isinstance(filters, dict) else str(filters)
+        if filters and not retried_without_group and methods_present and len(methods_present) < 2:
+            filter_note = []
+            if isinstance(filters, Mapping) and filters.get("group"):
+                filter_note.append(f"group={filters.get('group')}")
+            if sweep_filter:
+                filter_note.append(f"sweep in {sorted(sweeps)}")
+            note_str = ", ".join(filter_note) if filter_note else str(filters)
             print(
-                f"[paired-effect] only found methods {sorted(methods_present)} with filter {filter_note}; "
-                "retrying without filters to search for missing pairs",
+                f"[paired-effect] only found methods {sorted(methods_present)} with filter {note_str}; "
+                "retrying without the group filter to search for missing pairs",
                 flush=True,
             )
-            filters = None
+            filters = dict(sweep_filter) if sweep_filter else None
             retried_without_group = True
             attempt = 0
             time.sleep(retry_delay)
