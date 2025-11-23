@@ -2209,6 +2209,12 @@ PY
       agent_runs_started=$(grep -c "About to run command" "$LOG" || true)
     fi
 
+    local planned_runs="${WANDB_COUNT:-}"
+    local meets_planned=0
+    if [[ "$planned_runs" =~ ^[0-9]+$ ]] && (( planned_runs > 0 )) && (( agent_runs_started >= planned_runs )); then
+      meets_planned=1
+    fi
+
     local sweep_state=""
     if [[ -n "$SID" ]]; then
       sweep_state=$(
@@ -2256,6 +2262,10 @@ PY
     fi
 
     if (( ! timeout_rc )); then
+      if (( meets_planned )) && [[ $rc -ne 0 ]]; then
+        echo "[wandb_agent][info] hit requested WANDB_COUNT=${planned_runs} (started ${agent_runs_started}); normalising rc=$rc to success"
+        rc=0
+      fi
       if [[ $rc -eq 1 || $rc -eq 2 ]]; then
         if (( log_has_no_runs )); then
           echo "[wandb_agent][debug] sweep_state=${sweep_state:-unknown} runs_started=${agent_runs_started} (rc=$rc)" >&2
