@@ -2302,6 +2302,9 @@ PY
     fi
     if [[ $rc -eq 0 ]]; then
       :
+    elif [[ $rc -eq 2 ]]; then
+      echo "[INFO][wandb_agent] no runs left for sweep (rc=2); treating as success."
+      return 0
     else
       echo "[ERROR][wandb_agent] wandb agent failed with exit code $rc" >&2
       exit $rc
