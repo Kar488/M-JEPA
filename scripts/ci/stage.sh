@@ -2179,6 +2179,9 @@ PY
       # 137 = killed by SIGKILL   (128+9)
       if [[ $rc -eq 0 ]]; then
         break
+      elif [[ $rc -eq 2 ]]; then
+        echo "[INFO][wandb_agent] no runs left for sweep (rc=2); treating as success."
+        return 0
       elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
         echo "[INFO][$s] graceful stop (rc=$rc); not marking stage done; outputs should be flushed."
         mark_graceful_stop "$s"
