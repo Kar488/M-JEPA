@@ -650,8 +650,51 @@ run_phase2_sweep_stage() {
   local sweep_wall="${PHASE2_SWEEP_WALL_MINS:-920}"
   export HARD_WALL_MINS="$sweep_wall"
 
-  mapfile -t GRID_VISIBLE_GPUS < <(visible_gpu_ids)
-  local gpu_count="${#GRID_VISIBLE_GPUS[@]}"
+  local sweep_state=""
+  sweep_state=$(
+    WANDB_ENTITY="$WANDB_ENTITY" WANDB_PROJECT="$WANDB_PROJECT" SID="$SWEEP_ID" \
+      python_inline - "$SWEEP_ID" <<'PY' || true
+import os, sys
+
+try:
+    import wandb
+except Exception:
+    sys.exit(0)
+
+sid = os.environ.get("SID") or (sys.argv[1] if len(sys.argv) > 1 else None)
+if not sid:
+    sys.exit(0)
+
+entity = os.environ.get("WANDB_ENTITY")
+project = os.environ.get("WANDB_PROJECT")
+parts = sid.split("/")
+if len(parts) == 3:
+    entity, project, sid = parts
+elif len(parts) != 1 or not (entity and project):
+    sys.exit(0)
+
+try:
+    api = wandb.Api()
+    sweep = api.sweep(f"{entity}/{project}/{sid}")
+    state = getattr(sweep, "state", None) or ""
+    print(state)
+except Exception:
+    sys.exit(0)
+PY
+  )
+
+  local sweep_exhausted=0
+  if [[ "$sweep_state" =~ ^(FINISHED|CANCELED|CANCELLED)$ ]]; then
+    sweep_exhausted=1
+    echo "[$step][info] sweep state=${sweep_state}; skipping agent launch and preflight checks" >&2
+  fi
+
+  local -a GRID_VISIBLE_GPUS=()
+  local gpu_count=0
+  if (( ! sweep_exhausted )); then
+    mapfile -t GRID_VISIBLE_GPUS < <(visible_gpu_ids)
+    gpu_count="${#GRID_VISIBLE_GPUS[@]}"
+  fi
 
   if [[ -z "${WANDB_COUNT:-}" ]]; then
     export WANDB_COUNT=100
@@ -661,41 +704,49 @@ run_phase2_sweep_stage() {
   : "${PHASE2_LABELED_DIR:=$APP_DIR/data/katielinkmoleculenet_benchmark/train}"
   : "${PHASE2_UNLABELED_DIR:=$APP_DIR/data/ZINC-canonicalized}"
 
-  if [[ ! -d "$PHASE2_LABELED_DIR" ]]; then
-    echo "[$step][fatal] not a dir: $PHASE2_LABELED_DIR" >&2
-    restore_env_var LOG_DIR "$prev_log_dir"
-    restore_env_var HARD_WALL_MINS "$prev_wall"
-    return 2
-  fi
-  if [[ ! -d "$PHASE2_UNLABELED_DIR" ]]; then
-    echo "[$step][fatal] not a dir: $PHASE2_UNLABELED_DIR" >&2
-    restore_env_var LOG_DIR "$prev_log_dir"
-    restore_env_var HARD_WALL_MINS "$prev_wall"
-    return 2
+  if (( ! sweep_exhausted )); then
+    if [[ ! -d "$PHASE2_LABELED_DIR" ]]; then
+      echo "[$step][fatal] not a dir: $PHASE2_LABELED_DIR" >&2
+      restore_env_var LOG_DIR "$prev_log_dir"
+      restore_env_var HARD_WALL_MINS "$prev_wall"
+      return 2
+    fi
+    if [[ ! -d "$PHASE2_UNLABELED_DIR" ]]; then
+      echo "[$step][fatal] not a dir: $PHASE2_UNLABELED_DIR" >&2
+      restore_env_var LOG_DIR "$prev_log_dir"
+      restore_env_var HARD_WALL_MINS "$prev_wall"
+      return 2
+    fi
   fi
 
   local agent_workers=1
-  if [[ -n "${PHASE2_AGENT_COUNT:-}" ]]; then
-    if [[ "$PHASE2_AGENT_COUNT" =~ ^[0-9]+$ ]]; then
-      agent_workers="$PHASE2_AGENT_COUNT"
-    else
-      echo "[$step][warn] ignoring non-numeric PHASE2_AGENT_COUNT='${PHASE2_AGENT_COUNT}'" >&2
+  if (( sweep_exhausted )); then
+    agent_workers=0
+  else
+    if [[ -n "${PHASE2_AGENT_COUNT:-}" ]]; then
+      if [[ "$PHASE2_AGENT_COUNT" =~ ^[0-9]+$ ]]; then
+        agent_workers="$PHASE2_AGENT_COUNT"
+      else
+        echo "[$step][warn] ignoring non-numeric PHASE2_AGENT_COUNT='${PHASE2_AGENT_COUNT}'" >&2
+        agent_workers=1
+      fi
+    elif (( gpu_count > 1 )); then
+      agent_workers="$gpu_count"
+    fi
+
+    if (( gpu_count > 0 && agent_workers > gpu_count )); then
+      agent_workers="$gpu_count"
+    fi
+    if (( agent_workers < 1 )); then
       agent_workers=1
     fi
-  elif (( gpu_count > 1 )); then
-    agent_workers="$gpu_count"
-  fi
-
-  if (( gpu_count > 0 && agent_workers > gpu_count )); then
-    agent_workers="$gpu_count"
-  fi
-  if (( agent_workers < 1 )); then
-    agent_workers=1
   fi
 
   local launched=0
 
-  if (( agent_workers == 1 || gpu_count <= 1 )); then
+  if (( sweep_exhausted )); then
+    echo "[$step] sweep already exhausted; skipping agent launch" >&2
+  elif (( agent_workers == 1 || gpu_count <= 1 )); then
     export WANDB_COUNT="$phase2_total_count"
     if ! run_with_timeout wandb_agent; then
       restore_env_var LOG_DIR "$prev_log_dir"
