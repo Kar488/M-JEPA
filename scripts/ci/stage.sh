@@ -2251,26 +2251,27 @@ PY
       fi
     fi
 
-    if [[ $rc -eq 2 ]]; then
+    if [[ $rc -ne 0 ]]; then
+      local exhaustion_reason=""
       if (( log_has_no_runs )); then
         echo "[wandb_agent][debug] sweep_state=${sweep_state:-unknown} runs_started=${agent_runs_started} (rc=$rc)" >&2
         if [[ $agent_runs_started -gt 0 ]]; then
-          echo "[wandb_agent][warn] sweep exhausted after ${agent_runs_started} run(s); treating rc=2 as success"
-          rc=0
+          exhaustion_reason="sweep_exhausted_after_runs"
         elif [[ "$sweep_state" =~ ^(FINISHED|CANCELED|CANCELLED)$ ]]; then
-          echo "[wandb_agent][warn] sweep state=$sweep_state with no runs; treating rc=2 as sweep exhaustion"
-          rc=0
+          exhaustion_reason="sweep_state_${sweep_state}"
         else
           echo "[wandb_agent][error] agent saw 'No runs found' before starting any runs (sweep_state=${sweep_state:-unknown}); failing"
         fi
       elif [[ $agent_runs_started -gt 0 ]] && (( log_has_api_instability )); then
-        echo "[wandb_agent][warn] wandb API instability detected after ${agent_runs_started} run(s); treating rc=2 as success" >&2
-        rc=0
+        exhaustion_reason="wandb_api_instability"
       elif [[ $agent_runs_started -gt 0 ]] && [[ "$sweep_state" =~ ^(FINISHED|CANCELED|CANCELLED)$ ]]; then
-        echo "[wandb_agent][warn] sweep state=$sweep_state after ${agent_runs_started} run(s); treating rc=2 as sweep exhaustion"
-        rc=0
+        exhaustion_reason="sweep_state_${sweep_state}"
       elif [[ $agent_runs_started -gt 0 ]]; then
-        echo "[wandb_agent][warn] rc=2 after ${agent_runs_started} run(s) with no explicit wandb error; treating as sweep exhaustion"
+        exhaustion_reason="post_run_nonzero"
+      fi
+
+      if [[ -n "$exhaustion_reason" ]]; then
+        echo "[wandb_agent][warn] treating rc=$rc as sweep exhaustion (${exhaustion_reason}) after ${agent_runs_started} run(s)"
         rc=0
       fi
     fi
