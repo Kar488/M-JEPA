@@ -2183,10 +2183,18 @@ PY
     local GRACE="${KILL_AFTER_SECS:-60}"
     echo "[wandb_agent] wall budget=${SOFT}s, grace=${GRACE}s"
 
+    local -a stage_launch_env=()
+    local stage_python_bin=""
+    local -a stage_python_args=()
+    if ! ci_stage_resolve_python_runner stage_launch_env stage_python_bin stage_python_args "wandb_agent"; then
+      echo "[diag] about to exit: unable to resolve python runner (stage=wandb_agent)" >&2
+      exit 1
+    fi
+    local -a python_runner_cmd=("${stage_launch_env[@]}" "$stage_python_bin" "${stage_python_args[@]}")
+
     set +e
     timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
-      "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
-      python -m wandb agent --count ${WANDB_COUNT:-50} "$SID" \
+      "${python_runner_cmd[@]}" -m wandb agent --count ${WANDB_COUNT:-50} "$SID" \
       2>&1 | tee "$LOG"
     local -a wandb_agent_status=("${PIPESTATUS[@]}")
     set -e
@@ -2199,7 +2207,9 @@ PY
 
     local sweep_state=""
     if [[ -n "$SID" ]]; then
-      sweep_state=$(WANDB_ENTITY="$WANDB_ENTITY" WANDB_PROJECT="$WANDB_PROJECT" SID="$SID" python - "$SID" <<'PY' || true
+      sweep_state=$(
+        WANDB_ENTITY="$WANDB_ENTITY" WANDB_PROJECT="$WANDB_PROJECT" SID="$SID" \
+          "${python_runner_cmd[@]}" - "$SID" <<'PY' || true
 import os, sys
 
 try:
