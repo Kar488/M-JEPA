@@ -85,9 +85,13 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
   # Create a single sweep for JEPA and another for contrastive; reuse IDs
   : "${WANDB_COUNT:=30}"
+  : "${PHASE1_JEPA_COUNT:=${WANDB_COUNT}}"
+  : "${PHASE1_CONTRAST_COUNT:=${WANDB_COUNT}}"
+
   export WANDB_RUN_GROUP="${GITHUB_RUN_ID:-pipeline-$(date -u +%Y%m%dT%H%M%SZ)}"
   export WANDB_RESUME=allow
-  echo "[phase1] WANDB_COUNT=$WANDB_COUNT group=$WANDB_RUN_GROUP"
+  export WANDB_COUNT="$PHASE1_JEPA_COUNT"
+  echo "[phase1] JEPA runs=${PHASE1_JEPA_COUNT} contrastive runs=${PHASE1_CONTRAST_COUNT} group=$WANDB_RUN_GROUP"
   if [[ -n "${SWEEP_CACHE_DIR:-}" ]]; then
     echo "[phase1] dataset cache root: $SWEEP_CACHE_DIR"
   fi
@@ -136,6 +140,9 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   fi
   echo "[phase1] JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
 
+  JEPA_SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
+  CONTRAST_SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
+
   cd "$APP_DIR"
   BASE_LOG_DIR="${LOG_DIR:-$APP_DIR/logs}"
   mapfile -t GRID_VISIBLE_GPUS < <(visible_gpu_ids)
@@ -152,8 +159,9 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
         export CUDA_VISIBLE_DEVICES="${PHASE1_GPU_SPLITS[0]}"
         echo "[phase1] JEPA agent using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
       fi
-      export SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
-      echo "[phase1] launching JEPA agent for sweep $SWEEP_ID"
+      export SWEEP_ID="$JEPA_SWEEP_ID"
+      export WANDB_COUNT="$PHASE1_JEPA_COUNT"
+      echo "[phase1] launching JEPA agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
       run_with_timeout wandb_agent
     ) &
     PHASE1_JEPA_PID=$!
@@ -165,8 +173,9 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
         export CUDA_VISIBLE_DEVICES="${PHASE1_GPU_SPLITS[1]}"
         echo "[phase1] contrastive agent using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
       fi
-      export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
-      echo "[phase1] launching contrastive agent for sweep $SWEEP_ID"
+      export SWEEP_ID="$CONTRAST_SWEEP_ID"
+      export WANDB_COUNT="$PHASE1_CONTRAST_COUNT"
+      echo "[phase1] launching contrastive agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
       run_with_timeout wandb_agent
     ) &
     PHASE1_CONTRAST_PID=$!
@@ -183,12 +192,14 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
       exit 1
     fi
   else
-    export SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
-    echo "[phase1] launching JEPA agent for sweep $SWEEP_ID"
+    export SWEEP_ID="$JEPA_SWEEP_ID"
+    export WANDB_COUNT="$PHASE1_JEPA_COUNT"
+    echo "[phase1] launching JEPA agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
     run_with_timeout wandb_agent || exit 1
 
-    export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
-    echo "[phase1] launching contrastive agent for sweep $SWEEP_ID"
+    export SWEEP_ID="$CONTRAST_SWEEP_ID"
+    export WANDB_COUNT="$PHASE1_CONTRAST_COUNT"
+    echo "[phase1] launching contrastive agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
     run_with_timeout wandb_agent || exit 1
   fi
 
