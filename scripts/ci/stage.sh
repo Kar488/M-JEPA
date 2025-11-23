@@ -2183,12 +2183,65 @@ PY
     local GRACE="${KILL_AFTER_SECS:-60}"
     echo "[wandb_agent] wall budget=${SOFT}s, grace=${GRACE}s"
 
+    set +e
     timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
       "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
       python -m wandb agent --count ${WANDB_COUNT:-50} "$SID" \
       2>&1 | tee "$LOG"
+    local -a wandb_agent_status=("${PIPESTATUS[@]}")
+    set -e
 
-    rc=$?
+    rc=${wandb_agent_status[0]:-$?}
+    local agent_runs_started=0
+    if [[ -f "$LOG" ]]; then
+      agent_runs_started=$(grep -c "About to run command" "$LOG" || true)
+    fi
+
+    local sweep_state=""
+    if [[ -n "$SID" ]]; then
+      sweep_state=$(WANDB_ENTITY="$WANDB_ENTITY" WANDB_PROJECT="$WANDB_PROJECT" SID="$SID" python - "$SID" <<'PY' || true
+import os, sys
+
+try:
+    import wandb
+except Exception:
+    sys.exit(0)
+
+sid = os.environ.get("SID") or (sys.argv[1] if len(sys.argv) > 1 else None)
+if not sid:
+    sys.exit(0)
+
+entity = os.environ.get("WANDB_ENTITY")
+project = os.environ.get("WANDB_PROJECT")
+parts = sid.split("/")
+if len(parts) == 3:
+    entity, project, sid = parts
+elif len(parts) != 1 or not (entity and project):
+    sys.exit(0)
+
+try:
+    api = wandb.Api()
+    sweep = api.sweep(f"{entity}/{project}/{sid}")
+    state = getattr(sweep, "state", None) or ""
+    print(state)
+except Exception:
+    sys.exit(0)
+PY
+)
+    fi
+
+    if [[ $rc -eq 2 ]] && grep -qi "No runs found" "$LOG"; then
+      echo "[wandb_agent][debug] sweep_state=${sweep_state:-unknown} runs_started=${agent_runs_started} (rc=$rc)" >&2
+      if [[ $agent_runs_started -gt 0 ]]; then
+        echo "[wandb_agent][warn] sweep exhausted after ${agent_runs_started} run(s); treating rc=2 as success"
+        rc=0
+      elif [[ "$sweep_state" =~ ^(FINISHED|CANCELED|CANCELLED)$ ]]; then
+        echo "[wandb_agent][warn] sweep state=$sweep_state with no runs; treating rc=2 as sweep exhaustion"
+        rc=0
+      else
+        echo "[wandb_agent][error] agent saw 'No runs found' before starting any runs (sweep_state=${sweep_state:-unknown}); failing"
+      fi
+    fi
     # If the agent “gracefully” exited 0 but clearly failed runs, force non-zero
     if grep -qE 'Detected [0-9]+ failed runs|error: the following arguments are required' "$LOG"; then
       echo "[ERROR][wandb_agent] runs failed; forcing non-zero exit"
