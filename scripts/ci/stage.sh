@@ -2200,6 +2200,10 @@ PY
     set -e
 
     rc=${wandb_agent_status[0]:-$?}
+    local timeout_rc=0
+    if [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
+      timeout_rc=$rc
+    fi
     local agent_runs_started=0
     if [[ -f "$LOG" ]]; then
       agent_runs_started=$(grep -c "About to run command" "$LOG" || true)
@@ -2251,40 +2255,43 @@ PY
       fi
     fi
 
-    if [[ $rc -eq 1 || $rc -eq 2 ]]; then
-      if (( log_has_no_runs )); then
-        echo "[wandb_agent][debug] sweep_state=${sweep_state:-unknown} runs_started=${agent_runs_started} (rc=$rc)" >&2
-        if [[ $agent_runs_started -gt 0 ]]; then
-          echo "[wandb_agent][warn] sweep exhausted after ${agent_runs_started} run(s); treating rc=$rc as success"
+    if (( ! timeout_rc )); then
+      if [[ $rc -eq 1 || $rc -eq 2 ]]; then
+        if (( log_has_no_runs )); then
+          echo "[wandb_agent][debug] sweep_state=${sweep_state:-unknown} runs_started=${agent_runs_started} (rc=$rc)" >&2
+          if [[ $agent_runs_started -gt 0 ]]; then
+            echo "[wandb_agent][warn] sweep exhausted after ${agent_runs_started} run(s); treating rc=$rc as success"
+            rc=0
+          elif [[ "$sweep_state" =~ ^(FINISHED|CANCELED|CANCELLED)$ ]]; then
+            echo "[wandb_agent][warn] sweep state=$sweep_state with no runs; treating rc=$rc as sweep exhaustion"
+            rc=0
+          else
+            echo "[wandb_agent][error] agent saw 'No runs found' before starting any runs (sweep_state=${sweep_state:-unknown}); failing"
+          fi
+        elif [[ $agent_runs_started -gt 0 ]] && (( log_has_api_instability )); then
+          echo "[wandb_agent][warn] wandb API instability detected after ${agent_runs_started} run(s); treating rc=$rc as success" >&2
           rc=0
-        elif [[ "$sweep_state" =~ ^(FINISHED|CANCELED|CANCELLED)$ ]]; then
-          echo "[wandb_agent][warn] sweep state=$sweep_state with no runs; treating rc=$rc as sweep exhaustion"
+        elif [[ $agent_runs_started -gt 0 ]] && [[ "$sweep_state" =~ ^(FINISHED|CANCELED|CANCELLED)$ ]]; then
+          echo "[wandb_agent][warn] sweep state=$sweep_state after ${agent_runs_started} run(s); treating rc=$rc as sweep exhaustion"
           rc=0
-        else
-          echo "[wandb_agent][error] agent saw 'No runs found' before starting any runs (sweep_state=${sweep_state:-unknown}); failing"
+        elif [[ $agent_runs_started -gt 0 ]]; then
+          echo "[wandb_agent][warn] rc=$rc after ${agent_runs_started} run(s) with no explicit wandb error; treating as sweep exhaustion"
+          rc=0
         fi
-      elif [[ $agent_runs_started -gt 0 ]] && (( log_has_api_instability )); then
-        echo "[wandb_agent][warn] wandb API instability detected after ${agent_runs_started} run(s); treating rc=$rc as success" >&2
-        rc=0
-      elif [[ $agent_runs_started -gt 0 ]] && [[ "$sweep_state" =~ ^(FINISHED|CANCELED|CANCELLED)$ ]]; then
-        echo "[wandb_agent][warn] sweep state=$sweep_state after ${agent_runs_started} run(s); treating rc=$rc as sweep exhaustion"
-        rc=0
-      elif [[ $agent_runs_started -gt 0 ]]; then
-        echo "[wandb_agent][warn] rc=$rc after ${agent_runs_started} run(s) with no explicit wandb error; treating as sweep exhaustion"
-        rc=0
+      fi
+      # If the agent “gracefully” exited 0 but clearly failed runs, force non-zero
+      if grep -qE 'Detected [0-9]+ failed runs|error: the following arguments are required' "$LOG"; then
+        echo "[ERROR][wandb_agent] runs failed; forcing non-zero exit"
+        rc=1
       fi
     fi
-    # If the agent “gracefully” exited 0 but clearly failed runs, force non-zero
-    if grep -qE 'Detected [0-9]+ failed runs|error: the following arguments are required' "$LOG"; then
-      echo "[ERROR][wandb_agent] runs failed; forcing non-zero exit"
-      rc=1
+    if (( timeout_rc )); then
+      echo "[ERROR][wandb_agent] agent hit timeout/interrupt (rc=$timeout_rc); marking graceful stop and failing" >&2
+      mark_graceful_stop "$s"
+      exit $timeout_rc
     fi
     if [[ $rc -eq 0 ]]; then
       :
-    elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
-      echo "[ERROR][wandb_agent] agent hit timeout/interrupt (rc=$rc); marking graceful stop and failing" >&2
-      mark_graceful_stop "$s"
-      exit $rc
     else
       echo "[ERROR][wandb_agent] wandb agent failed with exit code $rc" >&2
       exit $rc
