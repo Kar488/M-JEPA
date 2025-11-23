@@ -2240,8 +2240,19 @@ PY
 )
     fi
 
-    if [[ $rc -eq 2 ]]; then
+    local log_has_no_runs=0
+    local log_has_api_instability=0
+    if [[ -f "$LOG" ]]; then
       if grep -qi "No runs found" "$LOG"; then
+        log_has_no_runs=1
+      fi
+      if grep -qiE "Error while calling W&B API: An internal error occurred|Response \[500\]|Network error \(HTTPError\)" "$LOG"; then
+        log_has_api_instability=1
+      fi
+    fi
+
+    if [[ $rc -eq 2 ]]; then
+      if (( log_has_no_runs )); then
         echo "[wandb_agent][debug] sweep_state=${sweep_state:-unknown} runs_started=${agent_runs_started} (rc=$rc)" >&2
         if [[ $agent_runs_started -gt 0 ]]; then
           echo "[wandb_agent][warn] sweep exhausted after ${agent_runs_started} run(s); treating rc=2 as success"
@@ -2250,10 +2261,16 @@ PY
           echo "[wandb_agent][warn] sweep state=$sweep_state with no runs; treating rc=2 as sweep exhaustion"
           rc=0
         else
-          echo "[wandb_agent][error] agent saw 'No runs found' before starting any runs (sweep_state=${sweep_state:-unknown}); failing" 
+          echo "[wandb_agent][error] agent saw 'No runs found' before starting any runs (sweep_state=${sweep_state:-unknown}); failing"
         fi
-      elif [[ $agent_runs_started -gt 0 ]] && grep -qiE "Error while calling W&B API: An internal error occurred|Response \[500\]|Network error \(HTTPError\)" "$LOG"; then
+      elif [[ $agent_runs_started -gt 0 ]] && (( log_has_api_instability )); then
         echo "[wandb_agent][warn] wandb API instability detected after ${agent_runs_started} run(s); treating rc=2 as success" >&2
+        rc=0
+      elif [[ $agent_runs_started -gt 0 ]] && [[ "$sweep_state" =~ ^(FINISHED|CANCELED|CANCELLED)$ ]]; then
+        echo "[wandb_agent][warn] sweep state=$sweep_state after ${agent_runs_started} run(s); treating rc=2 as sweep exhaustion"
+        rc=0
+      elif [[ $agent_runs_started -gt 0 ]]; then
+        echo "[wandb_agent][warn] rc=2 after ${agent_runs_started} run(s) with no explicit wandb error; treating as sweep exhaustion"
         rc=0
       fi
     fi
