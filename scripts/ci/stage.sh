@@ -2240,16 +2240,21 @@ PY
 )
     fi
 
-    if [[ $rc -eq 2 ]] && grep -qi "No runs found" "$LOG"; then
-      echo "[wandb_agent][debug] sweep_state=${sweep_state:-unknown} runs_started=${agent_runs_started} (rc=$rc)" >&2
-      if [[ $agent_runs_started -gt 0 ]]; then
-        echo "[wandb_agent][warn] sweep exhausted after ${agent_runs_started} run(s); treating rc=2 as success"
+    if [[ $rc -eq 2 ]]; then
+      if grep -qi "No runs found" "$LOG"; then
+        echo "[wandb_agent][debug] sweep_state=${sweep_state:-unknown} runs_started=${agent_runs_started} (rc=$rc)" >&2
+        if [[ $agent_runs_started -gt 0 ]]; then
+          echo "[wandb_agent][warn] sweep exhausted after ${agent_runs_started} run(s); treating rc=2 as success"
+          rc=0
+        elif [[ "$sweep_state" =~ ^(FINISHED|CANCELED|CANCELLED)$ ]]; then
+          echo "[wandb_agent][warn] sweep state=$sweep_state with no runs; treating rc=2 as sweep exhaustion"
+          rc=0
+        else
+          echo "[wandb_agent][error] agent saw 'No runs found' before starting any runs (sweep_state=${sweep_state:-unknown}); failing" 
+        fi
+      elif [[ $agent_runs_started -gt 0 ]] && grep -qiE "Error while calling W&B API: An internal error occurred|Response \[500\]|Network error \(HTTPError\)" "$LOG"; then
+        echo "[wandb_agent][warn] wandb API instability detected after ${agent_runs_started} run(s); treating rc=2 as success" >&2
         rc=0
-      elif [[ "$sweep_state" =~ ^(FINISHED|CANCELED|CANCELLED)$ ]]; then
-        echo "[wandb_agent][warn] sweep state=$sweep_state with no runs; treating rc=2 as sweep exhaustion"
-        rc=0
-      else
-        echo "[wandb_agent][error] agent saw 'No runs found' before starting any runs (sweep_state=${sweep_state:-unknown}); failing"
       fi
     fi
     # If the agent “gracefully” exited 0 but clearly failed runs, force non-zero
