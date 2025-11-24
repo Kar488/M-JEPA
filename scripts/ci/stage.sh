@@ -2349,7 +2349,12 @@ PY
         rc=1
       fi
     fi
+    # Treat exit 2 from timeout as sweep exhaustion, not failure
     if (( timeout_rc )); then
+      if [[ $timeout_rc -eq 2 ]]; then
+        echo "[INFO][wandb_agent] timeout wrapper returned rc=2 (No runs left); treating as success."
+        return 0
+      fi
       echo "[ERROR][wandb_agent] agent hit timeout/interrupt (rc=$timeout_rc); marking graceful stop and failing" >&2
       mark_graceful_stop "$s"
       exit $timeout_rc
