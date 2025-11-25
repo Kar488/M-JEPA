@@ -646,6 +646,53 @@ def test_paired_effect_retries_when_configs_flaky(monkeypatch, tmp_path, capsys)
     assert data["winner"] == "jepa"
 
 
+def test_paired_effect_retries_without_group_when_empty(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setenv("PE_FETCH_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("PE_FETCH_RETRY_DELAY", "0")
+    monkeypatch.setattr(pe.time, "sleep", lambda _: None)
+
+    runs = [
+        FakeRun("j1", {"training_method": "jepa", "pair_id": 1}, {"val_rmse": 0.5}),
+        FakeRun(
+            "c1",
+            {"training_method": "contrastive", "pair_id": 1},
+            {"val_rmse": 0.7},
+        ),
+    ]
+
+    class FilteredApi:
+        def runs(self, path, filters=None):
+            if filters and filters.get("group"):
+                return []
+            return runs
+
+    monkeypatch.setattr(pe, "wandb", types.SimpleNamespace(Api=lambda: FilteredApi()))
+
+    out = tmp_path / "pe_group_fallback.json"
+    capsys.readouterr()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pe",
+            "--project",
+            "proj",
+            "--group",
+            "grp",
+            "--sweep",
+            "sw1",
+            "--out",
+            str(out),
+            "--strict",
+        ],
+    )
+    pe.main()
+    payload = json.loads(out.read_text())
+    assert payload["pairs"] == 1
+    assert payload["winner"] == "jepa"
+
+
 def test_paired_effect_missing_threshold_keys(monkeypatch, tmp_path):
     """Runs lacking the threshold config keys should not be discarded entirely."""
 

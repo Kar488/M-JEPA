@@ -808,6 +808,22 @@ def main():
             time.sleep(retry_delay)
             continue
         if not runs_list:
+            if (
+                filters
+                and filters.get("group")
+                and not retried_without_group
+                and sweep_filter is not None
+            ):
+                print(
+                    "[paired-effect] no runs found with group filter; "
+                    "retrying without group to avoid missing freshly synced runs",
+                    flush=True,
+                )
+                filters = dict(sweep_filter) if sweep_filter else None
+                retried_without_group = True
+                attempt = 0
+                time.sleep(retry_delay)
+                continue
             break
 
         by_metric_pair_vals: Dict[str, Dict[str, Dict[str, List[float]]]] = {}
