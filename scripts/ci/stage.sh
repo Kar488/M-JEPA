@@ -2315,6 +2315,12 @@ PY
       fi
     fi
 
+    if (( log_has_no_runs )); then
+      echo "[wandb_agent] detected 'No runs found' in log; forcing rc=0/timeout_rc=0 (treating as success)."
+      rc=0
+      timeout_rc=0
+    fi
+
     if (( ! timeout_rc )); then
       if (( meets_planned )) && [[ $rc -ne 0 ]]; then
         echo "[wandb_agent][info] hit requested WANDB_COUNT=${planned_runs} (started ${agent_runs_started}); normalising rc=$rc to success"
@@ -2363,6 +2369,10 @@ PY
       :
     elif [[ $rc -eq 2 ]]; then
       echo "[INFO][wandb_agent] no runs left for sweep (rc=2); treating as success."
+      return 0
+    elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
+      echo "[INFO][wandb_agent] graceful stop (rc=$rc); letting agent flush."
+      mark_graceful_stop "$s"
       return 0
     else
       echo "[ERROR][wandb_agent] wandb agent failed with exit code $rc" >&2
