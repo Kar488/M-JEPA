@@ -1083,6 +1083,19 @@ if (( _needs_pretrain_state )); then
     fi
   fi
 
+  if [[ -z "${PRETRAIN_EXP_ID:-}" && -n "${GRID_EXP_ID:-}" ]]; then
+    case "${MJEPACI_STAGE}" in
+      phase2|phase2_*)
+        PRETRAIN_EXP_ID="$GRID_EXP_ID"
+        ;;
+    esac
+  fi
+
+  if [[ -z "${PRETRAIN_EXP_ID:-}" && -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+    PRETRAIN_EXP_ID="$(basename "${PRETRAIN_EXPERIMENT_ROOT%/}")"
+    PRETRAIN_STATE_ID="$PRETRAIN_EXP_ID"
+  fi
+
   if [[ -z "${PRETRAIN_EXP_ID:-}" ]]; then
     mjepa_log_error "missing pretrain lineage for ${MJEPACI_STAGE:-unknown}. Set PRETRAIN_EXP_ID=<id> to reuse an existing run or rerun pretrain to refresh pretrain_state.json."
     mjepa_log_error "checked: ${lineage_hint_primary}, ${lineage_hint_secondary}"
