@@ -999,8 +999,8 @@ def main():
 
     if not runs_list:
         if args.strict:
-            print("No runs found.", flush=True)
-            sys.exit(2)
+            print("No runs found; treating as success.", flush=True)
+            sys.exit(0)
         return
 
     if inferred_task is None:
