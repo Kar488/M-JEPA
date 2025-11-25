@@ -268,6 +268,11 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     PE_FILTER_FLAGS+=("--min_pretrain_batches" "${PE_MIN_PRETRAIN_BATCHES}")
   fi
 
+  if ! ensure_micromamba; then
+    echo "[phase1][fatal] micromamba unavailable; set MMBIN or install micromamba" >&2
+    exit 1
+  fi
+
   "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
     python -u "$APP_DIR/scripts/ci/paired_effect_from_wandb.py" \
       --project "${WANDB_PROJECT}" \
