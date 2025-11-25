@@ -2254,6 +2254,13 @@ PY
     set -e
 
     rc=${wandb_agent_status[0]:-$?}
+    # --- FIX START: Immediately handle WandB "No runs" exit code ---
+    if [[ $rc -eq 2 ]]; then
+      echo "[INFO][wandb_agent] agent returned rc=2 (sweeps done); treating as success."
+      return 0
+    fi
+    # --- FIX END ---
+    
     local timeout_rc=0
     if [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
       timeout_rc=$rc
