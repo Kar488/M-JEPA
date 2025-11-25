@@ -1062,7 +1062,7 @@ fi
 
 _needs_pretrain_state=0
 case "${MJEPACI_STAGE}" in
-  finetune|bench|benchmark|tox21|report|phase2|phase2_recheck|phase2_export|grid_recheck|grid_export)
+  finetune|bench|benchmark|tox21|report|phase2_recheck|phase2_export|grid_recheck|grid_export)
     _needs_pretrain_state=1
     ;;
 esac
