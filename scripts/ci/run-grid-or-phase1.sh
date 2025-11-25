@@ -433,11 +433,19 @@ PY
   cp "$TMP_BEST" "$OUT_PATH"
   echo "[phase1] staged best config to $OUT_PATH"
 
-  FINAL_CFG="${EXPORT_OUT_PATH:-${GRID_DIR:-$APP_DIR/grid}/best_grid_config.json}"
+  FINAL_CFG_DEFAULT="${GRID_DIR:-$APP_DIR/grid}/best_grid_config.json"
+  FINAL_CFG="${EXPORT_OUT_PATH:-$FINAL_CFG_DEFAULT}"
   if [[ "$FINAL_CFG" != "$OUT_PATH" ]]; then
-    mkdir -p "$(dirname "$FINAL_CFG")"
-    cp "$TMP_BEST" "$FINAL_CFG"
-    echo "[phase1] exported best config to $FINAL_CFG"
+    if mkdir -p "$(dirname "$FINAL_CFG")" 2>/dev/null && cp "$TMP_BEST" "$FINAL_CFG" 2>/dev/null; then
+      echo "[phase1] exported best config to $FINAL_CFG"
+    else
+      echo "[phase1][warn] unable to export best config to $FINAL_CFG; falling back to $FINAL_CFG_DEFAULT" >&2
+      mkdir -p "$(dirname "$FINAL_CFG_DEFAULT")"
+      cp "$TMP_BEST" "$FINAL_CFG_DEFAULT"
+      if [[ "$FINAL_CFG_DEFAULT" != "$OUT_PATH" ]]; then
+        echo "[phase1] exported best config to $FINAL_CFG_DEFAULT"
+      fi
+    fi
   fi
 
   CANONICAL_P2="${GRID_DIR:-$APP_DIR/grid}/grid_sweep_phase2.yaml"
