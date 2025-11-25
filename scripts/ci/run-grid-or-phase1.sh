@@ -162,7 +162,14 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
       export SWEEP_ID="$JEPA_SWEEP_ID"
       export WANDB_COUNT="$PHASE1_JEPA_COUNT"
       echo "[phase1] launching JEPA agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
-      run_with_timeout wandb_agent
+      if ! run_with_timeout wandb_agent; then
+        rc=$?
+        if [[ $rc -eq 2 ]]; then
+          echo "[phase1][warn] JEPA agent returned rc=2; treating as sweep exhaustion"
+        else
+          exit "$rc"
+        fi
+      fi
     ) &
     PHASE1_JEPA_PID=$!
 
@@ -176,7 +183,14 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
       export SWEEP_ID="$CONTRAST_SWEEP_ID"
       export WANDB_COUNT="$PHASE1_CONTRAST_COUNT"
       echo "[phase1] launching contrastive agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
-      run_with_timeout wandb_agent
+      if ! run_with_timeout wandb_agent; then
+        rc=$?
+        if [[ $rc -eq 2 ]]; then
+          echo "[phase1][warn] contrastive agent returned rc=2; treating as sweep exhaustion"
+        else
+          exit "$rc"
+        fi
+      fi
     ) &
     PHASE1_CONTRAST_PID=$!
 
@@ -185,6 +199,14 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     PHASE1_JEPA_RC=$?
     wait "$PHASE1_CONTRAST_PID"
     PHASE1_CONTRAST_RC=$?
+    if [[ $PHASE1_JEPA_RC -eq 2 ]]; then
+      echo "[phase1][warn] normalising JEPA agent rc=2 to success (sweep exhaustion)"
+      PHASE1_JEPA_RC=0
+    fi
+    if [[ $PHASE1_CONTRAST_RC -eq 2 ]]; then
+      echo "[phase1][warn] normalising contrastive agent rc=2 to success (sweep exhaustion)"
+      PHASE1_CONTRAST_RC=0
+    fi
     set -e
 
     if (( PHASE1_JEPA_RC != 0 || PHASE1_CONTRAST_RC != 0 )); then
@@ -195,12 +217,26 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     export SWEEP_ID="$JEPA_SWEEP_ID"
     export WANDB_COUNT="$PHASE1_JEPA_COUNT"
     echo "[phase1] launching JEPA agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
-    run_with_timeout wandb_agent || exit 1
+    if ! run_with_timeout wandb_agent; then
+      rc=$?
+      if [[ $rc -eq 2 ]]; then
+        echo "[phase1][warn] JEPA agent returned rc=2; treating as sweep exhaustion"
+      else
+        exit "$rc"
+      fi
+    fi
 
     export SWEEP_ID="$CONTRAST_SWEEP_ID"
     export WANDB_COUNT="$PHASE1_CONTRAST_COUNT"
     echo "[phase1] launching contrastive agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
-    run_with_timeout wandb_agent || exit 1
+    if ! run_with_timeout wandb_agent; then
+      rc=$?
+      if [[ $rc -eq 2 ]]; then
+        echo "[phase1][warn] contrastive agent returned rc=2; treating as sweep exhaustion"
+      else
+        exit "$rc"
+      fi
+    fi
   fi
 
   # Require that paired-effect analysis only considers runs that have reached
