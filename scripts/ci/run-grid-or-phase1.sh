@@ -455,8 +455,12 @@ PY
 
   FINAL_P2="${EXPORT_PHASE2_PATH:-$CANONICAL_P2}"
   if [[ "$FINAL_P2" != "$CANONICAL_P2" ]]; then
-    mkdir -p "$(dirname "$FINAL_P2")"
-    cp "$TMP_PHASE2" "$FINAL_P2"
+    if mkdir -p "$(dirname "$FINAL_P2")" 2>/dev/null && cp "$TMP_PHASE2" "$FINAL_P2" 2>/dev/null; then
+      echo "[phase1] exported Phase-2 sweep YAML to $FINAL_P2"
+    else
+      echo "[phase1][warn] unable to export Phase-2 sweep YAML to $FINAL_P2; falling back to $CANONICAL_P2" >&2
+      FINAL_P2="$CANONICAL_P2"
+    fi
   fi
 
   SWEEP_ID2="$(wandb_sweep_create "$FINAL_P2")"
