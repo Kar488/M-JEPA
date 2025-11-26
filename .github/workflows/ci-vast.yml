@@ -546,6 +546,7 @@ jobs:
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/phase2/current/phase2_sweep
+            ${{ runner.temp }}/phase2/lineage/phase2_sweep
             ${{ runner.temp }}/phase2/phase2_sweep
 
       - name: Upload Phase-2 recheck logs
@@ -556,6 +557,7 @@ jobs:
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/phase2/current/phase2_recheck
+            ${{ runner.temp }}/phase2/lineage/phase2_recheck
             ${{ runner.temp }}/phase2/phase2_recheck
 
       - name: Upload Phase-2 export logs
@@ -566,6 +568,7 @@ jobs:
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/phase2/current/phase2_export
+            ${{ runner.temp }}/phase2/lineage/phase2_export
             ${{ runner.temp }}/phase2/phase2_export
 
       - name: Upload Phase-2 grid outputs
@@ -576,6 +579,7 @@ jobs:
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/phase2/current/grid
+            ${{ runner.temp }}/phase2/lineage/grid
             ${{ runner.temp }}/phase2/grid
 
   vast_pretrain:
