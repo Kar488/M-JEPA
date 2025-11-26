@@ -23,6 +23,7 @@ from typing import Any, List, Optional, Sequence, Tuple
 
 import math
 import numbers
+import importlib.util
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -159,6 +160,8 @@ logger = logging.getLogger(__name__)
 _MINIMAL_PNG = base64.b64decode(
     b"iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAQAAACEN29KAAAAFElEQVR42mP8/58BCzAxwMjACCYAAgUCnPZRr8sAAAAASUVORK5CYII="
 )
+
+_MATPLOTLIB_AVAILABLE = bool(importlib.util.find_spec("matplotlib"))
 
 
 def _default_dataset_dir() -> Optional[str]:
@@ -390,6 +393,48 @@ def _prepare_highlight_colors(mol: "Chem.Mol"):
     atom_colors = {idx: _DRAW_COLOR_CLASS(0.99, 0.42, 0.09) for idx in highlight_atoms}
     bond_colors = {idx: _DRAW_COLOR_CLASS(0.13, 0.57, 0.27) for idx in highlight_bonds}
     return highlight_atoms, highlight_bonds, atom_colors, bond_colors
+
+
+def _draw_matplotlib_graph(graph: GraphData, smiles: Optional[str], path: Path) -> bool:
+    if not _MATPLOTLIB_AVAILABLE:
+        return False
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt  # type: ignore
+
+    positions = _graph_positions(graph)
+    if not positions:
+        return False
+    edges = _unique_edges(graph)
+    try:
+        fig = plt.figure(figsize=(6.4, 4.8))
+        ax = fig.add_subplot(111, projection="3d")
+        xs, ys, zs = zip(*positions)
+        ax.scatter(xs, ys, zs, c="#0d47a1", alpha=0.85, s=40, depthshade=True)
+        for src, dst in edges:
+            if src >= len(positions) or dst >= len(positions):
+                continue
+            ax.plot(
+                [positions[src][0], positions[dst][0]],
+                [positions[src][1], positions[dst][1]],
+                [positions[src][2], positions[dst][2]],
+                color="#9e9e9e",
+                linewidth=1.5,
+            )
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+        if smiles:
+            ax.set_title(smiles)
+        fig.tight_layout()
+        _ensure_dir(path.parent)
+        fig.savefig(path, dpi=150)
+    except Exception:
+        return False
+    finally:
+        plt.close("all")
+    return True
 
 
 def _draw_rdkit_2d(smiles: str, path: Path) -> bool:
@@ -652,13 +697,29 @@ def _write_html(path: Path, html: str) -> None:
     path.write_text(html, encoding="utf-8")
 
 
-def _render_sample(record_dir: Path, graph: GraphData, smiles: Optional[str], label: Optional[float], index: int) -> None:
+def _render_sample(
+    record_dir: Path,
+    graph: GraphData,
+    smiles: Optional[str],
+    label: Optional[float],
+    index: int,
+) -> str:
     png_path = record_dir / "molecule.png"
     html_path = record_dir / "molecule.html"
+    rendered_png = False
+    renderer = "placeholder"
     if smiles and _draw_rdkit_2d(smiles, png_path):
         logger.info("Rendered RDKit 2‑D visual for %s", smiles)
-    else:
+        rendered_png = True
+        renderer = "rdkit"
+    elif _draw_matplotlib_graph(graph, smiles, png_path):
+        logger.info("Rendered matplotlib fallback for sample %s", smiles or index)
+        rendered_png = True
+        renderer = "matplotlib"
+    if not rendered_png:
         _render_placeholder_png(png_path, caption=f"RDKit unavailable for sample {index}")
+        if not RDKit_AVAILABLE:
+            logger.info("RDKit unavailable; wrote placeholder PNG for sample %s", smiles or index)
     html_payload = None
     if smiles:
         html_payload = _build_buildamol_3d(smiles)
@@ -675,6 +736,7 @@ def _render_sample(record_dir: Path, graph: GraphData, smiles: Optional[str], la
         "label": label,
     }
     (record_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    return renderer
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -691,6 +753,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     output_dir = Path(args.output_dir)
     _ensure_dir(output_dir)
     logger.info("Generating graph visuals for %d / %d molecules", len(indices), total)
+    png_stats = {"rdkit": 0, "matplotlib": 0, "placeholder": 0}
     for slot, dataset_idx in enumerate(indices):
         record_dir = output_dir / f"sample_{slot:03d}"
         graph = dataset.graphs[dataset_idx]
@@ -698,7 +761,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if dataset.smiles and dataset_idx < len(dataset.smiles):
             smiles = dataset.smiles[dataset_idx]
         label = _coerce_label(dataset.labels, dataset_idx)
-        _render_sample(record_dir, graph, smiles, label, dataset_idx)
+        renderer = _render_sample(record_dir, graph, smiles, label, dataset_idx)
+        png_stats[renderer] = png_stats.get(renderer, 0) + 1
     summary = {
         "dataset_path": os.path.abspath(dataset_label)
         if args.dataset_path
@@ -708,6 +772,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "num_rendered": len(indices),
         "loader": loader_label,
         "fallback_forced": bool(_FORCE_FALLBACK_LOADER),
+        "rdkit_available": bool(RDKit_AVAILABLE),
+        "png_renderers": png_stats,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     logger.info("Graph visuals ready under %s", output_dir)
