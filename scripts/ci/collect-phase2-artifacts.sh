@@ -152,7 +152,7 @@ else
   remote_lineage_id="${GRID_EXP_ID:-${PRETRAIN_EXP_ID}}"
   remote_lineage_grid="${EXPERIMENTS_ROOT%/}/${remote_lineage_id}/grid"
 fi
-remote_current_id="${EXP_ID}"
+remote_current_id="${GRID_EXP_ID:-${EXP_ID}}"
 remote_current_grid="${EXPERIMENTS_ROOT%/}/${remote_current_id}/grid"
 
 
@@ -204,7 +204,9 @@ collect_tree() {
       fi
     else
       echo "[ci][warn] remote step directory not found for $label: $remote_dir" >&2
+      continue
     fi
+
   done
 
   mkdir -p "${dest_root}/grid"
