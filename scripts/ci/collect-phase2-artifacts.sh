@@ -212,27 +212,58 @@ collect_tree() {
   local label="$3"
   shift 3 || true
   local -a steps=(phase2_sweep phase2_recheck phase2_export)
+  find_remote_step_dir() {
+    local grid_root="$1" step_name="$2"
+    local primary_dir="${grid_root%/}/${step_name}"
+    if ssh "${SSH_OPTS[@]}" "$REMOTE" "test -d '$primary_dir'"; then
+      printf '%s' "$primary_dir"
+      return 0
+    fi
+
+    local alt_name="${step_name//_/-}" candidate=""
+    if candidate=$(ssh "${SSH_OPTS[@]}" "$REMOTE" \
+      "cd '${grid_root%/}' 2>/dev/null && find . -maxdepth 3 -type d \\\\( -name '${step_name}' -o -name '${alt_name}' \\\\) -print | head -n1" 2>/dev/null); then
+      candidate="${candidate#./}"
+    fi
+
+    if [[ -n "$candidate" ]]; then
+      printf '%s/%s' "${grid_root%/}" "$candidate"
+      return 0
+    fi
+    return 1
+  }
   for step in "${steps[@]}"; do
     local local_dir="${dest_root}/${step}"
     mkdir -p "$local_dir"
-    local remote_dir="${remote_grid}/${step}"
-    if ssh "${SSH_OPTS[@]}" "$REMOTE" "test -d '$remote_dir'"; then
-      if ! "${RSYNC[@]}" "$REMOTE:$remote_dir/logs/" "$local_dir/logs" 2>/dev/null; then
-        echo "[ci][warn] missing or empty logs for $label/$step at $remote_dir/logs" >&2
-      fi
-      if ! "${RSYNC[@]}" "$REMOTE:$remote_dir/stage-outputs/" "$local_dir/stage-outputs" 2>/dev/null; then
-        echo "[ci][warn] missing stage outputs for $label/$step at $remote_dir/stage-outputs" >&2
-      fi
-    else
-      echo "[ci][warn] remote step directory not found for $label: $remote_dir" >&2
+    local remote_dir
+    if ! remote_dir="$(find_remote_step_dir "$remote_grid" "$step")" || [[ -z "$remote_dir" ]]; then
+      echo "[ci][warn] remote step directory not found for $label: ${remote_grid}/${step}" >&2
       continue
     fi
 
+    if ! "${RSYNC[@]}" "$REMOTE:${remote_dir%/}/logs/" "$local_dir/logs" 2>/dev/null; then
+      echo "[ci][warn] missing or empty logs for $label/$step at ${remote_dir%/}/logs" >&2
+    fi
+    if ! "${RSYNC[@]}" "$REMOTE:${remote_dir%/}/stage-outputs/" "$local_dir/stage-outputs" 2>/dev/null; then
+      echo "[ci][warn] missing stage outputs for $label/$step at ${remote_dir%/}/stage-outputs" >&2
+    fi
   done
 
   mkdir -p "${dest_root}/grid"
   for name in best_grid_config.json recheck_summary.json grid_state.json; do
-    if ! "${RSYNC[@]}" "$REMOTE:${remote_grid}/${name}" "${dest_root}/grid/" 2>/dev/null; then
+    if "${RSYNC[@]}" "$REMOTE:${remote_grid}/${name}" "${dest_root}/grid/" 2>/dev/null; then
+      continue
+    fi
+
+    local fallback=""
+    if fallback=$(ssh "${SSH_OPTS[@]}" "$REMOTE" \
+      "cd '${remote_grid%/}' 2>/dev/null && find . -maxdepth 3 -type f -name '${name}' -print | head -n1" 2>/dev/null); then
+      fallback="${fallback#./}"
+    fi
+
+    if [[ -n "$fallback" ]]; then
+      "${RSYNC[@]}" "$REMOTE:${remote_grid%/}/${fallback}" "${dest_root}/grid/" 2>/dev/null || true
+    else
       echo "[ci][warn] unable to copy ${name} from ${remote_grid} (${label})" >&2
     fi
   done
