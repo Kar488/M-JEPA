@@ -121,6 +121,39 @@ sync_file "${PRETRAIN_MANIFEST:-${PRETRAIN_EXPERIMENT_ROOT}/artifacts/encoder_ma
 sync_file "${PRETRAIN_EXPERIMENT_ROOT}/pretrain/stage-outputs/pretrain.json" "stage-outputs"
 sync_file "${PRETRAIN_STATE_FILE:-${PRETRAIN_EXPERIMENT_ROOT}/pretrain_state.json}" "pretrain-state"
 
+# Rebuild stage outputs locally when the remote file is missing but the other
+# artifacts were synced successfully.  This keeps downstream jobs working on
+# Vast runs where ``pretrain.json`` was never materialised on the runner.
+rebuild_stage_outputs() {
+  local dest_dir="$1"
+  local stage_json="$dest_dir/pretrain.json"
+  local encoder_path="$dest_dir/encoder.pt"
+  local manifest_path="$dest_dir/encoder_manifest.json"
+
+  if [[ -f "$stage_json" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$encoder_path" || ! -f "$manifest_path" ]]; then
+    return 0
+  fi
+
+  local abs_encoder abs_manifest
+  abs_encoder="$(cd "$(dirname "$encoder_path")" && pwd)/$(basename "$encoder_path")"
+  abs_manifest="$(cd "$(dirname "$manifest_path")" && pwd)/$(basename "$manifest_path")"
+
+  cat >"$stage_json" <<EOF
+{
+  "encoder_checkpoint": "${abs_encoder}",
+  "manifest_path": "${abs_manifest}",
+  "manifest_updated": false
+}
+EOF
+
+  echo "::warning::reconstructed missing pretrain stage outputs at ${stage_json}" >&2
+}
+
+rebuild_stage_outputs "$DEST_DIR"
+
 tox21_remote="${PRETRAIN_TOX21_ENV:-}"
 if [[ -z "$tox21_remote" && -n "$PRETRAIN_EXPERIMENT_ROOT" ]]; then
   tox21_remote="${PRETRAIN_EXPERIMENT_ROOT%/}/tox21_gate.env"
