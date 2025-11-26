@@ -127,18 +127,50 @@ sync_file "${PRETRAIN_STATE_FILE:-${PRETRAIN_EXPERIMENT_ROOT}/pretrain_state.jso
 rebuild_stage_outputs() {
   local dest_dir="$1"
   local stage_json="$dest_dir/pretrain.json"
-  local encoder_path="$dest_dir/encoder.pt"
-  local manifest_path="$dest_dir/encoder_manifest.json"
+  local encoder_path="${2:-$dest_dir/encoder.pt}"
+  local manifest_path="${3:-$dest_dir/encoder_manifest.json}"
 
   if [[ -f "$stage_json" ]]; then
     return 0
   fi
-  if [[ ! -f "$encoder_path" || ! -f "$manifest_path" ]]; then
+
+  if [[ ! -f "$manifest_path" ]]; then
+    echo "::warning::cannot reconstruct pretrain stage outputs; missing manifest at ${manifest_path}" >&2
+    return 0
+  fi
+
+  # Prefer the synced encoder checkpoint but fall back to a manifest hint when
+  # that file is absent.  This is resilient to manifests that already embed an
+  # absolute encoder path produced by earlier stages.
+  local encoder_candidate="$encoder_path"
+  if [[ ! -f "$encoder_candidate" ]]; then
+    encoder_candidate="$(python - <<'PY'
+import json
+import os
+import sys
+
+manifest_path = sys.argv[1]
+encoder = ""
+try:
+    with open(manifest_path, encoding="utf-8") as f:
+        payload = json.load(f)
+    encoder = payload.get("paths", {}).get("encoder", "")
+except Exception:
+    encoder = ""
+
+if encoder and os.path.exists(encoder):
+    print(os.path.abspath(encoder))
+PY
+"$manifest_path")"
+  fi
+
+  if [[ -z "$encoder_candidate" || ! -f "$encoder_candidate" ]]; then
+    echo "::warning::cannot reconstruct pretrain stage outputs; missing encoder at ${encoder_path}" >&2
     return 0
   fi
 
   local abs_encoder abs_manifest
-  abs_encoder="$(cd "$(dirname "$encoder_path")" && pwd)/$(basename "$encoder_path")"
+  abs_encoder="$(cd "$(dirname "$encoder_candidate")" && pwd)/$(basename "$encoder_candidate")"
   abs_manifest="$(cd "$(dirname "$manifest_path")" && pwd)/$(basename "$manifest_path")"
 
   cat >"$stage_json" <<EOF
@@ -152,8 +184,6 @@ EOF
   echo "::warning::reconstructed missing pretrain stage outputs at ${stage_json}" >&2
 }
 
-rebuild_stage_outputs "$DEST_DIR"
-
 tox21_remote="${PRETRAIN_TOX21_ENV:-}"
 if [[ -z "$tox21_remote" && -n "$PRETRAIN_EXPERIMENT_ROOT" ]]; then
   tox21_remote="${PRETRAIN_EXPERIMENT_ROOT%/}/tox21_gate.env"
@@ -166,6 +196,8 @@ if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
   sync_optional_path "$graphs_remote" "graph visuals" "$DEST_DIR"
   sync_optional_path "$reports_remote" "reports" "$DEST_DIR"
 fi
+
+rebuild_stage_outputs "$DEST_DIR"
 
 required=(
   "$DEST_DIR/encoder.pt"
