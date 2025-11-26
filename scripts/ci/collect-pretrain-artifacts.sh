@@ -41,6 +41,10 @@ sync_file() {
     echo "::warning::skip $label because remote path is empty" >&2
     return 0
   fi
+  if ! remote_file_exists "$remote_path"; then
+    echo "::warning::remote $label missing at $remote_path" >&2
+    return 0
+  fi
   if "${RSYNC[@]}" "$REMOTE:$remote_path" "$DEST_DIR"; then
     return 0
   fi
