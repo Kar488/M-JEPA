@@ -675,27 +675,43 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     except Exception:
                         pretrain_exp_id = None
                 experiment_root_str = os.path.abspath(str(experiment_root))
+            else:
+                manifest_payload = existing_manifest or {}
+                if manifest_metric is None:
+                    logger.info(
+                        "Skipping manifest update; no validation metric provided and existing manifest present",
+                    )
+                else:
+                    logger.info(
+                        "Skipping manifest update; validation metric did not improve (current=%s, previous=%s)",
+                        manifest_metric,
+                        existing_metric,
+                    )
 
             hashes_block: Dict[str, Any] = {}
             if encoder_hash:
                 hashes_block["encoder"] = encoder_hash
 
-            manifest_payload = {
-                "created_at": timestamp,
-                "pretrain_exp_id": pretrain_exp_id,
-                "experiment_root": experiment_root_str,
-                "paths": manifest_paths,
-                "hyperparameters": hyperparameters,
-                "run": _collect_run_metadata(wb),
-                "metrics": {},
-            }
-            manifest_payload["featurizer"] = {
-                "add_3d": bool(getattr(args, "add_3d", False)),
-                "edge_dim": int(edge_dim) if edge_dim is not None else None,
-                "input_dim": int(input_dim),
-                "contiguity": bool(getattr(args, "contiguity", False)),
-            }
-            if hashes_block:
+            if should_write:
+                manifest_payload = {
+                    "created_at": timestamp,
+                    "pretrain_exp_id": pretrain_exp_id,
+                    "experiment_root": experiment_root_str,
+                    "paths": manifest_paths,
+                    "hyperparameters": hyperparameters,
+                    "run": _collect_run_metadata(wb),
+                    "metrics": {},
+                }
+                manifest_payload["featurizer"] = {
+                    "add_3d": bool(getattr(args, "add_3d", False)),
+                    "edge_dim": int(edge_dim) if edge_dim is not None else None,
+                    "input_dim": int(input_dim),
+                    "contiguity": bool(getattr(args, "contiguity", False)),
+                }
+            elif manifest_payload:
+                manifest_payload.setdefault("metrics", {})
+
+            if should_write and hashes_block:
                 manifest_payload["hashes"] = hashes_block
                 if manifest_metric is not None:
                     manifest_payload["metrics"]["validation"] = manifest_metric
@@ -704,7 +720,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     json.dump(manifest_payload, fh, indent=2, sort_keys=True)
                     fh.write("\n")
                 logger.info("Wrote encoder manifest to %s", manifest_path)
-            else:
+            elif should_write:
                 manifest_payload = existing_manifest or {}
                 logger.info(
                     "Skipping manifest update; validation metric did not improve (current=%s, previous=%s)",
