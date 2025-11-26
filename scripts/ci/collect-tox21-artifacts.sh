@@ -130,6 +130,9 @@ copy_file() {
 # Stage outputs (tox21_*.json) live under stage-outputs/
 collect_dir "${remote_tox21}/stage-outputs" "$dest_root/stage-outputs" "stage-outputs"
 
+# Integrated Gradients explanations live under tox21_dir/ig_explanations/<task>/.
+collect_dir "${remote_tox21}/ig_explanations" "$dest_root/ig_explanations" "ig-explanations"
+
 # Per-task CSV/JSON manifests and summary files at the root of tox21_dir.
 collect_files_matching "$remote_tox21" "$dest_root" '*.json' '*.csv' '*.tsv'
 
