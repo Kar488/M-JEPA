@@ -49,13 +49,13 @@ discover_remote_phase2_lineage() {
   if [[ -z "$target_id" || "$target_id" == "${EXP_ID}" ]]; then
     need_lookup=1
   fi
-  (( need_lookup )) || return 0
 
   local app_dir="${APP_DIR:-/srv/mjepa}"
   local default_id="${target_id:-${PRETRAIN_EXP_ID:-${EXP_ID}}}"
   local payload=""
 
-  if ! payload="$(ssh "${SSH_OPTS[@]}" "$REMOTE" bash -s -- "$app_dir" "$EXPERIMENTS_ROOT" "$default_id" <<'EOS' 2>/dev/null
+  if (( need_lookup )); then
+    if ! payload="$(ssh "${SSH_OPTS[@]}" "$REMOTE" bash -s -- "$app_dir" "$EXPERIMENTS_ROOT" "$default_id" <<'EOS' 2>/dev/null
 set -euo pipefail
 app_dir="${1:-/srv/mjepa}"
 exp_root="${2:-/data/mjepa/experiments}"
@@ -73,27 +73,21 @@ else
 fi
 "$py" scripts/ci/resolve_lineage_ids.py --root "$exp_root" --default-id "$default_id"
 EOS
-)"; then
-    payload=""
-  fi
+    )"; then
+      payload=""
+    fi
 
-  if [[ -z "$payload" ]]; then
-    return 0
-  fi
+    if [[ -n "$payload" ]]; then
+      local py_local=""
+      if command -v python3 >/dev/null 2>&1; then
+        py_local=python3
+      elif command -v python >/dev/null 2>&1; then
+        py_local=python
+      fi
 
-  local py_local=""
-  if command -v python3 >/dev/null 2>&1; then
-    py_local=python3
-  elif command -v python >/dev/null 2>&1; then
-    py_local=python
-  fi
-
-  if [[ -z "$py_local" ]]; then
-    return 0
-  fi
-
-  local -a resolved=()
-  if ! mapfile -t resolved < <("$py_local" - "$payload" <<'PY'
+      if [[ -n "$py_local" ]]; then
+        local -a resolved=()
+        if mapfile -t resolved < <("$py_local" - "$payload" <<'PY'
 import json
 import sys
 
@@ -111,26 +105,53 @@ def emit(key):
 print(emit("grid_exp_id"))
 print(emit("grid_dir"))
 PY
-  ); then
-    return 0
-  fi
+        ); then
+          local remote_grid_id="${resolved[0]:-}" remote_grid_dir="${resolved[1]:-}"
 
-  local remote_grid_id="${resolved[0]:-}" remote_grid_dir="${resolved[1]:-}"
-
-  if [[ -n "$remote_grid_dir" ]]; then
-    GRID_DIR="$remote_grid_dir"
-    export GRID_DIR
-    if [[ -z "${GRID_SOURCE_DIR:-}" ]]; then
-      GRID_SOURCE_DIR="$remote_grid_dir"
-      export GRID_SOURCE_DIR
+          if [[ -n "$remote_grid_dir" ]]; then
+            GRID_DIR="$remote_grid_dir"
+            export GRID_DIR
+            if [[ -z "${GRID_SOURCE_DIR:-}" ]]; then
+              GRID_SOURCE_DIR="$remote_grid_dir"
+              export GRID_SOURCE_DIR
+            fi
+          fi
+          if [[ -n "$remote_grid_id" ]]; then
+            GRID_EXP_ID="$remote_grid_id"
+            export GRID_EXP_ID
+          fi
+        fi
+      fi
     fi
   fi
-  if [[ -n "$remote_grid_id" ]]; then
-    GRID_EXP_ID="$remote_grid_id"
-    export GRID_EXP_ID
+
+  local need_dir_resolve=0
+  if [[ -z "${GRID_DIR:-}" ]]; then
+    need_dir_resolve=1
+  elif ! ssh "${SSH_OPTS[@]}" "$REMOTE" "test -d '${GRID_DIR%/}'" >/dev/null 2>&1; then
+    need_dir_resolve=1
   fi
 
-  if [[ -n "$remote_grid_dir" || -n "$remote_grid_id" ]]; then
+  if (( need_dir_resolve )); then
+    local exp_root="${EXPERIMENTS_ROOT%/}"
+    local probe=""
+    probe=$(ssh "${SSH_OPTS[@]}" "$REMOTE" "find '$exp_root' -maxdepth 3 -path '*/grid/phase2_sweep_id.txt' -printf '%T@ %h\n' 2>/dev/null | sort -nr | head -n1" 2>/dev/null || true)
+    if [[ -n "$probe" ]]; then
+      GRID_DIR="${probe#* }"
+      export GRID_DIR
+      GRID_EXP_ID="$(basename "$(dirname "${GRID_DIR%/}")")"
+      export GRID_EXP_ID
+      if [[ -z "${GRID_SOURCE_DIR:-}" ]]; then
+        GRID_SOURCE_DIR="$GRID_DIR"
+        export GRID_SOURCE_DIR
+      fi
+      echo "[ci][warn] fallback discovered Phase-2 grid at ${GRID_DIR} (GRID_EXP_ID=${GRID_EXP_ID:-<unset>})" >&2
+    else
+      echo "[ci][warn] unable to locate Phase-2 sweep directory under ${EXPERIMENTS_ROOT}" >&2
+    fi
+  fi
+
+  if [[ -n "$GRID_DIR" || -n "$GRID_EXP_ID" ]]; then
     echo "[ci] discovered remote Phase-2 lineage GRID_EXP_ID=${GRID_EXP_ID:-<unset>} GRID_DIR=${GRID_DIR:-<unset>}" >&2
   fi
 
