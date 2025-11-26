@@ -179,7 +179,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--dataset-path",
         default=_default_dataset_dir(),
-        help="Path to the dataset directory or file (defaults to DATASET_DIR env)",
+        help="Path to the dataset directory or file (defaults to DATASET_DIR env; synthetic fallback when unset)",
     )
     parser.add_argument(
         "--output-dir",
@@ -193,12 +193,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Number of molecules to visualise (default: 8)",
     )
     args = parser.parse_args(argv)
-    if not args.dataset_path:
-        parser.error("--dataset-path not provided and DATASET_DIR is unset")
     if not args.output_dir:
         parser.error("--output-dir not provided and PRETRAIN_EXPERIMENT_ROOT is unset")
     if args.num_samples is not None and args.num_samples <= 0:
         parser.error("--num-samples must be > 0")
+    if not args.dataset_path:
+        logger.warning("DATASET_DIR is unset; generating synthetic graph visuals")
     return args
 
 
@@ -241,7 +241,10 @@ def _graph_count(dataset: Any) -> int:
         return 0
 
 
-def _load_dataset(dataset_path: str, limit: Optional[int]) -> Tuple[GraphDataset, str]:
+def _load_dataset(dataset_path: Optional[str], limit: Optional[int]) -> Tuple[GraphDataset, str]:
+    if not dataset_path:
+        return _synthetic_dataset(limit)
+
     dataset_path = os.path.abspath(dataset_path)
     try:
         ext = _guess_extension(dataset_path)
@@ -678,9 +681,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="[graph-visuals] %(message)s")
     args = parse_args(argv)
     dataset, loader_label = _load_dataset(args.dataset_path, args.num_samples)
+    dataset_label = args.dataset_path or "synthetic"
     total = len(dataset.graphs)
     if total == 0:
-        logger.warning("Dataset %s contained zero graphs; nothing to render", args.dataset_path)
+        logger.warning("Dataset %s contained zero graphs; nothing to render", dataset_label)
         return 0
     limit = min(args.num_samples, total)
     indices = _select_indices(total, limit)
@@ -696,7 +700,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         label = _coerce_label(dataset.labels, dataset_idx)
         _render_sample(record_dir, graph, smiles, label, dataset_idx)
     summary = {
-        "dataset_path": os.path.abspath(args.dataset_path),
+        "dataset_path": os.path.abspath(dataset_label)
+        if args.dataset_path
+        else "synthetic",
         "output_dir": str(output_dir.resolve()),
         "num_graphs": total,
         "num_rendered": len(indices),

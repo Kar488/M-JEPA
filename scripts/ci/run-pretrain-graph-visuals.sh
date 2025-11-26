@@ -33,14 +33,17 @@ if [[ -z "${OUTPUT_ARG}" && -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
   OUTPUT_ARG="${PRETRAIN_EXPERIMENT_ROOT%/}/graphs"
 fi
 
-if [[ -z "${DATASET_ARG}" || -z "${OUTPUT_ARG}" ]]; then
-  echo "[pretrain] skipping graph visualisations because DATASET_DIR or PRETRAIN_EXPERIMENT_ROOT is unset" >&2
+if [[ -z "${OUTPUT_ARG}" ]]; then
+  echo "[pretrain] skipping graph visualisations because PRETRAIN_EXPERIMENT_ROOT is unset" >&2
   exit 0
 fi
 
 mkdir -p "${OUTPUT_ARG}"
 
-cmd=(python3 "${PYTHON_SCRIPT}" --dataset-path "${DATASET_ARG}" --output-dir "${OUTPUT_ARG}")
+cmd=(python3 "${PYTHON_SCRIPT}" --output-dir "${OUTPUT_ARG}")
+if [[ -n "${DATASET_ARG}" ]]; then
+  cmd+=(--dataset-path "${DATASET_ARG}")
+fi
 if [[ ${#PASSTHROUGH[@]} -gt 0 ]]; then
   cmd+=("${PASSTHROUGH[@]}")
 fi

@@ -92,6 +92,26 @@ sync_optional_file() {
   return 0
 }
 
+sync_optional_path() {
+  local remote_path="$1"
+  local label="$2"
+  local dest_dir="$3"
+  if [[ -z "$remote_path" ]]; then
+    echo "[collect] info: $label remote path empty; skipping" >&2
+    return 0
+  fi
+  if remote_path_exists "$remote_path"; then
+    if "${RSYNC[@]}" "$REMOTE:$remote_path" "$dest_dir"; then
+      echo "[collect] fetched optional $label from $remote_path" >&2
+      return 0
+    fi
+    echo "::warning::rsync failed for optional $label at $remote_path" >&2
+    return 0
+  fi
+  echo "[collect] info: $label not found at $remote_path; skipping" >&2
+  return 0
+}
+
 sync_file "${PRETRAIN_ENCODER_PATH:-${PRETRAIN_EXPERIMENT_ROOT}/pretrain/encoder.pt}" "encoder"
 sync_file "${PRETRAIN_MANIFEST:-${PRETRAIN_EXPERIMENT_ROOT}/artifacts/encoder_manifest.json}" "manifest"
 sync_file "${PRETRAIN_EXPERIMENT_ROOT}/pretrain/stage-outputs/pretrain.json" "stage-outputs"
@@ -105,15 +125,9 @@ sync_optional_file "$tox21_remote" "tox21_gate.env" "$DEST_DIR"
 
 if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
   graphs_remote="${PRETRAIN_EXPERIMENT_ROOT%/}/graphs"
-  if remote_path_exists "$graphs_remote"; then
-    if "${RSYNC[@]}" "$REMOTE:$graphs_remote" "$DEST_DIR"; then
-      echo "[collect] fetched graph visuals from $graphs_remote" >&2
-    else
-      echo "::warning::rsync failed for graph visuals at $graphs_remote" >&2
-    fi
-  else
-    echo "[collect] info: graph visuals not found at $graphs_remote; skipping" >&2
-  fi
+  reports_remote="${PRETRAIN_EXPERIMENT_ROOT%/}/reports"
+  sync_optional_path "$graphs_remote" "graph visuals" "$DEST_DIR"
+  sync_optional_path "$reports_remote" "reports" "$DEST_DIR"
 fi
 
 required=(
