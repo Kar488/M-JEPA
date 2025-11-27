@@ -38,7 +38,6 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
    cd M-JEPA
    pip install -r requirements.txt
    pip install torch
-   pip install rdkit
    pip install torch-geometric
    pip install deepchem
    pre-commit install
@@ -46,8 +45,9 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
 
    Turn on developer mode in developer settings for symlinks to work when running tests
 
-   Install torch and deepchem through conda
-   Optional: install RDKit via conda or `micromamba` for full chemistry features.
+   Install torch and deepchem through conda if you prefer GPU builds.
+   RDKit is bundled via PyPI (`rdkit`) in `requirements.txt`; conda/micromamba
+   installs remain supported for environments that prefer the conda-forge build.
    For Parquet support, install either `pyarrow` or `fastparquet`; tests will
    skip gracefully if neither is available.
 

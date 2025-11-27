@@ -485,7 +485,8 @@ def _draw_rdkit_2d(smiles: str, path: Path) -> bool:
     opts = drawer.drawOptions()
     opts.addAtomIndices = True
     opts.highlightRadius = 0.35
-    opts.dotsPerAngstrom = 45
+    if hasattr(opts, "dotsPerAngstrom"):
+        opts.dotsPerAngstrom = 45
     opts.bondLineWidth = 2.2
     opts.useBWAtomPalette()  # start from greyscale so highlights stand out
     highlight_atoms, highlight_bonds, atom_colors, bond_colors = _prepare_highlight_colors(mol)
