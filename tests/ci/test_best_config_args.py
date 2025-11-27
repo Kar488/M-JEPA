@@ -374,10 +374,6 @@ def test_bestcfg_no_epochs_respected_for_tox21():
 
 
 def test_bestcfg_uses_data_cache_grid_when_env_missing(tmp_path):
-    fallback_root = pathlib.Path("/data/mjepa/cache/grid/phase2_export/stage-outputs")
-    if fallback_root.exists():
-        pytest.skip("real /data/mjepa cache present; avoid clobbering")
-
     cfg = {
         "gnn_type": "gine",
         "hidden_dim": 73,
@@ -388,29 +384,37 @@ def test_bestcfg_uses_data_cache_grid_when_env_missing(tmp_path):
         "finetune_epochs": 1,
     }
 
-    try:
-        fallback_root.mkdir(parents=True, exist_ok=True)
-        (fallback_root / "best_grid_config.json").write_text(
-            json.dumps(cfg), encoding="utf-8"
-        )
+    exp_id = "test-exp"
+    fallback_root = (
+        tmp_path
+        / "mjepa"
+        / "fallback"
+        / "grid"
+        / exp_id
+        / "phase2_export"
+        / "stage-outputs"
+    )
+    fallback_root.mkdir(parents=True, exist_ok=True)
+    (fallback_root / "best_grid_config.json").write_text(
+        json.dumps(cfg), encoding="utf-8"
+    )
 
-        stdout, _ = run_bestcfg(
-            "tox21",
-            cfg,
-            env={
-                "GRID_DIR": "",
-                "GRID_SOURCE_DIR": "",
-                "GRID_CACHE_DIR": "",
-                "SWEEP_CACHE_DIR": "",
-                "CACHE_DIR": "",
-                "EXPERIMENT_DIR": "",
-                "GRID_EXP_ID": "",
-                "EXP_ID": "",
-            },
-            grid_dir_override="",
-        )
-    finally:
-        shutil.rmtree(fallback_root.parents[4], ignore_errors=True)
+    stdout, _ = run_bestcfg(
+        "tox21",
+        cfg,
+        env={
+            "GRID_DIR": "",
+            "GRID_SOURCE_DIR": "",
+            "GRID_CACHE_DIR": "",
+            "SWEEP_CACHE_DIR": "",
+            "CACHE_DIR": "",
+            "EXPERIMENT_DIR": "",
+            "GRID_EXP_ID": "",
+            "EXP_ID": exp_id,
+            "RUNNER_TEMP": str(tmp_path),
+        },
+        grid_dir_override="",
+    )
 
     assert "--hidden-dim" in stdout
     tokens = stdout.split()
