@@ -1855,6 +1855,24 @@ best_config_args() {
   if [[ -n "${BENCH_WINNER_JSON:-}" ]]; then
     add_winner_candidate "${BENCH_WINNER_JSON}"
   fi
+
+  # Always scan the fallback cache root in case EXP_ID/GRID_EXP_ID are unset or
+  # were reassigned during environment bootstrapping. This keeps best_config_args
+  # resilient to CI fallbacks where RUN_ID may drift from the desired EXP_ID but
+  # a cached grid winner still exists under RUNNER_TEMP.
+  if [[ -d "$emergency_grid" ]]; then
+    shopt -s nullglob
+    local fallback_candidate
+    for fallback_candidate in \
+      "$emergency_grid"/*/phase2_export/stage-outputs/best_grid_config.json \
+      "$emergency_grid"/*/phase2_recheck/stage-outputs/best_grid_config.json \
+      "$emergency_grid"/*/phase2_export/best_grid_config.json \
+      "$emergency_grid"/*/best_grid_config.json; do
+      add_winner_candidate "$fallback_candidate"
+    done
+    shopt -u nullglob
+  fi
+
   local grid_root
   for grid_root in "${grid_roots[@]}"; do
     [[ -n "$grid_root" ]] || continue
