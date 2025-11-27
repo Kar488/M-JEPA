@@ -806,6 +806,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     _ensure_dir(output_dir)
     logger.info("Generating graph visuals for %d / %d molecules", len(indices), total)
     png_stats = {"rdkit": 0, "matplotlib": 0, "placeholder": 0}
+    rdkit_placeholder_count = 0
     for slot, dataset_idx in enumerate(indices):
         record_dir = output_dir / f"sample_{slot:03d}"
         graph = dataset.graphs[dataset_idx]
@@ -815,6 +816,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         label = _coerce_label(dataset.labels, dataset_idx)
         renderer = _render_sample(record_dir, graph, smiles, label, dataset_idx)
         png_stats[renderer] = png_stats.get(renderer, 0) + 1
+        if renderer == "placeholder" and not RDKit_AVAILABLE:
+            rdkit_placeholder_count += 1
+    if not RDKit_AVAILABLE:
+        if rdkit_placeholder_count:
+            logger.warning(
+                "RDKit unavailable; generated %d placeholder PNG(s). Install rdkit to render 2-D depictions.",
+                rdkit_placeholder_count,
+            )
+        else:
+            logger.info(
+                "RDKit unavailable; matplotlib fallback rendered all samples."
+            )
     summary = {
         "dataset_path": os.path.abspath(dataset_label)
         if args.dataset_path
