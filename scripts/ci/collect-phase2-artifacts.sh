@@ -182,6 +182,15 @@ resolve_remote_grid_root() {
   shift 2 || true
 
   local -a candidates=()
+  local -a markers=(
+    "phase2_sweep_id.txt"
+    "best_grid_config.json"
+    "recheck_summary.json"
+    "grid_state.json"
+    "phase2_sweep"
+    "phase2_recheck"
+    "phase2_export"
+  )
   add_candidate() {
     local path="$1"
     [[ -z "$path" ]] && return
@@ -208,16 +217,36 @@ resolve_remote_grid_root() {
     add_candidate "${RUNNER_TEMP%/}/mjepa/fallback/grid/${grid_id}"
   fi
 
+  local first_existing=""
   local candidate
   for candidate in "${candidates[@]}"; do
-    if ssh "${SSH_OPTS[@]}" "$REMOTE" "test -d '${candidate}'" >/dev/null 2>&1; then
-      if [[ "$candidate" != "$primary" ]]; then
-        echo "[ci][warn] using fallback grid root for ${grid_id:-unknown}: ${candidate}" >&2
-      fi
-      printf '%s' "$candidate"
-      return 0
+    if ! ssh "${SSH_OPTS[@]}" "$REMOTE" "test -d '${candidate}'" >/dev/null 2>&1; then
+      continue
     fi
+
+    if [[ -z "$first_existing" ]]; then
+      first_existing="$candidate"
+    fi
+
+    local marker
+    for marker in "${markers[@]}"; do
+      if ssh "${SSH_OPTS[@]}" "$REMOTE" "test -e '${candidate%/}/${marker}'" >/dev/null 2>&1; then
+        if [[ "$candidate" != "$primary" ]]; then
+          echo "[ci][warn] using fallback grid root for ${grid_id:-unknown}: ${candidate}" >&2
+        fi
+        printf '%s' "$candidate"
+        return 0
+      fi
+    done
   done
+
+  if [[ -n "$first_existing" ]]; then
+    if [[ "$first_existing" != "$primary" ]]; then
+      echo "[ci][warn] using fallback grid root for ${grid_id:-unknown}: ${first_existing}" >&2
+    fi
+    printf '%s' "$first_existing"
+    return 0
+  fi
 
   if [[ -n "$grid_id" ]]; then
     local probe=""
