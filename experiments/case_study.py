@@ -107,6 +107,47 @@ def _ci_log(message: str, **payload: Any) -> None:
         logger.info("[ci][info] %s", message)
 
 
+def _sanitize_binary_labels(df: pd.DataFrame, label_col: str) -> tuple[pd.DataFrame, Dict[str, int]]:
+    """Coerce binary labels and drop sentinel values.
+
+    The Tox21 CSVs occasionally encode missing labels as negative numbers or
+    other non-binary values. Treat any non-finite/negative entry as missing and
+    discard rows that are not strict ``{0, 1}`` labels.
+
+    Args:
+        df: Input dataframe containing the label column.
+        label_col: Name of the label column to sanitise.
+
+    Returns:
+        A tuple of (clean_dataframe, drop_stats) where ``drop_stats`` records
+        how many rows were removed for each reason.
+    """
+
+    if label_col not in df.columns:
+        return df, {"dropped_negative": 0, "dropped_non_binary": 0, "dropped_na": 0}
+
+    filtered = df.copy()
+    filtered[label_col] = pd.to_numeric(filtered[label_col], errors="coerce")
+
+    drop_stats = {"dropped_negative": 0, "dropped_non_binary": 0, "dropped_na": 0}
+
+    negative_mask = filtered[label_col] < 0
+    drop_stats["dropped_negative"] = int(negative_mask.sum())
+    if drop_stats["dropped_negative"]:
+        filtered.loc[negative_mask, label_col] = np.nan
+
+    non_binary_mask = filtered[label_col].notna() & ~filtered[label_col].isin([0, 1])
+    drop_stats["dropped_non_binary"] = int(non_binary_mask.sum())
+    if drop_stats["dropped_non_binary"]:
+        filtered.loc[non_binary_mask, label_col] = np.nan
+
+    before_drop = len(filtered)
+    filtered = filtered.dropna(subset=[label_col])
+    drop_stats["dropped_na"] = before_drop - len(filtered)
+
+    return filtered, drop_stats
+
+
 # ``training.supervised`` and ``training.unsupervised`` are heavy modules that are
 # frequently monkeypatched in tests.  ``run_tox21_case_study`` only needs
 # ``train_linear_head`` and ``train_jepa`` so import them defensively to honour
@@ -1312,7 +1353,31 @@ def run_tox21_case_study(
     if task_name not in df.columns:
         raise ValueError(f"Task column '{task_name}' not found in {csv_path}")
 
-    df = df[[smiles_col, task_name]].dropna(subset=[task_name])
+    df = df[[smiles_col, task_name]]
+    df, label_drop_stats = _sanitize_binary_labels(df, task_name)
+    diagnostics["label_filter_counts"] = {
+        **label_drop_stats,
+        "retained": len(df),
+    }
+    dropped_total = label_drop_stats.get("dropped_na", 0)
+    if label_drop_stats.get("dropped_negative", 0):
+        logger.info(
+            "Dropping %d rows with negative %s labels (treated as missing)",
+            label_drop_stats["dropped_negative"],
+            task_name,
+        )
+    if label_drop_stats.get("dropped_non_binary", 0):
+        logger.info(
+            "Dropping %d rows with non-binary %s labels",
+            label_drop_stats["dropped_non_binary"],
+            task_name,
+        )
+    if dropped_total:
+        logger.info(
+            "Filtered dataset to %d rows after removing missing %s labels",
+            len(df),
+            task_name,
+        )
     smiles_list = _to_list(df[smiles_col].astype(str))
     labels_list = _to_list(df[task_name].astype(float))
     logger.debug("Loaded %d molecules", len(smiles_list))
