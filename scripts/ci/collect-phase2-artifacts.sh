@@ -165,16 +165,90 @@ PY
 
 discover_remote_phase2_lineage
 
+remote_lineage_id="${GRID_EXP_ID:-${PRETRAIN_EXP_ID:-}}"
+remote_current_id="${GRID_EXP_ID:-${EXP_ID}}"
+
 if [[ -n "${GRID_DIR:-}" ]]; then
   # GRID_DIR points directly at the grid used by phase2_export (e.g. /data/mjepa/experiments/1760284429/grid).
   remote_lineage_grid="${GRID_DIR%/}"
 else
   # Fall back to constructing it from GRID_EXP_ID or PRETRAIN_EXP_ID.
-  remote_lineage_id="${GRID_EXP_ID:-${PRETRAIN_EXP_ID}}"
   remote_lineage_grid="${EXPERIMENTS_ROOT%/}/${remote_lineage_id}/grid"
 fi
-remote_current_id="${GRID_EXP_ID:-${EXP_ID}}"
 remote_current_grid="${EXPERIMENTS_ROOT%/}/${remote_current_id}/grid"
+
+resolve_remote_grid_root() {
+  local primary="$1" grid_id="$2"
+  shift 2 || true
+
+  local -a candidates=()
+  add_candidate() {
+    local path="$1"
+    [[ -z "$path" ]] && return
+    local normalized="${path%/}"
+    local existing
+    for existing in "${candidates[@]}"; do
+      if [[ "$existing" == "$normalized" ]]; then
+        return
+      fi
+    done
+    candidates+=("$normalized")
+  }
+
+  add_candidate "$primary"
+  add_candidate "${GRID_SOURCE_DIR:-}"
+  add_candidate "${GRID_DIR:-}"
+  add_candidate "${SWEEP_CACHE_DIR:-}/grid"
+  add_candidate "${SWEEP_CACHE_DIR:-}/grid/${grid_id}"
+  add_candidate "${GRID_CACHE_DIR:-}"
+  add_candidate "${GRID_CACHE_DIR:-}/${grid_id}"
+  add_candidate "${CACHE_DIR:-}/grid"
+  add_candidate "${CACHE_DIR:-}/grid/${grid_id}"
+  if [[ -n "${RUNNER_TEMP:-}" && -n "$grid_id" ]]; then
+    add_candidate "${RUNNER_TEMP%/}/mjepa/fallback/grid/${grid_id}"
+  fi
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if ssh "${SSH_OPTS[@]}" "$REMOTE" "test -d '${candidate}'" >/dev/null 2>&1; then
+      if [[ "$candidate" != "$primary" ]]; then
+        echo "[ci][warn] using fallback grid root for ${grid_id:-unknown}: ${candidate}" >&2
+      fi
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+
+  if [[ -n "$grid_id" ]]; then
+    local probe=""
+    probe=$(ssh "${SSH_OPTS[@]}" "$REMOTE" bash -s -- "$grid_id" "${EXPERIMENTS_ROOT:-}" "${GRID_CACHE_DIR:-}" "${SWEEP_CACHE_DIR:-}" "${CACHE_DIR:-}" <<'EOS' 2>/dev/null || true)
+set -euo pipefail
+gid="$1"
+shift
+roots=("$@")
+for root in "${roots[@]}"; do
+  [[ -d "$root" ]] || continue
+  if path=$(find "$root" -maxdepth 4 -type d -path "*/${gid}/grid" -print -quit 2>/dev/null); then
+    printf '%s' "$path"
+    exit 0
+  fi
+done
+EOS
+    )
+
+    if [[ -n "$probe" ]]; then
+      echo "[ci][warn] discovered grid root via search for ${grid_id}: ${probe}" >&2
+      printf '%s' "$probe"
+      return 0
+    fi
+  fi
+
+  printf '%s' "$primary"
+  return 1
+}
+
+remote_lineage_grid="$(resolve_remote_grid_root "$remote_lineage_grid" "${remote_lineage_id:-}")"
+remote_current_grid="$(resolve_remote_grid_root "$remote_current_grid" "${remote_current_id:-}")"
 
 
 # Ensure Phase‑2 sweep metadata is available under the current experiment.
