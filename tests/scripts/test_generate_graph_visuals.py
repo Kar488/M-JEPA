@@ -37,6 +37,36 @@ def _assert_visuals(output_dir: Path) -> dict:
     return summary
 
 
+def test_placeholder_png_is_readable(tmp_path):
+    png_path = tmp_path / "molecule.png"
+    graph_visuals._render_placeholder_png(png_path, "RDKit rendering failed for sample 1")
+
+    data = png_path.read_bytes()
+    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    assert len(data) > 500, "placeholder should be a non-trivial PNG"
+
+    caption = png_path.with_suffix(".txt").read_text(encoding="utf-8")
+    assert caption.strip() == "RDKit rendering failed for sample 1"
+    assert caption.endswith("\n")
+
+
+def test_placeholder_reports_rdkit_import_error(tmp_path, monkeypatch):
+    graph = graph_visuals._StubGraphData(num_nodes=1)
+    graph.edge_index = [[0, 0], [0, 0]]
+
+    monkeypatch.setattr(graph_visuals, "RDKit_AVAILABLE", False)
+    monkeypatch.setattr(graph_visuals, "RDKit_INSTALLED", True)
+    monkeypatch.setattr(graph_visuals, "RDKit_IMPORT_ERROR", "ImportError: nope")
+    monkeypatch.setattr(graph_visuals, "_MATPLOTLIB_AVAILABLE", False)
+
+    record_dir = tmp_path / "sample"
+    renderer = graph_visuals._render_sample(record_dir, graph, "C", None, 0)
+
+    caption = (record_dir / "molecule.txt").read_text(encoding="utf-8").strip()
+    assert caption == "RDKit import failed; placeholder molecule"
+    assert renderer == "placeholder"
+
+
 def test_generate_graph_visuals_produces_files(tmp_path):
     dataset = tmp_path / "toy.csv"
     dataset.write_text("smiles\nC1=CC=CC=C1\n", encoding="utf-8")
