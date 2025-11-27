@@ -1353,6 +1353,8 @@ def run_tox21_case_study(
     if task_name not in df.columns:
         raise ValueError(f"Task column '{task_name}' not found in {csv_path}")
 
+    diagnostics: Dict[str, Any] = {}
+
     df = df[[smiles_col, task_name]]
     df, label_drop_stats = _sanitize_binary_labels(df, task_name)
     diagnostics["label_filter_counts"] = {
@@ -1382,7 +1384,6 @@ def run_tox21_case_study(
     labels_list = _to_list(df[task_name].astype(float))
     logger.debug("Loaded %d molecules", len(smiles_list))
 
-    diagnostics: Dict[str, Any] = {}
     try:
         ensemble_size = int(head_ensemble_size)
     except Exception:
