@@ -42,7 +42,10 @@ def run_bestcfg(
         run_env.setdefault("DATA_DIR", str(data_dir))
         run_env.setdefault("XDG_CACHE_HOME", str(cache_dir))
         run_env.setdefault("MJEPA_SUDO_BIN", "true")
-        run_env.setdefault("MJEPA_ALLOW_DATA_FALLBACKS", "1")
+        # Force fallbacks on so the tests are resilient to CI defaults that
+        # intentionally disable them (e.g., self-hosted runners that expect
+        # /data to be writable).
+        run_env["MJEPA_ALLOW_DATA_FALLBACKS"] = "1"
 
         shim = r'''
 rewrite_path() {
