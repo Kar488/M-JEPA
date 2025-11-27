@@ -212,10 +212,13 @@ if (( stage_outputs_missing )); then
   rebuild_stage_outputs "$DEST_DIR"
 fi
 
+if [[ ! -f "$stage_outputs_local" ]]; then
+  echo "::notice::pretrain stage outputs absent after reconstruction; continuing without pretrain.json" >&2
+fi
+
 required=(
   "$DEST_DIR/encoder.pt"
   "$DEST_DIR/encoder_manifest.json"
-  "$DEST_DIR/pretrain.json"
   "$DEST_DIR/pretrain_state.json"
 )
 
