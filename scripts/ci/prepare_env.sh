@@ -368,7 +368,7 @@ fi
 
 # ----------- project requirements (safe filter) -----------
 if [ -f "$APP_DIR/requirements.txt" ]; then
-  grep -viE '^(rdkit|torch(|-geometric|-scatter))([=<>].*)?$' "$APP_DIR/requirements.txt" > /tmp/req-safe.txt || true
+  grep -viE '^(rdkit|rdkit-pypi|torch(|-geometric|-scatter))([=<>].*)?$' "$APP_DIR/requirements.txt" > /tmp/req-safe.txt || true
   if [ -s /tmp/req-safe.txt ]; then
     micromamba run -n "$ENV_NAME" python -m pip install -r /tmp/req-safe.txt
   fi

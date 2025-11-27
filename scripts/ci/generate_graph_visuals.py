@@ -762,13 +762,13 @@ def _render_sample(
         _render_placeholder_png(png_path, caption=caption)
         if not RDKit_AVAILABLE:
             if RDKit_INSTALLED and RDKit_IMPORT_ERROR:
-                logger.info(
+                logger.debug(
                     "RDKit import failed (%s); wrote placeholder PNG for sample %s",
                     RDKit_IMPORT_ERROR,
                     smiles or index,
                 )
             else:
-                logger.info(
+                logger.debug(
                     "RDKit unavailable; wrote placeholder PNG for sample %s", smiles or index
                 )
         else:
@@ -821,7 +821,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             rdkit_placeholder_count += 1
     if not RDKit_AVAILABLE:
         if rdkit_placeholder_count:
-            logger.warning(
+            logger.info(
                 "RDKit unavailable; generated %d placeholder PNG(s). Install rdkit to render 2-D depictions.",
                 rdkit_placeholder_count,
             )
