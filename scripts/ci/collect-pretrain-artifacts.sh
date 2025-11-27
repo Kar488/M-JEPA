@@ -125,6 +125,10 @@ stage_output_candidates=()
 if [[ -n "${PRETRAIN_STAGE_OUTPUTS:-}" ]]; then
   stage_output_candidates+=("${PRETRAIN_STAGE_OUTPUTS%/}/pretrain.json")
 fi
+if [[ -n "${PRETRAIN_CACHE_DIR:-}" ]]; then
+  stage_output_candidates+=("${PRETRAIN_CACHE_DIR%/}/stage-outputs/pretrain.json")
+  stage_output_candidates+=("${PRETRAIN_CACHE_DIR%/}/pretrain/stage-outputs/pretrain.json")
+fi
 if [[ -n "${PRETRAIN_DIR:-}" ]]; then
   stage_output_candidates+=("${PRETRAIN_DIR%/}/stage-outputs/pretrain.json")
 fi
