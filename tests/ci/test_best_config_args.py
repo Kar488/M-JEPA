@@ -42,6 +42,7 @@ def run_bestcfg(
         run_env.setdefault("DATA_DIR", str(data_dir))
         run_env.setdefault("XDG_CACHE_HOME", str(cache_dir))
         run_env.setdefault("MJEPA_SUDO_BIN", "true")
+        run_env.setdefault("MJEPA_ALLOW_DATA_FALLBACKS", "1")
 
         shim = r'''
 rewrite_path() {
