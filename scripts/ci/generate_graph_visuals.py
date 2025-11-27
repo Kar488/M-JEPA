@@ -11,12 +11,13 @@ constructed directly from the graph topology.
 from __future__ import annotations
 
 import argparse
-import base64
 import csv
 import json
 import logging
 import os
 import sys
+import struct
+import zlib
 from itertools import cycle, islice
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
@@ -125,6 +126,10 @@ _FORCE_FALLBACK_LOADER = os.environ.get("GRAPH_VISUALS_FORCE_FALLBACK", "").stri
     "on",
 }
 
+_RDKit_SPEC = importlib.util.find_spec("rdkit")
+RDKit_INSTALLED = bool(_RDKit_SPEC)
+RDKit_IMPORT_ERROR: Optional[str] = None
+
 try:  # pragma: no cover - optional dependency in CI
     from rdkit import Chem
     from rdkit.Chem import AllChem
@@ -132,12 +137,13 @@ try:  # pragma: no cover - optional dependency in CI
     from rdkit.Chem.Draw import rdMolDraw2D
 
     RDKit_AVAILABLE = True
-except Exception:  # pragma: no cover - gracefully degrade in environments w/o RDKit
+except Exception as exc:  # pragma: no cover - gracefully degrade in environments w/o RDKit
     Chem = None  # type: ignore
     AllChem = None  # type: ignore
     rdDepictor = None  # type: ignore
     rdMolDraw2D = None  # type: ignore
     RDKit_AVAILABLE = False
+    RDKit_IMPORT_ERROR = str(exc)
 
 if RDKit_AVAILABLE:  # pragma: no cover - depends on optional rdkit
     _DRAW_COLOR_CLASS = getattr(rdMolDraw2D, "DrawColour", None) or getattr(rdMolDraw2D, "Color", None)
@@ -156,10 +162,6 @@ except Exception:  # pragma: no cover - degrade gracefully when BuildAmol is abs
     BUILDAMOL_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
-
-_MINIMAL_PNG = base64.b64decode(
-    b"iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAQAAACEN29KAAAAFElEQVR42mP8/58BCzAxwMjACCYAAgUCnPZRr8sAAAAASUVORK5CYII="
-)
 
 _MATPLOTLIB_AVAILABLE = bool(importlib.util.find_spec("matplotlib"))
 
@@ -371,10 +373,40 @@ def _coerce_label(labels: Optional[Sequence[Any]], idx: int) -> Optional[float]:
 
 def _render_placeholder_png(path: Path, caption: str) -> None:
     _ensure_dir(path.parent)
-    with open(path, "wb") as handle:
-        handle.write(_MINIMAL_PNG)
+
+    width, height = 320, 240
+    background = (245, 245, 245, 255)
+    border = (190, 190, 190, 255)
+    accent = (207, 34, 46, 255)
+
+    pixels = bytearray()
+    for y in range(height):
+        pixels.append(0)  # per-row filter type "None"
+        for x in range(width):
+            color = background
+            if x in {0, width - 1} or y in {0, height - 1}:
+                color = border
+            elif abs(x - width // 2) <= 2 or abs(y - height // 2) <= 2:
+                color = accent
+            pixels.extend(color)
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    compressed = zlib.compress(bytes(pixels))
+    png_bytes = b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", header) + _chunk(b"IDAT", compressed) + _chunk(
+        b"IEND", b""
+    )
+    path.write_bytes(png_bytes)
+
     caption_path = path.with_suffix(".txt")
-    caption_path.write_text(caption, encoding="utf-8")
+    caption_path.write_text(caption.rstrip() + "\n", encoding="utf-8")
 
 
 def _prepare_highlight_colors(mol: "Chem.Mol"):
@@ -717,7 +749,29 @@ def _render_sample(
         rendered_png = True
         renderer = "matplotlib"
     if not rendered_png:
-        _render_placeholder_png(png_path, caption=f"RDKit unavailable for sample {index}")
+        if not smiles:
+            caption = f"No SMILES provided for sample {index}"
+        elif not RDKit_AVAILABLE:
+            if RDKit_INSTALLED and RDKit_IMPORT_ERROR:
+                caption = "RDKit import failed; placeholder molecule"
+            else:
+                caption = "RDKit unavailable; placeholder molecule"
+        else:
+            caption = f"RDKit rendering failed for sample {index}"
+        _render_placeholder_png(png_path, caption=caption)
+        if not RDKit_AVAILABLE:
+            if RDKit_INSTALLED and RDKit_IMPORT_ERROR:
+                logger.info(
+                    "RDKit import failed (%s); wrote placeholder PNG for sample %s",
+                    RDKit_IMPORT_ERROR,
+                    smiles or index,
+                )
+            else:
+                logger.info(
+                    "RDKit unavailable; wrote placeholder PNG for sample %s", smiles or index
+                )
+        else:
+            logger.info("RDKit rendering failed; wrote placeholder PNG for sample %s", smiles or index)
     html_payload = None
     if smiles:
         html_payload = _build_buildamol_3d(smiles)
@@ -784,6 +838,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "loader": loader_label,
         "fallback_forced": bool(_FORCE_FALLBACK_LOADER),
         "rdkit_available": bool(RDKit_AVAILABLE),
+        "rdkit_installed": bool(RDKit_INSTALLED),
+        "rdkit_import_error": RDKit_IMPORT_ERROR,
         "png_renderers": png_stats,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
