@@ -1783,6 +1783,15 @@ best_config_args() {
   add_grid_root "${GRID_DIR:-}"
   add_grid_root "${GRID_CACHE_DIR:-}"
 
+  if [[ -n "${GRID_CACHE_DIR:-}" ]]; then
+    local grid_cache_root="${GRID_CACHE_DIR%/}"
+    if [[ -n "${GRID_EXP_ID:-}" ]]; then
+      add_grid_root "${grid_cache_root}/${GRID_EXP_ID}"
+    elif [[ -n "${EXP_ID:-}" ]]; then
+      add_grid_root "${grid_cache_root}/${EXP_ID}"
+    fi
+  fi
+
   if [[ ${#grid_roots[@]} -eq 0 ]]; then
     add_grid_root "${EXPERIMENT_DIR%/}/grid"
   fi
