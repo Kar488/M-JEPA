@@ -80,7 +80,7 @@ def test_tox21_case_study_passes_explain_kwargs(monkeypatch, tmp_path):
     assert captured.get("config", {}).get("task_name") == "NR-AR"
 
 
-def test_sanitize_binary_labels_filters_invalid_rows():
+def test_sanitize_binary_labels_filters_invalid_rows(monkeypatch):
     import sys
     import types
 
@@ -88,9 +88,10 @@ def test_sanitize_binary_labels_filters_invalid_rows():
     sup.train_linear_head = lambda *_, **__: {}
     unsup = types.ModuleType("training.unsupervised")
     unsup.train_jepa = lambda *_, **__: {}
-    sys.modules["training"] = types.ModuleType("training")
-    sys.modules["training.supervised"] = sup
-    sys.modules["training.unsupervised"] = unsup
+
+    monkeypatch.setitem(sys.modules, "training", types.ModuleType("training"))
+    monkeypatch.setitem(sys.modules, "training.supervised", sup)
+    monkeypatch.setitem(sys.modules, "training.unsupervised", unsup)
 
     import experiments.case_study as case_study
 
