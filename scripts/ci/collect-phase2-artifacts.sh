@@ -191,6 +191,12 @@ resolve_remote_grid_root() {
     "phase2_recheck"
     "phase2_export"
   )
+  local experiments_root="${EXPERIMENTS_ROOT:-}"
+  local inferred_cache_root=""
+  if [[ -n "$experiments_root" ]]; then
+    experiments_root="${experiments_root%/}"
+    inferred_cache_root="${experiments_root%/}/../cache"
+  fi
   add_candidate() {
     local path="$1"
     [[ -z "$path" ]] && return
@@ -204,17 +210,26 @@ resolve_remote_grid_root() {
     candidates+=("$normalized")
   }
 
-  add_candidate "$primary"
-  add_candidate "${GRID_SOURCE_DIR:-}"
-  add_candidate "${GRID_DIR:-}"
-  add_candidate "${SWEEP_CACHE_DIR:-}/grid"
-  add_candidate "${SWEEP_CACHE_DIR:-}/grid/${grid_id}"
-  add_candidate "${GRID_CACHE_DIR:-}"
-  add_candidate "${GRID_CACHE_DIR:-}/${grid_id}"
-  add_candidate "${CACHE_DIR:-}/grid"
-  add_candidate "${CACHE_DIR:-}/grid/${grid_id}"
+  add_candidate_with_grid_variant() {
+    local base="$1"
+    [[ -z "$base" ]] && return
+    add_candidate "$base"
+    add_candidate "${base%/}/grid"
+  }
+
+  add_candidate_with_grid_variant "$primary"
+  add_candidate_with_grid_variant "${GRID_SOURCE_DIR:-}"
+  add_candidate_with_grid_variant "${GRID_DIR:-}"
+  add_candidate_with_grid_variant "${SWEEP_CACHE_DIR:-}/grid"
+  add_candidate_with_grid_variant "${SWEEP_CACHE_DIR:-}/grid/${grid_id}"
+  add_candidate_with_grid_variant "${GRID_CACHE_DIR:-}"
+  add_candidate_with_grid_variant "${GRID_CACHE_DIR:-}/${grid_id}"
+  add_candidate_with_grid_variant "${CACHE_DIR:-}/grid"
+  add_candidate_with_grid_variant "${CACHE_DIR:-}/grid/${grid_id}"
+  add_candidate_with_grid_variant "${inferred_cache_root%/}/grid"
+  add_candidate_with_grid_variant "${inferred_cache_root%/}/grid/${grid_id}"
   if [[ -n "${RUNNER_TEMP:-}" && -n "$grid_id" ]]; then
-    add_candidate "${RUNNER_TEMP%/}/mjepa/fallback/grid/${grid_id}"
+    add_candidate_with_grid_variant "${RUNNER_TEMP%/}/mjepa/fallback/grid/${grid_id}"
   fi
 
   local first_existing=""
@@ -258,8 +273,11 @@ shift
 roots=("$@")
 for root in "${roots[@]}"; do
   [[ -d "$root" ]] || continue
-  if path=$(find "$root" -maxdepth 4 -type d -path "*/${gid}/grid" -print -quit 2>/dev/null); then
-    printf '%s' "$path"
+  if path=$(find "$root" -maxdepth 6 \( -type d -path "*/${gid}/grid" -o -type d -path "*/${gid}/*/grid" -o -type f -path "*/${gid}/phase2_sweep_id.txt" -o -type d -path "*/${gid}/phase2_sweep" \) -print -quit 2>/dev/null); then
+    if [[ -f "$path" ]]; then
+      path="$(dirname "$path")"
+    fi
+    printf '%s' "${path%/}"
     exit 0
   fi
 done
@@ -275,7 +293,7 @@ EOS
     fi
   fi
 
-  local -a search_roots=("${SWEEP_CACHE_DIR:-}" "${GRID_CACHE_DIR:-}" "${CACHE_DIR:-}")
+  local -a search_roots=("${SWEEP_CACHE_DIR:-}" "${GRID_CACHE_DIR:-}" "${CACHE_DIR:-}" "${inferred_cache_root:-}")
   local search_root probe=""
   for search_root in "${search_roots[@]}"; do
     [[ -n "$search_root" ]] || continue
@@ -329,10 +347,11 @@ collect_tree() {
   local remote_grid="$1"
   local dest_root="$2"
   local label="$3"
-  shift 3 || true
+  local grid_id="$4"
+  shift 4 || true
   local -a steps=(phase2_sweep phase2_recheck phase2_export)
   find_remote_step_dir() {
-    local grid_root="$1" step_name="$2"
+    local grid_root="$1" step_name="$2" grid_id="$3"
     local primary_dir="${grid_root%/}/${step_name}"
     if ssh "${SSH_OPTS[@]}" "$REMOTE" "test -d '$primary_dir'"; then
       printf '%s' "$primary_dir"
@@ -349,13 +368,56 @@ collect_tree() {
       printf '%s/%s' "${grid_root%/}" "$candidate"
       return 0
     fi
+
+    local -a roots=()
+    local inferred_cache_root=""
+    if [[ -n "${EXPERIMENTS_ROOT:-}" ]]; then
+      inferred_cache_root="${EXPERIMENTS_ROOT%/}/../cache"
+    fi
+
+    add_root() {
+      local base="$1"
+      [[ -z "$base" ]] && return
+      base="${base%/}"
+      roots+=("${base}/${step_name}")
+      roots+=("${base}/${alt_name}")
+      roots+=("${base}/grid/${step_name}")
+      roots+=("${base}/grid/${alt_name}")
+      if [[ -n "$grid_id" ]]; then
+        roots+=("${base}/${grid_id}/${step_name}")
+        roots+=("${base}/${grid_id}/${alt_name}")
+        roots+=("${base}/grid/${grid_id}/${step_name}")
+        roots+=("${base}/grid/${grid_id}/${alt_name}")
+      fi
+    }
+
+    add_root "$grid_root"
+    add_root "${GRID_SOURCE_DIR:-}"
+    add_root "${GRID_DIR:-}"
+    add_root "${SWEEP_CACHE_DIR:-}"
+    add_root "${SWEEP_CACHE_DIR:-}/grid"
+    add_root "${GRID_CACHE_DIR:-}"
+    add_root "${GRID_CACHE_DIR:-}/grid"
+    add_root "${CACHE_DIR:-}"
+    add_root "${CACHE_DIR:-}/grid"
+    add_root "${inferred_cache_root:-}"
+    add_root "${inferred_cache_root%/}/grid"
+
+    local probe
+    for probe in "${roots[@]}"; do
+      [[ -n "$probe" ]] || continue
+      if ssh "${SSH_OPTS[@]}" "$REMOTE" "test -d '${probe}'" >/dev/null 2>&1; then
+        printf '%s' "$probe"
+        return 0
+      fi
+    done
     return 1
   }
   for step in "${steps[@]}"; do
     local local_dir="${dest_root}/${step}"
     mkdir -p "$local_dir"
     local remote_dir
-    if ! remote_dir="$(find_remote_step_dir "$remote_grid" "$step")" || [[ -z "$remote_dir" ]]; then
+    if ! remote_dir="$(find_remote_step_dir "$remote_grid" "$step" "$grid_id")" || [[ -z "$remote_dir" ]]; then
       echo "[ci][warn] remote step directory not found for $label: ${remote_grid}/${step}" >&2
       continue
     fi
@@ -403,6 +465,6 @@ collect_tree() {
   fi
 }
 
-collect_tree "$remote_lineage_grid" "${DEST_ROOT}/lineage" "lineage"
-collect_tree "$remote_current_grid" "${DEST_ROOT}/current" "current"
+collect_tree "$remote_lineage_grid" "${DEST_ROOT}/lineage" "lineage" "${remote_lineage_id:-}"
+collect_tree "$remote_current_grid" "${DEST_ROOT}/current" "current" "${remote_current_id:-}"
 
