@@ -1757,25 +1757,35 @@ best_config_args() {
   # Reads best_grid_config.json and prints CLI args for the given stage
   local stage="$1"
   local -a grid_roots=()
-  if [[ -n "${GRID_SOURCE_DIR:-}" ]]; then
-    grid_roots+=("${GRID_SOURCE_DIR%/}")
-  fi
-  if [[ -n "${GRID_DIR:-}" ]]; then
-    local grid_dir_base="${GRID_DIR%/}"
-    local already=0
-    local existing_root
-    for existing_root in "${grid_roots[@]}"; do
-      if [[ "$existing_root" == "$grid_dir_base" ]]; then
-        already=1
-        break
+
+  add_grid_root() {
+    local root="$1"
+    [[ -z "$root" ]] && return
+    root="${root%/}"
+    local existing
+    for existing in "${grid_roots[@]}"; do
+      if [[ "$existing" == "$root" ]]; then
+        return
       fi
     done
-    if (( ! already )); then
-      grid_roots+=("$grid_dir_base")
-    fi
-  fi
+    grid_roots+=("$root")
+  }
+
+  add_grid_root "${GRID_SOURCE_DIR:-}"
+  add_grid_root "${GRID_DIR:-}"
+  add_grid_root "${GRID_CACHE_DIR:-}"
+
   if [[ ${#grid_roots[@]} -eq 0 ]]; then
-    grid_roots+=("${EXPERIMENT_DIR%/}/grid")
+    add_grid_root "${EXPERIMENT_DIR%/}/grid"
+  fi
+
+  local emergency_grid="${RUNNER_TEMP:-/tmp}/mjepa/fallback/grid"
+  if [[ -n "${GRID_EXP_ID:-}" ]]; then
+    add_grid_root "${emergency_grid%/}/${GRID_EXP_ID}"
+  elif [[ -n "${EXP_ID:-}" ]]; then
+    add_grid_root "${emergency_grid%/}/${EXP_ID}"
+  else
+    add_grid_root "$emergency_grid"
   fi
 
   local grid_display="${grid_roots[0]}"
@@ -1797,24 +1807,43 @@ best_config_args() {
   esac
 
   local -a winner_candidates=()
+
+  add_winner_candidate() {
+    local candidate="$1"
+    [[ -z "$candidate" ]] && return
+    local existing
+    for existing in "${winner_candidates[@]}"; do
+      if [[ "$existing" == "$candidate" ]]; then
+        return
+      fi
+    done
+    winner_candidates+=("$candidate")
+  }
+
   if [[ -n "${BENCH_WINNER_JSON:-}" ]]; then
-    winner_candidates+=("${BENCH_WINNER_JSON}")
+    add_winner_candidate "${BENCH_WINNER_JSON}"
   fi
   local grid_root
   for grid_root in "${grid_roots[@]}"; do
     [[ -n "$grid_root" ]] || continue
     if (( prefer_phase2 )); then
-      winner_candidates+=("${grid_root}/phase2_export/best_grid_config.json")
-      winner_candidates+=("${grid_root}/best_grid_config.json")
+      add_winner_candidate "${grid_root}/phase2_export/stage-outputs/best_grid_config.json"
+      add_winner_candidate "${grid_root}/phase2_recheck/stage-outputs/best_grid_config.json"
+      add_winner_candidate "${grid_root}/phase2_export/best_grid_config.json"
+      add_winner_candidate "${grid_root}/best_grid_config.json"
     else
-      winner_candidates+=("${grid_root}/best_grid_config.json")
-      winner_candidates+=("${grid_root}/phase2_export/best_grid_config.json")
+      add_winner_candidate "${grid_root}/best_grid_config.json"
+      add_winner_candidate "${grid_root}/phase2_export/best_grid_config.json"
+      add_winner_candidate "${grid_root}/phase2_export/stage-outputs/best_grid_config.json"
+      add_winner_candidate "${grid_root}/phase2_recheck/stage-outputs/best_grid_config.json"
     fi
   done
 
   local cfg="" candidate=""
+  local -a checked_candidates=()
   for candidate in "${winner_candidates[@]}"; do
     [[ -z "$candidate" ]] && continue
+    checked_candidates+=("$candidate")
     if [[ -r "$candidate" ]]; then
       cfg="$candidate"
       break
@@ -1837,6 +1866,10 @@ best_config_args() {
           primary_hint+=" (phase2)"
         fi
         echo "[fatal] $stage needs winner but missing: ${primary_hint}" >&2
+        if (( ${#checked_candidates[@]} )); then
+          echo "checked: ${checked_candidates[*]}" >&2
+          echo "hint: set GRID_SOURCE_DIR or GRID_DIR to the folder containing best_grid_config.json" >&2
+        fi
         return 2
         ;;
       *)
