@@ -1790,6 +1790,9 @@ best_config_args() {
     if [[ -n "${CACHE_DIR:-}" && -d "${CACHE_DIR%/}/grid" ]]; then
       add_grid_root "${CACHE_DIR%/}/grid"
     fi
+    if [[ -d "/data/mjepa/cache/grid" ]]; then
+      add_grid_root "/data/mjepa/cache/grid"
+    fi
     if [[ -d "/cache/grid" ]]; then
       add_grid_root "/cache/grid"
     fi
