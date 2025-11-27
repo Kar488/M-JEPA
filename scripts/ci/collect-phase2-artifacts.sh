@@ -276,6 +276,8 @@ for root in "${roots[@]}"; do
   if path=$(find "$root" -maxdepth 6 \( -type d -path "*/${gid}/grid" -o -type d -path "*/${gid}/*/grid" -o -type f -path "*/${gid}/phase2_sweep_id.txt" -o -type d -path "*/${gid}/phase2_sweep" \) -print -quit 2>/dev/null); then
     if [[ -f "$path" ]]; then
       path="$(dirname "$path")"
+    elif [[ -d "$path" && "$(basename "$path")" == "phase2_sweep" ]]; then
+      path="$(dirname "$path")"
     fi
     printf '%s' "${path%/}"
     exit 0
