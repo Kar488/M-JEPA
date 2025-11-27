@@ -118,7 +118,18 @@ sync_optional_path() {
 
 sync_file "${PRETRAIN_ENCODER_PATH:-${PRETRAIN_EXPERIMENT_ROOT}/pretrain/encoder.pt}" "encoder"
 sync_file "${PRETRAIN_MANIFEST:-${PRETRAIN_EXPERIMENT_ROOT}/artifacts/encoder_manifest.json}" "manifest"
-sync_file "${PRETRAIN_EXPERIMENT_ROOT}/pretrain/stage-outputs/pretrain.json" "stage-outputs"
+stage_outputs_remote="${PRETRAIN_EXPERIMENT_ROOT}/pretrain/stage-outputs/pretrain.json"
+stage_outputs_missing=0
+if remote_file_exists "$stage_outputs_remote"; then
+  sync_file "$stage_outputs_remote" "stage-outputs"
+else
+  echo "::notice::remote stage-outputs missing at ${stage_outputs_remote}; will attempt reconstruction" >&2
+  stage_outputs_missing=1
+fi
+stage_outputs_local="$DEST_DIR/pretrain.json"
+if [[ ! -f "$stage_outputs_local" ]]; then
+  stage_outputs_missing=1
+fi
 sync_file "${PRETRAIN_STATE_FILE:-${PRETRAIN_EXPERIMENT_ROOT}/pretrain_state.json}" "pretrain-state"
 
 # Rebuild stage outputs locally when the remote file is missing but the other
@@ -197,7 +208,9 @@ if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
   sync_optional_path "$reports_remote" "reports" "$DEST_DIR"
 fi
 
-rebuild_stage_outputs "$DEST_DIR"
+if (( stage_outputs_missing )); then
+  rebuild_stage_outputs "$DEST_DIR"
+fi
 
 required=(
   "$DEST_DIR/encoder.pt"
