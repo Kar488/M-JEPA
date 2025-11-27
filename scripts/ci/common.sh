@@ -1380,6 +1380,14 @@ fi
 
 ensure_dir_var SWEEP_CACHE_DIR "$CACHE_DIR" "${EXP_ID:+experiments/${EXP_ID}/}cache"
 
+if [[ -z "${GRID_CACHE_DIR:-}" && -n "${SWEEP_CACHE_DIR:-}" ]]; then
+  sweep_grid_candidate="${SWEEP_CACHE_DIR%/}/grid"
+  if [[ -d "$sweep_grid_candidate" ]]; then
+    GRID_CACHE_DIR="$sweep_grid_candidate"
+  fi
+  unset sweep_grid_candidate
+fi
+
 export CACHE_DIR
 export SWEEP_CACHE_DIR
 
