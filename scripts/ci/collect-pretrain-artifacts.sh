@@ -118,17 +118,54 @@ sync_optional_path() {
 
 sync_file "${PRETRAIN_ENCODER_PATH:-${PRETRAIN_EXPERIMENT_ROOT}/pretrain/encoder.pt}" "encoder"
 sync_file "${PRETRAIN_MANIFEST:-${PRETRAIN_EXPERIMENT_ROOT}/artifacts/encoder_manifest.json}" "manifest"
-stage_outputs_remote="${PRETRAIN_EXPERIMENT_ROOT}/pretrain/stage-outputs/pretrain.json"
-stage_outputs_missing=0
-if remote_file_exists "$stage_outputs_remote"; then
-  sync_file "$stage_outputs_remote" "stage-outputs"
-else
-  echo "::notice::remote stage-outputs missing at ${stage_outputs_remote}; will attempt reconstruction" >&2
-  stage_outputs_missing=1
-fi
+stage_outputs_missing=1
 stage_outputs_local="$DEST_DIR/pretrain.json"
-if [[ ! -f "$stage_outputs_local" ]]; then
-  stage_outputs_missing=1
+
+stage_output_candidates=()
+if [[ -n "${PRETRAIN_STAGE_OUTPUTS:-}" ]]; then
+  stage_output_candidates+=("${PRETRAIN_STAGE_OUTPUTS%/}/pretrain.json")
+fi
+if [[ -n "${PRETRAIN_DIR:-}" ]]; then
+  stage_output_candidates+=("${PRETRAIN_DIR%/}/stage-outputs/pretrain.json")
+fi
+if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+  stage_output_candidates+=("${PRETRAIN_EXPERIMENT_ROOT%/}/pretrain/stage-outputs/pretrain.json")
+fi
+if [[ -n "${PRETRAIN_MANIFEST:-}" ]]; then
+  manifest_dir="${PRETRAIN_MANIFEST%/*}"
+  if [[ "${manifest_dir##*/}" == "stage-outputs" ]]; then
+    stage_output_candidates+=("${manifest_dir%/}/pretrain.json")
+  fi
+fi
+
+seen_candidates=()
+for candidate in "${stage_output_candidates[@]}"; do
+  [[ -n "$candidate" ]] || continue
+  skip=0
+  for seen in "${seen_candidates[@]}"; do
+    if [[ "$seen" == "$candidate" ]]; then
+      skip=1
+      break
+    fi
+  done
+  (( skip )) && continue
+  seen_candidates+=("$candidate")
+  if remote_file_exists "$candidate"; then
+    echo "[collect] found stage outputs at $candidate" >&2
+    sync_file "$candidate" "stage-outputs"
+    if [[ -f "$stage_outputs_local" ]]; then
+      stage_outputs_missing=0
+      break
+    fi
+  else
+    echo "[collect] info: stage outputs not present at $candidate" >&2
+  fi
+done
+if [[ -f "$stage_outputs_local" ]]; then
+  stage_outputs_missing=0
+fi
+if (( stage_outputs_missing )); then
+  echo "::notice::stage-outputs missing remotely; will attempt reconstruction" >&2
 fi
 sync_file "${PRETRAIN_STATE_FILE:-${PRETRAIN_EXPERIMENT_ROOT}/pretrain_state.json}" "pretrain-state"
 
@@ -212,10 +249,13 @@ if (( stage_outputs_missing )); then
   rebuild_stage_outputs "$DEST_DIR"
 fi
 
+if [[ ! -f "$stage_outputs_local" ]]; then
+  echo "::notice::pretrain stage outputs absent after reconstruction; continuing without pretrain.json" >&2
+fi
+
 required=(
   "$DEST_DIR/encoder.pt"
   "$DEST_DIR/encoder_manifest.json"
-  "$DEST_DIR/pretrain.json"
   "$DEST_DIR/pretrain_state.json"
 )
 
