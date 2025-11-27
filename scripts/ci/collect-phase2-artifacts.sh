@@ -221,7 +221,8 @@ resolve_remote_grid_root() {
 
   if [[ -n "$grid_id" ]]; then
     local probe=""
-    probe=$(ssh "${SSH_OPTS[@]}" "$REMOTE" bash -s -- "$grid_id" "${EXPERIMENTS_ROOT:-}" "${GRID_CACHE_DIR:-}" "${SWEEP_CACHE_DIR:-}" "${CACHE_DIR:-}" <<'EOS' 2>/dev/null || true)
+    if ! probe=$(
+      ssh "${SSH_OPTS[@]}" "$REMOTE" bash -s -- "$grid_id" "${EXPERIMENTS_ROOT:-}" "${GRID_CACHE_DIR:-}" "${SWEEP_CACHE_DIR:-}" "${CACHE_DIR:-}" 2>/dev/null <<'EOS'
 set -euo pipefail
 gid="$1"
 shift
@@ -234,7 +235,9 @@ for root in "${roots[@]}"; do
   fi
 done
 EOS
-    )
+    ); then
+      probe=""
+    fi
 
     if [[ -n "$probe" ]]; then
       echo "[ci][warn] discovered grid root via search for ${grid_id}: ${probe}" >&2
