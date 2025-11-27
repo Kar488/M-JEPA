@@ -315,6 +315,59 @@ select_encoder_candidate() {
   return 1
 }
 
+resolve_cached_encoder_path() {
+  local path="$1"
+  [[ -n "$path" ]] || return 1
+  if [[ -f "$path" ]]; then
+    printf '%s\n' "$path"
+    return 0
+  fi
+
+  local rel_path="" exp_id=""
+  if [[ -n "${EXPERIMENTS_ROOT:-}" && "$path" == ${EXPERIMENTS_ROOT%/}/* ]]; then
+    rel_path="${path#${EXPERIMENTS_ROOT%/}/}"
+  fi
+
+  if [[ -z "$rel_path" && -n "${EXP_ID:-}" ]]; then
+    rel_path="${EXP_ID}/$(basename "$path")"
+  fi
+
+  if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
+    exp_id="$PRETRAIN_EXP_ID"
+  elif [[ -n "${EXP_ID:-}" ]]; then
+    exp_id="$EXP_ID"
+  fi
+
+  local -a fallback_roots=()
+  if [[ -n "${DATA_ROOT:-}" ]]; then
+    fallback_roots+=("${DATA_ROOT%/}/cache" "${DATA_ROOT%/}/cache/pretrain")
+  fi
+
+  local -a candidates=()
+  for base in "${fallback_roots[@]}"; do
+    [[ -n "$base" ]] || continue
+    if [[ -n "$rel_path" ]]; then
+      candidates+=("${base%/}/${rel_path}")
+    fi
+    if [[ -n "$exp_id" ]]; then
+      candidates+=(
+        "${base%/}/${exp_id}/finetune/$(basename "$path")"
+        "${base%/}/${exp_id}/finetune/encoder_ft.pt"
+      )
+    fi
+  done
+
+  for candidate in "${candidates[@]}"; do
+    [[ -n "$candidate" ]] || continue
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 MET_ENV_FILE="${PRETRAIN_EXPERIMENT_ROOT}/met_benchmark.env"
 mkdir -p "$(dirname "$MET_ENV_FILE")"
 if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]] && [[ -f "$MET_ENV_FILE" ]]; then
@@ -459,6 +512,14 @@ elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   else
     select_status=0
   fi
+  if (( select_status )) || [[ ! -f "$resolved_path" ]]; then
+    if cached_path=$(resolve_cached_encoder_path "$resolved_path"); then
+      echo "[tox21] warning: falling back to cached encoder checkpoint: ${cached_path}" >&2
+      resolved_path="$cached_path"
+      resolved_label="cached_${resolved_label:-unknown}"
+      select_status=0
+    fi
+  fi
   TOX21_ENCODER_CHECKPOINT="$resolved_path"
   encoder_decision_source="$resolved_label"
   if (( select_status )); then
@@ -488,6 +549,13 @@ if [[ -z "${TOX21_ENCODER_CHECKPOINT:-}" ]]; then
 fi
 
 echo "[tox21] eval: using encoder_checkpoint=${TOX21_ENCODER_CHECKPOINT} (mode=${SOURCE} origin=${encoder_decision_source})" >&2
+
+if [[ ! -f "${TOX21_ENCODER_CHECKPOINT}" ]]; then
+  if cached_path=$(resolve_cached_encoder_path "$TOX21_ENCODER_CHECKPOINT"); then
+    echo "[tox21] warning: encoder checkpoint missing; retrying cached path ${cached_path}" >&2
+    TOX21_ENCODER_CHECKPOINT="$cached_path"
+  fi
+fi
 
 ensure_dir "$TOX21_ENCODER_CHECKPOINT"
 
