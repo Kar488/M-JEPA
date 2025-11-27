@@ -77,8 +77,11 @@ export -f rewrite_path _wrap_args_and_exec mkdir install cp mv touch tee
             if grid_dir_override is None
             else str(grid_dir_override)
         )
+        trace = str(run_env.get("BESTCFG_TRACE", "")).lower() in {"1", "true", "yes", "on"}
+        trace_prefix = "set -x; " if trace else ""
         cmd = (
-            "set -euo pipefail; set -x; "
+            "set -euo pipefail; "
+            f"{trace_prefix}"
             f"export DATA_DIR={shlex.quote(pathlib.Path(data_dir).as_posix())}; "
             f"export XDG_CACHE_HOME={shlex.quote(pathlib.Path(cache_dir).as_posix())}; "
             f"{shim} "
