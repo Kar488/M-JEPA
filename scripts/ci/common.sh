@@ -1783,6 +1783,18 @@ best_config_args() {
   add_grid_root "${GRID_DIR:-}"
   add_grid_root "${GRID_CACHE_DIR:-}"
 
+  if [[ -z "${GRID_CACHE_DIR:-}" ]]; then
+    if [[ -n "${SWEEP_CACHE_DIR:-}" && -d "${SWEEP_CACHE_DIR%/}/grid" ]]; then
+      add_grid_root "${SWEEP_CACHE_DIR%/}/grid"
+    fi
+    if [[ -n "${CACHE_DIR:-}" && -d "${CACHE_DIR%/}/grid" ]]; then
+      add_grid_root "${CACHE_DIR%/}/grid"
+    fi
+    if [[ -d "/cache/grid" ]]; then
+      add_grid_root "/cache/grid"
+    fi
+  fi
+
   if [[ -n "${GRID_CACHE_DIR:-}" ]]; then
     local grid_cache_root="${GRID_CACHE_DIR%/}"
     if [[ -n "${GRID_EXP_ID:-}" ]]; then
