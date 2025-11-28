@@ -416,29 +416,64 @@ select_encoder_candidate() {
   return 1
 }
 
-resolve_finetune_stage_json() {
+collect_finetune_stage_outputs() {
   local default_path="$1"
-  local -a candidates=("$default_path")
+  local -n out_ref=$2
+  local stage_outputs_dir
+  stage_outputs_dir="$(dirname "$default_path")"
 
-  local stage_basename
-  stage_basename="${default_path##*/}"
-
+  local -a roots=("$stage_outputs_dir")
   if [[ -n "${DATA_ROOT:-}" ]]; then
     local cache_root
     cache_root="${DATA_ROOT%/}/cache/finetune"
-    candidates+=(
-      "${cache_root}/stage-outputs/${stage_basename}"
-      "${cache_root}/${EXP_ID:-}/stage-outputs/${stage_basename}"
+    roots+=(
+      "${cache_root}/stage-outputs"
+      "${cache_root}/${EXP_ID:-}/stage-outputs"
     )
   fi
 
-  for candidate in "${candidates[@]}"; do
-    [[ -n "$candidate" ]] || continue
-    if [[ -f "$candidate" ]]; then
-      printf '%s\n' "$candidate"
-      return 0
+  declare -A seen=()
+  _add_stage_file() {
+    local candidate_path="$1"
+    [[ -f "$candidate_path" ]] || return
+    if [[ -n "${seen[$candidate_path]:-}" ]]; then
+      return
     fi
+    out_ref+=("$candidate_path")
+    seen["$candidate_path"]=1
+  }
+
+  for root in "${roots[@]}"; do
+    [[ -d "$root" ]] || continue
+    _add_stage_file "${root%/}/finetune.json"
+
+    shopt -s nullglob
+    for candidate_path in "${root%/}"/finetune_*.json "${root%/}"/*/finetune_*.json; do
+      _add_stage_file "$candidate_path"
+    done
+    shopt -u nullglob
   done
+
+  (( ${#out_ref[@]} > 0 )) || return 1
+  return 0
+}
+
+finetune_root_from_stage_output() {
+  local stage_output="$1"
+  local stage_dir
+  local finetune_root
+
+  stage_dir="$(dirname "$stage_output")"
+  finetune_root="$(dirname "$stage_dir")"
+
+  if [[ "$(basename "$finetune_root")" == "stage-outputs" ]]; then
+    finetune_root="$(dirname "$finetune_root")"
+  fi
+
+  if finetune_root="$(cd "$finetune_root" 2>/dev/null && pwd -P)"; then
+    printf '%s\n' "$finetune_root"
+    return 0
+  fi
 
   return 1
 }
@@ -611,27 +646,55 @@ PY
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
 elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   stage_json="${FINETUNE_DIR}/stage-outputs/finetune.json"
-  if resolved_stage_json=$(resolve_finetune_stage_json "$stage_json"); then
-    if [[ "$resolved_stage_json" != "$stage_json" ]]; then
-      echo "[tox21] warning: finetune stage outputs missing; retrying cached path ${resolved_stage_json}" >&2
-      stage_json="$resolved_stage_json"
-    fi
-  fi
-  stage_root=""
-  stage_dir="$(dirname "$stage_json")"
-  if stage_root="$(cd "$stage_dir/.." 2>/dev/null && pwd -P)"; then
-    :
-  else
-    stage_root=""
-  fi
-  ft_export_path=""
-  if ! ft_export_path=$(extract_finetune_export "$stage_json"); then
-    if [[ -f "$stage_json" ]]; then
-      echo "[tox21] warning: encoder_finetuned checkpoint not recorded in ${stage_json}" >&2
+  stage_files=()
+  collect_finetune_stage_outputs "$stage_json" stage_files || true
+  if [[ ! -f "$stage_json" ]]; then
+    if [[ -n "${stage_files[*]:-}" ]]; then
+      echo "[tox21] warning: finetune stage outputs missing; retrying cached path ${stage_files[0]}" >&2
     else
       echo "[tox21] warning: expected ${stage_json} for frozen_finetuned mode" >&2
     fi
-    ft_export_path=""
+  fi
+
+  ft_export_path=""
+  task_candidates=()
+  seed_candidates=()
+  declare -A seed_roots_seen=()
+
+  for stage_file in "${stage_files[@]}"; do
+    [[ -f "$stage_file" ]] || continue
+    if [[ -z "$ft_export_path" ]]; then
+      if ! ft_export_path=$(extract_finetune_export "$stage_file"); then
+        ft_export_path=""
+      fi
+    fi
+
+    if task_paths=$(extract_finetune_task_checkpoints "$stage_file" 2>/dev/null); then
+      while IFS= read -r task_path; do
+        [[ -n "$task_path" ]] || continue
+        task_candidates+=("assay_task" "$task_path")
+      done <<<"$task_paths"
+    fi
+
+    if finetune_root=$(finetune_root_from_stage_output "$stage_file"); then
+      if [[ -z "${seed_roots_seen[$finetune_root]:-}" ]]; then
+        seed_roots_seen[$finetune_root]=1
+        collect_seed_best_checkpoints "$finetune_root" seed_candidates || true
+      fi
+    fi
+  done
+
+  if [[ -n "${FINETUNE_DIR:-}" ]]; then
+    if finetune_root="$(cd "${FINETUNE_DIR%/}" 2>/dev/null && pwd -P)"; then
+      if [[ -z "${seed_roots_seen[$finetune_root]:-}" ]]; then
+        seed_roots_seen[$finetune_root]=1
+        collect_seed_best_checkpoints "$finetune_root" seed_candidates || true
+      fi
+    fi
+  fi
+
+  if [[ -z "$ft_export_path" && -f "$stage_json" ]]; then
+    echo "[tox21] warning: encoder_finetuned checkpoint not recorded in ${stage_json}" >&2
   fi
   task_candidates=()
   if task_paths=$(extract_finetune_task_checkpoints "$stage_json" 2>/dev/null); then
@@ -673,27 +736,54 @@ elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
 elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   stage_json="${FINETUNE_DIR}/stage-outputs/finetune.json"
-  if resolved_stage_json=$(resolve_finetune_stage_json "$stage_json"); then
-    if [[ "$resolved_stage_json" != "$stage_json" ]]; then
-      echo "[tox21] warning: finetune stage outputs missing; retrying cached path ${resolved_stage_json}" >&2
-      stage_json="$resolved_stage_json"
-    fi
-  fi
-  stage_root=""
-  stage_dir="$(dirname "$stage_json")"
-  if stage_root="$(cd "$stage_dir/.." 2>/dev/null && pwd -P)"; then
-    :
-  else
-    stage_root=""
-  fi
-  ft_export_path=""
-  if ! ft_export_path=$(extract_finetune_export "$stage_json"); then
-    if [[ -f "$stage_json" ]]; then
-      echo "[tox21] warning: encoder_finetuned checkpoint not recorded in ${stage_json}" >&2
+  stage_files=()
+  collect_finetune_stage_outputs "$stage_json" stage_files || true
+  if [[ ! -f "$stage_json" ]]; then
+    if [[ -n "${stage_files[*]:-}" ]]; then
+      echo "[tox21] warning: finetune stage outputs missing; retrying cached path ${stage_files[0]}" >&2
     else
       echo "[tox21] warning: expected ${stage_json} for ${SOURCE} mode" >&2
     fi
-    ft_export_path=""
+  fi
+  ft_export_path=""
+  task_candidates=()
+  seed_candidates=()
+  declare -A seed_roots_seen=()
+
+  for stage_file in "${stage_files[@]}"; do
+    [[ -f "$stage_file" ]] || continue
+    if [[ -z "$ft_export_path" ]]; then
+      if ! ft_export_path=$(extract_finetune_export "$stage_file"); then
+        ft_export_path=""
+      fi
+    fi
+
+    if task_paths=$(extract_finetune_task_checkpoints "$stage_file" 2>/dev/null); then
+      while IFS= read -r task_path; do
+        [[ -n "$task_path" ]] || continue
+        task_candidates+=("assay_task" "$task_path")
+      done <<<"$task_paths"
+    fi
+
+    if finetune_root=$(finetune_root_from_stage_output "$stage_file"); then
+      if [[ -z "${seed_roots_seen[$finetune_root]:-}" ]]; then
+        seed_roots_seen[$finetune_root]=1
+        collect_seed_best_checkpoints "$finetune_root" seed_candidates || true
+      fi
+    fi
+  done
+
+  if [[ -n "${FINETUNE_DIR:-}" ]]; then
+    if finetune_root="$(cd "${FINETUNE_DIR%/}" 2>/dev/null && pwd -P)"; then
+      if [[ -z "${seed_roots_seen[$finetune_root]:-}" ]]; then
+        seed_roots_seen[$finetune_root]=1
+        collect_seed_best_checkpoints "$finetune_root" seed_candidates || true
+      fi
+    fi
+  fi
+
+  if [[ -z "$ft_export_path" && -f "$stage_json" ]]; then
+    echo "[tox21] warning: encoder_finetuned checkpoint not recorded in ${stage_json}" >&2
   fi
   task_candidates=()
   if task_paths=$(extract_finetune_task_checkpoints "$stage_json" 2>/dev/null); then
