@@ -637,8 +637,8 @@ elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   resolved_path=""
   resolved_label=""
   if ! select_encoder_candidate resolved_path resolved_label \
-    finetune_export "$ft_export_path" \
     "${task_candidates[@]}" \
+    finetune_export "$ft_export_path" \
     explicit_override "$orig_encoder_override" \
     "${seed_candidates[@]}" \
     encoder_ft "${FINETUNE_DIR}/encoder_ft.pt" \
@@ -699,8 +699,8 @@ elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   resolved_path=""
   resolved_label=""
   if ! select_encoder_candidate resolved_path resolved_label \
-    finetune_export "$ft_export_path" \
     "${task_candidates[@]}" \
+    finetune_export "$ft_export_path" \
     explicit_override "$orig_encoder_override" \
     "${seed_candidates[@]}" \
     seed_best "${FINETUNE_DIR}/seed_0/ft_best.pt" \
