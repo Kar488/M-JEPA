@@ -20,11 +20,19 @@ import struct
 import zlib
 from itertools import cycle, islice
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import math
 import numbers
 import importlib.util
+
+try:  # pragma: no cover - optional dependency in CI
+    import networkx as nx
+
+    NX_AVAILABLE = True
+except Exception:  # pragma: no cover - degrade gracefully when networkx missing
+    nx = None  # type: ignore
+    NX_AVAILABLE = False
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -134,6 +142,7 @@ try:  # pragma: no cover - optional dependency in CI
     from rdkit import Chem
     from rdkit.Chem import AllChem
     from rdkit.Chem import rdDepictor
+    from rdkit.Chem import rdMolDescriptors
     from rdkit.Chem.Draw import rdMolDraw2D
 
     RDKit_AVAILABLE = True
@@ -439,11 +448,25 @@ def _draw_matplotlib_graph(graph: GraphData, smiles: Optional[str], path: Path) 
     if not positions:
         return False
     edges = _unique_edges(graph)
+    atom_symbols = None
+    ring_atoms: set[int] = set()
+    if RDKit_AVAILABLE and smiles:
+        try:
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is not None:
+                atom_symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]
+                try:
+                    ring_atoms, _, _, _ = _prepare_highlight_colors(mol)
+                except Exception:
+                    ring_atoms = set()
+        except Exception:
+            atom_symbols = None
     try:
         fig = plt.figure(figsize=(6.4, 4.8))
         ax = fig.add_subplot(111, projection="3d")
         xs, ys, zs = zip(*positions)
-        ax.scatter(xs, ys, zs, c="#0d47a1", alpha=0.85, s=40, depthshade=True)
+        colors = ["#e65100" if idx in ring_atoms else "#0d47a1" for idx in range(len(xs))]
+        ax.scatter(xs, ys, zs, c=colors, alpha=0.85, s=40, depthshade=True)
         for src, dst in edges:
             if src >= len(positions) or dst >= len(positions):
                 continue
@@ -454,6 +477,11 @@ def _draw_matplotlib_graph(graph: GraphData, smiles: Optional[str], path: Path) 
                 color="#9e9e9e",
                 linewidth=1.5,
             )
+        for idx, (x_coord, y_coord, z_coord) in enumerate(positions):
+            label = str(idx)
+            if atom_symbols is not None and idx < len(atom_symbols):
+                label = f"{atom_symbols[idx]}{idx}"
+            ax.text(x_coord, y_coord, z_coord, label, fontsize=8, color="#263238")
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_zlabel("z")
@@ -602,26 +630,140 @@ def _unique_edges(graph: GraphData) -> List[tuple[int, int]]:
     return sorted(pairs)
 
 
+def _build_nx_graph(graph: GraphData) -> "nx.Graph":
+    """Build a simple undirected NetworkX graph from GraphData.edge_index."""
+
+    if not NX_AVAILABLE:
+        raise RuntimeError("networkx is not available")
+    G = nx.Graph()
+    num_nodes = graph.num_nodes()
+    G.add_nodes_from(range(num_nodes))
+
+    edge_index = graph.edge_index
+    rows = _normalise_matrix(edge_index)
+    if rows and len(rows) >= 2:
+        edges = set()
+        for u, v in zip(rows[0], rows[1]):
+            try:
+                u_int = int(u)
+                v_int = int(v)
+            except Exception:
+                continue
+            if u_int == v_int:
+                continue
+            e = (min(u_int, v_int), max(u_int, v_int))
+            edges.add(e)
+        G.add_edges_from(edges)
+    return G
+
+
+def _complexity_metrics(graph: GraphData, smiles: Optional[str]) -> Dict[str, Any]:
+    metrics: Dict[str, Any] = {}
+
+    num_nodes = graph.num_nodes()
+    edges_list: List[tuple[int, int]] = _unique_edges(graph)
+    try:
+        G = _build_nx_graph(graph)
+        n = G.number_of_nodes()
+        m = G.number_of_edges()
+    except Exception:
+        n = int(num_nodes)
+        m = len(edges_list)
+        G = None  # type: ignore[assignment]
+
+    metrics["num_nodes"] = int(n)
+    metrics["num_edges"] = int(m)
+
+    if n > 0:
+        if NX_AVAILABLE and G is not None:
+            degrees = dict(G.degree())
+            metrics["avg_degree"] = float(sum(degrees.values()) / n)
+            metrics["max_degree"] = int(max(degrees.values()))
+        else:
+            deg_counts = [0 for _ in range(n)]
+            for u, v in edges_list:
+                if u < n:
+                    deg_counts[u] += 1
+                if v < n:
+                    deg_counts[v] += 1
+            metrics["avg_degree"] = float(sum(deg_counts) / n) if n else 0.0
+            metrics["max_degree"] = int(max(deg_counts)) if deg_counts else 0
+    else:
+        metrics["avg_degree"] = 0.0
+        metrics["max_degree"] = 0
+
+    if NX_AVAILABLE and G is not None:
+        if n > 1 and nx.is_connected(G):
+            try:
+                metrics["avg_shortest_path"] = float(nx.average_shortest_path_length(G))
+                metrics["diameter"] = int(nx.diameter(G))
+            except Exception:
+                metrics["avg_shortest_path"] = None
+                metrics["diameter"] = None
+        else:
+            metrics["avg_shortest_path"] = None
+            metrics["diameter"] = None
+        metrics["avg_clustering"] = float(nx.average_clustering(G)) if n > 1 else 0.0
+    else:
+        metrics["avg_shortest_path"] = None
+        metrics["diameter"] = None
+        metrics["avg_clustering"] = 0.0
+
+    metrics["cyclomatic_number"] = int(m - n + 1) if n > 0 else 0
+
+    metrics["num_rings"] = None
+    if RDKit_AVAILABLE and smiles:
+        try:
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is not None:
+                metrics["num_rings"] = int(rdMolDescriptors.CalcNumRings(mol))
+        except Exception:
+            metrics["num_rings"] = None
+
+    return metrics
+
+
 def _plotly_html(graph: GraphData, smiles: Optional[str], div_id: str) -> str:
     positions = _graph_positions(graph)
+    atom_symbols = None
+    ring_atoms: set[int] = set()
+    if RDKit_AVAILABLE and smiles:
+        try:
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is not None:
+                atom_symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]
+                try:
+                    ring_atoms, _, _, _ = _prepare_highlight_colors(mol)
+                except Exception:
+                    ring_atoms = set()
+        except Exception:
+            atom_symbols = None
     nodes = positions
-    tooltips = []
-    for idx, coords in enumerate(nodes):
-        tooltip = f"Atom {idx}"
-        if smiles:
-            tooltip += f" | {smiles}"
-        tooltips.append(tooltip)
+    texts: List[str] = []
+    colors: List[str] = []
+    xs = [p[0] for p in nodes]
+    ys = [p[1] for p in nodes]
+    zs = [p[2] for p in nodes]
+    for idx in range(len(nodes)):
+        sym = "?"
+        if atom_symbols is not None and idx < len(atom_symbols):
+            sym = atom_symbols[idx]
+        texts.append(f"{sym}{idx}")
+        if idx in ring_atoms:
+            colors.append("#e65100")
+        else:
+            colors.append("#0d47a1")
     node_trace = {
         "type": "scatter3d",
         "mode": "markers",
-        "x": [p[0] for p in nodes],
-        "y": [p[1] for p in nodes],
-        "z": [p[2] for p in nodes],
-        "text": tooltips,
+        "x": xs,
+        "y": ys,
+        "z": zs,
+        "text": texts,
         "marker": {
             "size": 7,
-            "color": "#0d47a1",
-            "opacity": 0.85,
+            "color": colors,
+            "opacity": 0.9,
         },
         "name": "atoms",
     }
@@ -788,8 +930,86 @@ def _render_sample(
         "num_edges": len(_unique_edges(graph)),
         "label": label,
     }
+    try:
+        metrics = _complexity_metrics(graph, smiles)
+        metadata.update(metrics)
+    except Exception:
+        pass
+    metadata["node_atom_mapping"] = list(range(graph.num_nodes()))
     (record_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return renderer
+
+
+def _write_index_html(output_dir: Path) -> None:
+    rows = []
+    for sample_dir in sorted(output_dir.glob("sample_*")):
+        meta_path = sample_dir / "metadata.json"
+        if not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        sample_id = sample_dir.name
+        png_rel = f"{sample_id}/molecule.png"
+        html_rel = f"{sample_id}/molecule.html"
+        rows.append((sample_id, meta, png_rel, html_rel))
+
+    headers = [
+        "Sample",
+        "SMILES",
+        "num_nodes",
+        "num_edges",
+        "num_rings",
+        "cyclomatic_number",
+        "avg_degree",
+        "avg_clustering",
+        "diameter",
+    ]
+
+    cells = []
+    for sample_id, meta, png_rel, html_rel in rows:
+        cells.append(
+            "<tr>"
+            f"<td>{sample_id}</td>"
+            f"<td>{meta.get('smiles') or ''}</td>"
+            f"<td>{meta.get('num_nodes', '')}</td>"
+            f"<td>{meta.get('num_edges', '')}</td>"
+            f"<td>{meta.get('num_rings', '')}</td>"
+            f"<td>{meta.get('cyclomatic_number', '')}</td>"
+            f"<td>{meta.get('avg_degree', '')}</td>"
+            f"<td>{meta.get('avg_clustering', '')}</td>"
+            f"<td>{meta.get('diameter', '')}</td>"
+            f"<td><a href='{png_rel}'>PNG</a></td>"
+            f"<td><a href='{html_rel}'>HTML</a></td>"
+            "</tr>"
+        )
+    table_rows = "\n".join(cells)
+    header_html = "".join(f"<th>{h}</th>" for h in headers + ["PNG", "HTML"])
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='utf-8'/>
+  <title>Graph gallery</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 1.5rem; }}
+    table {{ border-collapse: collapse; width: 100%; }}
+    th, td {{ border: 1px solid #ccc; padding: 0.5rem; text-align: left; }}
+    th {{ background: #f5f5f5; }}
+    tr:nth-child(even) {{ background: #fafafa; }}
+  </style>
+  </head>
+<body>
+  <h1>Graph visualisation gallery</h1>
+  <table>
+    <thead><tr>{header_html}</tr></thead>
+    <tbody>
+      {table_rows}
+    </tbody>
+  </table>
+</body>
+</html>"""
+    (output_dir / "index.html").write_text(html, encoding="utf-8")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -844,6 +1064,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "png_renderers": png_stats,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    _write_index_html(output_dir)
     logger.info("Graph visuals ready under %s", output_dir)
     return 0
 
