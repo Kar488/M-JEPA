@@ -25,6 +25,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import math
 import numbers
 import importlib.util
+try:  # pragma: no cover - optional dependency in CI
+    import numpy as np
+except Exception:  # pragma: no cover - degrade gracefully when numpy missing
+    np = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - optional dependency in CI
     import networkx as nx
@@ -115,7 +119,27 @@ except Exception:  # pragma: no cover - fallback when optional deps missing
     _RealGraphData = None
     GRAPH_DATASET_AVAILABLE = False
 
-GraphData = _RealGraphData or _StubGraphData  # type: ignore[assignment]
+if _RealGraphData is not None and np is not None:
+    class _GraphDataCompat(_RealGraphData):  # type: ignore[misc]
+        def __init__(
+            self,
+            num_nodes: int,
+            *,
+            edge_index: Optional[Any] = None,
+            edge_attr: Optional[Any] = None,
+            pos: Optional[Any] = None,
+            x: Optional[Any] = None,
+        ) -> None:
+            if x is None and edge_index is None:
+                safe_nodes = max(int(num_nodes), 0)
+                x = np.zeros((safe_nodes, 0), dtype=np.float32)
+                edge_index = np.empty((2, 0), dtype=np.int64)
+            super().__init__(x=x, edge_index=edge_index, edge_attr=edge_attr, pos=pos)
+
+    GraphData = _GraphDataCompat  # type: ignore[assignment]
+else:
+    GraphData = _StubGraphData  # type: ignore[assignment]
+
 GraphDataset = _RealGraphDataset or _StubGraphDataset  # type: ignore[assignment]
 FALLBACK_GRAPH_DATASET = _StubGraphDataset
 _SYNTHETIC_SMILES = [
