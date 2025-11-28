@@ -64,3 +64,26 @@ rebuilding an encoder lineage. ``FORCE_RERUN=stage1,stage2`` remains available
 to selectively invalidate cached stages when experimenting.
 
 For policy details and override semantics, read :doc:`frozen_lineage_policy`.
+
+
+Sweep sizing recommendations
+---------------------------
+
+- **Phase 1 sweep size.** Use ``WANDB_COUNT`` (or
+  ``PHASE1_JEPA_COUNT``/``PHASE1_CONTRAST_COUNT``) of **30** per method by
+  default to ensure deep coverage of the backbone/seed grid. If you need a lean
+  coarse sweep, you can trim to the 6–10 range while still keeping high odds of
+  overlapping ``pair_id`` coverage across backbones.
+
+- **Phase 2 sweep size.** Aim for **80** agents for the Bayesian refinement; this
+  usually suffices to explore the neighbourhood around the Phase 1 winner while
+  keeping costs reasonable. Drop to ~40 runs for quick-turn experiments or keep
+  the default (100) when you have capacity and want higher-resolution surfaces
+  on large GPU pools.
+
+- **Wall-clock budgets.** For Phase 1 grid agents, reserve 240–300 minutes
+  (``HARD_WALL_MINS``) to accommodate slower nodes or cold caches; the lower end
+  is fine when you have prebuilt datasets. Phase 2 agents should stay near the
+  12–16 hour window (720–960 minutes) used in CI so longer fine-tuning stages
+  finish cleanly; tighten the wall when prototyping and expand it only if your
+  hardware is markedly slower than the CI baseline.
