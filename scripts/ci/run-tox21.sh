@@ -29,9 +29,6 @@ ci_print_env_diag "$STAGE_BIN"
 
 export EXP_ID EXPERIMENTS_ROOT EXPERIMENT_DIR PRETRAIN_DIR ARTIFACTS_DIR PRETRAIN_ARTIFACTS_DIR
 
-export WANDB_NAME="tox21"
-export WANDB_JOB_TYPE="tox21"
-
 : "${GITHUB_ENV:=${PRETRAIN_TOX21_ENV}}"
 mkdir -p "$(dirname "$GITHUB_ENV")"
 : >"$GITHUB_ENV"
@@ -61,6 +58,22 @@ if [[ "$SOURCE" == "pretrain_frozen" ]]; then
     fi
   fi
 fi
+
+wandb_mode="${SOURCE//_/-}"
+if [[ "$SOURCE" == "pretrain_frozen" ]]; then
+  wandb_mode="baseline"
+fi
+
+if [[ -z "${WANDB_NAME:-}" ]]; then
+  WANDB_NAME="tox21-${wandb_mode}"
+  export WANDB_NAME
+fi
+
+if [[ -z "${WANDB_JOB_TYPE:-}" ]]; then
+  WANDB_JOB_TYPE="tox21-${wandb_mode}"
+  export WANDB_JOB_TYPE
+fi
+echo "[tox21] wandb run name=${WANDB_NAME} job_type=${WANDB_JOB_TYPE}" >&2
 MANIFEST_DEFAULT="${PRETRAIN_MANIFEST:-${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json}"
 MANIFEST_PATH="${TOX21_ENCODER_MANIFEST:-$MANIFEST_DEFAULT}"
 
