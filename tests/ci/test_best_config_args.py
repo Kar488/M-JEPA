@@ -22,7 +22,12 @@ pytestmark = [
 ]
 
 
-def run_bestcfg(stage: str, cfg: dict, env: dict | None = None) -> tuple[str, str]:
+def run_bestcfg(
+    stage: str,
+    cfg: dict,
+    env: dict | None = None,
+    grid_dir_override: str | None = None,
+) -> tuple[str, str]:
     """Execute best_config_args <stage> and capture stdout/stderr."""
 
     with tempfile.TemporaryDirectory() as td:
@@ -36,6 +41,11 @@ def run_bestcfg(stage: str, cfg: dict, env: dict | None = None) -> tuple[str, st
         run_env = dict(os.environ, **(env or {}))
         run_env.setdefault("DATA_DIR", str(data_dir))
         run_env.setdefault("XDG_CACHE_HOME", str(cache_dir))
+        run_env.setdefault("MJEPA_SUDO_BIN", "true")
+        # Force fallbacks on so the tests are resilient to CI defaults that
+        # intentionally disable them (e.g., self-hosted runners that expect
+        # /data to be writable).
+        run_env["MJEPA_ALLOW_DATA_FALLBACKS"] = "1"
 
         shim = r'''
 rewrite_path() {
@@ -62,9 +72,16 @@ export -f rewrite_path _wrap_args_and_exec mkdir install cp mv touch tee
 '''
 
         msys_common = pathlib.Path(COMMON_SH).as_posix()
-        msys_grid = pathlib.Path(str(grid_dir)).as_posix()
+        msys_grid = (
+            pathlib.Path(str(grid_dir)).as_posix()
+            if grid_dir_override is None
+            else str(grid_dir_override)
+        )
+        trace = str(run_env.get("BESTCFG_TRACE", "")).lower() in {"1", "true", "yes", "on"}
+        trace_prefix = "set -x; " if trace else ""
         cmd = (
-            "set -euo pipefail; set -x; "
+            "set -euo pipefail; "
+            f"{trace_prefix}"
             f"export DATA_DIR={shlex.quote(pathlib.Path(data_dir).as_posix())}; "
             f"export XDG_CACHE_HOME={shlex.quote(pathlib.Path(cache_dir).as_posix())}; "
             f"{shim} "
@@ -357,4 +374,53 @@ def test_bestcfg_no_epochs_respected_for_tox21():
     assert "--finetune-epochs" not in stdout
     summary = extract_summary(stderr)
     assert set(["pretrain_epochs", "finetune_epochs"]).issubset(set(summary["skipped"]))
+
+
+def test_bestcfg_uses_data_cache_grid_when_env_missing(tmp_path):
+    cfg = {
+        "gnn_type": "gine",
+        "hidden_dim": 73,
+        "num_layers": 4,
+        "learning_rate": 1e-4,
+        "batch_size": 32,
+        "pretrain_epochs": 3,
+        "finetune_epochs": 1,
+    }
+
+    exp_id = "test-exp"
+    fallback_root = (
+        tmp_path
+        / "mjepa"
+        / "fallback"
+        / "grid"
+        / exp_id
+        / "phase2_export"
+        / "stage-outputs"
+    )
+    fallback_root.mkdir(parents=True, exist_ok=True)
+    (fallback_root / "best_grid_config.json").write_text(
+        json.dumps(cfg), encoding="utf-8"
+    )
+
+    stdout, _ = run_bestcfg(
+        "tox21",
+        cfg,
+        env={
+            "GRID_DIR": "",
+            "GRID_SOURCE_DIR": "",
+            "GRID_CACHE_DIR": "",
+            "SWEEP_CACHE_DIR": "",
+            "CACHE_DIR": "",
+            "EXPERIMENT_DIR": "",
+            "GRID_EXP_ID": "",
+            "EXP_ID": exp_id,
+            "RUNNER_TEMP": str(tmp_path),
+        },
+        grid_dir_override="",
+    )
+
+    assert "--hidden-dim" in stdout
+    tokens = stdout.split()
+    assert "--hidden-dim" in tokens
+    assert tokens[tokens.index("--hidden-dim") + 1] == "73"
 

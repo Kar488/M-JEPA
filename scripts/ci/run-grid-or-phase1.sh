@@ -85,9 +85,13 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
   # Create a single sweep for JEPA and another for contrastive; reuse IDs
   : "${WANDB_COUNT:=30}"
+  : "${PHASE1_JEPA_COUNT:=${WANDB_COUNT}}"
+  : "${PHASE1_CONTRAST_COUNT:=${WANDB_COUNT}}"
+
   export WANDB_RUN_GROUP="${GITHUB_RUN_ID:-pipeline-$(date -u +%Y%m%dT%H%M%SZ)}"
   export WANDB_RESUME=allow
-  echo "[phase1] WANDB_COUNT=$WANDB_COUNT group=$WANDB_RUN_GROUP"
+  export WANDB_COUNT="$PHASE1_JEPA_COUNT"
+  echo "[phase1] JEPA runs=${PHASE1_JEPA_COUNT} contrastive runs=${PHASE1_CONTRAST_COUNT} group=$WANDB_RUN_GROUP"
   if [[ -n "${SWEEP_CACHE_DIR:-}" ]]; then
     echo "[phase1] dataset cache root: $SWEEP_CACHE_DIR"
   fi
@@ -136,6 +140,9 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   fi
   echo "[phase1] JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
 
+  JEPA_SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
+  CONTRAST_SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
+
   cd "$APP_DIR"
   BASE_LOG_DIR="${LOG_DIR:-$APP_DIR/logs}"
   mapfile -t GRID_VISIBLE_GPUS < <(visible_gpu_ids)
@@ -152,9 +159,17 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
         export CUDA_VISIBLE_DEVICES="${PHASE1_GPU_SPLITS[0]}"
         echo "[phase1] JEPA agent using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
       fi
-      export SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
-      echo "[phase1] launching JEPA agent for sweep $SWEEP_ID"
-      run_with_timeout wandb_agent
+      export SWEEP_ID="$JEPA_SWEEP_ID"
+      export WANDB_COUNT="$PHASE1_JEPA_COUNT"
+      echo "[phase1] launching JEPA agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
+      if ! run_with_timeout wandb_agent; then
+        rc=$?
+        if [[ $rc -eq 2 ]]; then
+          echo "[phase1][warn] JEPA agent returned rc=2; treating as sweep exhaustion"
+        else
+          exit "$rc"
+        fi
+      fi
     ) &
     PHASE1_JEPA_PID=$!
 
@@ -165,9 +180,17 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
         export CUDA_VISIBLE_DEVICES="${PHASE1_GPU_SPLITS[1]}"
         echo "[phase1] contrastive agent using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
       fi
-      export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
-      echo "[phase1] launching contrastive agent for sweep $SWEEP_ID"
-      run_with_timeout wandb_agent
+      export SWEEP_ID="$CONTRAST_SWEEP_ID"
+      export WANDB_COUNT="$PHASE1_CONTRAST_COUNT"
+      echo "[phase1] launching contrastive agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
+      if ! run_with_timeout wandb_agent; then
+        rc=$?
+        if [[ $rc -eq 2 ]]; then
+          echo "[phase1][warn] contrastive agent returned rc=2; treating as sweep exhaustion"
+        else
+          exit "$rc"
+        fi
+      fi
     ) &
     PHASE1_CONTRAST_PID=$!
 
@@ -176,6 +199,14 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     PHASE1_JEPA_RC=$?
     wait "$PHASE1_CONTRAST_PID"
     PHASE1_CONTRAST_RC=$?
+    if [[ $PHASE1_JEPA_RC -eq 2 ]]; then
+      echo "[phase1][warn] normalising JEPA agent rc=2 to success (sweep exhaustion)"
+      PHASE1_JEPA_RC=0
+    fi
+    if [[ $PHASE1_CONTRAST_RC -eq 2 ]]; then
+      echo "[phase1][warn] normalising contrastive agent rc=2 to success (sweep exhaustion)"
+      PHASE1_CONTRAST_RC=0
+    fi
     set -e
 
     if (( PHASE1_JEPA_RC != 0 || PHASE1_CONTRAST_RC != 0 )); then
@@ -183,13 +214,33 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
       exit 1
     fi
   else
-    export SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
-    echo "[phase1] launching JEPA agent for sweep $SWEEP_ID"
-    run_with_timeout wandb_agent || exit 1
+    export SWEEP_ID="$JEPA_SWEEP_ID"
+    export WANDB_COUNT="$PHASE1_JEPA_COUNT"
+    echo "[phase1] launching JEPA agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
+    (
+      if ! run_with_timeout wandb_agent; then
+        rc=$?
+        if [[ $rc -eq 2 ]]; then
+          echo "[phase1][warn] JEPA agent returned rc=2; treating as sweep exhaustion"
+        else
+          exit "$rc"
+        fi
+      fi
+    )
 
-    export SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
-    echo "[phase1] launching contrastive agent for sweep $SWEEP_ID"
-    run_with_timeout wandb_agent || exit 1
+    export SWEEP_ID="$CONTRAST_SWEEP_ID"
+    export WANDB_COUNT="$PHASE1_CONTRAST_COUNT"
+    echo "[phase1] launching contrastive agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
+    (
+      if ! run_with_timeout wandb_agent; then
+        rc=$?
+        if [[ $rc -eq 2 ]]; then
+          echo "[phase1][warn] contrastive agent returned rc=2; treating as sweep exhaustion"
+        else
+          exit "$rc"
+        fi
+      fi
+    )
   fi
 
   # Require that paired-effect analysis only considers runs that have reached
@@ -215,6 +266,11 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   fi
   if [[ -n "${PE_MIN_PRETRAIN_BATCHES}" ]]; then
     PE_FILTER_FLAGS+=("--min_pretrain_batches" "${PE_MIN_PRETRAIN_BATCHES}")
+  fi
+
+  if ! ensure_micromamba; then
+    echo "[phase1][fatal] micromamba unavailable; set MMBIN or install micromamba" >&2
+    exit 1
   fi
 
   "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
@@ -377,11 +433,19 @@ PY
   cp "$TMP_BEST" "$OUT_PATH"
   echo "[phase1] staged best config to $OUT_PATH"
 
-  FINAL_CFG="${EXPORT_OUT_PATH:-${GRID_DIR:-$APP_DIR/grid}/best_grid_config.json}"
+  FINAL_CFG_DEFAULT="${GRID_DIR:-$APP_DIR/grid}/best_grid_config.json"
+  FINAL_CFG="${EXPORT_OUT_PATH:-$FINAL_CFG_DEFAULT}"
   if [[ "$FINAL_CFG" != "$OUT_PATH" ]]; then
-    mkdir -p "$(dirname "$FINAL_CFG")"
-    cp "$TMP_BEST" "$FINAL_CFG"
-    echo "[phase1] exported best config to $FINAL_CFG"
+    if mkdir -p "$(dirname "$FINAL_CFG")" 2>/dev/null && cp "$TMP_BEST" "$FINAL_CFG" 2>/dev/null; then
+      echo "[phase1] exported best config to $FINAL_CFG"
+    else
+      echo "[phase1][warn] unable to export best config to $FINAL_CFG; falling back to $FINAL_CFG_DEFAULT" >&2
+      mkdir -p "$(dirname "$FINAL_CFG_DEFAULT")"
+      cp "$TMP_BEST" "$FINAL_CFG_DEFAULT"
+      if [[ "$FINAL_CFG_DEFAULT" != "$OUT_PATH" ]]; then
+        echo "[phase1] exported best config to $FINAL_CFG_DEFAULT"
+      fi
+    fi
   fi
 
   CANONICAL_P2="${GRID_DIR:-$APP_DIR/grid}/grid_sweep_phase2.yaml"
@@ -391,8 +455,12 @@ PY
 
   FINAL_P2="${EXPORT_PHASE2_PATH:-$CANONICAL_P2}"
   if [[ "$FINAL_P2" != "$CANONICAL_P2" ]]; then
-    mkdir -p "$(dirname "$FINAL_P2")"
-    cp "$TMP_PHASE2" "$FINAL_P2"
+    if mkdir -p "$(dirname "$FINAL_P2")" 2>/dev/null && cp "$TMP_PHASE2" "$FINAL_P2" 2>/dev/null; then
+      echo "[phase1] exported Phase-2 sweep YAML to $FINAL_P2"
+    else
+      echo "[phase1][warn] unable to export Phase-2 sweep YAML to $FINAL_P2; falling back to $CANONICAL_P2" >&2
+      FINAL_P2="$CANONICAL_P2"
+    fi
   fi
 
   SWEEP_ID2="$(wandb_sweep_create "$FINAL_P2")"

@@ -10,5 +10,5 @@ pip install torch==2.2.1 --index-url https://download.pytorch.org/whl/cpu
 # Then install torch-scatter matching Torch (CPU)
 pip install torch-scatter==2.1.2 -f https://data.pyg.org/whl/torch-2.2.1+cpu.html
 
-# Install the rest (requirements.txt should NOT contain rdkit/rdkit-pypi)
+# Install the rest (requirements.txt now includes rdkit for graph visuals)
 pip install -r requirements.txt

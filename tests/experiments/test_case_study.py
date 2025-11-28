@@ -5,6 +5,7 @@ import types
 from typing import Any, Dict
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 
@@ -77,6 +78,38 @@ def test_tox21_case_study_passes_explain_kwargs(monkeypatch, tmp_path):
     assert captured.get("mode") == "ig"
     assert captured.get("config", {}).get("output_dir") == str(tmp_path)
     assert captured.get("config", {}).get("task_name") == "NR-AR"
+
+
+def test_sanitize_binary_labels_filters_invalid_rows(monkeypatch):
+    import sys
+    import types
+
+    sup = types.ModuleType("training.supervised")
+    sup.train_linear_head = lambda *_, **__: {}
+    unsup = types.ModuleType("training.unsupervised")
+    unsup.train_jepa = lambda *_, **__: {}
+
+    monkeypatch.setitem(sys.modules, "training", types.ModuleType("training"))
+    monkeypatch.setitem(sys.modules, "training.supervised", sup)
+    monkeypatch.setitem(sys.modules, "training.unsupervised", unsup)
+
+    import experiments.case_study as case_study
+
+    df = pd.DataFrame(
+        {
+            "smiles": ["CCO", "CCN", "CCC", "CCF"],
+            "NR-AR": [1, -1, 0, 2],
+        }
+    )
+
+    cleaned, stats = case_study._sanitize_binary_labels(df, "NR-AR")
+
+    assert stats["dropped_negative"] == 1
+    assert stats["dropped_non_binary"] == 1
+    assert stats["dropped_na"] == 2
+    assert len(cleaned) == 2
+    assert set(cleaned["NR-AR"].tolist()) == {0.0, 1.0}
+    assert len(df) == 4, "Input dataframe should remain unchanged"
 
 
 def test_evaluate_case_study_handles_probability_mismatch(monkeypatch):

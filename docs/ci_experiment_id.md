@@ -45,6 +45,12 @@ experiment identifiers and artifact hand-offs.
   and forwards them to Vast via the appleboy `envs` list. The stage now invokes
   Python through the project environment (`resolve_ci_python`) instead of a bare
   `python` binary.
+* W&B runs from tox21 inherit their names from the evaluation mode. The frozen
+  baseline gate logs under `tox21-baseline`; full fine-tunes use
+  `tox21-fine-tuned`; and end-to-end evals log under `tox21-end-to-end`. Expect
+  one AUC series per run you execute (baseline + whichever fine-tune/eval path
+  you invoke), subject to the usual label-coverage guardrails in the tox21
+  metric logger.
 
 ## Git runner vs. appleboy
 

@@ -235,15 +235,31 @@ def describe_bond_types(smiles: Optional[str], pairs: Iterable[Tuple[int, int]])
         for pair in pairs:
             descriptions[pair] = f"bond_{pair[0]}_{pair[1]}"
         return descriptions
+    try:  # pragma: no cover - depends on rdkit
+        num_atoms = int(mol.GetNumAtoms())
+    except Exception:
+        num_atoms = None
+
     for pair in pairs:
         i, j = pair
-        bond = mol.GetBondBetweenAtoms(i, j)
+        if num_atoms is not None and (i < 0 or j < 0 or i >= num_atoms or j >= num_atoms):
+            descriptions[pair] = f"bond_{i}_{j}"
+            continue
+        try:  # pragma: no cover - depends on rdkit
+            bond = mol.GetBondBetweenAtoms(i, j)
+        except Exception:
+            bond = None
         if bond is None:
             descriptions[pair] = f"bond_{i}_{j}"
             continue
-        atom_i = mol.GetAtomWithIdx(i).GetSymbol()
-        atom_j = mol.GetAtomWithIdx(j).GetSymbol()
-        descriptions[pair] = f"{atom_i}-{atom_j}:{bond.GetBondType()}"
+        try:  # pragma: no cover - depends on rdkit
+            atom_i = mol.GetAtomWithIdx(i).GetSymbol()
+            atom_j = mol.GetAtomWithIdx(j).GetSymbol()
+            bond_type = bond.GetBondType()
+        except Exception:
+            descriptions[pair] = f"bond_{i}_{j}"
+            continue
+        descriptions[pair] = f"{atom_i}-{atom_j}:{bond_type}"
     return descriptions
 
 
@@ -280,11 +296,19 @@ def render_molecule_heatmap(
             handle.write(_PLACEHOLDER_PNG)
         return output_path
 
-    max_atoms = mol.GetNumAtoms()
+    try:  # pragma: no cover - depends on rdkit
+        max_atoms = int(mol.GetNumAtoms())
+    except Exception:
+        max_atoms = len(atom_scores)
     highlight_atoms = {idx: _score_to_color(score, score >= 0) for idx, score in enumerate(atom_scores[:max_atoms])}
     bond_colors = {}
     for (i, j), score in bond_scores.items():
-        bond = mol.GetBondBetweenAtoms(i, j)
+        if i < 0 or j < 0 or i >= max_atoms or j >= max_atoms:
+            continue
+        try:  # pragma: no cover - depends on rdkit
+            bond = mol.GetBondBetweenAtoms(i, j)
+        except Exception:
+            bond = None
         if bond is None:
             continue
         bond_colors[bond.GetIdx()] = _score_to_color(score, score >= 0)

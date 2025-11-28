@@ -11,18 +11,28 @@ constructed directly from the graph topology.
 from __future__ import annotations
 
 import argparse
-import base64
 import csv
 import json
 import logging
 import os
 import sys
+import struct
+import zlib
 from itertools import cycle, islice
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import math
 import numbers
+import importlib.util
+
+try:  # pragma: no cover - optional dependency in CI
+    import networkx as nx
+
+    NX_AVAILABLE = True
+except Exception:  # pragma: no cover - degrade gracefully when networkx missing
+    nx = None  # type: ignore
+    NX_AVAILABLE = False
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -124,19 +134,25 @@ _FORCE_FALLBACK_LOADER = os.environ.get("GRAPH_VISUALS_FORCE_FALLBACK", "").stri
     "on",
 }
 
+_RDKit_SPEC = importlib.util.find_spec("rdkit")
+RDKit_INSTALLED = bool(_RDKit_SPEC)
+RDKit_IMPORT_ERROR: Optional[str] = None
+
 try:  # pragma: no cover - optional dependency in CI
     from rdkit import Chem
     from rdkit.Chem import AllChem
     from rdkit.Chem import rdDepictor
+    from rdkit.Chem import rdMolDescriptors
     from rdkit.Chem.Draw import rdMolDraw2D
 
     RDKit_AVAILABLE = True
-except Exception:  # pragma: no cover - gracefully degrade in environments w/o RDKit
+except Exception as exc:  # pragma: no cover - gracefully degrade in environments w/o RDKit
     Chem = None  # type: ignore
     AllChem = None  # type: ignore
     rdDepictor = None  # type: ignore
     rdMolDraw2D = None  # type: ignore
     RDKit_AVAILABLE = False
+    RDKit_IMPORT_ERROR = str(exc)
 
 if RDKit_AVAILABLE:  # pragma: no cover - depends on optional rdkit
     _DRAW_COLOR_CLASS = getattr(rdMolDraw2D, "DrawColour", None) or getattr(rdMolDraw2D, "Color", None)
@@ -156,9 +172,7 @@ except Exception:  # pragma: no cover - degrade gracefully when BuildAmol is abs
 
 logger = logging.getLogger(__name__)
 
-_MINIMAL_PNG = base64.b64decode(
-    b"iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAQAAACEN29KAAAAFElEQVR42mP8/58BCzAxwMjACCYAAgUCnPZRr8sAAAAASUVORK5CYII="
-)
+_MATPLOTLIB_AVAILABLE = bool(importlib.util.find_spec("matplotlib"))
 
 
 def _default_dataset_dir() -> Optional[str]:
@@ -179,7 +193,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--dataset-path",
         default=_default_dataset_dir(),
-        help="Path to the dataset directory or file (defaults to DATASET_DIR env)",
+        help="Path to the dataset directory or file (defaults to DATASET_DIR env; synthetic fallback when unset)",
     )
     parser.add_argument(
         "--output-dir",
@@ -193,12 +207,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Number of molecules to visualise (default: 8)",
     )
     args = parser.parse_args(argv)
-    if not args.dataset_path:
-        parser.error("--dataset-path not provided and DATASET_DIR is unset")
     if not args.output_dir:
         parser.error("--output-dir not provided and PRETRAIN_EXPERIMENT_ROOT is unset")
     if args.num_samples is not None and args.num_samples <= 0:
         parser.error("--num-samples must be > 0")
+    if not args.dataset_path:
+        logger.warning("DATASET_DIR is unset; generating synthetic graph visuals")
     return args
 
 
@@ -241,7 +255,10 @@ def _graph_count(dataset: Any) -> int:
         return 0
 
 
-def _load_dataset(dataset_path: str, limit: Optional[int]) -> Tuple[GraphDataset, str]:
+def _load_dataset(dataset_path: Optional[str], limit: Optional[int]) -> Tuple[GraphDataset, str]:
+    if not dataset_path:
+        return _synthetic_dataset(limit)
+
     dataset_path = os.path.abspath(dataset_path)
     try:
         ext = _guess_extension(dataset_path)
@@ -365,10 +382,40 @@ def _coerce_label(labels: Optional[Sequence[Any]], idx: int) -> Optional[float]:
 
 def _render_placeholder_png(path: Path, caption: str) -> None:
     _ensure_dir(path.parent)
-    with open(path, "wb") as handle:
-        handle.write(_MINIMAL_PNG)
+
+    width, height = 320, 240
+    background = (245, 245, 245, 255)
+    border = (190, 190, 190, 255)
+    accent = (207, 34, 46, 255)
+
+    pixels = bytearray()
+    for y in range(height):
+        pixels.append(0)  # per-row filter type "None"
+        for x in range(width):
+            color = background
+            if x in {0, width - 1} or y in {0, height - 1}:
+                color = border
+            elif abs(x - width // 2) <= 2 or abs(y - height // 2) <= 2:
+                color = accent
+            pixels.extend(color)
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    compressed = zlib.compress(bytes(pixels))
+    png_bytes = b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", header) + _chunk(b"IDAT", compressed) + _chunk(
+        b"IEND", b""
+    )
+    path.write_bytes(png_bytes)
+
     caption_path = path.with_suffix(".txt")
-    caption_path.write_text(caption, encoding="utf-8")
+    caption_path.write_text(caption.rstrip() + "\n", encoding="utf-8")
 
 
 def _prepare_highlight_colors(mol: "Chem.Mol"):
@@ -389,6 +436,67 @@ def _prepare_highlight_colors(mol: "Chem.Mol"):
     return highlight_atoms, highlight_bonds, atom_colors, bond_colors
 
 
+def _draw_matplotlib_graph(graph: GraphData, smiles: Optional[str], path: Path) -> bool:
+    if not _MATPLOTLIB_AVAILABLE:
+        return False
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt  # type: ignore
+
+    positions = _graph_positions(graph)
+    if not positions:
+        return False
+    edges = _unique_edges(graph)
+    atom_symbols = None
+    ring_atoms: set[int] = set()
+    if RDKit_AVAILABLE and smiles:
+        try:
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is not None:
+                atom_symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]
+                try:
+                    ring_atoms, _, _, _ = _prepare_highlight_colors(mol)
+                except Exception:
+                    ring_atoms = set()
+        except Exception:
+            atom_symbols = None
+    try:
+        fig = plt.figure(figsize=(6.4, 4.8))
+        ax = fig.add_subplot(111, projection="3d")
+        xs, ys, zs = zip(*positions)
+        colors = ["#e65100" if idx in ring_atoms else "#0d47a1" for idx in range(len(xs))]
+        ax.scatter(xs, ys, zs, c=colors, alpha=0.85, s=40, depthshade=True)
+        for src, dst in edges:
+            if src >= len(positions) or dst >= len(positions):
+                continue
+            ax.plot(
+                [positions[src][0], positions[dst][0]],
+                [positions[src][1], positions[dst][1]],
+                [positions[src][2], positions[dst][2]],
+                color="#9e9e9e",
+                linewidth=1.5,
+            )
+        for idx, (x_coord, y_coord, z_coord) in enumerate(positions):
+            label = str(idx)
+            if atom_symbols is not None and idx < len(atom_symbols):
+                label = f"{atom_symbols[idx]}{idx}"
+            ax.text(x_coord, y_coord, z_coord, label, fontsize=8, color="#263238")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+        if smiles:
+            ax.set_title(smiles)
+        fig.tight_layout()
+        _ensure_dir(path.parent)
+        fig.savefig(path, dpi=150)
+    except Exception:
+        return False
+    finally:
+        plt.close("all")
+    return True
+
+
 def _draw_rdkit_2d(smiles: str, path: Path) -> bool:
     if not RDKit_AVAILABLE:
         return False
@@ -405,7 +513,8 @@ def _draw_rdkit_2d(smiles: str, path: Path) -> bool:
     opts = drawer.drawOptions()
     opts.addAtomIndices = True
     opts.highlightRadius = 0.35
-    opts.dotsPerAngstrom = 45
+    if hasattr(opts, "dotsPerAngstrom"):
+        opts.dotsPerAngstrom = 45
     opts.bondLineWidth = 2.2
     opts.useBWAtomPalette()  # start from greyscale so highlights stand out
     highlight_atoms, highlight_bonds, atom_colors, bond_colors = _prepare_highlight_colors(mol)
@@ -521,26 +630,140 @@ def _unique_edges(graph: GraphData) -> List[tuple[int, int]]:
     return sorted(pairs)
 
 
+def _build_nx_graph(graph: GraphData) -> "nx.Graph":
+    """Build a simple undirected NetworkX graph from GraphData.edge_index."""
+
+    if not NX_AVAILABLE:
+        raise RuntimeError("networkx is not available")
+    G = nx.Graph()
+    num_nodes = graph.num_nodes()
+    G.add_nodes_from(range(num_nodes))
+
+    edge_index = graph.edge_index
+    rows = _normalise_matrix(edge_index)
+    if rows and len(rows) >= 2:
+        edges = set()
+        for u, v in zip(rows[0], rows[1]):
+            try:
+                u_int = int(u)
+                v_int = int(v)
+            except Exception:
+                continue
+            if u_int == v_int:
+                continue
+            e = (min(u_int, v_int), max(u_int, v_int))
+            edges.add(e)
+        G.add_edges_from(edges)
+    return G
+
+
+def _complexity_metrics(graph: GraphData, smiles: Optional[str]) -> Dict[str, Any]:
+    metrics: Dict[str, Any] = {}
+
+    num_nodes = graph.num_nodes()
+    edges_list: List[tuple[int, int]] = _unique_edges(graph)
+    try:
+        G = _build_nx_graph(graph)
+        n = G.number_of_nodes()
+        m = G.number_of_edges()
+    except Exception:
+        n = int(num_nodes)
+        m = len(edges_list)
+        G = None  # type: ignore[assignment]
+
+    metrics["num_nodes"] = int(n)
+    metrics["num_edges"] = int(m)
+
+    if n > 0:
+        if NX_AVAILABLE and G is not None:
+            degrees = dict(G.degree())
+            metrics["avg_degree"] = float(sum(degrees.values()) / n)
+            metrics["max_degree"] = int(max(degrees.values()))
+        else:
+            deg_counts = [0 for _ in range(n)]
+            for u, v in edges_list:
+                if u < n:
+                    deg_counts[u] += 1
+                if v < n:
+                    deg_counts[v] += 1
+            metrics["avg_degree"] = float(sum(deg_counts) / n) if n else 0.0
+            metrics["max_degree"] = int(max(deg_counts)) if deg_counts else 0
+    else:
+        metrics["avg_degree"] = 0.0
+        metrics["max_degree"] = 0
+
+    if NX_AVAILABLE and G is not None:
+        if n > 1 and nx.is_connected(G):
+            try:
+                metrics["avg_shortest_path"] = float(nx.average_shortest_path_length(G))
+                metrics["diameter"] = int(nx.diameter(G))
+            except Exception:
+                metrics["avg_shortest_path"] = None
+                metrics["diameter"] = None
+        else:
+            metrics["avg_shortest_path"] = None
+            metrics["diameter"] = None
+        metrics["avg_clustering"] = float(nx.average_clustering(G)) if n > 1 else 0.0
+    else:
+        metrics["avg_shortest_path"] = None
+        metrics["diameter"] = None
+        metrics["avg_clustering"] = 0.0
+
+    metrics["cyclomatic_number"] = int(m - n + 1) if n > 0 else 0
+
+    metrics["num_rings"] = None
+    if RDKit_AVAILABLE and smiles:
+        try:
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is not None:
+                metrics["num_rings"] = int(rdMolDescriptors.CalcNumRings(mol))
+        except Exception:
+            metrics["num_rings"] = None
+
+    return metrics
+
+
 def _plotly_html(graph: GraphData, smiles: Optional[str], div_id: str) -> str:
     positions = _graph_positions(graph)
+    atom_symbols = None
+    ring_atoms: set[int] = set()
+    if RDKit_AVAILABLE and smiles:
+        try:
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is not None:
+                atom_symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]
+                try:
+                    ring_atoms, _, _, _ = _prepare_highlight_colors(mol)
+                except Exception:
+                    ring_atoms = set()
+        except Exception:
+            atom_symbols = None
     nodes = positions
-    tooltips = []
-    for idx, coords in enumerate(nodes):
-        tooltip = f"Atom {idx}"
-        if smiles:
-            tooltip += f" | {smiles}"
-        tooltips.append(tooltip)
+    texts: List[str] = []
+    colors: List[str] = []
+    xs = [p[0] for p in nodes]
+    ys = [p[1] for p in nodes]
+    zs = [p[2] for p in nodes]
+    for idx in range(len(nodes)):
+        sym = "?"
+        if atom_symbols is not None and idx < len(atom_symbols):
+            sym = atom_symbols[idx]
+        texts.append(f"{sym}{idx}")
+        if idx in ring_atoms:
+            colors.append("#e65100")
+        else:
+            colors.append("#0d47a1")
     node_trace = {
         "type": "scatter3d",
         "mode": "markers",
-        "x": [p[0] for p in nodes],
-        "y": [p[1] for p in nodes],
-        "z": [p[2] for p in nodes],
-        "text": tooltips,
+        "x": xs,
+        "y": ys,
+        "z": zs,
+        "text": texts,
         "marker": {
             "size": 7,
-            "color": "#0d47a1",
-            "opacity": 0.85,
+            "color": colors,
+            "opacity": 0.9,
         },
         "name": "atoms",
     }
@@ -649,13 +872,49 @@ def _write_html(path: Path, html: str) -> None:
     path.write_text(html, encoding="utf-8")
 
 
-def _render_sample(record_dir: Path, graph: GraphData, smiles: Optional[str], label: Optional[float], index: int) -> None:
+def _render_sample(
+    record_dir: Path,
+    graph: GraphData,
+    smiles: Optional[str],
+    label: Optional[float],
+    index: int,
+) -> str:
     png_path = record_dir / "molecule.png"
     html_path = record_dir / "molecule.html"
+    rendered_png = False
+    renderer = "placeholder"
     if smiles and _draw_rdkit_2d(smiles, png_path):
         logger.info("Rendered RDKit 2‑D visual for %s", smiles)
-    else:
-        _render_placeholder_png(png_path, caption=f"RDKit unavailable for sample {index}")
+        rendered_png = True
+        renderer = "rdkit"
+    elif _draw_matplotlib_graph(graph, smiles, png_path):
+        logger.info("Rendered matplotlib fallback for sample %s", smiles or index)
+        rendered_png = True
+        renderer = "matplotlib"
+    if not rendered_png:
+        if not smiles:
+            caption = f"No SMILES provided for sample {index}"
+        elif not RDKit_AVAILABLE:
+            if RDKit_INSTALLED and RDKit_IMPORT_ERROR:
+                caption = "RDKit import failed; placeholder molecule"
+            else:
+                caption = "RDKit unavailable; placeholder molecule"
+        else:
+            caption = f"RDKit rendering failed for sample {index}"
+        _render_placeholder_png(png_path, caption=caption)
+        if not RDKit_AVAILABLE:
+            if RDKit_INSTALLED and RDKit_IMPORT_ERROR:
+                logger.debug(
+                    "RDKit import failed (%s); wrote placeholder PNG for sample %s",
+                    RDKit_IMPORT_ERROR,
+                    smiles or index,
+                )
+            else:
+                logger.debug(
+                    "RDKit unavailable; wrote placeholder PNG for sample %s", smiles or index
+                )
+        else:
+            logger.info("RDKit rendering failed; wrote placeholder PNG for sample %s", smiles or index)
     html_payload = None
     if smiles:
         html_payload = _build_buildamol_3d(smiles)
@@ -671,22 +930,104 @@ def _render_sample(record_dir: Path, graph: GraphData, smiles: Optional[str], la
         "num_edges": len(_unique_edges(graph)),
         "label": label,
     }
+    try:
+        metrics = _complexity_metrics(graph, smiles)
+        metadata.update(metrics)
+    except Exception:
+        pass
+    metadata["node_atom_mapping"] = list(range(graph.num_nodes()))
     (record_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    return renderer
+
+
+def _write_index_html(output_dir: Path) -> None:
+    rows = []
+    for sample_dir in sorted(output_dir.glob("sample_*")):
+        meta_path = sample_dir / "metadata.json"
+        if not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        sample_id = sample_dir.name
+        png_rel = f"{sample_id}/molecule.png"
+        html_rel = f"{sample_id}/molecule.html"
+        rows.append((sample_id, meta, png_rel, html_rel))
+
+    headers = [
+        "Sample",
+        "SMILES",
+        "num_nodes",
+        "num_edges",
+        "num_rings",
+        "cyclomatic_number",
+        "avg_degree",
+        "avg_clustering",
+        "diameter",
+    ]
+
+    cells = []
+    for sample_id, meta, png_rel, html_rel in rows:
+        cells.append(
+            "<tr>"
+            f"<td>{sample_id}</td>"
+            f"<td>{meta.get('smiles') or ''}</td>"
+            f"<td>{meta.get('num_nodes', '')}</td>"
+            f"<td>{meta.get('num_edges', '')}</td>"
+            f"<td>{meta.get('num_rings', '')}</td>"
+            f"<td>{meta.get('cyclomatic_number', '')}</td>"
+            f"<td>{meta.get('avg_degree', '')}</td>"
+            f"<td>{meta.get('avg_clustering', '')}</td>"
+            f"<td>{meta.get('diameter', '')}</td>"
+            f"<td><a href='{png_rel}'>PNG</a></td>"
+            f"<td><a href='{html_rel}'>HTML</a></td>"
+            "</tr>"
+        )
+    table_rows = "\n".join(cells)
+    header_html = "".join(f"<th>{h}</th>" for h in headers + ["PNG", "HTML"])
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='utf-8'/>
+  <title>Graph gallery</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 1.5rem; }}
+    table {{ border-collapse: collapse; width: 100%; }}
+    th, td {{ border: 1px solid #ccc; padding: 0.5rem; text-align: left; }}
+    th {{ background: #f5f5f5; }}
+    tr:nth-child(even) {{ background: #fafafa; }}
+  </style>
+  </head>
+<body>
+  <h1>Graph visualisation gallery</h1>
+  <table>
+    <thead><tr>{header_html}</tr></thead>
+    <tbody>
+      {table_rows}
+    </tbody>
+  </table>
+</body>
+</html>"""
+    (output_dir / "index.html").write_text(html, encoding="utf-8")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="[graph-visuals] %(message)s")
     args = parse_args(argv)
     dataset, loader_label = _load_dataset(args.dataset_path, args.num_samples)
+    dataset_label = args.dataset_path or "synthetic"
     total = len(dataset.graphs)
     if total == 0:
-        logger.warning("Dataset %s contained zero graphs; nothing to render", args.dataset_path)
+        logger.warning("Dataset %s contained zero graphs; nothing to render", dataset_label)
         return 0
     limit = min(args.num_samples, total)
     indices = _select_indices(total, limit)
     output_dir = Path(args.output_dir)
     _ensure_dir(output_dir)
     logger.info("Generating graph visuals for %d / %d molecules", len(indices), total)
+    png_stats = {"rdkit": 0, "matplotlib": 0, "placeholder": 0}
+    rdkit_placeholder_count = 0
     for slot, dataset_idx in enumerate(indices):
         record_dir = output_dir / f"sample_{slot:03d}"
         graph = dataset.graphs[dataset_idx]
@@ -694,16 +1035,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if dataset.smiles and dataset_idx < len(dataset.smiles):
             smiles = dataset.smiles[dataset_idx]
         label = _coerce_label(dataset.labels, dataset_idx)
-        _render_sample(record_dir, graph, smiles, label, dataset_idx)
+        renderer = _render_sample(record_dir, graph, smiles, label, dataset_idx)
+        png_stats[renderer] = png_stats.get(renderer, 0) + 1
+        if renderer == "placeholder" and not RDKit_AVAILABLE:
+            rdkit_placeholder_count += 1
+    if not RDKit_AVAILABLE:
+        if rdkit_placeholder_count:
+            logger.info(
+                "RDKit unavailable; generated %d placeholder PNG(s). Install rdkit to render 2-D depictions.",
+                rdkit_placeholder_count,
+            )
+        else:
+            logger.info(
+                "RDKit unavailable; matplotlib fallback rendered all samples."
+            )
     summary = {
-        "dataset_path": os.path.abspath(args.dataset_path),
+        "dataset_path": os.path.abspath(dataset_label)
+        if args.dataset_path
+        else "synthetic",
         "output_dir": str(output_dir.resolve()),
         "num_graphs": total,
         "num_rendered": len(indices),
         "loader": loader_label,
         "fallback_forced": bool(_FORCE_FALLBACK_LOADER),
+        "rdkit_available": bool(RDKit_AVAILABLE),
+        "rdkit_installed": bool(RDKit_INSTALLED),
+        "rdkit_import_error": RDKit_IMPORT_ERROR,
+        "png_renderers": png_stats,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    _write_index_html(output_dir)
     logger.info("Graph visuals ready under %s", output_dir)
     return 0
 
