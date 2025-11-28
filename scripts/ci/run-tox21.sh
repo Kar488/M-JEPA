@@ -29,9 +29,6 @@ ci_print_env_diag "$STAGE_BIN"
 
 export EXP_ID EXPERIMENTS_ROOT EXPERIMENT_DIR PRETRAIN_DIR ARTIFACTS_DIR PRETRAIN_ARTIFACTS_DIR
 
-export WANDB_NAME="tox21"
-export WANDB_JOB_TYPE="tox21"
-
 : "${GITHUB_ENV:=${PRETRAIN_TOX21_ENV}}"
 mkdir -p "$(dirname "$GITHUB_ENV")"
 : >"$GITHUB_ENV"
@@ -61,12 +58,28 @@ if [[ "$SOURCE" == "pretrain_frozen" ]]; then
     fi
   fi
 fi
+
+wandb_mode="${SOURCE//_/-}"
+if [[ "$SOURCE" == "pretrain_frozen" ]]; then
+  wandb_mode="baseline"
+fi
+
+if [[ -z "${WANDB_NAME:-}" ]]; then
+  WANDB_NAME="tox21-${wandb_mode}"
+  export WANDB_NAME
+fi
+
+if [[ -z "${WANDB_JOB_TYPE:-}" ]]; then
+  WANDB_JOB_TYPE="tox21-${wandb_mode}"
+  export WANDB_JOB_TYPE
+fi
+echo "[tox21] wandb run name=${WANDB_NAME} job_type=${WANDB_JOB_TYPE}" >&2
 MANIFEST_DEFAULT="${PRETRAIN_MANIFEST:-${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json}"
 MANIFEST_PATH="${TOX21_ENCODER_MANIFEST:-$MANIFEST_DEFAULT}"
 
 if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   if [[ -z "${FINETUNE_EPOCHS:-}" ]]; then
-    FINETUNE_EPOCHS=18
+    FINETUNE_EPOCHS=10
   fi
   if [[ -z "${TOX21_FINETUNE_PATIENCE:-}" ]]; then
     TOX21_FINETUNE_PATIENCE=10
@@ -683,6 +696,20 @@ elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   if [[ -z "$ft_export_path" && -f "$stage_json" ]]; then
     echo "[tox21] warning: encoder_finetuned checkpoint not recorded in ${stage_json}" >&2
   fi
+  task_candidates=()
+  if task_paths=$(extract_finetune_task_checkpoints "$stage_json" 2>/dev/null); then
+    while IFS= read -r task_path; do
+      [[ -n "$task_path" ]] || continue
+      task_candidates+=("assay_task" "$task_path")
+    done <<<"$task_paths"
+  fi
+  seed_candidates=()
+  if [[ -n "$stage_root" ]]; then
+    collect_seed_best_checkpoints "$stage_root" seed_candidates || true
+  fi
+  if [[ -n "${FINETUNE_DIR:-}" && "${stage_root:-}" != "${FINETUNE_DIR%/}" ]]; then
+    collect_seed_best_checkpoints "${FINETUNE_DIR%/}" seed_candidates || true
+  fi
   resolved_path=""
   resolved_label=""
   if ! select_encoder_candidate resolved_path resolved_label \
@@ -757,6 +784,20 @@ elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
 
   if [[ -z "$ft_export_path" && -f "$stage_json" ]]; then
     echo "[tox21] warning: encoder_finetuned checkpoint not recorded in ${stage_json}" >&2
+  fi
+  task_candidates=()
+  if task_paths=$(extract_finetune_task_checkpoints "$stage_json" 2>/dev/null); then
+    while IFS= read -r task_path; do
+      [[ -n "$task_path" ]] || continue
+      task_candidates+=("assay_task" "$task_path")
+    done <<<"$task_paths"
+  fi
+  seed_candidates=()
+  if [[ -n "$stage_root" ]]; then
+    collect_seed_best_checkpoints "$stage_root" seed_candidates || true
+  fi
+  if [[ -n "${FINETUNE_DIR:-}" && "${stage_root:-}" != "${FINETUNE_DIR%/}" ]]; then
+    collect_seed_best_checkpoints "${FINETUNE_DIR%/}" seed_candidates || true
   fi
   resolved_path=""
   resolved_label=""
