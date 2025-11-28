@@ -1216,6 +1216,587 @@ fi
     assert values["TOX21_FULL_FINETUNE"].lower() == "true"
 
 
+def test_tox21_cached_finetune_artifacts_are_discovered(tmp_path):
+    experiments_root = tmp_path / "experiments"
+    exp_id = "19678842966"
+    pretrain_root = experiments_root / exp_id
+    pretrain_dir = pretrain_root / "pretrain"
+    pretrain_artifacts = pretrain_root / "artifacts"
+    finetune_dir = pretrain_root / "finetune"
+    tox21_dir = pretrain_root / "tox21"
+
+    for path in (pretrain_dir, pretrain_artifacts, finetune_dir, tox21_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = pretrain_artifacts / "encoder_manifest.json"
+    manifest_path.write_text(json.dumps({"paths": {"encoder": "missing"}}), encoding="utf-8")
+    state_path = pretrain_root / "pretrain_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    data_root = tmp_path / "data"
+    cache_root = data_root / "cache" / "finetune"
+    encoder_path = cache_root / "encoder_ft.pt"
+    encoder_path.parent.mkdir(parents=True, exist_ok=True)
+    encoder_path.write_text("cached", encoding="utf-8")
+
+    stage_outputs = cache_root / "stage-outputs"
+    stage_outputs.mkdir(parents=True, exist_ok=True)
+    finetune_json = stage_outputs / "finetune.json"
+    finetune_json.write_text(
+        json.dumps({"encoder_finetuned": {"checkpoint": str(encoder_path)}}),
+        encoding="utf-8",
+    )
+
+    micromamba_stub = tmp_path / "micromamba"
+    micromamba_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -e\n"
+        "if [[ \"${1:-}\" == \"run\" ]]; then\n"
+        "  shift\n"
+        "  if [[ \"${1:-}\" == \"-n\" ]]; then\n"
+        "    shift 2\n"
+        "  fi\n"
+        "  exec \"$@\"\n"
+        "elif [[ \"${1:-}\" == \"shell\" && \"${2:-}\" == \"hook\" ]]; then\n"
+        "  exit 0\n"
+        "else\n"
+        "  echo \"micromamba stub unsupported: $*\" >&2\n"
+        "  exit 1\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    micromamba_stub.chmod(0o755)
+
+    stage_stub = tmp_path / "stage_stub.sh"
+    stage_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "mkdir -p \"${TOX21_DIR}/stage-outputs\"\n"
+        "printf '{}' > \"${TOX21_DIR}/stage-outputs/tox21_${TOX21_EVALUATION_MODE}.json\"\n"
+        "printf '%s' \"${TOX21_ENCODER_CHECKPOINT}\" > \"${TOX21_DIR}/selected_checkpoint.txt\"\n",
+        encoding="utf-8",
+    )
+    stage_stub.chmod(0o755)
+
+    grid_dir = tmp_path / "grid"
+    grid_dir.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "APP_DIR": str(REPO_ROOT),
+            "EXPERIMENTS_ROOT": str(experiments_root),
+            "EXP_ID": exp_id,
+            "PRETRAIN_EXP_ID": exp_id,
+            "PRETRAIN_EXPERIMENT_ROOT": str(pretrain_root),
+            "PRETRAIN_DIR": str(pretrain_dir),
+            "PRETRAIN_ARTIFACTS_DIR": str(pretrain_artifacts),
+            "PRETRAIN_MANIFEST": str(manifest_path),
+            "PRETRAIN_STATE_FILE": str(state_path),
+            "PRETRAIN_STATE_FILE_CANONICAL": str(state_path),
+            "PRETRAIN_TOX21_ENV": str(pretrain_root / "tox21_gate.env"),
+            "FINETUNE_DIR": str(finetune_dir),
+            "TOX21_DIR": str(tox21_dir),
+            "GITHUB_ENV": str(pretrain_root / "tox21_gate.env"),
+            "WANDB_API_KEY": "",
+            "STAGE_BIN": str(stage_stub),
+            "MMBIN": str(micromamba_stub),
+            "MAMBA_ROOT_PREFIX": str(tmp_path / "micromamba_root"),
+            "GRID_DIR": str(grid_dir),
+            "GRID_SOURCE_DIR": str(grid_dir),
+            "DATA_ROOT": str(data_root),
+            "TOX21_EVALUATION_MODE": "fine_tuned",
+            "TOX21_ENCODER_SOURCE": "fine_tuned",
+            "MJEPACI_STAGE_SHIM": str(stage_stub),
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", "scripts/ci/run-tox21.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    selected = (tox21_dir / "selected_checkpoint.txt").read_text(encoding="utf-8")
+    assert selected == str(encoder_path)
+
+
+def test_tox21_prefers_assay_task_checkpoints_over_seed_zero(tmp_path):
+    experiments_root = tmp_path / "experiments"
+    exp_id = "19678842966"
+    pretrain_root = experiments_root / exp_id
+    pretrain_dir = pretrain_root / "pretrain"
+    pretrain_artifacts = pretrain_root / "artifacts"
+    finetune_dir = pretrain_root / "finetune"
+    tox21_dir = pretrain_root / "tox21"
+
+    for path in (pretrain_dir, pretrain_artifacts, finetune_dir, tox21_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = pretrain_artifacts / "encoder_manifest.json"
+    manifest_path.write_text(json.dumps({"paths": {"encoder": "missing"}}), encoding="utf-8")
+    state_path = pretrain_root / "pretrain_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    data_root = tmp_path / "data"
+    cache_root = data_root / "cache" / "finetune"
+    assay_ckpt = cache_root / "NR-AR" / "seed_3" / "ft_best.pt"
+    assay_ckpt.parent.mkdir(parents=True, exist_ok=True)
+    assay_ckpt.write_text("assay-best", encoding="utf-8")
+
+    stage_outputs = cache_root / "stage-outputs"
+    stage_outputs.mkdir(parents=True, exist_ok=True)
+    finetune_json = stage_outputs / "finetune.json"
+    finetune_json.write_text(
+        json.dumps(
+            {
+                "tasks": {
+                    "NR-AR": {
+                        "encoder_finetuned": {"checkpoint": str(assay_ckpt)},
+                        "diagnostics": {"encoder_checkpoint": str(assay_ckpt)},
+                    },
+                    "SR-ARE": {"selected_path": str(assay_ckpt)},
+                },
+                "primary_task": "NR-AR",
+                "task_order": ["NR-AR", "SR-ARE"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    micromamba_stub = tmp_path / "micromamba"
+    micromamba_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -e\n"
+        "if [[ \"${1:-}\" == \"run\" ]]; then\n"
+        "  shift\n"
+        "  if [[ \"${1:-}\" == \"-n\" ]]; then\n"
+        "    shift 2\n"
+        "  fi\n"
+        "  exec \"$@\"\n"
+        "elif [[ \"${1:-}\" == \"shell\" && \"${2:-}\" == \"hook\" ]]; then\n"
+        "  exit 0\n"
+        "else\n"
+        "  echo \"micromamba stub unsupported: $*\" >&2\n"
+        "  exit 1\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    micromamba_stub.chmod(0o755)
+
+    stage_stub = tmp_path / "stage_stub.sh"
+    stage_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "mkdir -p \"${TOX21_DIR}/stage-outputs\"\n"
+        "printf '{}' > \"${TOX21_DIR}/stage-outputs/tox21_${TOX21_EVALUATION_MODE}.json\"\n"
+        "printf '%s' \"${TOX21_ENCODER_CHECKPOINT}\" > \"${TOX21_DIR}/selected_checkpoint.txt\"\n",
+        encoding="utf-8",
+    )
+    stage_stub.chmod(0o755)
+
+    grid_dir = tmp_path / "grid"
+    grid_dir.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "APP_DIR": str(REPO_ROOT),
+            "EXPERIMENTS_ROOT": str(experiments_root),
+            "EXP_ID": exp_id,
+            "PRETRAIN_EXP_ID": exp_id,
+            "PRETRAIN_EXPERIMENT_ROOT": str(pretrain_root),
+            "PRETRAIN_DIR": str(pretrain_dir),
+            "PRETRAIN_ARTIFACTS_DIR": str(pretrain_artifacts),
+            "PRETRAIN_MANIFEST": str(manifest_path),
+            "PRETRAIN_STATE_FILE": str(state_path),
+            "PRETRAIN_STATE_FILE_CANONICAL": str(state_path),
+            "PRETRAIN_TOX21_ENV": str(pretrain_root / "tox21_gate.env"),
+            "FINETUNE_DIR": str(finetune_dir),
+            "TOX21_DIR": str(tox21_dir),
+            "GITHUB_ENV": str(pretrain_root / "tox21_gate.env"),
+            "WANDB_API_KEY": "",
+            "STAGE_BIN": str(stage_stub),
+            "MMBIN": str(micromamba_stub),
+            "MAMBA_ROOT_PREFIX": str(tmp_path / "micromamba_root"),
+            "GRID_DIR": str(grid_dir),
+            "GRID_SOURCE_DIR": str(grid_dir),
+            "DATA_ROOT": str(data_root),
+            "TOX21_EVALUATION_MODE": "fine_tuned",
+            "TOX21_ENCODER_SOURCE": "fine_tuned",
+            "MJEPACI_STAGE_SHIM": str(stage_stub),
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", "scripts/ci/run-tox21.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    selected = (tox21_dir / "selected_checkpoint.txt").read_text(encoding="utf-8")
+    assert selected == str(assay_ckpt)
+
+
+def test_tox21_consumes_cached_assay_stage_outputs(tmp_path):
+    experiments_root = tmp_path / "experiments"
+    exp_id = "19678843010"
+    pretrain_root = experiments_root / exp_id
+    pretrain_dir = pretrain_root / "pretrain"
+    pretrain_artifacts = pretrain_root / "artifacts"
+    finetune_dir = pretrain_root / "finetune"
+    tox21_dir = pretrain_root / "tox21"
+
+    for path in (pretrain_dir, pretrain_artifacts, finetune_dir, tox21_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = pretrain_artifacts / "encoder_manifest.json"
+    manifest_path.write_text(json.dumps({"paths": {"encoder": "missing"}}), encoding="utf-8")
+    state_path = pretrain_root / "pretrain_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    data_root = tmp_path / "data"
+    cache_root = data_root / "cache" / "finetune"
+
+    assay_ckpt = cache_root / "NR-AhR" / "seed_5" / "ft_best.pt"
+    assay_ckpt.parent.mkdir(parents=True, exist_ok=True)
+    assay_ckpt.write_text("assay-best", encoding="utf-8")
+
+    stage_outputs = cache_root / "stage-outputs" / "NR-AhR"
+    stage_outputs.mkdir(parents=True, exist_ok=True)
+    finetune_json = stage_outputs / "finetune_NR-AhR.json"
+    finetune_json.write_text(
+        json.dumps(
+            {
+                "encoder_finetuned": {"checkpoint": str(assay_ckpt)},
+                "tasks": {
+                    "NR-AhR": {
+                        "encoder_finetuned": {"checkpoint": str(assay_ckpt)},
+                        "diagnostics": {"encoder_checkpoint": str(assay_ckpt)},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    micromamba_stub = tmp_path / "micromamba"
+    micromamba_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -e\n"
+        "if [[ \"${1:-}\" == \"run\" ]]; then\n"
+        "  shift\n"
+        "  if [[ \"${1:-}\" == \"-n\" ]]; then\n"
+        "    shift 2\n"
+        "  fi\n"
+        "  exec \"$@\"\n"
+        "elif [[ \"${1:-}\" == \"shell\" && \"${2:-}\" == \"hook\" ]]; then\n"
+        "  exit 0\n"
+        "else\n"
+        "  echo \"micromamba stub unsupported: $*\" >&2\n"
+        "  exit 1\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    micromamba_stub.chmod(0o755)
+
+    stage_stub = tmp_path / "stage_stub.sh"
+    stage_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "mkdir -p \"${TOX21_DIR}/stage-outputs\"\n"
+        "printf '{}' > \"${TOX21_DIR}/stage-outputs/tox21_${TOX21_EVALUATION_MODE}.json\"\n"
+        "printf '%s' \"${TOX21_ENCODER_CHECKPOINT}\" > \"${TOX21_DIR}/selected_checkpoint.txt\"\n",
+        encoding="utf-8",
+    )
+    stage_stub.chmod(0o755)
+
+    grid_dir = tmp_path / "grid"
+    grid_dir.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "APP_DIR": str(REPO_ROOT),
+            "EXPERIMENTS_ROOT": str(experiments_root),
+            "EXP_ID": exp_id,
+            "PRETRAIN_EXP_ID": exp_id,
+            "PRETRAIN_EXPERIMENT_ROOT": str(pretrain_root),
+            "PRETRAIN_DIR": str(pretrain_dir),
+            "PRETRAIN_ARTIFACTS_DIR": str(pretrain_artifacts),
+            "PRETRAIN_MANIFEST": str(manifest_path),
+            "PRETRAIN_STATE_FILE": str(state_path),
+            "PRETRAIN_STATE_FILE_CANONICAL": str(state_path),
+            "PRETRAIN_TOX21_ENV": str(pretrain_root / "tox21_gate.env"),
+            "FINETUNE_DIR": str(finetune_dir),
+            "TOX21_DIR": str(tox21_dir),
+            "GITHUB_ENV": str(pretrain_root / "tox21_gate.env"),
+            "WANDB_API_KEY": "",
+            "STAGE_BIN": str(stage_stub),
+            "MMBIN": str(micromamba_stub),
+            "MAMBA_ROOT_PREFIX": str(tmp_path / "micromamba_root"),
+            "GRID_DIR": str(grid_dir),
+            "GRID_SOURCE_DIR": str(grid_dir),
+            "DATA_ROOT": str(data_root),
+            "TOX21_EVALUATION_MODE": "fine_tuned",
+            "TOX21_ENCODER_SOURCE": "fine_tuned",
+            "MJEPACI_STAGE_SHIM": str(stage_stub),
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", "scripts/ci/run-tox21.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    selected = (tox21_dir / "selected_checkpoint.txt").read_text(encoding="utf-8")
+    assert selected == str(assay_ckpt)
+
+
+def test_tox21_prioritizes_assay_task_over_export_checkpoint(tmp_path):
+    experiments_root = tmp_path / "experiments"
+    exp_id = "19678842999"
+    pretrain_root = experiments_root / exp_id
+    pretrain_dir = pretrain_root / "pretrain"
+    pretrain_artifacts = pretrain_root / "artifacts"
+    finetune_dir = pretrain_root / "finetune"
+    tox21_dir = pretrain_root / "tox21"
+
+    for path in (pretrain_dir, pretrain_artifacts, finetune_dir, tox21_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = pretrain_artifacts / "encoder_manifest.json"
+    manifest_path.write_text(json.dumps({"paths": {"encoder": "missing"}}), encoding="utf-8")
+    state_path = pretrain_root / "pretrain_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    stage_outputs = finetune_dir / "stage-outputs"
+    stage_outputs.mkdir(parents=True, exist_ok=True)
+
+    export_ckpt = finetune_dir / "encoder_ft.pt"
+    export_ckpt.write_text("export", encoding="utf-8")
+
+    assay_ckpt = finetune_dir / "NR-AR" / "seed_4" / "ft_best.pt"
+    assay_ckpt.parent.mkdir(parents=True, exist_ok=True)
+    assay_ckpt.write_text("assay-best", encoding="utf-8")
+
+    finetune_json = stage_outputs / "finetune.json"
+    finetune_json.write_text(
+        json.dumps(
+            {
+                "encoder_finetuned": {"checkpoint": str(export_ckpt)},
+                "tasks": {
+                    "NR-AR": {
+                        "encoder_finetuned": {"checkpoint": str(assay_ckpt)},
+                        "diagnostics": {"encoder_checkpoint": str(assay_ckpt)},
+                    },
+                    "SR-ARE": {"selected_path": str(assay_ckpt)},
+                },
+                "primary_task": "NR-AR",
+                "task_order": ["NR-AR", "SR-ARE"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    micromamba_stub = tmp_path / "micromamba"
+    micromamba_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -e\n"
+        "if [[ \"${1:-}\" == \"run\" ]]; then\n"
+        "  shift\n"
+        "  if [[ \"${1:-}\" == \"-n\" ]]; then\n"
+        "    shift 2\n"
+        "  fi\n"
+        "  exec \"$@\"\n"
+        "elif [[ \"${1:-}\" == \"shell\" && \"${2:-}\" == \"hook\" ]]; then\n"
+        "  exit 0\n"
+        "else\n"
+        "  echo \"micromamba stub unsupported: $*\" >&2\n"
+        "  exit 1\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    micromamba_stub.chmod(0o755)
+
+    stage_stub = tmp_path / "stage_stub.sh"
+    stage_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "mkdir -p \"${TOX21_DIR}/stage-outputs\"\n"
+        "printf '{}' > \"${TOX21_DIR}/stage-outputs/tox21_${TOX21_EVALUATION_MODE}.json\"\n"
+        "printf '%s' \"${TOX21_ENCODER_CHECKPOINT}\" > \"${TOX21_DIR}/selected_checkpoint.txt\"\n",
+        encoding="utf-8",
+    )
+    stage_stub.chmod(0o755)
+
+    grid_dir = tmp_path / "grid"
+    grid_dir.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "APP_DIR": str(REPO_ROOT),
+            "EXPERIMENTS_ROOT": str(experiments_root),
+            "EXP_ID": exp_id,
+            "PRETRAIN_EXP_ID": exp_id,
+            "PRETRAIN_EXPERIMENT_ROOT": str(pretrain_root),
+            "PRETRAIN_DIR": str(pretrain_dir),
+            "PRETRAIN_ARTIFACTS_DIR": str(pretrain_artifacts),
+            "PRETRAIN_MANIFEST": str(manifest_path),
+            "PRETRAIN_STATE_FILE": str(state_path),
+            "PRETRAIN_STATE_FILE_CANONICAL": str(state_path),
+            "PRETRAIN_TOX21_ENV": str(pretrain_root / "tox21_gate.env"),
+            "FINETUNE_DIR": str(finetune_dir),
+            "TOX21_DIR": str(tox21_dir),
+            "GITHUB_ENV": str(pretrain_root / "tox21_gate.env"),
+            "WANDB_API_KEY": "",
+            "STAGE_BIN": str(stage_stub),
+            "MMBIN": str(micromamba_stub),
+            "MAMBA_ROOT_PREFIX": str(tmp_path / "micromamba_root"),
+            "GRID_DIR": str(grid_dir),
+            "GRID_SOURCE_DIR": str(grid_dir),
+            "DATA_ROOT": str(tmp_path / "data"),
+            "TOX21_EVALUATION_MODE": "fine_tuned",
+            "TOX21_ENCODER_SOURCE": "fine_tuned",
+            "MJEPACI_STAGE_SHIM": str(stage_stub),
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", "scripts/ci/run-tox21.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    selected = (tox21_dir / "selected_checkpoint.txt").read_text(encoding="utf-8")
+    assert selected == str(assay_ckpt)
+
+
+def test_tox21_consumes_best_available_seed_checkpoint(tmp_path):
+    experiments_root = tmp_path / "experiments"
+    exp_id = "222222"
+    pretrain_root = experiments_root / exp_id
+    pretrain_dir = pretrain_root / "pretrain"
+    pretrain_artifacts = pretrain_root / "artifacts"
+    finetune_dir = pretrain_root / "finetune"
+    tox21_dir = pretrain_root / "tox21"
+
+    for path in (pretrain_dir, pretrain_artifacts, finetune_dir, tox21_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = pretrain_artifacts / "encoder_manifest.json"
+    manifest_path.write_text(json.dumps({"paths": {"encoder": "missing"}}), encoding="utf-8")
+    state_path = pretrain_root / "pretrain_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    stage_outputs = finetune_dir / "stage-outputs"
+    stage_outputs.mkdir(parents=True, exist_ok=True)
+    finetune_json = stage_outputs / "finetune.json"
+    finetune_json.write_text(json.dumps({"encoder_finetuned": {"checkpoint": "missing"}}), encoding="utf-8")
+
+    seed_one_ckpt = finetune_dir / "seed_1" / "ft_best.pt"
+    seed_two_ckpt = finetune_dir / "seed_2" / "ft_best.pt"
+    seed_one_ckpt.parent.mkdir(parents=True, exist_ok=True)
+    seed_two_ckpt.parent.mkdir(parents=True, exist_ok=True)
+    seed_one_ckpt.write_text("seed-1", encoding="utf-8")
+    seed_two_ckpt.write_text("seed-2", encoding="utf-8")
+
+    micromamba_stub = tmp_path / "micromamba"
+    micromamba_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -e\n"
+        "if [[ \"${1:-}\" == \"run\" ]]; then\n"
+        "  shift\n"
+        "  if [[ \"${1:-}\" == \"-n\" ]]; then\n"
+        "    shift 2\n"
+        "  fi\n"
+        "  exec \"$@\"\n"
+        "elif [[ \"${1:-}\" == \"shell\" && \"${2:-}\" == \"hook\" ]]; then\n"
+        "  exit 0\n"
+        "else\n"
+        "  echo \"micromamba stub unsupported: $*\" >&2\n"
+        "  exit 1\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    micromamba_stub.chmod(0o755)
+
+    stage_stub = tmp_path / "stage_stub.sh"
+    stage_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "mkdir -p \"${TOX21_DIR}/stage-outputs\"\n"
+        "printf '{}' > \"${TOX21_DIR}/stage-outputs/tox21_${TOX21_EVALUATION_MODE}.json\"\n"
+        "printf '%s' \"${TOX21_ENCODER_CHECKPOINT}\" > \"${TOX21_DIR}/selected_checkpoint.txt\"\n",
+        encoding="utf-8",
+    )
+    stage_stub.chmod(0o755)
+
+    grid_dir = tmp_path / "grid"
+    grid_dir.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "APP_DIR": str(REPO_ROOT),
+            "EXPERIMENTS_ROOT": str(experiments_root),
+            "EXP_ID": exp_id,
+            "PRETRAIN_EXP_ID": exp_id,
+            "PRETRAIN_EXPERIMENT_ROOT": str(pretrain_root),
+            "PRETRAIN_DIR": str(pretrain_dir),
+            "PRETRAIN_ARTIFACTS_DIR": str(pretrain_artifacts),
+            "PRETRAIN_MANIFEST": str(manifest_path),
+            "PRETRAIN_STATE_FILE": str(state_path),
+            "PRETRAIN_STATE_FILE_CANONICAL": str(state_path),
+            "PRETRAIN_TOX21_ENV": str(pretrain_root / "tox21_gate.env"),
+            "FINETUNE_DIR": str(finetune_dir),
+            "TOX21_DIR": str(tox21_dir),
+            "GITHUB_ENV": str(pretrain_root / "tox21_gate.env"),
+            "WANDB_API_KEY": "",
+            "STAGE_BIN": str(stage_stub),
+            "MMBIN": str(micromamba_stub),
+            "MAMBA_ROOT_PREFIX": str(tmp_path / "micromamba_root"),
+            "GRID_DIR": str(grid_dir),
+            "GRID_SOURCE_DIR": str(grid_dir),
+            "DATA_ROOT": str(tmp_path / "data"),
+            "TOX21_EVALUATION_MODE": "fine_tuned",
+            "TOX21_ENCODER_SOURCE": "fine_tuned",
+            "MJEPACI_STAGE_SHIM": str(stage_stub),
+        }
+    )
+
+    proc = subprocess.run(
+        ["bash", "scripts/ci/run-tox21.sh"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    selected = (tox21_dir / "selected_checkpoint.txt").read_text(encoding="utf-8")
+    assert selected == str(seed_one_ckpt)
+
+
 def test_build_stage_args_respects_full_finetune_env(tmp_path):
     best_cfg = {
         "config": {
