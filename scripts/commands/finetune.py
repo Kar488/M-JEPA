@@ -52,7 +52,7 @@ _TOX21_TASKS = {
     "SR-p53",
 }
 
-_TOX21_EPOCH_FLOOR_DEFAULT = 18
+_TOX21_EPOCH_FLOOR_DEFAULT = 10
 
 
 def _flag_was_provided(flags: Iterable[str]) -> bool:

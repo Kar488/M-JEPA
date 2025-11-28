@@ -66,7 +66,7 @@ MANIFEST_PATH="${TOX21_ENCODER_MANIFEST:-$MANIFEST_DEFAULT}"
 
 if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   if [[ -z "${FINETUNE_EPOCHS:-}" ]]; then
-    FINETUNE_EPOCHS=18
+    FINETUNE_EPOCHS=10
   fi
   if [[ -z "${TOX21_FINETUNE_PATIENCE:-}" ]]; then
     TOX21_FINETUNE_PATIENCE=10
