@@ -646,6 +646,10 @@ PY
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
 elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   stage_json="${FINETUNE_DIR}/stage-outputs/finetune.json"
+  stage_root=""
+  if stage_root_guess=$(finetune_root_from_stage_output "$stage_json" 2>/dev/null); then
+    stage_root="$stage_root_guess"
+  fi
   stage_files=()
   collect_finetune_stage_outputs "$stage_json" stage_files || true
   if [[ ! -f "$stage_json" ]]; then
@@ -696,14 +700,12 @@ elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   if [[ -z "$ft_export_path" && -f "$stage_json" ]]; then
     echo "[tox21] warning: encoder_finetuned checkpoint not recorded in ${stage_json}" >&2
   fi
-  task_candidates=()
   if task_paths=$(extract_finetune_task_checkpoints "$stage_json" 2>/dev/null); then
     while IFS= read -r task_path; do
       [[ -n "$task_path" ]] || continue
       task_candidates+=("assay_task" "$task_path")
     done <<<"$task_paths"
   fi
-  seed_candidates=()
   if [[ -n "$stage_root" ]]; then
     collect_seed_best_checkpoints "$stage_root" seed_candidates || true
   fi
@@ -736,6 +738,10 @@ elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
 elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   stage_json="${FINETUNE_DIR}/stage-outputs/finetune.json"
+  stage_root=""
+  if stage_root_guess=$(finetune_root_from_stage_output "$stage_json" 2>/dev/null); then
+    stage_root="$stage_root_guess"
+  fi
   stage_files=()
   collect_finetune_stage_outputs "$stage_json" stage_files || true
   if [[ ! -f "$stage_json" ]]; then
@@ -785,14 +791,12 @@ elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   if [[ -z "$ft_export_path" && -f "$stage_json" ]]; then
     echo "[tox21] warning: encoder_finetuned checkpoint not recorded in ${stage_json}" >&2
   fi
-  task_candidates=()
   if task_paths=$(extract_finetune_task_checkpoints "$stage_json" 2>/dev/null); then
     while IFS= read -r task_path; do
       [[ -n "$task_path" ]] || continue
       task_candidates+=("assay_task" "$task_path")
     done <<<"$task_paths"
   fi
-  seed_candidates=()
   if [[ -n "$stage_root" ]]; then
     collect_seed_best_checkpoints "$stage_root" seed_candidates || true
   fi
