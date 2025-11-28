@@ -432,6 +432,66 @@ def _resolve_label_columns(args: argparse.Namespace) -> List[str]:
             seen.append(entry)
     return seen
 
+
+def _sanitize_dataset_labels(dataset) -> tuple[Any, Dict[str, int]]:
+    """Drop rows with missing/sentinel labels from a GraphDataset.
+
+    Treat negative or non-finite labels as missing (common when ``-1`` encodes
+    "no label" in MoleculeNet/Tox21 CSVs) and return a filtered copy alongside
+    drop statistics.
+    """
+
+    labels_attr = getattr(dataset, "labels", None)
+    graphs_attr = getattr(dataset, "graphs", None)
+
+    stats = {"size_before": len(dataset), "dropped_negative": 0, "dropped_nonfinite": 0}
+
+    if labels_attr is None or graphs_attr is None:
+        stats["size_after"] = len(dataset)
+        stats["dropped_total"] = 0
+        return dataset, stats
+
+    try:
+        labels_arr = np.asarray(labels_attr, dtype=float)
+    except Exception:
+        logger.debug("Skipping label sanitization; unable to coerce labels array", exc_info=True)
+        stats["size_after"] = len(dataset)
+        stats["dropped_total"] = 0
+        return dataset, stats
+
+    if labels_arr.ndim > 1:
+        if labels_arr.shape[1] == 1:
+            labels_arr = labels_arr[:, 0]
+        else:
+            logger.debug(
+                "Skipping label sanitization for multi-dimensional labels with shape %s", labels_arr.shape
+            )
+            stats["size_after"] = len(dataset)
+            stats["dropped_total"] = 0
+            return dataset, stats
+
+    nonfinite_mask = ~np.isfinite(labels_arr)
+    negative_mask = labels_arr < 0
+    drop_mask = nonfinite_mask | negative_mask
+
+    stats["dropped_nonfinite"] = int(nonfinite_mask.sum())
+    stats["dropped_negative"] = int(negative_mask.sum())
+    stats["dropped_total"] = int(drop_mask.sum())
+
+    if stats["dropped_total"] <= 0:
+        stats["size_after"] = len(dataset)
+        return dataset, stats
+
+    keep_indices = [idx for idx, flag in enumerate(~drop_mask) if flag]
+    graphs_clean = [graphs_attr[idx] for idx in keep_indices]
+    smiles_attr = getattr(dataset, "smiles", None)
+    smiles_clean = [smiles_attr[idx] for idx in keep_indices] if smiles_attr else None
+    labels_clean = labels_arr[keep_indices]
+
+    cleaned = GraphDataset(graphs_clean, labels_clean, smiles_clean)
+    stats["size_after"] = len(cleaned)
+    return cleaned, stats
+
 stage_config: Dict[str, Any] = {}
 soft_timeout_exit_code = int(os.environ.get("LINEAR_HEAD_SOFT_TIMEOUT_EXIT", "86"))
 
@@ -763,6 +823,7 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
     log_effective_gnn(args, logger, wb)
 
     # Load labelled dataset
+    label_drop_stats: Dict[str, int] = {}
     try:
         labeled = load_directory_dataset(
             dataset_path,
@@ -774,6 +835,29 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
 
         if requires_3d:
             _ensure_dataset_has_pos(labeled)
+
+        labeled, label_drop_stats = _sanitize_dataset_labels(labeled)
+        if label_drop_stats.get("dropped_total", 0) > 0:
+            logger.info(
+                "[finetune] filtered %d/%d labelled rows (negative or non-finite labels)",
+                label_drop_stats.get("dropped_total", 0),
+                label_drop_stats.get("size_before", len(labeled)),
+            )
+            if wb is not None:
+                try:
+                    wb.log(
+                        {
+                            "dataset/labels_dropped": float(label_drop_stats["dropped_total"]),
+                            "dataset/labels_dropped_negative": float(
+                                label_drop_stats.get("dropped_negative", 0)
+                            ),
+                            "dataset/labels_dropped_nonfinite": float(
+                                label_drop_stats.get("dropped_nonfinite", 0)
+                            ),
+                        }
+                    )
+                except Exception:
+                    pass
 
         # Sample a subset of labeled graphs if requested.  Use getattr to
         # handle cases where sample_labeled isn’t provided.
@@ -790,6 +874,11 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
     except Exception:
         logger.exception("Failed to load labelled dataset")
         wb.log({"phase": "data_load", "status": "error"})
+        sys.exit(1)
+
+    if len(labeled) <= 0:
+        logger.error("No labelled rows remain after filtering; aborting fine-tune")
+        wb.log({"phase": "data_load", "status": "empty_dataset"})
         sys.exit(1)
 
     dataset_size = len(labeled)
@@ -1837,6 +1926,14 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
         "batch_size_effective": int(effective_batch_size) if effective_batch_size else None,
         "batch_size_target_batches": int(min_batches_target),
     }
+    if label_drop_stats:
+        dataset_summary["labels_dropped"] = int(label_drop_stats.get("dropped_total", 0))
+        dataset_summary["labels_dropped_negative"] = int(
+            label_drop_stats.get("dropped_negative", 0)
+        )
+        dataset_summary["labels_dropped_nonfinite"] = int(
+            label_drop_stats.get("dropped_nonfinite", 0)
+        )
     stage_payload["dataset"] = dataset_summary
     stage_payload["seed_list"] = seed_list_summary
     if getattr(args, "ckpt_dir", None):
