@@ -141,9 +141,17 @@ ci_phase2_locate_phase1_spec() {
 ci_phase2_ensure_sweep_id() {
   local grid_root="${1%/}"
   local prior_source="${2%/}"
+  local allow_reuse="$(normalize_bool "${3:-0}" 0)"
   local sweep_file="${grid_root}/phase2_sweep_id.txt"
   if [[ -f "$sweep_file" ]]; then
-    return 0
+    if (( allow_reuse )); then
+      echo "[phase2] reusing existing sweep id from ${sweep_file}; sweep spec will not be regenerated" >&2
+      return 0
+    fi
+
+    local stale_id="$(<"$sweep_file")"
+    echo "[phase2] discarding stale sweep id ${stale_id:-<unknown>} in ${sweep_file} to create a fresh sweep" >&2
+    rm -f "$sweep_file" || true
   fi
 
   local -a spec_candidates=()
@@ -326,10 +334,14 @@ ci_print_env_diag "$STAGE_BIN"
 if [[ -n "${GRID_SOURCE_DIR:-}" ]]; then
   grid_root="${GRID_SOURCE_DIR%/}"
   source_hint="${common_grid_source_dir%/}"
-  if ! ci_phase2_ensure_sweep_id "$grid_root" "$source_hint"; then
+  allow_reuse_flag=0
+  if (( freeze_active || ci_phase2_force_reuse )); then
+    allow_reuse_flag=1
+  fi
+  if ! ci_phase2_ensure_sweep_id "$grid_root" "$source_hint" "$allow_reuse_flag"; then
     exit $?
   fi
-  unset grid_root source_hint || true
+  unset grid_root source_hint allow_reuse_flag || true
 fi
 
 # At this point GRID_EXP_ID and PRETRAIN_EXP_ID have been set (either from
