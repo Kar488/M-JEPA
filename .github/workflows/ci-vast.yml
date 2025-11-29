@@ -532,6 +532,9 @@ jobs:
           EXP_ID: ${{ env.EXP_ID }}
           EXPERIMENTS_ROOT: ${{ env.EXPERIMENTS_ROOT }}
           RUNNER_TEMP: ${{ runner.temp }}
+          # run-grid-phase2.sh already runs sweep → recheck → export on the Vast host.
+          # Artifact collection only validates that the recheck outputs exist.
+          REQUIRE_PHASE2_RECHECK: "1"
         run: |
           echo "WORKSPACE=$GITHUB_WORKSPACE" && ls -la "$GITHUB_WORKSPACE" || true
           ls -la "$GITHUB_WORKSPACE/scripts/ci" || true

@@ -345,6 +345,97 @@ if [[ "${src_grid%/}" != "${dst_grid%/}" ]]; then
 fi
 EOS
 
+seed_grid_markers() {
+  local grid_dir="$1" label="$2"
+  [[ -n "$grid_dir" ]] || return 0
+
+  ssh "${SSH_OPTS[@]}" "$REMOTE" bash -s -- "$grid_dir" "$label" <<'EOS'
+set -euo pipefail
+grid_dir="${1%/}"
+label="$2"
+
+if [[ ! -d "$grid_dir" ]]; then
+  exit 0
+fi
+
+copy_if_missing() {
+  local name="$1"
+  shift || true
+  local -a probes=("$@")
+  [[ -f "${grid_dir}/${name}" ]] && return 0
+
+  local probe
+  for probe in "${probes[@]}"; do
+    [[ -z "$probe" ]] && continue
+    if [[ -f "${grid_dir}/${probe}" ]]; then
+      mkdir -p "${grid_dir}"
+      cp -f "${grid_dir}/${probe}" "${grid_dir}/${name}"
+      echo "[ci][info] restored ${name} for ${label} from ${probe}" >&2
+      return 0
+    fi
+  done
+}
+
+copy_if_missing \
+  best_grid_config.json \
+  phase2_export/stage-outputs/best_grid_config.json \
+  phase2_recheck/stage-outputs/best_grid_config.json \
+  phase2_export/best_grid_config.json
+
+copy_if_missing \
+  recheck_summary.json \
+  phase2_export/stage-outputs/recheck_summary.json \
+  phase2_recheck/stage-outputs/recheck_summary.json \
+  phase2_export/recheck_summary.json
+
+copy_if_missing \
+  grid_state.json \
+  phase2_export/stage-outputs/grid_state.json \
+  phase2_recheck/stage-outputs/grid_state.json \
+  phase2_export/grid_state.json
+EOS
+}
+
+seed_grid_markers "$remote_lineage_grid" "lineage"
+seed_grid_markers "$remote_current_grid" "current"
+
+ensure_recheck_topk() {
+  local grid_dir="$1" label="$2"
+  [[ -n "$grid_dir" ]] || return 0
+
+  # Phase-2 stages run sequentially inside run-grid-phase2.sh (sweep →
+  # recheck → export).  Artifact collection never replays recheck; it only
+  # asserts the outputs exist.  Allow opting out (for bespoke debug runs) via
+  # REQUIRE_PHASE2_RECHECK=0.
+  if [[ "${REQUIRE_PHASE2_RECHECK:-1}" == "0" ]]; then
+    return 0
+  fi
+
+  ssh "${SSH_OPTS[@]}" "$REMOTE" bash -s -- "$grid_dir" "$label" <<'EOS'
+set -euo pipefail
+grid_dir="${1%/}"
+label="$2"
+
+if [[ ! -d "$grid_dir" ]]; then
+  exit 0
+fi
+
+has_recheck=0
+if find "$grid_dir" -maxdepth 2 -type f \
+    \( -name 'recheck_summary.json' -o -name 'phase2_recheck.json' \) -print -quit 2>/dev/null | grep -q .; then
+  has_recheck=1
+fi
+
+if [[ $has_recheck -eq 0 ]]; then
+  echo "[ci][fatal] phase2_recheck artifacts missing under ${grid_dir} (${label}); run-grid-phase2.sh runs recheck before collection, and the collector will not rerun it" >&2
+  exit 1
+fi
+EOS
+}
+
+ensure_recheck_topk "$remote_lineage_grid" "lineage"
+ensure_recheck_topk "$remote_current_grid" "current"
+
 collect_tree() {
   local remote_grid="$1"
   local dest_root="$2"

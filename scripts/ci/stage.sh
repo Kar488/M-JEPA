@@ -1020,6 +1020,14 @@ run_phase2_recheck_stage() {
 
   local log_path="${step_log_dir}/recheck_topk.log"
 
+  # Ensure the grid root exists and is writable so recheck outputs land in the
+  # expected location (GRID_DIR).  When GRID_DIR is missing, the recheck helper
+  # silently falls back to a temp directory, which leaves the core pipeline
+  # without a recheck_summary.json to export or collect.
+  if [[ -n "${GRID_DIR:-}" ]]; then
+    mkdir -p "${GRID_DIR}" || true
+  fi
+
   echo "[$step] wall budget=${wall_mins}m (${soft}s), grace=${grace}s"
 
   timeout --signal=SIGTERM --kill-after="$grace" "$soft" \
@@ -1059,6 +1067,19 @@ run_phase2_recheck_stage() {
   rm -f "$incomplete" 2>/dev/null || true
 
   phase2_sync_grid_artifacts "$step"
+
+  local outputs_dir="${dir}/stage-outputs"
+  mkdir -p "$outputs_dir"
+
+  local best_json="${GRID_DIR}/best_grid_config.json"
+  local summary_json="${GRID_DIR}/recheck_summary.json"
+
+  if [[ -f "$best_json" ]]; then
+    cp -f "$best_json" "${outputs_dir}/best_grid_config.json"
+  fi
+  if [[ -f "$summary_json" ]]; then
+    cp -f "$summary_json" "${outputs_dir}/recheck_summary.json"
+  fi
 
   local metadata="${dir}/stage-outputs/${step}.json"
   python_inline "$metadata" "$sweep_id" "${GRID_DIR}/recheck_summary.json" "${GRID_DIR}/best_grid_config.json" "${PHASE2_METRIC}" "${PHASE2_DIRECTION}" "${TOPK_RECHECK}" "${EXTRA_SEEDS}" <<'PY'
