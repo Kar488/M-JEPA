@@ -650,8 +650,8 @@ run_phase2_sweep_stage() {
   local sweep_wall="${PHASE2_SWEEP_WALL_MINS:-920}"
   export HARD_WALL_MINS="$sweep_wall"
 
-  local sweep_state=""
-  sweep_state=$(
+  local sweep_state="" sweep_seen_runs=""
+  read -r sweep_state sweep_seen_runs < <(
     WANDB_ENTITY="$WANDB_ENTITY" WANDB_PROJECT="$WANDB_PROJECT" SID="$SWEEP_ID" \
       python_inline - "$SWEEP_ID" <<'PY' || true
 import os, sys
@@ -673,13 +673,22 @@ if len(parts) == 3:
 elif len(parts) != 1 or not (entity and project):
     sys.exit(0)
 
+state = ""
+seen = ""
 try:
     api = wandb.Api()
     sweep = api.sweep(f"{entity}/{project}/{sid}")
     state = getattr(sweep, "state", None) or ""
-    print(state)
+    try:
+        runs = api.runs(f"{entity}/{project}", filters={"sweep": sid})
+        seen = str(sum(1 for _ in runs))
+    except Exception:
+        seen = ""
 except Exception:
     sys.exit(0)
+
+print(state)
+print(seen)
 PY
   )
 
@@ -700,6 +709,15 @@ PY
     export WANDB_COUNT=100
   fi
   local phase2_total_count="$WANDB_COUNT"
+  if [[ -n "$sweep_seen_runs" && "$sweep_seen_runs" =~ ^[0-9]+$ ]]; then
+    if (( sweep_seen_runs >= phase2_total_count )); then
+      sweep_exhausted=1
+      echo "[$step][info] sweep already has ${sweep_seen_runs} runs; target count=${phase2_total_count}. Skipping agent launch." >&2
+    else
+      phase2_total_count=$(( phase2_total_count - sweep_seen_runs ))
+      echo "[$step][info] sweep has ${sweep_seen_runs} existing runs; launching ${phase2_total_count} more to honour WANDB_COUNT." >&2
+    fi
+  fi
 
   : "${PHASE2_LABELED_DIR:=$APP_DIR/data/katielinkmoleculenet_benchmark/train}"
   : "${PHASE2_UNLABELED_DIR:=$APP_DIR/data/ZINC-canonicalized}"
@@ -898,12 +916,14 @@ run_phase2_recheck_stage() {
     return 2
   fi
 
-  local sweep_id
-  sweep_id="$(<"$sweep_id_file")"
-  export WANDB_SWEEP_ID2="$sweep_id"
+    local sweep_id
+    sweep_id="$(<"$sweep_id_file")"
+    export WANDB_SWEEP_ID2="$sweep_id"
 
-  local prev_log_dir="${LOG_DIR:-}"
-  local step_log_dir="${dir}/logs"
+    echo "[$step] appending recheck trials to sweep ${sweep_id} (TOPK_RECHECK=${TOPK_RECHECK} EXTRA_SEEDS=${EXTRA_SEEDS}); total runs will exceed the sweep-stage WANDB_COUNT." >&2
+
+    local prev_log_dir="${LOG_DIR:-}"
+    local step_log_dir="${dir}/logs"
   mkdir -p "$step_log_dir"
   export LOG_DIR="$step_log_dir"
 
