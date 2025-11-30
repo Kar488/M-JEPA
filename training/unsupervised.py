@@ -5,6 +5,7 @@ import errno
 import logging
 import math
 import os
+import tempfile
 import time as _t
 import warnings
 from dataclasses import dataclass
@@ -113,6 +114,35 @@ from utils.dataset import SupportsTeardown
 from utils.graph_ops import _encode_graph, _pool_graph_emb
 from utils.logging import maybe_init_wandb
 logger = logging.getLogger(__name__)
+
+
+def _resolve_ckpt_dir(ckpt_path: Optional[str]) -> Optional[str]:
+    """Ensure a checkpoint directory exists, falling back on permission errors."""
+
+    if not ckpt_path:
+        return None
+
+    try:
+        os.makedirs(ckpt_path, exist_ok=True)
+        return ckpt_path
+    except PermissionError:
+        fallback_root = os.getenv("STAGE_OUTPUTS_DIR") or tempfile.gettempdir()
+        fallback = os.path.join(fallback_root, os.path.basename(ckpt_path))
+
+        try:
+            os.makedirs(fallback, exist_ok=True)
+        except PermissionError:
+            logger.warning(
+                "Checkpoint directory %s is not writable and fallback %s also failed",
+                ckpt_path,
+                fallback,
+            )
+            return None
+
+        logger.warning(
+            "Checkpoint directory %s is not writable; using fallback %s", ckpt_path, fallback
+        )
+        return fallback
 from utils.schedule import cosine_with_warmup
 
 
@@ -1543,8 +1573,7 @@ def train_jepa(
     losses: List[float] = []
     mse = nn.MSELoss()
     step = 0
-    if ckpt_path:
-        os.makedirs(ckpt_path, exist_ok=True)
+    ckpt_path = _resolve_ckpt_dir(ckpt_path)
 
 
     _start_wall = _t.perf_counter()
@@ -2050,8 +2079,7 @@ def train_contrastive(
 
     losses: List[float] = []
     step = 0
-    if ckpt_path:
-        os.makedirs(ckpt_path, exist_ok=True)
+    ckpt_path = _resolve_ckpt_dir(ckpt_path)
 
     _start_wall = _t.perf_counter()
 

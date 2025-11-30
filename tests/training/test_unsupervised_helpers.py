@@ -1,3 +1,4 @@
+import os
 import types
 
 import pytest
@@ -88,4 +89,19 @@ def test_graph_serialisation_roundtrip():
     restored = unsup._graph_from_serialisable(state)
     assert np.array_equal(np.asarray(restored.edge_index), graph.edge_index)
     assert getattr(restored, "custom").tolist() == [1.0, 2.0]
+
+
+def test_resolve_ckpt_dir_fallback_on_permission_error(tmp_path, monkeypatch):
+    unwritable = tmp_path / "locked"
+    unwritable.mkdir()
+    unwritable.chmod(0o500)
+
+    stage_dir = tmp_path / "stage"
+    monkeypatch.setenv("STAGE_OUTPUTS_DIR", str(stage_dir))
+
+    fallback = unsup._resolve_ckpt_dir(str(unwritable / "ckpts"))
+    assert fallback == os.path.join(str(stage_dir), "ckpts")
+    assert os.path.isdir(fallback)
+
+    unwritable.chmod(0o700)
 
