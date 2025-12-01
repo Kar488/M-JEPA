@@ -84,7 +84,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   unset WANDB_NAME WANDB_RUN_ID
 
   # Create a single sweep for JEPA and another for contrastive; reuse IDs
-  : "${WANDB_COUNT:=30}"
+  : "${WANDB_COUNT:=2}"
   : "${PHASE1_JEPA_COUNT:=${WANDB_COUNT}}"
   : "${PHASE1_CONTRAST_COUNT:=${WANDB_COUNT}}"
 
