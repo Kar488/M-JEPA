@@ -341,6 +341,12 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
         dpkg -i cuda-keyring_1.1-1_all.deb
         apt-get update
 
+        OR THIS
+        echo 'github ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/github
+        chmod 440 /etc/sudoers.d/github
+        sudo -u github -i  # or su - github
+        sudo -n whoami     # should print "root" with no password prompt
+
   5) After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
 
     From Vast Jupytr notebook terminal 
