@@ -42,10 +42,9 @@ parameters:
     distribution: log_uniform
   temperature: { values: [0.07, 0.1, 0.2] }
 
-  max_pretrain_batches:  {values: [150, 300]}
-  max_finetune_batches:  {value: 100}
+  max_finetune_batches:  {value: 0}
 
-  devices:              {value: 1}
+  devices:              {value: 0}
   num-workers:          {value: 4}
   persistent-workers:   {value: 0} # 0 false
   prefetch-factor:      {value: 2}
@@ -63,8 +62,8 @@ parameters:
   aug_atom_masking: { values: [0, 1] }
   aug_subgraph_removal: { values: [0, 1] }
 
-  sample_unlabeled: { value: 250000 }
-  sample_labeled: { value: 1000 }
+  sample_unlabeled: { value: 10000000 }
+  sample_labeled: { value: 5000 }
 
 early_terminate:
   type: hyperband

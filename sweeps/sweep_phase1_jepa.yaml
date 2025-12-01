@@ -40,10 +40,9 @@ parameters:
   pretrain_batch_size:  {values: [64, 128, 256]}
   finetune_batch_size:  {values: [256] }
   
-  max_pretrain_batches:  {values: [400, 800]}
-  max_finetune_batches:  {value: 200}
-  
-  devices:              {value: 2} #full multi-GPU parallelism (DDP)
+  max_finetune_batches:  {value: 0}
+
+  devices:              {value: 0} # auto-detect visible GPUs for DDP
   num-workers:          {value: 8} #4*GPUs - keep data loading saturated
   persistent-workers:   {value: 1} # 0 false, keep workers alive between epochs
   prefetch-factor:      {value: 2} #each worker can prefetch 2 batches
@@ -55,7 +54,7 @@ parameters:
 
   task_type:            {value: regression}
   label_col:            {value: "measured log solubility in mols per litre"}
-  sample_unlabeled:     {value: 250000}
+  sample_unlabeled:     {value: 10000000}
   sample_labeled:       {value: 5000}
 
   gnn_type:             {values: ["gine", "dmpnn", "schnet3d"]}

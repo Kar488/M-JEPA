@@ -10,6 +10,43 @@ from venv import logger
 
 from . import dataset_cache
 
+
+def _cuda_available() -> bool:
+    try:
+        import torch  # type: ignore
+    except Exception:
+        return False
+
+    cuda = getattr(torch, "cuda", None)
+    is_available = getattr(cuda, "is_available", None)
+    if not callable(is_available):
+        return False
+
+    try:
+        return bool(is_available())
+    except Exception:
+        return False
+
+
+def _detect_visible_devices() -> int:
+    mask = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
+    if mask:
+        tokens = [entry.strip() for entry in mask.split(",") if entry.strip()]
+        if tokens:
+            return len(tokens)
+
+    if _cuda_available():
+        try:
+            import torch  # type: ignore
+
+            count = int(torch.cuda.device_count())  # type: ignore[attr-defined]
+            if count > 0:
+                return count
+        except Exception:
+            pass
+
+    return 1
+
 try:
     from utils.wandb_filters import silence_pydantic_field_warnings
 except Exception:  # pragma: no cover - helper only available in repo context
@@ -320,7 +357,12 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     _apply("max_finetune_batches", "max_finetune_batches", int)
     _apply("sample_unlabeled", "sample_unlabeled", int)
     _apply("sample_labeled", "sample_labeled", int)
-    
+
+    auto_devices = int(getattr(args, "devices", 0) or 0)
+    if auto_devices <= 0:
+        auto_devices = _detect_visible_devices()
+        setattr(args, "devices", auto_devices)
+
     # learning rate may be named "learning_rate" or "lr"
     if "learning_rate" in sweep_cfg:
         args.learning_rate = float(sweep_cfg["learning_rate"])
@@ -557,7 +599,9 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
         task_type=args.task_type,
         seeds=[args.seed],
-        device=resolve_device("cuda" if getattr(args, "devices", 1) > 0 else "cpu"),
+        device=resolve_device(
+            "cuda" if _cuda_available() and int(getattr(args, "devices", 1)) > 0 else "cpu"
+        ),
         use_wandb=bool(int(getattr(args, "use_wandb", 1))),
         ckpt_dir="outputs/sweep_ckpts",
         ckpt_every=50,
