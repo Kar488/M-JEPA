@@ -121,12 +121,16 @@ fi
 # ----------- micromamba install / hook -----------
 MM_PREFIX="$HOME/micromamba"
 MM_BIN="$MM_PREFIX/bin/micromamba"
+# Relax remote timeout defaults to survive slow mirrors; callers can override via env.
+export CONDA_REMOTE_CONNECT_TIMEOUT_SECS="${CONDA_REMOTE_CONNECT_TIMEOUT_SECS:-30}"
+export CONDA_REMOTE_READ_TIMEOUT_SECS="${CONDA_REMOTE_READ_TIMEOUT_SECS:-180}"
 mkdir -p "$MM_PREFIX/bin"
 # Retry helper to survive transient registry stalls (e.g., slow conda-forge mirrors)
 micromamba_with_retry() {
   local attempts=${1:-3}
   shift
   local status=0
+  local cleaned=0
 
   for attempt in $(seq 1 "$attempts"); do
     if "$MM_BIN" "$@"; then
@@ -135,6 +139,13 @@ micromamba_with_retry() {
 
     status=$?
     if (( attempt < attempts )); then
+      if (( attempt == attempts - 1 && ! cleaned )); then
+        echo "[prepare-env] cleaning micromamba cache before final retry" >&2
+        if ! "$MM_BIN" clean -a -y >/dev/null 2>&1; then
+          echo "[prepare-env] micromamba clean failed; continuing without cache purge" >&2
+        fi
+        cleaned=1
+      fi
       echo "[prepare-env] micromamba $* failed (attempt ${attempt}/${attempts}, exit ${status}); retrying after backoff" >&2
       sleep "$((attempt * 5))"
     else
