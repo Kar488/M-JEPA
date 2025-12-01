@@ -706,7 +706,7 @@ PY
   fi
 
   if [[ -z "${WANDB_COUNT:-}" ]]; then
-    export WANDB_COUNT=100
+    export WANDB_COUNT=4
   fi
   local phase2_total_count="$WANDB_COUNT"
   if [[ -n "$sweep_seen_runs" && "$sweep_seen_runs" =~ ^[0-9]+$ ]]; then
