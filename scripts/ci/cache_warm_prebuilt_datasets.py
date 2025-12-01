@@ -7,9 +7,10 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
+import yaml
 
 def _maybe_inject_repo_root() -> None:
     """Ensure the repository root is available on ``sys.path``."""
@@ -37,6 +38,44 @@ from scripts.commands import dataset_cache
 _PART_PATTERN = re.compile(r"part-(\d+)-(\d+)\.pkl$")
 _DEFAULT_SHARD_SIZE = 5000
 _SMILES_COLUMN = "smiles"
+_SWEEP_TEMPLATE_DEFAULTS = (
+    "sweeps/sweep_phase1_jepa.yaml",
+    "sweeps/sweep_phase1_contrastive.yaml",
+    "sweeps/grid_sweep_phase2.yaml",
+)
+
+
+def _resolve_param_default_from_templates(
+    template_paths: Sequence[str], param_name: str, *, fallback: int
+) -> int:
+    """Load ``param_name`` from sweep templates (first value wins)."""
+
+    repo_root = Path(__file__).resolve().parents[2]
+    for rel_path in template_paths:
+        template_path = repo_root / rel_path
+        try:
+            with open(template_path, "r", encoding="utf-8") as fh:
+                sweep_cfg = yaml.safe_load(fh) or {}
+        except FileNotFoundError:
+            continue
+        parameters = sweep_cfg.get("parameters", {}) or {}
+        param_cfg = parameters.get(param_name) or {}
+        if not isinstance(param_cfg, dict):
+            continue
+        if "value" in param_cfg:
+            return int(param_cfg["value"])
+        values = param_cfg.get("values")
+        if isinstance(values, Sequence) and not isinstance(values, (str, bytes)) and values:
+            return int(values[0])
+    return fallback
+
+
+_DEFAULT_SAMPLE_UNLABELED = _resolve_param_default_from_templates(
+    _SWEEP_TEMPLATE_DEFAULTS, "sample_unlabeled", fallback=0
+)
+_DEFAULT_MAX_GRAPHS_PER_RUN = _resolve_param_default_from_templates(
+    _SWEEP_TEMPLATE_DEFAULTS, "max_graphs_per_run", fallback=250_000
+)
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -44,8 +83,25 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--labeled-dir", required=True, help="Path to the labeled corpus")
     parser.add_argument("--cache-dir", required=True, help="Base cache directory (same as sweeps)")
     parser.add_argument("--label-col", default=None, help="Optional label column for the labeled set")
-    parser.add_argument("--sample-unlabeled", type=int, default=0, help="Optional max graphs for unlabeled set")
+    parser.add_argument(
+        "--sample-unlabeled",
+        type=int,
+        default=_DEFAULT_SAMPLE_UNLABELED,
+        help="Optional max graphs for unlabeled set; defaults to sweep YAML value",
+    )
     parser.add_argument("--sample-labeled", type=int, default=0, help="Optional max graphs for labeled set")
+    parser.add_argument(
+        "--stream-chunk-size",
+        type=int,
+        default=0,
+        help="If >0, read dataset files in chunks of this many rows to reduce memory pressure",
+    )
+    parser.add_argument(
+        "--max-graphs-per-run",
+        type=int,
+        default=_DEFAULT_MAX_GRAPHS_PER_RUN,
+        help="If >0, stop after emitting this many new graphs for a dataset and leave shards resumable (defaults to sweep YAML)",
+    )
     parser.add_argument("--num-workers", type=int, default=-1, help="RDKit worker pool size")
     parser.add_argument("--add-3d", action="store_true", help="Enable 3D featurisation")
     parser.add_argument(
@@ -119,14 +175,20 @@ def _list_dataset_files(dirpath: str) -> List[Tuple[str, str]]:
     return files
 
 
-def _read_dataframe(path: str, ext: str, label_col: Optional[str]) -> pd.DataFrame:
+def _dataframe_iter(
+    path: str, ext: str, label_col: Optional[str], chunk_size: int
+) -> Iterable[pd.DataFrame]:
     cols = [_SMILES_COLUMN]
     if label_col:
         cols.append(label_col)
     if ext == ".parquet":
-        return pd.read_parquet(path, columns=cols)
+        if chunk_size > 0:
+            return pd.read_parquet(path, columns=cols, chunksize=chunk_size)
+        return (pd.read_parquet(path, columns=cols),)
     if ext == ".csv":
-        return pd.read_csv(path, usecols=lambda c: c in cols)
+        if chunk_size > 0:
+            return pd.read_csv(path, usecols=lambda c: c in cols, chunksize=chunk_size)
+        return (pd.read_csv(path, usecols=lambda c: c in cols),)
     raise ValueError(f"Unsupported dataset extension: {ext}")
 
 
@@ -219,11 +281,14 @@ class _ShardAccumulator:
 
 def _stream_directory_to_cache(
     *,
+    kind: str,
     dirpath: str,
     cache_path: str,
     label_col: Optional[str],
     add_3d: bool,
     sample: int,
+    per_run_limit: int,
+    chunk_size: int,
     num_workers: int,
     force: bool,
     log: Callable[[str], None],
@@ -243,6 +308,26 @@ def _stream_directory_to_cache(
         log(f"resuming from {processed} processed graphs ({len(existing_shards)} shards)")
 
     max_graphs = sample if sample > 0 else None
+    if max_graphs is not None:
+        log(
+            f"{kind} dataset capped at {max_graphs} graphs via sample-{kind}; remaining files will be skipped"
+        )
+    per_run_cap = per_run_limit if per_run_limit > 0 else None
+    remaining_global = None if max_graphs is None else max(max_graphs - processed, 0)
+    run_cap: Optional[int]
+    if per_run_cap is None:
+        run_cap = remaining_global
+    elif remaining_global is None:
+        run_cap = per_run_cap
+    else:
+        run_cap = min(per_run_cap, remaining_global)
+    if per_run_cap is not None:
+        target_desc = f"toward the {max_graphs} target" if max_graphs is not None else ""
+        log(
+            f"{kind} dataset will emit at most {per_run_cap} new graphs this run {target_desc}; rerun to continue"
+        )
+    if chunk_size > 0:
+        log(f"{kind} dataset will stream files in chunks of {chunk_size} rows to control memory usage")
     expect_labels = bool(label_col)
     accumulator = _ShardAccumulator(
         shard_dir=shard_dir,
@@ -263,51 +348,69 @@ def _stream_directory_to_cache(
 
     resume_offset = processed
     graphs_emitted = processed
+    hit_run_cap = False
+    hit_global_cap = False
     files = _list_dataset_files(dirpath)
     if not files:
         raise FileNotFoundError(f"No supported dataset files found in {dirpath}")
     for path, ext in files:
-        if max_graphs is not None and graphs_emitted >= max_graphs:
+        if (max_graphs is not None and graphs_emitted >= max_graphs) or (
+            run_cap is not None and (graphs_emitted - processed) >= run_cap
+        ):
             break
-        df = _read_dataframe(path, ext, label_col)
-        smiles = df[_SMILES_COLUMN].astype(str).tolist()
-        labels_seq: Optional[Sequence[Any]] = None
-        if label_col and label_col in df.columns:
-            labels_seq = df[label_col].tolist()
-        if resume_offset:
-            if resume_offset >= len(smiles):
-                resume_offset -= len(smiles)
+        df_iter = _dataframe_iter(path, ext, label_col, chunk_size)
+        for df in df_iter:
+            smiles = df[_SMILES_COLUMN].astype(str).tolist()
+            labels_seq: Optional[Sequence[Any]] = None
+            if label_col and label_col in df.columns:
+                labels_seq = df[label_col].tolist()
+            if resume_offset:
+                if resume_offset >= len(smiles):
+                    resume_offset -= len(smiles)
+                    continue
+                smiles = smiles[resume_offset:]
+                if labels_seq is not None:
+                    labels_seq = labels_seq[resume_offset:]
+                resume_offset = 0
+            if max_graphs is not None:
+                remaining = max_graphs - graphs_emitted
+                smiles = smiles[:remaining]
+                if labels_seq is not None:
+                    labels_seq = labels_seq[:remaining]
+            if not smiles:
                 continue
-            smiles = smiles[resume_offset:]
-            if labels_seq is not None:
-                labels_seq = labels_seq[resume_offset:]
-            resume_offset = 0
-        if max_graphs is not None:
-            remaining = max_graphs - graphs_emitted
-            smiles = smiles[:remaining]
-            if labels_seq is not None:
-                labels_seq = labels_seq[:remaining]
-        if not smiles:
-            continue
-        state_iter = _mdataset._iter_graph_states(
-            smiles,
-            add_3d=add_3d,
-            random_seed=None,
-            worker_budget=worker_budget,
-            cls_module=cls_module,
-            cls_qualname=cls_qualname,
-        )
-        for idx, g_state in state_iter:
-            if g_state is None:
-                continue
-            label_value = None
-            if labels_seq is not None and idx < len(labels_seq):
-                label_value = labels_seq[idx]
-            accumulator.add(g_state, smiles[idx], label_value)
-            graphs_emitted += 1
-            if max_graphs is not None and graphs_emitted >= max_graphs:
+            state_iter = _mdataset._iter_graph_states(
+                smiles,
+                add_3d=add_3d,
+                random_seed=None,
+                worker_budget=worker_budget,
+                cls_module=cls_module,
+                cls_qualname=cls_qualname,
+            )
+            for idx, g_state in state_iter:
+                if g_state is None:
+                    continue
+                label_value = None
+                if labels_seq is not None and idx < len(labels_seq):
+                    label_value = labels_seq[idx]
+                accumulator.add(g_state, smiles[idx], label_value)
+                graphs_emitted += 1
+                if max_graphs is not None and graphs_emitted >= max_graphs:
+                    hit_global_cap = True
+                    break
+                if run_cap is not None and (graphs_emitted - processed) >= run_cap:
+                    hit_run_cap = True
+                    break
+            if hit_run_cap or hit_global_cap:
                 break
+        if hit_run_cap or hit_global_cap:
+            break
     accumulator.finalize()
+    if hit_run_cap and not hit_global_cap:
+        log(
+            f"{kind} per-run cap reached after {graphs_emitted - processed} new graphs; rerun to continue"
+        )
+        return
     _write_manifest(cache_path, accumulator, log)
 
 
@@ -335,6 +438,8 @@ def _make_streaming_builder(
     label_col: Optional[str],
     add_3d: bool,
     sample: int,
+    per_run_limit: int,
+    chunk_size: int,
     num_workers: int,
     force: bool,
     log: Callable[[str], None],
@@ -345,11 +450,14 @@ def _make_streaming_builder(
             raise RuntimeError(f"unable to resolve cache path for {kind}")
         try:
             _stream_directory_to_cache(
+                kind=kind,
                 dirpath=dirpath,
                 cache_path=cache_path,
                 label_col=label_col,
                 add_3d=add_3d,
                 sample=sample,
+                per_run_limit=per_run_limit,
+                chunk_size=chunk_size,
                 num_workers=num_workers,
                 force=force,
                 log=log,
@@ -396,6 +504,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         label_col=None,
         add_3d=bool(args.add_3d),
         sample=args.sample_unlabeled,
+        per_run_limit=args.max_graphs_per_run,
+        chunk_size=args.stream_chunk_size,
         num_workers=args.num_workers,
         force=args.force,
         log=_log,
@@ -420,6 +530,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         label_col=args.label_col,
         add_3d=bool(args.add_3d),
         sample=args.sample_labeled,
+        per_run_limit=args.max_graphs_per_run,
+        chunk_size=args.stream_chunk_size,
         num_workers=args.num_workers,
         force=args.force,
         log=_log,

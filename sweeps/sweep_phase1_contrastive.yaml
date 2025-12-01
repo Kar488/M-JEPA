@@ -52,6 +52,7 @@ parameters:
 
   task_type:            {value: regression}
   label_col:            {value: "measured log solubility in mols per litre"}
+  max_graphs_per_run:   {value: 250000}
   sample_unlabeled:     {value: 10000000}
   sample_labeled:       {value: 5000}
 

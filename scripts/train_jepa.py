@@ -1506,6 +1506,13 @@ def build_parser() -> argparse.ArgumentParser:
     sweep.add_argument("--finetune-epochs", "--finetune_epochs", dest="finetune_epochs", type=int, default=1)
     sweep.add_argument("--max-pretrain-batches", "--max_pretrain_batches", dest="max_pretrain_batches", type=int, default=0)
     sweep.add_argument("--max-finetune-batches", "--max_finetune_batches", dest="max_finetune_batches", type=int, default=0)
+    sweep.add_argument(
+        "--max-graphs-per-run",
+        "--max_graphs_per_run",
+        dest="max_graphs_per_run",
+        type=int,
+        default=0,
+    )
     sweep.add_argument("--sample-unlabeled", "--sample_unlabeled", dest="sample_unlabeled", type=int, default=0)
     sweep.add_argument("--sample-labeled", "--sample_labeled", dest="sample_labeled", type=int, default=0)
     sweep.add_argument("--time-budget-mins", type=int, default=0)
