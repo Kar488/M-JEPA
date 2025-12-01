@@ -122,6 +122,29 @@ fi
 MM_PREFIX="$HOME/micromamba"
 MM_BIN="$MM_PREFIX/bin/micromamba"
 mkdir -p "$MM_PREFIX/bin"
+# Retry helper to survive transient registry stalls (e.g., slow conda-forge mirrors)
+micromamba_with_retry() {
+  local attempts=${1:-3}
+  shift
+  local status=0
+
+  for attempt in $(seq 1 "$attempts"); do
+    if "$MM_BIN" "$@"; then
+      return 0
+    fi
+
+    status=$?
+    if (( attempt < attempts )); then
+      echo "[prepare-env] micromamba $* failed (attempt ${attempt}/${attempts}, exit ${status}); retrying after backoff" >&2
+      sleep "$((attempt * 5))"
+    else
+      echo "[prepare-env] micromamba $* failed after ${attempts} attempts (exit ${status})" >&2
+    fi
+  done
+
+  return "$status"
+}
+
 # Ensure bsdtar is installed on the system
 if ! command -v bsdtar >/dev/null 2>&1; then
   echo "Installing bsdtar…"
@@ -143,7 +166,7 @@ eval "$("$MM_BIN" shell hook -s bash)"
 
 # ----------- env create if needed -----------
 if ! micromamba env list | grep -q "^${ENV_NAME}\b"; then
-  micromamba create -y -n "$ENV_NAME" -c conda-forge python=3.10 rdkit=2023.09.5 scipy pip
+  micromamba_with_retry 3 create -y -n "$ENV_NAME" -c conda-forge python=3.10 rdkit=2023.09.5 scipy pip
 fi
 
 # ----------- base pip deps -----------
