@@ -34,8 +34,20 @@ if command -v ssh-add >/dev/null 2>&1; then
 fi
 
 REMOTE="${VAST_USER}@${VAST_HOST}"
-SSH_OPTS=(-i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
+SSH_OPTS=(-i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
 RSYNC=(rsync -avz --chmod=ugo=rwX -e "ssh ${SSH_OPTS[*]}")
+
+check_remote_reachable() {
+  if ssh "${SSH_OPTS[@]}" "$REMOTE" "echo ok" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "[ci][fatal] unable to reach ${REMOTE} via SSH on port ${VAST_PORT}; phase2 collector cannot proceed" >&2
+  echo "[ci][hint] verify VAST_HOST/VAST_PORT and that the runner can reach the Vast machine" >&2
+  exit 1
+}
+
+check_remote_reachable
 
 discover_remote_phase2_lineage() {
   local target_dir="${GRID_DIR:-}" target_id="${GRID_EXP_ID:-}" need_lookup=0

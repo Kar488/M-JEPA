@@ -26,8 +26,21 @@ fi
 chmod 600 "$KEY_PATH"
 
 REMOTE="${VAST_USER}@${VAST_HOST}"
-SSH_CMD=(ssh -i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no)
-RSYNC=(rsync -avz --chmod=ugo=rwX -e "ssh -i $KEY_PATH -p $VAST_PORT -o StrictHostKeyChecking=no")
+SSH_OPTS=(-i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
+SSH_CMD=(ssh "${SSH_OPTS[@]}")
+RSYNC=(rsync -avz --chmod=ugo=rwX -e "ssh ${SSH_OPTS[*]}")
+
+check_remote_reachable() {
+  if ssh "${SSH_OPTS[@]}" "$REMOTE" "echo ok" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "[collect][fatal] unable to reach ${REMOTE} via SSH on port ${VAST_PORT}; pretrain collector cannot proceed" >&2
+  echo "[collect][hint] verify VAST_HOST/VAST_PORT and that the runner can reach the Vast machine" >&2
+  exit 1
+}
+
+check_remote_reachable
 
 echo "[collect] PRETRAIN_EXPERIMENT_ROOT=$PRETRAIN_EXPERIMENT_ROOT" >&2
 
