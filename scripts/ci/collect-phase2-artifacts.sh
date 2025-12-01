@@ -315,7 +315,7 @@ EOS
   done
 
   printf '%s' "$primary"
-  return 1
+  return 0
 }
 
 remote_lineage_grid="$(resolve_remote_grid_root "$remote_lineage_grid" "${remote_lineage_id:-}")"
