@@ -1351,6 +1351,23 @@ else
   : "${PRETRAIN_ARTIFACTS_DIR:=${ARTIFACTS_DIR}}"
 fi
 
+normalize_cache_suffix() {
+  local var_name="$1" value="${!1:-}" legacy_suffix upgraded
+  [[ -n "$value" ]] || return 0
+  for legacy_suffix in graphs_50k graphs_250k; do
+    if [[ "$value" == */${legacy_suffix} || "$value" == "${legacy_suffix}" ]]; then
+      upgraded="${value%/${legacy_suffix}}/graphs_10m"
+      upgraded="${upgraded##/}"
+      if [[ "$value" == /* ]]; then
+        upgraded="/${upgraded}"
+      fi
+      mjepa_log_warn "normalizing ${var_name} from ${value} → ${upgraded}"
+      printf -v "$var_name" '%s' "$upgraded"
+      return 0
+    fi
+  done
+}
+
 if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
   if [[ -z "${WANDB_DIR:-}" ]]; then
     WANDB_DIR="${EXPERIMENT_DIR}/wandb"
@@ -1371,12 +1388,16 @@ else
   default_wandb_root="${DATA_ROOT}/wandb"
 fi
 
+normalize_cache_suffix CACHE_DIR
+
 ensure_dir_var CACHE_DIR "$default_cache_root" "${EXP_ID:+experiments/${EXP_ID}/}cache"
 ensure_dir_var WANDB_DIR "$default_wandb_root" "${EXP_ID:+experiments/${EXP_ID}/}wandb"
 
 if [[ -z "${SWEEP_CACHE_DIR:-}" ]]; then
   SWEEP_CACHE_DIR="$CACHE_DIR"
 fi
+
+normalize_cache_suffix SWEEP_CACHE_DIR
 
 ensure_dir_var SWEEP_CACHE_DIR "$CACHE_DIR" "${EXP_ID:+experiments/${EXP_ID}/}cache"
 
