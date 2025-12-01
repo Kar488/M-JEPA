@@ -299,7 +299,13 @@ EOS
   local search_root probe=""
   for search_root in "${search_roots[@]}"; do
     [[ -n "$search_root" ]] || continue
-    probe=$(ssh "${SSH_OPTS[@]}" "$REMOTE" "root='$search_root'; [[ -d \"$root\" ]] || exit 0; find \"$root\" -maxdepth 4 -path '*/phase2_sweep_id.txt' -printf '%T@ %h\\n' 2>/dev/null | sort -nr | head -n1" 2>/dev/null || true)
+    probe=$(ssh "${SSH_OPTS[@]}" "$REMOTE" bash -s -- "$search_root" <<'EOS' 2>/dev/null || true
+set -euo pipefail
+root="${1:-}"
+[[ -d "$root" ]] || exit 0
+find "$root" -maxdepth 4 -path '*/phase2_sweep_id.txt' -printf '%T@ %h\n' 2>/dev/null | sort -nr | head -n1
+EOS
+    )
     if [[ -n "$probe" ]]; then
       probe="${probe#* }"
       echo "[ci][warn] using cache-discovered grid root: ${probe} (searched under ${search_root})" >&2
