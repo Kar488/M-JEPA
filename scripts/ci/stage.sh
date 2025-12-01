@@ -2638,6 +2638,12 @@ run_stage() {
     rm -f "$stamp" "$state_path" 2>/dev/null || true
   fi
 
+  if [[ "$stage" == "phase2_recheck" && -n "$rerun_reason" ]]; then
+    local recheck_dir
+    recheck_dir="$(stage_dir phase2_recheck)"
+    rm -f "${recheck_dir}/recheck_done.ok" "${recheck_dir}/recheck_incomplete.ok" 2>/dev/null || true
+  fi
+
   mkdir -p "$dir" "$dir/stage-outputs"
   local inputs_tmp deps_tmp outputs_tmp
   inputs_tmp="$(mktemp)"
