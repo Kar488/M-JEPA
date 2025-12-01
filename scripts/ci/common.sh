@@ -1356,18 +1356,18 @@ if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
     WANDB_DIR="${EXPERIMENT_DIR}/wandb"
   fi
   if [[ -z "${CACHE_DIR:-}" ]]; then
-    CACHE_DIR="${EXPERIMENT_DIR}/cache/graphs_250k"
+    CACHE_DIR="${EXPERIMENT_DIR}/cache/graphs_10m"
   fi
-  default_cache_root="${EXPERIMENT_DIR}/cache/graphs_250k"
+  default_cache_root="${EXPERIMENT_DIR}/cache/graphs_10m"
   default_wandb_root="${EXPERIMENT_DIR}/wandb"
 else
   if [[ -z "${CACHE_DIR:-}" ]]; then
-    CACHE_DIR="${DATA_ROOT}/cache/graphs_250k"
+    CACHE_DIR="${DATA_ROOT}/cache/graphs_10m"
   fi
   if [[ -z "${WANDB_DIR:-}" ]]; then
     WANDB_DIR="${DATA_ROOT}/wandb"
   fi
-  default_cache_root="${DATA_ROOT}/cache/graphs_250k"
+  default_cache_root="${DATA_ROOT}/cache/graphs_10m"
   default_wandb_root="${DATA_ROOT}/wandb"
 fi
 

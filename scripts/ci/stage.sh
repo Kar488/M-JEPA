@@ -647,7 +647,7 @@ run_phase2_sweep_stage() {
   export LOG_DIR="$step_log_dir"
 
   local prev_wall="${HARD_WALL_MINS:-}"
-  local sweep_wall="${PHASE2_SWEEP_WALL_MINS:-920}"
+  local sweep_wall="${PHASE2_SWEEP_WALL_MINS:-1160}"
   export HARD_WALL_MINS="$sweep_wall"
 
   local sweep_state="" sweep_seen_runs=""
@@ -906,7 +906,7 @@ run_phase2_recheck_stage() {
   : "${PHASE2_DIRECTION:=min}"
   : "${PHASE2_UNLABELED_DIR:=$APP_DIR/data/ZINC-canonicalized}"
   : "${PHASE2_LABELED_DIR:=$APP_DIR/data/katielinkmoleculenet_benchmark/train}"
-  : "${PHASE2_RECHECK_WALL_MINS:=300}"
+  : "${PHASE2_RECHECK_WALL_MINS:=540}"
   : "${PHASE2_SEED_WALL_MINS:=}"
   : "${PHASE2_RECHECK_GRACE_SECS:=120}"
 
@@ -1645,7 +1645,7 @@ run_with_timeout() {
         arr=("${arr_ref[@]}")
       fi
 
-      local BUDGET_MINS="${REPORT_TIME_BUDGET_MINS:-${HARD_WALL_MINS:-30}}"
+      local BUDGET_MINS="${REPORT_TIME_BUDGET_MINS:-${HARD_WALL_MINS:-270}}"
       local SOFT=$((BUDGET_MINS*60))
       local GRACE="${KILL_AFTER_SECS:-60}"
       echo "[stage] wall budget=${BUDGET_MINS}m (${SOFT}s), grace=${GRACE}s"
@@ -1763,9 +1763,9 @@ run_with_timeout() {
     # handle default timeouts differently
     local BUDGET_MINS="$(getv --time-budget-mins || true)"
     case "$s" in
-      grid) : "${BUDGET_MINS:=${HARD_WALL_MINS:-240}}" ;;
-      pretrain|finetune) : "${BUDGET_MINS:=${HARD_WALL_MINS:-120}}" ;;
-      *) : "${BUDGET_MINS:=${HARD_WALL_MINS:-60}}" ;;
+      grid) : "${BUDGET_MINS:=${HARD_WALL_MINS:-480}}" ;;
+      pretrain|finetune) : "${BUDGET_MINS:=${HARD_WALL_MINS:-360}}" ;;
+      *) : "${BUDGET_MINS:=${HARD_WALL_MINS:-300}}" ;;
     esac
     local SOFT="$((BUDGET_MINS*60))"   # convert minutes → seconds
     local GRACE="${KILL_AFTER_SECS:-60}"
@@ -2274,7 +2274,7 @@ PY
     echo "[wandb_agent] using sweep: $SID"
 
     local -a cmd=("$@")
-    local SOFT=$(( (${HARD_WALL_MINS:-240})*60 ))
+    local SOFT=$(( (${HARD_WALL_MINS:-480})*60 ))
     local GRACE="${KILL_AFTER_SECS:-60}"
     echo "[wandb_agent] wall budget=${SOFT}s, grace=${GRACE}s"
 

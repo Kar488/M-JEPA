@@ -31,12 +31,12 @@ grid_search:
   finetune_epochs_options: [1]
   learning_rates: [3e-4, 1e-4]
   seeds: [1, 2, 3]
-  sample_unlabeled: 250000
+  sample_unlabeled: 10000000
   sample_labeled: 5000
   n_rows_per_file: 1000
-  max_pretrain_batches: 200
-  max_finetune_batches: 50
-  time_budget_mins: 300
+  max_pretrain_batches: 0
+  max_finetune_batches: 0
+  time_budget_mins: 540
   force_tqdm: true
   out_csv: ${GRID_DIR}/grid_results.csv
   best_config_out: ${GRID_DIR}/best_grid_config.json

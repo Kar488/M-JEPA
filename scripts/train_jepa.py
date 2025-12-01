@@ -93,6 +93,32 @@ def _torch_cuda_available() -> bool:
     except Exception:
         return False
 
+
+def _detect_visible_devices() -> int:
+    """Infer the visible CUDA device count, falling back to a single slot.
+
+    Prefers an explicit ``CUDA_VISIBLE_DEVICES`` mask when present; otherwise
+    relies on ``torch.cuda.device_count``.  Returns ``1`` when CUDA is
+    unavailable so that downstream consumers continue to run on CPU instead of
+    erroring on ``0`` devices.
+    """
+
+    mask = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
+    if mask:
+        entries = [token.strip() for token in mask.split(",") if token.strip()]
+        if entries:
+            return len(entries)
+
+    if _torch_cuda_available():
+        try:
+            count = int(torch.cuda.device_count())  # type: ignore[attr-defined]
+            if count > 0:
+                return count
+        except Exception:
+            pass
+
+    return 1
+
 import yaml
 
 from utils.dataset import (
@@ -893,7 +919,7 @@ class CommonArgDefaults:
             pin_memory=True,
             persistent_workers=True,
             bf16=False,
-            devices=1,
+            devices=_detect_visible_devices(),
             use_wandb=False,
             wandb_project=wandb_cfg.get("project", "m-jepa"),
             wandb_tags=wandb_cfg.get("tags", []),

@@ -230,7 +230,7 @@ def test_common_sh_rewrites_unwritable_sweep_cache(tmp_path):
 
     cache_dir = Path(cache_dir_str)
     assert cache_dir_str != str(blocked_sweep)
-    assert cache_dir.name == "graphs_250k"
+    assert cache_dir.name == "graphs_10m"
     assert cache_dir.is_dir(), cache_dir
 
 
