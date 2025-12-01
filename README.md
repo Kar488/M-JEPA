@@ -94,8 +94,9 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
       is given. Clear the cache when switching featurisation options such as
       `--add-3d` to avoid stale representations. The enlarged 10 M graph dataset keeps
       its cached featurisations under `cache/graphs_10m` to avoid clashes with other
-      datasets. Remove any lingering `cache/graphs_50k` or `cache/graphs_250k`
-      directories so runs don't accidentally mix the old features with the new cache.
+      datasets. Cache utilities now normalise legacy roots such as `cache/graphs_50k`
+      or `cache/graphs_250k` to `cache/graphs_10m`, but you should still delete those
+      stale directories to prevent accidental reuse of mismatched features.
 
    -  Pipeline usage
       Individual stages of the JEPA workflow can be invoked via subcommands in
