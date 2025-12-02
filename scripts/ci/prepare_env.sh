@@ -10,6 +10,10 @@ set -euo pipefail
 export MJEPACI_STAGE="prepare-env"
 : "${EXP_ID:=${RUN_ID}}"
 
+# Skip cache directory wiring during environment repairs; cache defaults are
+# stage-specific and do not need to run when only ensuring permissions.
+export MJEPACI_INIT_CACHE_DIRS=0
+
 CI_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${CI_SCRIPT_DIR}/common.sh"
