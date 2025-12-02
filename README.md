@@ -347,6 +347,7 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
         chmod 440 /etc/sudoers.d/github
         sudo -u github -i  # or su - github
         sudo -n whoami     # should print "root" with no password prompt
+        
 
   5) After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
 
