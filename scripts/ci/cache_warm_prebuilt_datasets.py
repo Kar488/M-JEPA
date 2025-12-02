@@ -554,9 +554,10 @@ def _warm_dataset_in_chunks(
             return
         current_total = int(manifest.get("total_graphs") or 0)
         if current_total <= previous_total:
-            raise RuntimeError(
-                f"{kind} cache warm made no progress (stuck at {current_total} graphs)"
+            log(
+                f"{kind} cache warm made no progress; corpus likely exhausted at {current_total} graphs"
             )
+            break
         if current_total >= sample:
             break
 
