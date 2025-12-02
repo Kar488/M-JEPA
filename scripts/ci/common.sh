@@ -1595,10 +1595,14 @@ _select_mamba_prefix() {
   candidate="${requested:-$fallback_home}"
 
   # If the requested prefix already hosts the mjepa env or the micromamba
-  # binary, prefer it even if the conda-meta marker is missing (some runners
-  # prune cache metadata but keep the env layout intact).
+  # binary, prefer it when it also resembles a valid conda root. Some runners
+  # prune cache metadata but keep the env layout intact, so allow either the
+  # binary or env directory to signal reuse.
   if [[ -n "$requested" ]]; then
-    if [[ -x "${requested%/}/bin/micromamba" ]] || [[ -d "${requested%/}/envs/mjepa" ]]; then
+    local has_mm="${requested%/}/bin/micromamba"
+    local has_env="${requested%/}/envs/mjepa"
+
+    if is_conda_root_prefix "$requested" && { [[ -x "$has_mm" ]] || [[ -d "$has_env" ]]; }; then
       printf '%s' "$requested"
       return 0
     fi
@@ -1711,6 +1715,23 @@ repair_micromamba_env() {
     bash "$prepare_env"
 }
 
+force_rebuild_mjepa_env() {
+  mjepa_log_warn "[ensure_micromamba_python] forcing full rebuild of 'mjepa' environment"
+
+  local root="${MAMBA_ROOT_PREFIX:-$HOME/micromamba}"
+  local env_dir="${root%/}/envs/mjepa"
+
+  if command -v micromamba >/dev/null 2>&1; then
+    micromamba env remove -y -n mjepa >/dev/null 2>&1 || true
+  fi
+
+  if [[ -d "$env_dir" ]]; then
+    rm -rf "$env_dir"
+  fi
+
+  repair_micromamba_env
+}
+
 ensure_micromamba_python() {
   if ! ensure_micromamba; then
     return 1
@@ -1765,7 +1786,17 @@ PY
     return 0
   fi
 
-  mjepa_log_error "[ensure_micromamba_python] micromamba env 'mjepa' still unhealthy after probing both ${env_python:-<unset>} and micromamba run"
+  mjepa_log_warn "[ensure_micromamba_python] stdlib still missing after lightweight repair; forcing full env rebuild via prepare_env.sh"
+
+  if force_rebuild_mjepa_env; then
+    if "${MMBIN}" run -n mjepa python - <<'PY' >/dev/null 2>&1; then
+import encodings  # noqa: F401
+PY
+      return 0
+    fi
+  fi
+
+  mjepa_log_error "[ensure_micromamba_python] micromamba env 'mjepa' still unhealthy after full rebuild"
   return 1
 }
 
