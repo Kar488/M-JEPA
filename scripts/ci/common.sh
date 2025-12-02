@@ -1594,6 +1594,16 @@ _select_mamba_prefix() {
 
   candidate="${requested:-$fallback_home}"
 
+  # If the requested prefix already hosts the mjepa env or the micromamba
+  # binary, prefer it even if the conda-meta marker is missing (some runners
+  # prune cache metadata but keep the env layout intact).
+  if [[ -n "$requested" ]]; then
+    if [[ -x "${requested%/}/bin/micromamba" ]] || [[ -d "${requested%/}/envs/mjepa" ]]; then
+      printf '%s' "$requested"
+      return 0
+    fi
+  fi
+
   if [[ -n "$requested" && -d "$requested" ]] && ! is_conda_root_prefix "$requested"; then
     if [[ -d "$fallback_home" ]]; then
       if is_conda_root_prefix "$fallback_home"; then
@@ -1633,6 +1643,24 @@ ensure_micromamba() {
   eval "$("$MMBIN" shell hook -s bash)" || true
 }
 
+micromamba_env_python_path() {
+  local prefix="${1:-${MAMBA_ROOT_PREFIX:-}}"
+
+  if [[ -z "$prefix" ]]; then
+    return 1
+  fi
+
+  local env_root="${prefix%/}/envs/mjepa"
+  local candidate="${env_root}/bin/python"
+
+  if [[ -x "$candidate" ]]; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+
+  return 1
+}
+
 repair_micromamba_env() {
   local prepare_env="${APP_DIR:-}/scripts/ci/prepare_env.sh"
   local fallback_prepare_env=""
@@ -1661,6 +1689,18 @@ ensure_micromamba_python() {
     return 1
   fi
 
+  local env_python=""
+  env_python="$(micromamba_env_python_path "$MAMBA_ROOT_PREFIX" 2>/dev/null || true)"
+
+  if [[ -n "$env_python" && -x "$env_python" ]]; then
+    if "$env_python" - <<'PY' >/dev/null 2>&1; then
+import encodings  # noqa: F401
+PY
+      return 0
+    fi
+    mjepa_log_warn "[ensure_micromamba_python] python probe failed via ${env_python}; retrying through micromamba run"
+  fi
+
   if "${MMBIN}" run -n mjepa python - <<'PY' >/dev/null 2>&1; then
 import encodings  # noqa: F401
 PY
@@ -1671,11 +1711,11 @@ PY
 
   if ! "${MMBIN}" env list | grep -qE "^mjepa\s" >/dev/null 2>&1; then
     if ! "${MMBIN}" create -y -n mjepa python=3.10 >/dev/null 2>&1; then
-      mjepa_log_warn "[ensure_micromamba_python] failed to create fallback env; will try prepare_env.sh next"
+      mjepa_log_warn "[ensure_micromamba_python] failed to create fallback env; manual repair may be required"
     fi
   else
     if ! "${MMBIN}" install -y -n mjepa python >/dev/null 2>&1; then
-      mjepa_log_warn "[ensure_micromamba_python] failed to repair existing env; will try prepare_env.sh next"
+      mjepa_log_warn "[ensure_micromamba_python] failed to repair existing env; manual repair may be required"
     fi
   fi
 
@@ -1685,25 +1725,7 @@ PY
     return 0
   fi
 
-  mjepa_log_warn "[ensure_micromamba_python] micromamba env 'mjepa' missing stdlib; attempting repair via prepare_env.sh"
-
-  if repair_micromamba_env; then
-    # prepare_env.sh may change MAMBA_ROOT_PREFIX or bootstrap a new micromamba
-    # binary under a different prefix. Refresh the micromamba path before the
-    # final health check so we do not keep probing a stale, broken install.
-    if ! ensure_micromamba; then
-      mjepa_log_error "[ensure_micromamba_python] micromamba missing after repair"
-      return 1
-    fi
-
-    if "${MMBIN}" run -n mjepa python - <<'PY' >/dev/null 2>&1; then
-import encodings  # noqa: F401
-PY
-    return 0
-  fi
-  fi
-
-  mjepa_log_error "[ensure_micromamba_python] micromamba env 'mjepa' still unhealthy after repair"
+  mjepa_log_error "[ensure_micromamba_python] micromamba env 'mjepa' still unhealthy after probing both ${env_python:-<unset>} and micromamba run"
   return 1
 }
 
