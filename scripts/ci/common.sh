@@ -1700,6 +1700,7 @@ import encodings  # noqa: F401
 PY
     return 0
   fi
+  fi
 
   mjepa_log_error "[ensure_micromamba_python] micromamba env 'mjepa' still unhealthy after repair"
   return 1
