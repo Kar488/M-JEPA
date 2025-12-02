@@ -1354,23 +1354,54 @@ else
   : "${PRETRAIN_ARTIFACTS_DIR:=${ARTIFACTS_DIR}}"
 fi
 
-  mjepa_init_cache_dirs() {
-    local default_cache_root default_wandb_root
+_mjepa_rewrite_legacy_graph_cache_root() {
+  local path="$1"
+  local preferred="$2"
 
-    if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
-      : "${WANDB_DIR:=${EXPERIMENT_DIR}/wandb}"
-      : "${CACHE_DIR:=${EXPERIMENT_DIR}/cache/graphs_10m}"
-      default_cache_root="${EXPERIMENT_DIR}/cache/graphs_10m"
-      default_wandb_root="${EXPERIMENT_DIR}/wandb"
-    else
-      : "${CACHE_DIR:=${DATA_ROOT}/cache/graphs_10m}"
-      : "${WANDB_DIR:=${DATA_ROOT}/wandb}"
-      default_cache_root="${DATA_ROOT}/cache/graphs_10m"
-      default_wandb_root="${DATA_ROOT}/wandb"
+  if [[ -z "$path" ]]; then
+    printf '%s' "$path"
+    return 0
+  fi
+
+  local suffix="${path##*/}"
+  if [[ "$suffix" == "graphs_250k" ]]; then
+    local rewritten="${path%/graphs_250k}/graphs_10m"
+    if [[ -d "$rewritten" ]]; then
+      mjepa_log_warn "overriding legacy cache root ${path} → ${rewritten}"
+      printf '%s' "$rewritten"
+      return 0
     fi
+
+    if [[ -n "$preferred" ]]; then
+      mjepa_log_warn "legacy cache root ${path}; defaulting to ${preferred}"
+      printf '%s' "$preferred"
+      return 0
+    fi
+  fi
+
+  printf '%s' "$path"
+}
+
+mjepa_init_cache_dirs() {
+  local default_cache_root default_wandb_root
+
+  if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+    : "${WANDB_DIR:=${EXPERIMENT_DIR}/wandb}"
+    : "${CACHE_DIR:=${EXPERIMENT_DIR}/cache/graphs_10m}"
+    default_cache_root="${EXPERIMENT_DIR}/cache/graphs_10m"
+    default_wandb_root="${EXPERIMENT_DIR}/wandb"
+  else
+    : "${CACHE_DIR:=${DATA_ROOT}/cache/graphs_10m}"
+    : "${WANDB_DIR:=${DATA_ROOT}/wandb}"
+    default_cache_root="${DATA_ROOT}/cache/graphs_10m"
+    default_wandb_root="${DATA_ROOT}/wandb"
+  fi
 
     ensure_dir_var CACHE_DIR "$default_cache_root" "${EXP_ID:+experiments/${EXP_ID}/}cache"
     ensure_dir_var WANDB_DIR "$default_wandb_root" "${EXP_ID:+experiments/${EXP_ID}/}wandb"
+
+    CACHE_DIR="$(_mjepa_rewrite_legacy_graph_cache_root "$CACHE_DIR" "$default_cache_root")"
+    SWEEP_CACHE_DIR="$(_mjepa_rewrite_legacy_graph_cache_root "${SWEEP_CACHE_DIR:-}" "$default_cache_root")"
 
     if [[ -z "${SWEEP_CACHE_DIR:-}" ]]; then
       SWEEP_CACHE_DIR="$CACHE_DIR"
