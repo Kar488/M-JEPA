@@ -1666,6 +1666,24 @@ PY
     return 0
   fi
 
+  mjepa_log_warn "[ensure_micromamba_python] micromamba env 'mjepa' missing stdlib; attempting lightweight repair"
+
+  if ! "${MMBIN}" env list | grep -qE "^mjepa\s" >/dev/null 2>&1; then
+    if ! "${MMBIN}" create -y -n mjepa python=3.10 >/dev/null 2>&1; then
+      mjepa_log_warn "[ensure_micromamba_python] failed to create fallback env; will try prepare_env.sh next"
+    fi
+  else
+    if ! "${MMBIN}" install -y -n mjepa python >/dev/null 2>&1; then
+      mjepa_log_warn "[ensure_micromamba_python] failed to repair existing env; will try prepare_env.sh next"
+    fi
+  fi
+
+  if "${MMBIN}" run -n mjepa python - <<'PY' >/dev/null 2>&1; then
+import encodings  # noqa: F401
+PY
+    return 0
+  fi
+
   mjepa_log_warn "[ensure_micromamba_python] micromamba env 'mjepa' missing stdlib; attempting repair via prepare_env.sh"
 
   if repair_micromamba_env && "${MMBIN}" run -n mjepa python - <<'PY' >/dev/null 2>&1; then
