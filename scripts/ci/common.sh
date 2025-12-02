@@ -1686,7 +1686,16 @@ PY
 
   mjepa_log_warn "[ensure_micromamba_python] micromamba env 'mjepa' missing stdlib; attempting repair via prepare_env.sh"
 
-  if repair_micromamba_env && "${MMBIN}" run -n mjepa python - <<'PY' >/dev/null 2>&1; then
+  if repair_micromamba_env; then
+    # prepare_env.sh may change MAMBA_ROOT_PREFIX or bootstrap a new micromamba
+    # binary under a different prefix. Refresh the micromamba path before the
+    # final health check so we do not keep probing a stale, broken install.
+    if ! ensure_micromamba; then
+      mjepa_log_error "[ensure_micromamba_python] micromamba missing after repair"
+      return 1
+    fi
+
+    if "${MMBIN}" run -n mjepa python - <<'PY' >/dev/null 2>&1; then
 import encodings  # noqa: F401
 PY
     return 0
