@@ -119,8 +119,28 @@ else
 fi
 
 # ----------- micromamba install / hook -----------
-MM_PREFIX="$HOME/micromamba"
+DEFAULT_MM_PREFIX="$HOME/micromamba"
+
+is_conda_root_prefix() {
+  local prefix="$1"
+  [[ -d "${prefix}/conda-meta" ]] || [[ -f "${prefix}/conda-meta/history" ]]
+}
+
+MM_PREFIX_CANDIDATE="${MAMBA_ROOT_PREFIX:-$DEFAULT_MM_PREFIX}"
+if [[ -d "$MM_PREFIX_CANDIDATE" ]] && ! is_conda_root_prefix "$MM_PREFIX_CANDIDATE"; then
+  if [[ "$MM_PREFIX_CANDIDATE" != "$DEFAULT_MM_PREFIX" ]]; then
+    echo "[prepare-env][warn] MAMBA_ROOT_PREFIX=$MM_PREFIX_CANDIDATE exists but is not a conda root; falling back to $DEFAULT_MM_PREFIX"
+    MM_PREFIX_CANDIDATE="$DEFAULT_MM_PREFIX"
+  else
+    backup_candidate="${MM_PREFIX_CANDIDATE}.bak.${RUN_ID}"
+    echo "[prepare-env][warn] $MM_PREFIX_CANDIDATE exists but is not a conda root; moving aside to $backup_candidate"
+    mv "$MM_PREFIX_CANDIDATE" "$backup_candidate"
+  fi
+fi
+
+MM_PREFIX="$MM_PREFIX_CANDIDATE"
 MM_BIN="$MM_PREFIX/bin/micromamba"
+export MAMBA_ROOT_PREFIX="$MM_PREFIX"
 # Relax remote timeout defaults to survive slow mirrors; callers can override via env.
 export CONDA_REMOTE_CONNECT_TIMEOUT_SECS="${CONDA_REMOTE_CONNECT_TIMEOUT_SECS:-30}"
 export CONDA_REMOTE_READ_TIMEOUT_SECS="${CONDA_REMOTE_READ_TIMEOUT_SECS:-180}"
