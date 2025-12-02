@@ -128,28 +128,16 @@ def _normalized_payload(dirpath: str, add_3d: bool, sample: int, label_col: Opti
     return payload
 
 
-_LEGACY_CACHE_SUFFIXES = {"graphs_50k", "graphs_250k"}
-
-
-def _normalize_cache_dir(path: str, log: Callable[[str], None]) -> str:
-    """Resolve ``path`` and redirect legacy cache roots to ``graphs_10m``."""
+def _normalize_cache_dir(path: str) -> str:
+    """Resolve ``path`` and strip a trailing ``prebuilt_datasets`` component."""
 
     resolved = dataset_cache.resolve_env_path(path).rstrip(os.sep)
     suffix = os.path.basename(resolved)
 
-    append_prebuilt = suffix == "prebuilt_datasets"
-    base_dir = os.path.dirname(resolved) if append_prebuilt else resolved
-    base_suffix = os.path.basename(base_dir)
+    if suffix == "prebuilt_datasets":
+        return os.path.dirname(resolved)
 
-    if base_suffix in _LEGACY_CACHE_SUFFIXES:
-        redirected_base = os.path.join(os.path.dirname(base_dir), "graphs_10m")
-        target = (os.path.join(redirected_base, "prebuilt_datasets") if append_prebuilt else redirected_base)
-        log(
-            f"redirecting legacy cache root {resolved} to {target}; remove stale caches if present"
-        )
-        base_dir = redirected_base
-
-    return base_dir
+    return resolved
 
 
 def _ensure_dir(path: str, name: str) -> str:
@@ -620,7 +608,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     unlabeled_dir = _ensure_dir(args.unlabeled_dir, "unlabeled")
     labeled_dir = _ensure_dir(args.labeled_dir, "labeled")
-    cache_dir = _normalize_cache_dir(args.cache_dir, log=_log)
+    cache_dir = _normalize_cache_dir(args.cache_dir)
 
     cache_root = dataset_cache.prepare_cache_root(cache_dir, enabled=True)
     if not cache_root:

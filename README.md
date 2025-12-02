@@ -92,11 +92,10 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
    -  Pass `--cache-dir` to `scripts/train_jepa.py` to store featurised graphs on disk.
       Grid search enables caching by default under `cache/graphs_10m` unless `--no-cache`
       is given. Clear the cache when switching featurisation options such as
-      `--add-3d` to avoid stale representations. The enlarged 10 M graph dataset keeps
+     `--add-3d` to avoid stale representations. The enlarged 10 M graph dataset keeps
       its cached featurisations under `cache/graphs_10m` to avoid clashes with other
-      datasets. Cache utilities now normalise legacy roots such as `cache/graphs_50k`
-      or `cache/graphs_250k` to `cache/graphs_10m`, but you should still delete those
-      stale directories to prevent accidental reuse of mismatched features.
+      datasets. Remove any stale cache directories when switching featurisation
+      options to prevent accidental reuse of mismatched features.
 
    -  Pipeline usage
       Individual stages of the JEPA workflow can be invoked via subcommands in
@@ -145,13 +144,19 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
 
 4. **Run tests**
 
+   Install the Python dependencies first so optional test helpers such as
+   ``pandas`` and ``pyyaml`` are available:
+
    ```bash
-   cd 'C:\Users\karth\Dropbox\Documents\synched folder\my.certifications\La trobe\research\coding\M-JEPA>'
+   pip install -r requirements.txt
+   ```
+
+   ```bash
+   cd 'C:\\Users\\karth\\Dropbox\\Documents\\synched folder\\my.certifications\\La trobe\\research\\coding\\M-JEPA>'
    pytest --cache-clear tests -v -q -s -o log_cli=true -W ignore
    # or single one
    pytest --cache-clear tests/test_plot_small.py -q -s -o log_cli=true -W ignore
    ```
-
 
 5. **Running on a server (GitHub Actions ➜ Vast.ai via SSH)**
 

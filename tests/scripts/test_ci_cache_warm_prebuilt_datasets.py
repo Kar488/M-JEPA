@@ -127,7 +127,7 @@ def test_dataframe_iter_chunks(tmp_path):
     assert full_lengths == [5]
 
 
-def test_cache_warm_redirects_legacy_cache(monkeypatch, tmp_path, capsys):
+def test_cache_warm_accepts_explicit_prebuilt_dir(monkeypatch, tmp_path, capsys):
     calls = []
     _setup_loader(monkeypatch, calls)
 
@@ -135,46 +135,7 @@ def test_cache_warm_redirects_legacy_cache(monkeypatch, tmp_path, capsys):
     labeled = tmp_path / "labeled"
     unlabeled.mkdir()
     labeled.mkdir()
-    legacy_cache_root = tmp_path / "cache" / "graphs_250k"
-
-    argv = [
-        "--unlabeled-dir",
-        str(unlabeled),
-        "--labeled-dir",
-        str(labeled),
-        "--cache-dir",
-        str(legacy_cache_root),
-    ]
-
-    assert cache_warm.main(argv) == 0
-    assert "redirecting legacy cache root" in capsys.readouterr().out
-
     cache_root = tmp_path / "cache" / "graphs_10m" / "prebuilt_datasets"
-    assert dataset_cache.cache_exists(
-        "unlabeled",
-        {
-            "path": str(unlabeled.resolve()),
-            "add_3d": False,
-            "sample": DEFAULT_SAMPLE_UNLABELED,
-        },
-        str(cache_root),
-    )
-    assert dataset_cache.cache_exists(
-        "labeled",
-        {"path": str(labeled.resolve()), "add_3d": False, "sample": 0},
-        str(cache_root),
-    )
-
-
-def test_cache_warm_redirects_legacy_prebuilt_dir(monkeypatch, tmp_path, capsys):
-    calls = []
-    _setup_loader(monkeypatch, calls)
-
-    unlabeled = tmp_path / "unlabeled"
-    labeled = tmp_path / "labeled"
-    unlabeled.mkdir()
-    labeled.mkdir()
-    legacy_cache_root = tmp_path / "cache" / "graphs_250k" / "prebuilt_datasets"
 
     argv = [
         "--unlabeled-dir",
@@ -182,16 +143,15 @@ def test_cache_warm_redirects_legacy_prebuilt_dir(monkeypatch, tmp_path, capsys)
         "--labeled-dir",
         str(labeled),
         "--cache-dir",
-        str(legacy_cache_root),
+        str(cache_root),
     ]
 
     assert cache_warm.main(argv) == 0
 
     out = capsys.readouterr().out
-    assert "redirecting legacy cache root" in out
-    assert "graphs_10m" in out
+    assert "redirecting legacy cache root" not in out
+    assert str(cache_root) in out
 
-    cache_root = tmp_path / "cache" / "graphs_10m" / "prebuilt_datasets"
     assert dataset_cache.cache_exists(
         "unlabeled",
         {
