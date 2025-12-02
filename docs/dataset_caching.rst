@@ -1,8 +1,8 @@
 Dataset caching behaviour
 =========================
 
-This note summarises how cached molecular graphs are separated when the
-``add_3d`` flag is toggled and why SchNet3D always receives 3-D coordinates.
+ This note summarises how cached molecular graphs are separated when the
+ ``add_3d`` flag is toggled and why SchNet3D always receives 3-D coordinates.
 
 GraphDataset caches
 -------------------
@@ -28,6 +28,22 @@ result.【F:scripts/commands/sweep_run.py†L260-L399】  The default ZINC corpu
 draws 10 M molecules, so caches materialised by automation live under
 ``cache/graphs_10m`` to make the size explicit and avoid mixing with older
 250 K or 50 K runs.
+
+Cache warmers
+-------------
+
+``scripts/ci/cache_warm_prebuilt_datasets.py`` layers two limits: a global
+``--sample-{kind}`` cap (defaults pulled from the sweep YAMLs) and an optional
+per-run ceiling (``--max-graphs-per-run``, default 250 K). The warmer now loops
+internally when both limits are set: it removes only the manifest between
+iterations so existing shards are reused, keeps writing manifests after every
+chunk, and resumes until the sample cap is reached or the corpus is exhausted.
+You no longer need to wrap the script in an external loop; expect ~40 internal
+iterations when ``--sample-unlabeled`` is 10 M and ``--max-graphs-per-run`` is
+250 K.【F:scripts/ci/cache_warm_prebuilt_datasets.py†L334-L447】 Use ``--force``
+only when discarding an existing manifest and shards to restart from scratch and
+set ``--sample-unlabeled`` (and ``--sample-labeled``) high enough to allow the
+loop to reach your intended total.【F:scripts/commands/dataset_cache.py†L55-L115】
 
 3-D coordinates for SchNet3D
 ----------------------------
