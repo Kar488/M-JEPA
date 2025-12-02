@@ -1629,6 +1629,42 @@ ensure_micromamba() {
   eval "$("$MMBIN" shell hook -s bash)" || true
 }
 
+repair_micromamba_env() {
+  local prepare_env="${APP_DIR:-}/scripts/ci/prepare_env.sh"
+
+  if [[ ! -x "$prepare_env" ]]; then
+    mjepa_log_error "[ensure_micromamba_python] prepare_env.sh missing; cannot repair micromamba env"
+    return 1
+  fi
+
+  APP_DIR="${APP_DIR:-}" \
+    MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-$HOME/micromamba}" \
+    bash "$prepare_env"
+}
+
+ensure_micromamba_python() {
+  if ! ensure_micromamba; then
+    return 1
+  fi
+
+  if "${MMBIN}" run -n mjepa python - <<'PY' >/dev/null 2>&1; then
+import encodings  # noqa: F401
+PY
+    return 0
+  fi
+
+  mjepa_log_warn "[ensure_micromamba_python] micromamba env 'mjepa' missing stdlib; attempting repair via prepare_env.sh"
+
+  if repair_micromamba_env && "${MMBIN}" run -n mjepa python - <<'PY' >/dev/null 2>&1; then
+import encodings  # noqa: F401
+PY
+    return 0
+  fi
+
+  mjepa_log_error "[ensure_micromamba_python] micromamba env 'mjepa' still unhealthy after repair"
+  return 1
+}
+
 # --- cache stamp utilities ---
 _stamp() { echo "$1/.stamp"; }
 needs_stage() {
