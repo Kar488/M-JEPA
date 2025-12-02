@@ -137,7 +137,8 @@ MM_PREFIX_CANDIDATE="${MAMBA_ROOT_PREFIX:-$DEFAULT_MM_PREFIX}"
 if [[ -d "$MM_PREFIX_CANDIDATE" ]] && ! is_conda_root_prefix "$MM_PREFIX_CANDIDATE"; then
   if [[ "$MM_PREFIX_CANDIDATE" != "$DEFAULT_MM_PREFIX" ]]; then
     echo "[prepare-env][warn] MAMBA_ROOT_PREFIX=$MM_PREFIX_CANDIDATE exists but is not a conda root; falling back to $DEFAULT_MM_PREFIX"
-    MM_PREFIX_CANDIDATE="$DEFAULT_MM_PREFIX"
+    rm -rf "$MM_PREFIX_CANDIDATE"
+    # we keep MM_PREFIX_CANDIDATE as the target root instead of falling back
   else
     backup_candidate="${MM_PREFIX_CANDIDATE}.bak.${RUN_ID}"
     echo "[prepare-env][warn] $MM_PREFIX_CANDIDATE exists but is not a conda root; moving aside to $backup_candidate"

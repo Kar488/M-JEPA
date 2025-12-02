@@ -344,7 +344,7 @@ jobs:
           CACHE_WARM_UNLABELED_DIR="${APP_DIR}/data/ZINC-canonicalized"
           CACHE_WARM_LABELED_DIR="${APP_DIR}/data/katielinkmoleculenet_benchmark/train"
           CACHE_WARM_LABEL_COL="measured log solubility in mols per litre"
-          CACHE_WARM_SAMPLE_UNLABELED=250000
+          CACHE_WARM_SAMPLE_UNLABELED=10000000
           CACHE_WARM_SAMPLE_LABELED=5000
           CACHE_WARM_NUM_WORKERS=-1
 
@@ -388,7 +388,7 @@ jobs:
           CACHE_WARM_UNLABELED_DIR="${APP_DIR}/data/ZINC-canonicalized"
           CACHE_WARM_LABELED_DIR="${APP_DIR}/data/katielinkmoleculenet_benchmark/train"
           CACHE_WARM_LABEL_COL="measured log solubility in mols per litre"
-          CACHE_WARM_SAMPLE_UNLABELED=250000
+          CACHE_WARM_SAMPLE_UNLABELED=10000000
           CACHE_WARM_SAMPLE_LABELED=5000
           CACHE_WARM_NUM_WORKERS=-1
 
