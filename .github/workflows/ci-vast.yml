@@ -323,16 +323,10 @@ jobs:
     name: Warm dataset cache (2D)
     runs-on: self-hosted
     timeout-minutes: 480
-    needs: [tests_quick, vast_prepare_environment]
+    needs: [vast_prepare_environment]
     env:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
-      - name: Ensure experiments root available
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$APP_DIR"
-          bash scripts/ci/ensure_experiments_root.sh
       - name: Materialise 2D caches locally
         shell: bash
         run: |
@@ -373,16 +367,10 @@ jobs:
     name: Warm dataset cache (3D)
     runs-on: self-hosted
     timeout-minutes: 480
-    needs: [vast_cache_warm_2d]
+    needs: [vast_prepare_environment, vast_cache_warm_2d]
     env:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
-      - name: Ensure experiments root available
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$APP_DIR"
-          bash scripts/ci/ensure_experiments_root.sh
       - name: Materialise 3D caches locally
         shell: bash
         run: |
