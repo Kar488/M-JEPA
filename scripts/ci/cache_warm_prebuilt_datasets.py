@@ -216,6 +216,21 @@ def _discover_existing_shards(shard_dir: str, base_dir: str) -> Tuple[List[Dict[
     return contiguous, processed
 
 
+def _load_sharded_manifest(cache_path: str) -> Optional[Dict[str, Any]]:
+    try:
+        with open(cache_path, "rb") as fh:
+            payload = pickle.load(fh)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("__dataset_cache_format__") != dataset_cache.SHARDED_CACHE_FORMAT:
+        return None
+    return payload
+
+
 class _ShardAccumulator:
     def __init__(
         self,
@@ -407,6 +422,7 @@ def _stream_directory_to_cache(
             break
     accumulator.finalize()
     if hit_run_cap and not hit_global_cap:
+        _write_manifest(cache_path, accumulator, log)
         log(
             f"{kind} per-run cap reached after {graphs_emitted - processed} new graphs; rerun to continue"
         )
@@ -479,6 +495,77 @@ def _make_streaming_builder(
     return _builder
 
 
+def _warm_dataset_in_chunks(
+    *,
+    kind: str,
+    payload: Dict[str, Any],
+    builder: Callable[[], dataset_cache.DatasetBuilderResult],
+    cache_root: str,
+    sample: int,
+    per_run_limit: int,
+    force: bool,
+    log: Callable[[str], None],
+) -> None:
+    cache_path = dataset_cache.dataset_cache_path(kind, payload, cache_root)
+    if cache_path is None:
+        raise RuntimeError(f"unable to resolve cache path for {kind}")
+
+    # If there is no per-run ceiling or no target sample, fall back to the
+    # single invocation flow.
+    if per_run_limit <= 0 or sample <= 0:
+        dataset_cache.ensure_dataset_cache(
+            kind, payload, builder, cache_root, force=force, log=log
+        )
+        return
+
+    manifest = _load_sharded_manifest(cache_path)
+    previous_total = 0
+    if manifest and not force:
+        previous_total = int(manifest.get("total_graphs") or 0)
+        if previous_total >= sample:
+            log(
+                f"{kind} dataset already has {previous_total} graphs (>= target {sample}); skipping warmup"
+            )
+            return
+        log(
+            f"{kind} dataset already has {previous_total} graphs; continuing warmup toward {sample}"
+        )
+
+    first_force = force
+    while True:
+        if not first_force:
+            try:
+                os.remove(cache_path)
+            except FileNotFoundError:
+                pass
+        dataset_cache.ensure_dataset_cache(
+            kind, payload, builder, cache_root, force=first_force, log=log
+        )
+        first_force = False
+
+        manifest = _load_sharded_manifest(cache_path)
+        if manifest is None:
+            log(
+                f"{kind} cache warm did not produce a sharded manifest; stopping early"
+            )
+            return
+        current_total = int(manifest.get("total_graphs") or 0)
+        if current_total <= previous_total:
+            raise RuntimeError(
+                f"{kind} cache warm made no progress (stuck at {current_total} graphs)"
+            )
+        if current_total >= sample:
+            break
+
+        remaining = sample - current_total
+        log(
+            f"{kind} cache at {current_total}/{sample}; warming another {per_run_limit}-graph chunk (remaining {remaining})"
+        )
+        previous_total = current_total
+
+    log(f"{kind} cache reached target with {current_total} graphs")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_argparser()
     args = parser.parse_args(argv)
@@ -510,11 +597,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         force=args.force,
         log=_log,
     )
-    dataset_cache.ensure_dataset_cache(
-        "unlabeled",
-        unlabeled_payload,
-        unlabeled_builder,
-        cache_root,
+    _warm_dataset_in_chunks(
+        kind="unlabeled",
+        payload=unlabeled_payload,
+        builder=unlabeled_builder,
+        cache_root=cache_root,
+        sample=args.sample_unlabeled,
+        per_run_limit=args.max_graphs_per_run,
         force=args.force,
         log=_log,
     )
@@ -536,11 +625,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         force=args.force,
         log=_log,
     )
-    dataset_cache.ensure_dataset_cache(
-        "labeled",
-        labeled_payload,
-        labeled_builder,
-        cache_root,
+    _warm_dataset_in_chunks(
+        kind="labeled",
+        payload=labeled_payload,
+        builder=labeled_builder,
+        cache_root=cache_root,
+        sample=args.sample_labeled,
+        per_run_limit=args.max_graphs_per_run,
         force=args.force,
         log=_log,
     )
