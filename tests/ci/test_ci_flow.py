@@ -205,6 +205,7 @@ def test_common_sh_rewrites_unwritable_sweep_cache(tmp_path):
         {
             "DATA_ROOT": str(data_root),
             "RUNNER_TEMP": str(runner_tmp),
+            "CACHE_DIR": str(data_root / "cache" / "graphs_10m"),
             "SWEEP_CACHE_DIR": str(blocked_sweep),
             "MJEPA_ALLOW_DATA_FALLBACKS": "1",
         }
