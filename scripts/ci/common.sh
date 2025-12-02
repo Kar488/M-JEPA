@@ -1776,10 +1776,19 @@ PY
     return 1
   fi
 
+  # After repair_env, prepare_env.sh may have deliberately built the env under
+  # $HOME/micromamba even if DATA_ROOT=/data/mjepa. If we detect an mjepa env
+  # there, explicitly switch MAMBA_ROOT_PREFIX so subsequent micromamba calls
+  # (including warm-2d) use the correct prefix instead of the stale /data one.
+  local home_prefix="${HOME%/}/micromamba"
+  if [[ -d "${home_prefix}/envs/mjepa" ]]; then
+    MAMBA_ROOT_PREFIX="$home_prefix"
+    export MAMBA_ROOT_PREFIX
+  fi
+
   # IMPORTANT: re-run ensure_micromamba so _select_mamba_prefix can now prefer
-  # the real conda root created by prepare_env.sh (usually $HOME/micromamba).
-  # This updates MAMBA_ROOT_PREFIX and MMBIN for all subsequent micromamba calls
-  # (including the warm-2d python invocation).
+  # the real conda root created by prepare_env.sh. This updates MAMBA_ROOT_PREFIX
+  # and MMBIN for all subsequent micromamba calls (including warm-2d).
   if ! ensure_micromamba; then
     mjepa_log_error "[ensure_micromamba_python] ensure_micromamba failed after repair"
     return 1
