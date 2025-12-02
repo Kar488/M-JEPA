@@ -182,6 +182,9 @@ if ! command -v bsdtar >/dev/null 2>&1; then
   sudo apt-get update -qq
   sudo apt-get install -y libarchive-tools
 fi
+# Guarantee the micromamba binary directory is on PATH so wrappers like
+# `timeout` can invoke it directly without relying on the shell hook.
+export PATH="${MM_PREFIX}/bin:${PATH}"
 if ! [ -x "$MM_BIN" ]; then
   case "$(uname -m)" in
     x86_64|amd64) CHAN=linux-64 ;;
@@ -445,7 +448,7 @@ fi
 
 # ----------- sanity -----------
 set +e
-timeout 120 micromamba run -n "$ENV_NAME" python - <<'PY'
+timeout 120 "$MM_BIN" run -n "$ENV_NAME" python - <<'PY'
 import torch
 from rdkit.Chem.Scaffolds import MurckoScaffold as MS
 print("torch:", torch.__version__, "cuda:", torch.cuda.is_available())
