@@ -1768,21 +1768,30 @@ PY
 
   # 3) Attempt a full repair using prepare_env.sh.
   #    This script already:
-  #      - (re)creates the mjepa env,
+  #      - (re)creates the mjepa env (possibly under $HOME/micromamba),
   #      - installs all deps,
-  #      - runs its own, *stronger* sanity check (torch + RDKit).
+  #      - runs its own, *stronger* sanity check (torch + RDKit + CUDA).
   if ! repair_micromamba_env; then
     mjepa_log_error "[ensure_micromamba_python] repair_micromamba_env failed; cannot recover micromamba env"
+    return 1
+  fi
+
+  # IMPORTANT: re-run ensure_micromamba so _select_mamba_prefix can now prefer
+  # the real conda root created by prepare_env.sh (usually $HOME/micromamba).
+  # This updates MAMBA_ROOT_PREFIX and MMBIN for all subsequent micromamba calls
+  # (including the warm-2d python invocation).
+  if ! ensure_micromamba; then
+    mjepa_log_error "[ensure_micromamba_python] ensure_micromamba failed after repair"
     return 1
   fi
 
   # 4) At this point prepare_env.sh has completed successfully and has already
   #    run a richer sanity check (torch + RDKit + CUDA). We treat that as
   #    authoritative and do NOT gate on our own brittle stdlib probe anymore.
-  mjepa_log_warn "[ensure_micromamba_python] prepare_env.sh completed; trusting rebuilt 'mjepa' env as healthy"
+  mjepa_log_warn "[ensure_micromamba_python] prepare_env.sh completed; trusting rebuilt 'mjepa' env as healthy (MAMBA_ROOT_PREFIX=${MAMBA_ROOT_PREFIX:-<unset>})"
 
-  # Optional: one last *best-effort* micromamba run probe – but its failure
-  # should NOT be fatal anymore. We just log it and proceed.
+  # Optional: one last *best-effort* micromamba run probe with the updated root.
+  # Its failure should NOT be fatal anymore. We just log it and proceed.
   if [[ -n "${MMBIN:-}" ]]; then
     if ! "$MMBIN" run -n mjepa python - <<'PY' >/dev/null 2>&1; then
 import encodings  # noqa: F401
