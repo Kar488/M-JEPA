@@ -422,7 +422,6 @@ def _stream_directory_to_cache(
             break
     accumulator.finalize()
     if hit_run_cap and not hit_global_cap:
-        _write_manifest(cache_path, accumulator, log)
         log(
             f"{kind} per-run cap reached after {graphs_emitted - processed} new graphs; rerun to continue"
         )
@@ -519,6 +518,7 @@ def _warm_dataset_in_chunks(
         return
 
     manifest = _load_sharded_manifest(cache_path)
+    cache_exists = os.path.exists(cache_path)
     previous_total = 0
     if manifest and not force:
         previous_total = int(manifest.get("total_graphs") or 0)
@@ -530,6 +530,9 @@ def _warm_dataset_in_chunks(
         log(
             f"{kind} dataset already has {previous_total} graphs; continuing warmup toward {sample}"
         )
+    elif cache_exists and not force:
+        log(f"{kind} dataset already cached in non-sharded format; skipping warmup")
+        return
 
     first_force = force
     while True:
