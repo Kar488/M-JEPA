@@ -421,12 +421,16 @@ def _stream_directory_to_cache(
         if hit_run_cap or hit_global_cap:
             break
     accumulator.finalize()
+
+    # Always persist a manifest so resumptions can discover the existing shards
+    # and cumulative counts. When only the per-run cap was reached we still want
+    # to record progress rather than aborting without a manifest.
+    _write_manifest(cache_path, accumulator, log)
     if hit_run_cap and not hit_global_cap:
         log(
             f"{kind} per-run cap reached after {graphs_emitted - processed} new graphs; rerun to continue"
         )
         return
-    _write_manifest(cache_path, accumulator, log)
 
 
 def _write_manifest(cache_path: str, accumulator: _ShardAccumulator, log: Callable[[str], None]) -> None:
