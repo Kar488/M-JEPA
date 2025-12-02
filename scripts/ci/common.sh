@@ -1653,10 +1653,37 @@ micromamba_env_python_path() {
   local env_root="${prefix%/}/envs/mjepa"
   local candidate="${env_root}/bin/python"
 
-  if [[ -x "$candidate" ]]; then
+  if [[ -f "$candidate" && -x "$candidate" ]]; then
     printf '%s' "$candidate"
     return 0
   fi
+
+  return 1
+}
+
+python_stdlib_marker() {
+  local python_bin="$1"
+
+  if [[ -z "$python_bin" ]]; then
+    return 1
+  fi
+
+  local resolved lib_root
+  resolved="$(readlink -f "$python_bin" 2>/dev/null || true)"
+
+  if [[ -z "$resolved" ]]; then
+    return 1
+  fi
+
+  lib_root="$(cd "$(dirname "$resolved")/.." && pwd)/lib"
+
+  local marker
+  for marker in "$lib_root"/python*/encodings/__init__.py; do
+    if [[ -f "$marker" ]]; then
+      printf '%s' "$marker"
+      return 0
+    fi
+  done
 
   return 1
 }
@@ -1692,13 +1719,26 @@ ensure_micromamba_python() {
   local env_python=""
   env_python="$(micromamba_env_python_path "$MAMBA_ROOT_PREFIX" 2>/dev/null || true)"
 
-  if [[ -n "$env_python" && -x "$env_python" ]]; then
+  if [[ -n "$env_python" ]]; then
+    if [[ -d "$env_python" ]]; then
+      mjepa_log_warn "[ensure_micromamba_python] expected an executable at ${env_python} but found a directory; deferring to micromamba run"
+      env_python=""
+    elif [[ ! -f "$env_python" || ! -x "$env_python" ]]; then
+      mjepa_log_warn "[ensure_micromamba_python] ${env_python} is not an executable file; deferring to micromamba run"
+      env_python=""
+    fi
+  fi
+
+  if [[ -n "$env_python" ]] && python_stdlib_marker "$env_python" >/dev/null 2>&1; then
     if "$env_python" - <<'PY' >/dev/null 2>&1; then
 import encodings  # noqa: F401
 PY
       return 0
     fi
     mjepa_log_warn "[ensure_micromamba_python] python probe failed via ${env_python}; retrying through micromamba run"
+  elif [[ -n "$env_python" ]]; then
+    mjepa_log_warn "[ensure_micromamba_python] ${env_python} present but stdlib markers missing; deferring to micromamba run"
+    env_python=""
   fi
 
   if "${MMBIN}" run -n mjepa python - <<'PY' >/dev/null 2>&1; then
