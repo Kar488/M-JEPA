@@ -342,7 +342,10 @@ jobs:
           # Source the shared CI bootstrap so DATA_ROOT / micromamba fallbacks
           # mirror the behaviour of stage runners.
           source scripts/ci/common.sh
-          ensure_micromamba
+          if ! ensure_micromamba_python; then
+            echo "[cache-warm][fatal] micromamba env 'mjepa' missing or broken" >&2
+            exit 1
+          fi
           MICROMAMBA_BIN="$MMBIN"
           CACHE_WARM_UNLABELED_DIR="${APP_DIR}/data/ZINC-canonicalized"
           CACHE_WARM_LABELED_DIR="${APP_DIR}/data/katielinkmoleculenet_benchmark/train"
@@ -389,7 +392,10 @@ jobs:
           # Mirror the 2D warmer setup so both stages share the fallback
           # handling implemented in scripts/ci/common.sh.
           source scripts/ci/common.sh
-          ensure_micromamba
+          if ! ensure_micromamba_python; then
+            echo "[cache-warm][fatal] micromamba env 'mjepa' missing or broken" >&2
+            exit 1
+          fi
           MICROMAMBA_BIN="$MMBIN"
           CACHE_WARM_UNLABELED_DIR="${APP_DIR}/data/ZINC-canonicalized"
           CACHE_WARM_LABELED_DIR="${APP_DIR}/data/katielinkmoleculenet_benchmark/train"
