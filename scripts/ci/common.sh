@@ -459,10 +459,13 @@ mjepa_ensure_dir() {
   return 1
 }
 
-if [[ -z "${APP_DIR:-}" ]]; then
+if [[ -z "${APP_DIR:-}" || ! -f "${APP_DIR}/scripts/train_jepa.py" ]]; then
   __ci_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   __ci_root="$(cd "${__ci_here}/../.." && pwd)"
   if [[ -f "${__ci_root}/scripts/train_jepa.py" ]]; then
+    if [[ -n "${APP_DIR:-}" && "${APP_DIR}" != "${__ci_root}" ]]; then
+      mjepa_log_warn "APP_DIR=${APP_DIR} missing CI scripts; falling back to ${__ci_root}"
+    fi
     APP_DIR="${__ci_root}"
   fi
   unset __ci_here __ci_root
@@ -1631,6 +1634,16 @@ ensure_micromamba() {
 
 repair_micromamba_env() {
   local prepare_env="${APP_DIR:-}/scripts/ci/prepare_env.sh"
+  local fallback_prepare_env=""
+
+  if [[ ! -x "$prepare_env" ]]; then
+    fallback_prepare_env="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prepare_env.sh"
+  fi
+
+  if [[ ! -x "$prepare_env" && -x "$fallback_prepare_env" ]]; then
+    mjepa_log_warn "[ensure_micromamba_python] prepare_env.sh not found under APP_DIR=${APP_DIR:-<unset>}; using ${fallback_prepare_env}"
+    prepare_env="$fallback_prepare_env"
+  fi
 
   if [[ ! -x "$prepare_env" ]]; then
     mjepa_log_error "[ensure_micromamba_python] prepare_env.sh missing; cannot repair micromamba env"
