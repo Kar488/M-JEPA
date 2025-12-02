@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# NOTE: keep this script executable; ensure_micromamba_python invokes it to
+# repair the micromamba environment when CI detects a broken stdlib.
+
 # ----------- inputs & defaults -----------
 : "${APP_DIR:=/srv/mjepa}"
 : "${RUN_ID:=$(date +%s)}"
