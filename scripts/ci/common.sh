@@ -1354,66 +1354,44 @@ else
   : "${PRETRAIN_ARTIFACTS_DIR:=${ARTIFACTS_DIR}}"
 fi
 
-normalize_cache_suffix() {
-  local var_name="$1" value="${!1:-}" legacy_suffix upgraded
-  [[ -n "$value" ]] || return 0
-  for legacy_suffix in graphs_50k graphs_250k; do
-    if [[ "$value" == */${legacy_suffix} || "$value" == "${legacy_suffix}" ]]; then
-      upgraded="${value%/${legacy_suffix}}/graphs_10m"
-      upgraded="${upgraded##/}"
-      if [[ "$value" == /* ]]; then
-        upgraded="/${upgraded}"
-      fi
-      mjepa_log_warn "normalizing ${var_name} from ${value} → ${upgraded}"
-      printf -v "$var_name" '%s' "$upgraded"
-      return 0
+  mjepa_init_cache_dirs() {
+    local default_cache_root default_wandb_root
+
+    if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+      : "${WANDB_DIR:=${EXPERIMENT_DIR}/wandb}"
+      : "${CACHE_DIR:=${EXPERIMENT_DIR}/cache/graphs_10m}"
+      default_cache_root="${EXPERIMENT_DIR}/cache/graphs_10m"
+      default_wandb_root="${EXPERIMENT_DIR}/wandb"
+    else
+      : "${CACHE_DIR:=${DATA_ROOT}/cache/graphs_10m}"
+      : "${WANDB_DIR:=${DATA_ROOT}/wandb}"
+      default_cache_root="${DATA_ROOT}/cache/graphs_10m"
+      default_wandb_root="${DATA_ROOT}/wandb"
     fi
-  done
-}
 
-if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
-  if [[ -z "${WANDB_DIR:-}" ]]; then
-    WANDB_DIR="${EXPERIMENT_DIR}/wandb"
+    ensure_dir_var CACHE_DIR "$default_cache_root" "${EXP_ID:+experiments/${EXP_ID}/}cache"
+    ensure_dir_var WANDB_DIR "$default_wandb_root" "${EXP_ID:+experiments/${EXP_ID}/}wandb"
+
+    if [[ -z "${SWEEP_CACHE_DIR:-}" ]]; then
+      SWEEP_CACHE_DIR="$CACHE_DIR"
+    fi
+
+    ensure_dir_var SWEEP_CACHE_DIR "$CACHE_DIR" "${EXP_ID:+experiments/${EXP_ID}/}cache"
+
+    if [[ -z "${GRID_CACHE_DIR:-}" && -n "${SWEEP_CACHE_DIR:-}" ]]; then
+      local sweep_grid_candidate="${SWEEP_CACHE_DIR%/}/grid"
+      if [[ -d "$sweep_grid_candidate" ]]; then
+        GRID_CACHE_DIR="$sweep_grid_candidate"
+      fi
+    fi
+
+    export CACHE_DIR SWEEP_CACHE_DIR
+  }
+
+  : "${MJEPACI_INIT_CACHE_DIRS:=1}"
+  if [[ "$MJEPACI_INIT_CACHE_DIRS" == "1" ]]; then
+    mjepa_init_cache_dirs
   fi
-  if [[ -z "${CACHE_DIR:-}" ]]; then
-    CACHE_DIR="${EXPERIMENT_DIR}/cache/graphs_10m"
-  fi
-  default_cache_root="${EXPERIMENT_DIR}/cache/graphs_10m"
-  default_wandb_root="${EXPERIMENT_DIR}/wandb"
-else
-  if [[ -z "${CACHE_DIR:-}" ]]; then
-    CACHE_DIR="${DATA_ROOT}/cache/graphs_10m"
-  fi
-  if [[ -z "${WANDB_DIR:-}" ]]; then
-    WANDB_DIR="${DATA_ROOT}/wandb"
-  fi
-  default_cache_root="${DATA_ROOT}/cache/graphs_10m"
-  default_wandb_root="${DATA_ROOT}/wandb"
-fi
-
-normalize_cache_suffix CACHE_DIR
-
-ensure_dir_var CACHE_DIR "$default_cache_root" "${EXP_ID:+experiments/${EXP_ID}/}cache"
-ensure_dir_var WANDB_DIR "$default_wandb_root" "${EXP_ID:+experiments/${EXP_ID}/}wandb"
-
-if [[ -z "${SWEEP_CACHE_DIR:-}" ]]; then
-  SWEEP_CACHE_DIR="$CACHE_DIR"
-fi
-
-normalize_cache_suffix SWEEP_CACHE_DIR
-
-ensure_dir_var SWEEP_CACHE_DIR "$CACHE_DIR" "${EXP_ID:+experiments/${EXP_ID}/}cache"
-
-if [[ -z "${GRID_CACHE_DIR:-}" && -n "${SWEEP_CACHE_DIR:-}" ]]; then
-  sweep_grid_candidate="${SWEEP_CACHE_DIR%/}/grid"
-  if [[ -d "$sweep_grid_candidate" ]]; then
-    GRID_CACHE_DIR="$sweep_grid_candidate"
-  fi
-  unset sweep_grid_candidate
-fi
-
-export CACHE_DIR
-export SWEEP_CACHE_DIR
 
 # Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
 GRID_DIR_DEFAULT="${EXPERIMENT_DIR}/grid"
@@ -1616,10 +1594,12 @@ _select_mamba_prefix() {
 
   candidate="${requested:-$fallback_home}"
 
-  if [[ -n "$requested" && -d "$requested" && ! is_conda_root_prefix "$requested" ]]; then
-    if [[ -d "$fallback_home" && is_conda_root_prefix "$fallback_home" ]]; then
-      mjepa_log_warn "[ensure_micromamba] MAMBA_ROOT_PREFIX=$requested is not a conda root; reusing $fallback_home from prepare_env.sh"
-      candidate="$fallback_home"
+  if [[ -n "$requested" && -d "$requested" ]] && ! is_conda_root_prefix "$requested"; then
+    if [[ -d "$fallback_home" ]]; then
+      if is_conda_root_prefix "$fallback_home"; then
+        mjepa_log_warn "[ensure_micromamba] MAMBA_ROOT_PREFIX=$requested is not a conda root; reusing $fallback_home from prepare_env.sh"
+        candidate="$fallback_home"
+      fi
     fi
   fi
 
