@@ -1606,8 +1606,29 @@ _bootstrap_micromamba() {
   return 0
 }
 
+is_conda_root_prefix() {
+  local prefix="$1"
+  [[ -d "${prefix}/conda-meta" ]] || [[ -f "${prefix}/conda-meta/history" ]]
+}
+
+_select_mamba_prefix() {
+  local requested="${MAMBA_ROOT_PREFIX:-}" fallback_home="${HOME%/}/micromamba" candidate
+
+  candidate="${requested:-$fallback_home}"
+
+  if [[ -n "$requested" && -d "$requested" && ! is_conda_root_prefix "$requested" ]]; then
+    if [[ -d "$fallback_home" && is_conda_root_prefix "$fallback_home" ]]; then
+      mjepa_log_warn "[ensure_micromamba] MAMBA_ROOT_PREFIX=$requested is not a conda root; reusing $fallback_home from prepare_env.sh"
+      candidate="$fallback_home"
+    fi
+  fi
+
+  printf '%s' "$candidate"
+}
+
 ensure_micromamba() {
-  local prefix="${MAMBA_ROOT_PREFIX:-$HOME/micromamba}"
+  local prefix
+  prefix="$(_select_mamba_prefix)"
   local candidate="${MMBIN:-}"
 
   if [[ -n "$candidate" && -x "$candidate" ]]; then
