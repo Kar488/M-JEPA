@@ -235,6 +235,49 @@ def test_common_sh_rewrites_unwritable_sweep_cache(tmp_path):
     assert cache_dir.is_dir(), cache_dir
 
 
+def test_common_sh_rewrites_legacy_cache_root(tmp_path):
+    common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
+
+    data_root = tmp_path / "data"
+    legacy_cache = data_root / "cache" / "graphs_250k"
+    preferred_cache = data_root / "cache" / "graphs_10m"
+
+    preferred_cache.mkdir(parents=True, exist_ok=True)
+    legacy_cache.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "DATA_ROOT": str(data_root),
+            "CACHE_DIR": str(legacy_cache),
+            "SWEEP_CACHE_DIR": str(legacy_cache),
+            "MJEPA_ALLOW_DATA_FALLBACKS": "1",
+        }
+    )
+
+    cmd = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(common_sh))}; "
+        "printf '%s\n%s' \"$CACHE_DIR\" \"$SWEEP_CACHE_DIR\""
+    )
+
+    proc = subprocess.run(
+        ["bash", "-c", cmd],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    cache_dir_str, sweep_dir_str = proc.stdout.strip().splitlines()
+    assert cache_dir_str == sweep_dir_str
+
+    cache_dir = Path(cache_dir_str)
+    assert cache_dir.name == "graphs_10m"
+    assert cache_dir.is_dir(), cache_dir
+
+
 def test_common_sh_attempts_privileged_fix_for_experiments_root(tmp_path):
     common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
     fake_sudo = REPO_ROOT / "tests" / "ci" / "fake_sudo.sh"
