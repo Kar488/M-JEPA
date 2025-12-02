@@ -422,10 +422,14 @@ def _stream_directory_to_cache(
             break
     accumulator.finalize()
 
-    # Always persist a manifest so resumptions can discover the existing shards
-    # and cumulative counts. When only the per-run cap was reached we still want
-    # to record progress rather than aborting without a manifest.
-    _write_manifest(cache_path, accumulator, log)
+    # Persist the manifest only when we've reached the global target or emitted
+    # all available graphs. Hitting the per-run cap alone should leave the
+    # manifest absent so callers can detect that additional shards still need to
+    # be materialised. Progress is tracked via the shard filenames, which
+    # ``_discover_existing_shards`` can replay on the next invocation.
+    should_write_manifest = not (hit_run_cap and not hit_global_cap)
+    if should_write_manifest:
+        _write_manifest(cache_path, accumulator, log)
     if hit_run_cap and not hit_global_cap:
         log(
             f"{kind} per-run cap reached after {graphs_emitted - processed} new graphs; rerun to continue"
@@ -537,6 +541,24 @@ def _warm_dataset_in_chunks(
     elif cache_exists and not force:
         log(f"{kind} dataset already cached in non-sharded format; skipping warmup")
         return
+    else:
+        # If no manifest exists yet (e.g., because previous runs stopped at the
+        # per-run ceiling), reconstruct progress from the shard directory so we
+        # can resume streaming.
+        shard_dir = f"{cache_path}.parts"
+        existing_shards, processed = _discover_existing_shards(shard_dir, os.path.dirname(cache_path))
+        if existing_shards:
+            manifest = {
+                "__dataset_cache_format__": dataset_cache.SHARDED_CACHE_FORMAT,
+                "version": dataset_cache.SHARDED_CACHE_VERSION,
+                "shards": existing_shards,
+                "total_graphs": processed,
+                "has_labels": any("labels" in shard for shard in existing_shards),
+            }
+            previous_total = processed
+            log(
+                f"{kind} dataset found {processed} graphs in partial shards; continuing warmup toward {sample}"
+            )
 
     first_force = force
     while True:
@@ -552,10 +574,20 @@ def _warm_dataset_in_chunks(
 
         manifest = _load_sharded_manifest(cache_path)
         if manifest is None:
-            log(
-                f"{kind} cache warm did not produce a sharded manifest; stopping early"
-            )
-            return
+            shard_dir = f"{cache_path}.parts"
+            existing_shards, processed = _discover_existing_shards(shard_dir, os.path.dirname(cache_path))
+            if not existing_shards:
+                log(
+                    f"{kind} cache warm did not produce a sharded manifest; stopping early"
+                )
+                return
+            manifest = {
+                "__dataset_cache_format__": dataset_cache.SHARDED_CACHE_FORMAT,
+                "version": dataset_cache.SHARDED_CACHE_VERSION,
+                "shards": existing_shards,
+                "total_graphs": processed,
+                "has_labels": any("labels" in shard for shard in existing_shards),
+            }
         current_total = int(manifest.get("total_graphs") or 0)
         if current_total <= previous_total:
             log(
@@ -571,6 +603,14 @@ def _warm_dataset_in_chunks(
         )
         previous_total = current_total
 
+    if manifest is not None and current_total >= sample:
+        _write_manifest(cache_path, _ShardAccumulator(
+            shard_dir=f"{cache_path}.parts",
+            base_dir=os.path.dirname(cache_path),
+            shard_size=_DEFAULT_SHARD_SIZE,
+            existing=manifest.get("shards", []),
+            expect_labels=bool(manifest.get("has_labels")),
+        ), log)
     log(f"{kind} cache reached target with {current_total} graphs")
 
 
