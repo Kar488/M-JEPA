@@ -196,8 +196,23 @@ eval "$("$MM_BIN" shell hook -s bash)"
 
 
 # ----------- env create if needed -----------
-if ! micromamba env list | grep -q "^${ENV_NAME}\b"; then
+create_base_env() {
   micromamba_with_retry 3 create -y -n "$ENV_NAME" -c conda-forge python=3.10 rdkit=2023.09.5 scipy pip
+}
+
+if ! micromamba env list | grep -q "^${ENV_NAME}\b"; then
+  create_base_env
+fi
+
+# Some Vast runners sporadically ship a truncated micromamba env where the
+# standard library is missing (e.g., ``encodings``). Detect that early and
+# rebuild so later cache warmers and sweeps do not fail on import.
+if ! micromamba run -n "$ENV_NAME" python - <<'PY' >/dev/null 2>&1; then
+import encodings  # noqa: F401
+PY
+  echo "[prepare-env][warn] Broken Python stdlib detected; rebuilding $ENV_NAME"
+  micromamba env remove -y -n "$ENV_NAME" || true
+  create_base_env
 fi
 
 # ----------- base pip deps -----------
