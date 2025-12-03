@@ -1742,7 +1742,7 @@ repair_micromamba_env() {
   fi
 
   APP_DIR="${APP_DIR:-}" \
-    MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-$HOME/micromamba}" \
+    MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-}" \
     bash "$prepare_env"
 }
 
@@ -1805,16 +1805,6 @@ PY
   if ! repair_micromamba_env; then
     mjepa_log_error "[ensure_micromamba_python] repair_micromamba_env failed; cannot recover micromamba env"
     return 1
-  fi
-
-  # After repair_env, prepare_env.sh may have deliberately built the env under
-  # $HOME/micromamba even if DATA_ROOT=/data/mjepa. If we detect an mjepa env
-  # there, explicitly switch MAMBA_ROOT_PREFIX so subsequent micromamba calls
-  # (including warm-2d) use the correct prefix instead of the stale /data one.
-  local home_prefix="${HOME%/}/micromamba"
-  if [[ -d "${home_prefix}/envs/mjepa" ]]; then
-    MAMBA_ROOT_PREFIX="$home_prefix"
-    export MAMBA_ROOT_PREFIX
   fi
 
   # IMPORTANT: re-run ensure_micromamba so _select_mamba_prefix can now prefer
