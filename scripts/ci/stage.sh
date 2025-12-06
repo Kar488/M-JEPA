@@ -1645,7 +1645,7 @@ run_with_timeout() {
         arr=("${arr_ref[@]}")
       fi
 
-      local BUDGET_MINS="${REPORT_TIME_BUDGET_MINS:-${HARD_WALL_MINS:-270}}"
+      local BUDGET_MINS="${REPORT_TIME_BUDGET_MINS:-${HARD_WALL_MINS:-1500}}"
       local SOFT=$((BUDGET_MINS*60))
       local GRACE="${KILL_AFTER_SECS:-60}"
       echo "[stage] wall budget=${BUDGET_MINS}m (${SOFT}s), grace=${GRACE}s"
@@ -1763,9 +1763,9 @@ run_with_timeout() {
     # handle default timeouts differently
     local BUDGET_MINS="$(getv --time-budget-mins || true)"
     case "$s" in
-      grid) : "${BUDGET_MINS:=${HARD_WALL_MINS:-480}}" ;;
-      pretrain|finetune) : "${BUDGET_MINS:=${HARD_WALL_MINS:-360}}" ;;
-      *) : "${BUDGET_MINS:=${HARD_WALL_MINS:-300}}" ;;
+      grid) : "${BUDGET_MINS:=${HARD_WALL_MINS:-1500}}" ;;
+      pretrain|finetune) : "${BUDGET_MINS:=${HARD_WALL_MINS:-1500}}" ;;
+      *) : "${BUDGET_MINS:=${HARD_WALL_MINS:-1500}}" ;;
     esac
     local SOFT="$((BUDGET_MINS*60))"   # convert minutes → seconds
     local GRACE="${KILL_AFTER_SECS:-60}"

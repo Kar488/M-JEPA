@@ -56,7 +56,7 @@ env:
   WANDB_SWEEP_ID1: ey6pd85u
   WANDB_SWEEP_ID2: ongqx38g
   WANDB_COUNT: 30
-  HARD_WALL_MINS: 120
+  HARD_WALL_MINS: 1500
   KILL_AFTER_SECS: 120
   GRID_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb' }}
   CACHE_DIR: /data/mjepa/cache/graphs_250k
@@ -415,7 +415,7 @@ jobs:
     if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
     name: Learn hyperparameters (Custom or WandB)
     runs-on: self-hosted #ubuntu-latest
-    timeout-minutes: 960
+    timeout-minutes: 1860
     needs: [tests_quick,vast_prepare_environment,vast_cache_warm_2d,vast_cache_warm_3d]
     env:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
@@ -431,7 +431,7 @@ jobs:
           bash scripts/ci/ensure_experiments_root.sh
       - name: Run grid search
         env:
-          HARD_WALL_MINS: 900
+          HARD_WALL_MINS: 1500
           KILL_AFTER_SECS: 120
           # Set matching backbone/seed combinations so JEPA & contrastive sweeps stay paired.
           WANDB_COUNT: 2
@@ -484,9 +484,9 @@ jobs:
       EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
       GRID_EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_learn_hyperparameters.outputs.pretrain_exp_id || needs.vast_learn_hyperparameters.outputs.grid_exp_id || github.run_id }}
-      PHASE2_SWEEP_WALL_MINS: 920
-      PHASE2_RECHECK_WALL_MINS: 180
-      PHASE2_EXPORT_WALL_MINS: 30
+      PHASE2_SWEEP_WALL_MINS: 1500
+      PHASE2_RECHECK_WALL_MINS: 1500
+      PHASE2_EXPORT_WALL_MINS: 1500
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
       - name: Ensure experiments root available
@@ -586,7 +586,7 @@ jobs:
   vast_pretrain:
     name: Pretain Model
     runs-on: self-hosted #ubuntu-latest
-    timeout-minutes: 960
+    timeout-minutes: 1860
     needs: [vast_learn_hyperparameters, vast_sweep_phase2]
     if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && ( ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb' && needs.vast_sweep_phase2.result == 'success') || ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'custom' && needs.vast_learn_hyperparameters.result == 'success') ) }}
     env:
@@ -612,7 +612,7 @@ jobs:
 
       - name: Pretrain on Vast
         env:
-          HARD_WALL_MINS: 900
+          HARD_WALL_MINS: 1500
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "8"
@@ -654,7 +654,7 @@ jobs:
   vast_tox21_baseline:
     name: Tox21 Baseline
     runs-on: self-hosted #ubuntu-latest
-    timeout-minutes: 960
+    timeout-minutes: 1860
     needs: vast_pretrain
     if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_pretrain.result == 'success' }}
     outputs:
@@ -687,7 +687,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 920m
+          command_timeout: 1500m
           envs: APP_DIR,GRID_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
@@ -695,7 +695,7 @@ jobs:
           script: |
             bash "$APP_DIR/scripts/ci/run-tox21.sh"
         env:
-          HARD_WALL_MINS: 900
+          HARD_WALL_MINS: 1500
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "18"
@@ -758,7 +758,7 @@ jobs:
   vast_finetune:
     name: Fine tune model
     runs-on: self-hosted  #ubuntu-latest
-    timeout-minutes: 920
+    timeout-minutes: 1860
     needs: [vast_pretrain, vast_tox21_baseline]
     if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_pretrain.result == 'success' && needs.vast_tox21_baseline.result == 'success' && needs.vast_tox21_baseline.outputs.tox21_gate == 'false' }}
     env:
@@ -781,7 +781,7 @@ jobs:
           bash scripts/ci/ensure_experiments_root.sh
       - name: Finetune on Vast
         env:
-          HARD_WALL_MINS: 880
+          HARD_WALL_MINS: 1500
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "40"
           FINETUNE_EPOCHS: "18"
@@ -795,7 +795,7 @@ jobs:
   vast_benchmark:
     name: Benchmark
     runs-on: self-hosted #ubuntu-latest
-    timeout-minutes: 900
+    timeout-minutes: 1860
     needs: [vast_pretrain, vast_tox21_baseline, vast_finetune]
     if: ${{ always() && ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
     env:
@@ -822,7 +822,7 @@ jobs:
       - name: Benchmark
         if: ${{ needs.vast_finetune.result == 'success' }}
         env:
-          HARD_WALL_MINS: 820
+          HARD_WALL_MINS: 1500
           KILL_AFTER_SECS: 120
           BENCH_VAL_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/val
           BENCH_TEST_DIR: ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/test
@@ -836,7 +836,7 @@ jobs:
   vast_tox21:
     name: Tox21 Evaluation
     runs-on: self-hosted  #ubuntu-latest
-    timeout-minutes: 960
+    timeout-minutes: 1860
     needs: [vast_pretrain, vast_finetune]
     if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_finetune.result == 'success' }}
     env:
@@ -866,7 +866,7 @@ jobs:
           key: ${{ secrets.VAST_SSH_KEY }}
           #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
-          command_timeout: 910m
+          command_timeout: 1500m
           envs: APP_DIR,GRID_DIR,TOX21_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
@@ -874,7 +874,7 @@ jobs:
           script: |
             bash "$APP_DIR/scripts/ci/run-tox21.sh"
         env:
-          HARD_WALL_MINS: 900
+          HARD_WALL_MINS: 1500
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "18"
@@ -910,7 +910,7 @@ jobs:
   vast_report:
     name: Generate reports
     runs-on: self-hosted #ubuntu-latest
-    timeout-minutes: 200
+    timeout-minutes: 1860
     needs: [vast_tox21_baseline, vast_benchmark, vast_tox21, vast_finetune]
     if: ${{ always() && ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
     env:
