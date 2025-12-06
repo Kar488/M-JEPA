@@ -344,7 +344,13 @@ jobs:
           CACHE_WARM_UNLABELED_DIR="${APP_DIR}/data/ZINC-canonicalized"
           CACHE_WARM_LABELED_DIR="${APP_DIR}/data/katielinkmoleculenet_benchmark/train"
           CACHE_WARM_LABEL_COL="measured log solubility in mols per litre"
-          CACHE_WARM_SAMPLE_UNLABELED=10000000
+          # Build the full 10M cache used by later pretraining plus the
+          # Phase-1 subset and Phase-2 intermediate shard so sweep agents see
+          # hits (sample size is part of the cache key, so we need every
+          # variant on disk).
+          CACHE_WARM_SAMPLE_UNLABELED_FULL=10000000
+          CACHE_WARM_SAMPLE_UNLABELED_PHASE1=100000
+          CACHE_WARM_SAMPLE_UNLABELED_PHASE2=250000
           CACHE_WARM_SAMPLE_LABELED=5000
           CACHE_WARM_NUM_WORKERS=-1
 
@@ -353,12 +359,34 @@ jobs:
             exit 1
           fi
 
+          # Warm the full pretrain cache first, then a Phase-1-sized cache so
+          # sweep agents reuse the small shard instead of rebuilding.
           "$MICROMAMBA_BIN" run -n mjepa python scripts/ci/cache_warm_prebuilt_datasets.py \
             --unlabeled-dir "$CACHE_WARM_UNLABELED_DIR" \
             --labeled-dir "$CACHE_WARM_LABELED_DIR" \
             --label-col "$CACHE_WARM_LABEL_COL" \
             --cache-dir "$SWEEP_CACHE_DIR" \
-            --sample-unlabeled "$CACHE_WARM_SAMPLE_UNLABELED" \
+            --sample-unlabeled "$CACHE_WARM_SAMPLE_UNLABELED_FULL" \
+            --sample-labeled "$CACHE_WARM_SAMPLE_LABELED" \
+            --num-workers "$CACHE_WARM_NUM_WORKERS"
+
+          "$MICROMAMBA_BIN" run -n mjepa python scripts/ci/cache_warm_prebuilt_datasets.py \
+            --unlabeled-dir "$CACHE_WARM_UNLABELED_DIR" \
+            --labeled-dir "$CACHE_WARM_LABELED_DIR" \
+            --label-col "$CACHE_WARM_LABEL_COL" \
+            --cache-dir "$SWEEP_CACHE_DIR" \
+            --sample-unlabeled "$CACHE_WARM_SAMPLE_UNLABELED_PHASE1" \
+            --sample-labeled "$CACHE_WARM_SAMPLE_LABELED" \
+            --num-workers "$CACHE_WARM_NUM_WORKERS"
+
+          # Phase-2 sweeps sample a larger unlabeled shard than Phase-1, so
+          # warm that intermediate cache too.
+          "$MICROMAMBA_BIN" run -n mjepa python scripts/ci/cache_warm_prebuilt_datasets.py \
+            --unlabeled-dir "$CACHE_WARM_UNLABELED_DIR" \
+            --labeled-dir "$CACHE_WARM_LABELED_DIR" \
+            --label-col "$CACHE_WARM_LABEL_COL" \
+            --cache-dir "$SWEEP_CACHE_DIR" \
+            --sample-unlabeled "$CACHE_WARM_SAMPLE_UNLABELED_PHASE2" \
             --sample-labeled "$CACHE_WARM_SAMPLE_LABELED" \
             --num-workers "$CACHE_WARM_NUM_WORKERS"
 
@@ -390,7 +418,13 @@ jobs:
           CACHE_WARM_UNLABELED_DIR="${APP_DIR}/data/ZINC-canonicalized"
           CACHE_WARM_LABELED_DIR="${APP_DIR}/data/katielinkmoleculenet_benchmark/train"
           CACHE_WARM_LABEL_COL="measured log solubility in mols per litre"
-          CACHE_WARM_SAMPLE_UNLABELED=10000000
+          # Build the full 10M cache used by later pretraining plus the
+          # Phase-1 subset and Phase-2 intermediate shard so sweep agents see
+          # hits (sample size is part of the cache key, so we need every
+          # variant on disk).
+          CACHE_WARM_SAMPLE_UNLABELED_FULL=10000000
+          CACHE_WARM_SAMPLE_UNLABELED_PHASE1=100000
+          CACHE_WARM_SAMPLE_UNLABELED_PHASE2=250000
           CACHE_WARM_SAMPLE_LABELED=5000
           CACHE_WARM_NUM_WORKERS=-1
 
@@ -400,13 +434,39 @@ jobs:
           fi
 
           SOFT_WALL_SECS=$(( HARD_WALL_MINS * 60 ))
+          # Warm the full pretrain cache first, then a Phase-1-sized cache so
+          # sweep agents reuse the small shard instead of rebuilding.
           "$MICROMAMBA_BIN" run -n mjepa timeout --signal=SIGTERM --kill-after="$KILL_AFTER_SECS" "$SOFT_WALL_SECS" \
             python scripts/ci/cache_warm_prebuilt_datasets.py \
               --unlabeled-dir "$CACHE_WARM_UNLABELED_DIR" \
               --labeled-dir "$CACHE_WARM_LABELED_DIR" \
               --label-col "$CACHE_WARM_LABEL_COL" \
               --cache-dir "$SWEEP_CACHE_DIR" \
-              --sample-unlabeled "$CACHE_WARM_SAMPLE_UNLABELED" \
+              --sample-unlabeled "$CACHE_WARM_SAMPLE_UNLABELED_FULL" \
+              --sample-labeled "$CACHE_WARM_SAMPLE_LABELED" \
+              --num-workers "$CACHE_WARM_NUM_WORKERS" \
+              --add-3d
+
+          "$MICROMAMBA_BIN" run -n mjepa timeout --signal=SIGTERM --kill-after="$KILL_AFTER_SECS" "$SOFT_WALL_SECS" \
+            python scripts/ci/cache_warm_prebuilt_datasets.py \
+              --unlabeled-dir "$CACHE_WARM_UNLABELED_DIR" \
+              --labeled-dir "$CACHE_WARM_LABELED_DIR" \
+              --label-col "$CACHE_WARM_LABEL_COL" \
+              --cache-dir "$SWEEP_CACHE_DIR" \
+              --sample-unlabeled "$CACHE_WARM_SAMPLE_UNLABELED_PHASE1" \
+              --sample-labeled "$CACHE_WARM_SAMPLE_LABELED" \
+              --num-workers "$CACHE_WARM_NUM_WORKERS" \
+              --add-3d
+
+          # Phase-2 sweeps sample a larger unlabeled shard than Phase-1, so
+          # warm that intermediate cache too.
+          "$MICROMAMBA_BIN" run -n mjepa timeout --signal=SIGTERM --kill-after="$KILL_AFTER_SECS" "$SOFT_WALL_SECS" \
+            python scripts/ci/cache_warm_prebuilt_datasets.py \
+              --unlabeled-dir "$CACHE_WARM_UNLABELED_DIR" \
+              --labeled-dir "$CACHE_WARM_LABELED_DIR" \
+              --label-col "$CACHE_WARM_LABEL_COL" \
+              --cache-dir "$SWEEP_CACHE_DIR" \
+              --sample-unlabeled "$CACHE_WARM_SAMPLE_UNLABELED_PHASE2" \
               --sample-labeled "$CACHE_WARM_SAMPLE_LABELED" \
               --num-workers "$CACHE_WARM_NUM_WORKERS" \
               --add-3d
