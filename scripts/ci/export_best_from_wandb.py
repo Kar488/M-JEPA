@@ -1095,6 +1095,7 @@ def main():
         ]
 
         params: Dict[str, Any] = copy.deepcopy(template_params) if template_params else {}
+        params.pop("training_method", None)
 
         prefers_cpu = _phase2_prefers_cpu()
 
