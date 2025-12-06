@@ -39,11 +39,22 @@ internally when both limits are set: it removes only the manifest between
 iterations so existing shards are reused, keeps writing manifests after every
 chunk, and resumes until the sample cap is reached or the corpus is exhausted.
 You no longer need to wrap the script in an external loop; expect ~40 internal
-iterations when ``--sample-unlabeled`` is 10 M and ``--max-graphs-per-run`` is
-250 K.【F:scripts/ci/cache_warm_prebuilt_datasets.py†L334-L447】 Use ``--force``
-only when discarding an existing manifest and shards to restart from scratch and
-set ``--sample-unlabeled`` (and ``--sample-labeled``) high enough to allow the
-loop to reach your intended total.【F:scripts/commands/dataset_cache.py†L55-L115】
+ iterations when ``--sample-unlabeled`` is 10 M and ``--max-graphs-per-run`` is
+ 250 K.【F:scripts/ci/cache_warm_prebuilt_datasets.py†L334-L447】 Use ``--force``
+ only when discarding an existing manifest and shards to restart from scratch and
+ set ``--sample-unlabeled`` (and ``--sample-labeled``) high enough to allow the
+ loop to reach your intended total.【F:scripts/commands/dataset_cache.py†L55-L115】
+
+Interpreting slow first epochs
+------------------------------
+
+When the unlabeled budget is set to 10 M, the first epoch can appear stalled for
+an hour or more if the cache is missing or incomplete. This is usually the
+worker building shards on the fly rather than a training deadlock. Confirm the
+cache exists under ``cache/graphs_10m`` (or your ``SWEEP_CACHE_DIR`` override),
+warm it via ``scripts/ci/cache_warm_prebuilt_datasets.py`` before launching
+sweeps, and expect materially faster epochs once the pre-built tensors are in
+place.【F:data/mdataset.py†L390-L483】【F:scripts/ci/cache_warm_prebuilt_datasets.py†L334-L447】
 
 3-D coordinates for SchNet3D
 ----------------------------

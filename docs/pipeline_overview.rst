@@ -81,9 +81,9 @@ Sweep sizing recommendations
   the default (100) when you have capacity and want higher-resolution surfaces
   on large GPU pools.
 
-- **Wall-clock budgets.** For Phase 1 grid agents, reserve 240–300 minutes
-  (``HARD_WALL_MINS``) to accommodate slower nodes or cold caches; the lower end
-  is fine when you have prebuilt datasets. Phase 2 agents should stay near the
-  12–16 hour window (720–960 minutes) used in CI so longer fine-tuning stages
-  finish cleanly; tighten the wall when prototyping and expand it only if your
-  hardware is markedly slower than the CI baseline.
+- **Wall-clock budgets.** From Phase 1 onward, allocate at least 1,500 minutes
+  (25 hours) via ``HARD_WALL_MINS`` so agents can finish even on slower nodes or
+  during heavy I/O. The extra cushion keeps Phase 2 fine-tuning and downstream
+  grading from timing out when the 10 M-cache is already built; trim the wall
+  only for smoke tests and keep the cache warmer in place to avoid stalls during
+  early epochs.
