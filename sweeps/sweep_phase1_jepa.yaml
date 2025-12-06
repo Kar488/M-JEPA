@@ -23,8 +23,9 @@ parameters:
   num_layers:           {value: 3}
 
   # Keep budgets aligned with the paired-effect filter thresholds (see run-grid-or-phase1.sh).
-  pretrain_epochs:      {values: [5]}
-  finetune_epochs:      {values: [1]}
+  pretrain_epochs:      {value: 1}
+  max_pretrain_batches: {value: 200}
+  finetune_epochs:      {value: 10}
   learning_rate:        {value: 1e-4}
   
   add_3d:               {value: 1}
@@ -37,8 +38,8 @@ parameters:
   aug_atom_masking:     {value: 1}
   aug_subgraph_removal: {value: 1}
 
-  pretrain_batch_size:  {values: [64, 128, 256]}
-  finetune_batch_size:  {values: [256] }
+  pretrain_batch_size:  {value: 256}
+  finetune_batch_size:  {value: 256}
   
   max_finetune_batches:  {value: 0}
 
@@ -55,7 +56,7 @@ parameters:
   task_type:            {value: regression}
   label_col:            {value: "measured log solubility in mols per litre"}
   max_graphs_per_run:   {value: 250000}
-  sample_unlabeled:     {value: 10000000}
+  sample_unlabeled:     {value: 100000}
   sample_labeled:       {value: 5000}
 
   gnn_type:             {values: ["gine", "dmpnn", "schnet3d"]}
