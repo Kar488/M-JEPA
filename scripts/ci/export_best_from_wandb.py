@@ -12,7 +12,7 @@ Notes:
 - This script does NOT create a sweep; Step #3 will create/use WANDB_SWEEP_ID2.
 """
 
-import argparse, csv, json, math, os, time
+import argparse, copy, csv, json, math, os, time
 from collections.abc import Mapping
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
@@ -1071,7 +1071,7 @@ def main():
     if args.emit_bounds:
         top = collect_topk(runs, primary, maximize, args.topk)
         sweep_params = _sweep_param_map(sweep)
-        template_params = _load_phase2_template_params(APP_DIR) if args.extend_fixed else {}
+        template_params = _load_phase2_template_params(APP_DIR)
 
         # Numeric → p10–p90; discrete → unique sets
         numeric_keys = ["mask_ratio", "ema_decay", "learning_rate"]
@@ -1094,7 +1094,7 @@ def main():
             "pin-memory","bf16","devices","use-wandb",
         ]
 
-        params: Dict[str, Any] = {}
+        params: Dict[str, Any] = copy.deepcopy(template_params) if template_params else {}
 
         prefers_cpu = _phase2_prefers_cpu()
 
@@ -1131,6 +1131,18 @@ def main():
                     params[k] = {"value": vals[0]}
             else:
                 params[k] = {"values": vals}
+
+        template_overrides = {
+            "pretrain_batch_size",
+            "finetune_batch_size",
+            "pretrain_epochs",
+            "max_pretrain_batches",
+            "finetune_epochs",
+            "sample_unlabeled",
+        }
+        for key in template_overrides:
+            if key in template_params:
+                params[key] = template_params[key]
 
         params["labeled_dir"]      = {"value": "${env:PHASE2_LABELED_DIR}"}
         params["unlabeled_dir"]    = {"value": "${env:PHASE2_UNLABELED_DIR}"}

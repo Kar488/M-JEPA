@@ -24,17 +24,17 @@ grid_search:
   gnn_types: [mpnn]
   ema_decays: [0.996, 0.998, 0.999]
   add_3d_options: [1]
-  pretrain_batch_sizes: [64, 128, 256]
-  finetune_batch_sizes: [128, 256]
+  pretrain_batch_sizes: [256]
+  finetune_batch_sizes: [256]
   temperatures: [0.07, 0.1, 0.2]
-  pretrain_epochs_options: [30, 50]
-  finetune_epochs_options: [1]
+  pretrain_epochs_options: [1]
+  finetune_epochs_options: [10]
   learning_rates: [3e-4, 1e-4]
   seeds: [1, 2, 3]
-  sample_unlabeled: 10000000
+  sample_unlabeled: 100000
   sample_labeled: 5000
   n_rows_per_file: 1000
-  max_pretrain_batches: 0
+  max_pretrain_batches: 200
   max_finetune_batches: 0
   time_budget_mins: 540
   force_tqdm: true
@@ -50,7 +50,9 @@ pretrain:
   n_rows_per_file: 1000
   ckpt_dir: ${PRETRAIN_DIR}
   save_every: 1
-  pretrain_epochs: ${PRETRAIN_EPOCHS:-70}   # maps to --epochs for "pretrain"
+  pretrain_epochs: ${PRETRAIN_EPOCHS:-3}    # maps to --epochs for "pretrain"
+  pretrain_batch_size: 256
+  sample_unlabeled: 10000000
   output: ${PRETRAIN_DIR}/encoder.pt
   force_tqdm: true
   use_wandb: true
@@ -110,16 +112,16 @@ tox21:
     - SR-p53
   dataset: tox21
   tox21_dir: ${TOX21_DIR}
-  pretrain_epochs: ${PRETRAIN_EPOCHS:-70}   # maps to --pretrain-epochs for "tox21"
-  finetune_epochs: ${FINETUNE_EPOCHS:-10}    # maps to --finetune-epochs for "tox21"
+  pretrain_epochs: ${PRETRAIN_EPOCHS:-3}    # maps to --pretrain-epochs for "tox21"
+  finetune_epochs: ${FINETUNE_EPOCHS:-15}   # maps to --finetune-epochs for "tox21"
   pretrain_time_budget_mins: 90
   finetune_time_budget_mins: 60
   encoder_checkpoint: ${TOX21_ENCODER_CHECKPOINT}
   encoder_manifest: ${TOX21_ENCODER_MANIFEST:-${PRETRAIN_MANIFEST}}
   encoder_source: ${TOX21_ENCODER_SOURCE:-pretrain_frozen}
   evaluation_mode: ${TOX21_EVALUATION_MODE:-${TOX21_ENCODER_SOURCE:-pretrain_frozen}}
-  batch_size: 64
-  epochs: 50
+  batch_size: 256
+  epochs: 15
   patience: 12
   head_lr: ${TOX21_HEAD_LR:-0.0005}
   encoder_lr: ${TOX21_ENCODER_LR:-0.00005}
