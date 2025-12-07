@@ -129,13 +129,22 @@ def _normalized_payload(dirpath: str, add_3d: bool, sample: int, label_col: Opti
 
 
 def _normalize_cache_dir(path: str) -> str:
-    """Resolve ``path`` and strip a trailing ``prebuilt_datasets`` component."""
+    """Resolve ``path`` and strip/upgrade cache roots for backward compatibility."""
 
     resolved = dataset_cache.resolve_env_path(path).rstrip(os.sep)
     suffix = os.path.basename(resolved)
 
     if suffix == "prebuilt_datasets":
-        return os.path.dirname(resolved)
+        resolved = os.path.dirname(resolved)
+        suffix = os.path.basename(resolved)
+
+    if suffix == "graphs_250k":
+        upgraded = os.path.join(os.path.dirname(resolved), "graphs_10m")
+        if os.path.isdir(upgraded):
+            _log(
+                f"overriding legacy cache root {resolved} → {upgraded}; pass --cache-dir to disable"
+            )
+            return upgraded
 
     return resolved
 
