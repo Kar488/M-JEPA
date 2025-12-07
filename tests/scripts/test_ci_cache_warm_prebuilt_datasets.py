@@ -193,6 +193,56 @@ def test_cache_warm_skips_when_present(monkeypatch, tmp_path):
     assert calls == []
 
 
+def test_cache_warm_skips_exhausted_manifest(monkeypatch, tmp_path):
+    calls = []
+    _setup_loader(monkeypatch, calls)
+
+    unlabeled = tmp_path / "unlabeled"
+    labeled = tmp_path / "labeled"
+    unlabeled.mkdir()
+    labeled.mkdir()
+    cache_dir = tmp_path / "cache"
+    cache_root = cache_dir / "prebuilt_datasets"
+    cache_root.mkdir(parents=True)
+
+    unlabeled_payload = cache_warm._normalized_payload(
+        str(unlabeled), False, DEFAULT_SAMPLE_UNLABELED, None
+    )
+    labeled_payload = cache_warm._normalized_payload(str(labeled), False, 5, None)
+
+    for kind, payload, total in (
+        ("unlabeled", unlabeled_payload, 10),
+        ("labeled", labeled_payload, 3),
+    ):
+        cache_path = dataset_cache.dataset_cache_path(kind, payload, str(cache_root))
+        assert cache_path
+        manifest = {
+            "__dataset_cache_format__": dataset_cache.SHARDED_CACHE_FORMAT,
+            "version": dataset_cache.SHARDED_CACHE_VERSION,
+            "shards": [],
+            "total_graphs": total,
+            "has_labels": kind == "labeled",
+            "exhausted": True,
+        }
+        Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(cache_path, "wb") as fh:
+            pickle.dump(manifest, fh)
+
+    argv = [
+        "--unlabeled-dir",
+        str(unlabeled),
+        "--labeled-dir",
+        str(labeled),
+        "--cache-dir",
+        str(cache_dir),
+        "--sample-labeled",
+        "5",
+    ]
+
+    cache_warm.main(argv)
+    assert calls == []
+
+
 def test_cache_warm_force_rebuild(monkeypatch, tmp_path):
     calls = []
     _setup_loader(monkeypatch, calls)
@@ -216,6 +266,51 @@ def test_cache_warm_force_rebuild(monkeypatch, tmp_path):
     calls.clear()
     cache_warm.main(argv + ["--force"])
     assert len(calls) == 2
+
+
+def test_warm_dataset_marks_exhausted_manifest_on_stall(monkeypatch, tmp_path):
+    labeled = tmp_path / "labeled"
+    labeled.mkdir()
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+
+    payload = cache_warm._normalized_payload(str(labeled), False, 5, None)
+    cache_path = dataset_cache.dataset_cache_path("labeled", payload, str(cache_root))
+    assert cache_path
+
+    initial_manifest = {
+        "__dataset_cache_format__": dataset_cache.SHARDED_CACHE_FORMAT,
+        "version": dataset_cache.SHARDED_CACHE_VERSION,
+        "shards": [],
+        "total_graphs": 3,
+        "has_labels": False,
+    }
+    with open(cache_path, "wb") as fh:
+        pickle.dump(initial_manifest, fh)
+
+    def fake_ensure(kind, _payload, builder, _cache_root, *, force=False, log=None):
+        assert kind == "labeled"
+        assert builder() == dataset_cache.DatasetBuilderResult(data=None, already_persisted=True)
+        with open(cache_path, "wb") as manifest_fh:
+            pickle.dump(initial_manifest, manifest_fh)
+
+    monkeypatch.setattr(dataset_cache, "ensure_dataset_cache", fake_ensure)
+
+    cache_warm._warm_dataset_in_chunks(
+        kind="labeled",
+        payload=payload,
+        builder=lambda: dataset_cache.DatasetBuilderResult(data=None, already_persisted=True),
+        cache_root=str(cache_root),
+        sample=5,
+        per_run_limit=10,
+        force=False,
+        log=lambda _msg: None,
+    )
+
+    with open(cache_path, "rb") as fh:
+        manifest = pickle.load(fh)
+
+    assert manifest.get("exhausted") is True
 
 
 def test_stream_directory_per_run_cap_resumable(monkeypatch, tmp_path):
