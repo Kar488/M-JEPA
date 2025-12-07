@@ -742,6 +742,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     # logging metrics via wandb.log and updating the run summary.
     if should_publish_summary:
         try:
+            print(f"[sweep-run] publishing payload: {payload}", flush=True)
             _wb_summary_update(payload)
         except Exception as exc:
             print(

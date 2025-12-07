@@ -603,6 +603,10 @@ def _run_one_config_method(
     labels = getattr(ds_eval, "labels", None)
     n_labels = len(labels) if labels is not None else 0
 
+    logger.info(
+        "Dataset sizes | pretrain=%d eval=%d labels=%d", n_pretrain, n_eval, n_labels
+    )
+
     if n_eval == 0 or n_labels == 0:
         logger.warning(
             "Evaluation dataset unavailable or unlabeled (graphs=%d labels=%d); skipping metrics.",
@@ -915,6 +919,7 @@ def _run_one_config_method(
                     prefetch_factor=prefetch_factor,
                     bf16=bf16,
                 )
+                logger.info("train_linear_head metrics: %s", m)
                 row = {k: float(v) for k, v in m.items() if k != "head"}
             except TypeError:
                 m = train_linear_head(
@@ -927,6 +932,7 @@ def _run_one_config_method(
                     device=device,
                     use_scaffold=use_scaffold,
                 )
+                logger.info("train_linear_head metrics (legacy signature): %s", m)
                 row = {k: float(v) for k, v in m.items() if k != "head"}
 
             if _HAS_PROBE:
@@ -1010,6 +1016,7 @@ def _run_one_config_method(
     # materialize seeds to count reliably (iterables can be one-shot)
     _seeds = tuple(seeds) if not isinstance(seeds, tuple) else seeds
     row = {**asdict(cfg), **agg, "method": method, "seeds": len(_seeds)}
+    logger.info("Aggregated payload for %s: %s", method, row)
     return row
 
 
