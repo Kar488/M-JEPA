@@ -132,6 +132,25 @@ def test_wb_summary_update_aliases(monkeypatch, tmp_path):
     assert dummy_wandb.run.summary["val_auc"] == 0.9
 
 
+def test_wb_summary_update_accepts_mean_aliases(monkeypatch):
+    class DummyRun:
+        def __init__(self):
+            self.summary = {}
+
+    logs = {}
+    dummy_wandb = types.SimpleNamespace(
+        run=DummyRun(), log=lambda data: logs.update(data)
+    )
+    monkeypatch.setitem(sys.modules, "wandb", dummy_wandb)
+
+    ws = importlib.reload(importlib.import_module("scripts.wandb_safety"))
+    ws.wb_summary_update({"roc_auc_mean": 0.77, "best_step_mean": 4})
+
+    assert dummy_wandb.run.summary["val_auc"] == 0.77
+    assert dummy_wandb.run.summary["best_step"] == 4
+    assert logs["val_auc"] == 0.77
+
+
 def test_wb_summary_update_fallback_on_update_error(monkeypatch):
     class DummySummary(dict):
         def update(self, *a, **kwargs):

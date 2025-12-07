@@ -123,8 +123,12 @@ def _normalized_payload(dirpath: str, add_3d: bool, sample: int, label_col: Opti
         "add_3d": bool(add_3d),
         "sample": int(sample or 0),
     }
-    if label_col:
-        payload["label_col"] = label_col
+    # ``dataset_cache.dataset_cache_path`` hashes the payload; include the label
+    # column explicitly so runs that pass ``label_col=None`` resolve to the same
+    # cache key as the cache warmer. Otherwise, the warmer drops the key while
+    # sweep agents include it, producing distinct digests and repeated rebuilds
+    # of the labeled dataset.
+    payload["label_col"] = label_col
     return payload
 
 
