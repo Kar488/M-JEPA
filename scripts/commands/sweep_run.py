@@ -495,14 +495,9 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                 return False
             return True
 
-    using_wandb = bool(int(getattr(args, "use_wandb", 1))) or wandb_run is not None
-    if not using_wandb:
-        # Downstream helpers use WANDB_DISABLED/WANDB_MODE to decide whether
-        # warnings should be emitted.  When the CLI explicitly disables W&B we
-        # set the canonical env toggles so helpers such as wandb_safety know the
-        # absence of a run is expected and should not be noisy.
-        os.environ.setdefault("WANDB_DISABLED", "1")
-        os.environ.setdefault("WANDB_MODE", "disabled")
+    # Force W&B to remain enabled for sweep runs so summary metrics are always
+    # propagated. The sweep agent already controls lifecycle and credentials.
+    using_wandb = True
 
     # Ensure a W&B run exists so URL logging is stable regardless of when the
     # agent is invoked (before or after a sweep agent spawns wandb.run).
@@ -535,6 +530,17 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     if using_wandb and run is not None:
         _update_run_config(run, full_cfg)
+        try:
+            cfg_obj = getattr(run, "config", None)
+            cfg_keys = list(cfg_obj.keys()) if cfg_obj is not None else []
+            print(
+                f"[sweep-run] run.config keys after full update: {sorted(cfg_keys)}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                f"[sweep-run] unable to inspect run.config keys: {exc}", flush=True
+            )
 
     import time as _t
     _deadline = None
@@ -704,6 +710,32 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     best_step = _infer_best_step(payload)
     payload["best_step"] = best_step
+
+    # Directly publish the payload and val_rmse to W&B before the resilient helper
+    # runs. This ensures the Summary tab is populated even if wandb_safety fails.
+    try:
+        import wandb as _direct_wandb  # type: ignore
+
+        direct_run = getattr(_direct_wandb, "run", None)
+        if direct_run is not None:
+            try:
+                if "val_rmse" in payload:
+                    _direct_wandb.log({"val_rmse": payload["val_rmse"]})
+                    print("[sweep-run] direct wandb.log val_rmse succeeded", flush=True)
+            except Exception as exc:
+                print(f"[sweep-run] direct wandb.log failed: {exc}", flush=True)
+            try:
+                direct_run.summary.update(payload)
+                print(
+                    f"[sweep-run] direct run.summary.update succeeded (keys={list(payload.keys())})",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(f"[sweep-run] direct run.summary.update failed: {exc}", flush=True)
+        else:
+            print("[sweep-run] direct wandb.run is None; skipping immediate summary update", flush=True)
+    except Exception as exc:
+        print(f"[sweep-run] direct wandb summary sync error: {exc}", flush=True)
 
     run = _wait_for_wandb_run()
     _print_wandb_links(run, prefix="ready")
