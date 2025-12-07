@@ -581,6 +581,49 @@ def _run_one_config_method(
     ds_pre = _ensure_graph_dataset(ds_pre)
     ds_eval = _ensure_graph_dataset(ds_eval) or ds_pre
 
+    def _dataset_len(ds: Any) -> int:
+        try:
+            return len(ds)  # type: ignore[arg-type]
+        except Exception:
+            pass
+        graphs = getattr(ds, "graphs", None)
+        if graphs is not None:
+            try:
+                return len(graphs)
+            except Exception:
+                return 0
+        return 0
+
+    n_pretrain = _dataset_len(ds_pre)
+    n_eval = _dataset_len(ds_eval)
+    n_labels = len(getattr(ds_eval, "labels", []) or [])
+
+    if n_eval == 0 or n_labels == 0:
+        logger.warning(
+            "Evaluation dataset unavailable or unlabeled (graphs=%d labels=%d); skipping metrics.",
+            n_eval,
+            n_labels,
+        )
+        _seeds = tuple(seeds) if not isinstance(seeds, tuple) else seeds
+        base_row = {**asdict(cfg), "method": method, "seeds": len(_seeds)}
+        base_row.update(
+            {
+                "n_pretrain_graphs": n_pretrain,
+                "n_eval_graphs": n_eval,
+                "n_eval_labels": n_labels,
+                "skip_reason": "empty_eval_dataset",
+            }
+        )
+        # Provide task-appropriate summary keys so callers/loggers do not see an
+        # empty payload even when data loading failed.
+        if (task_type or "").lower().startswith("regress"):
+            base_row.setdefault("rmse", float("nan"))
+            base_row.setdefault("val_rmse", float("nan"))
+        else:
+            base_row.setdefault("roc_auc", float("nan"))
+            base_row.setdefault("val_auc", float("nan"))
+        return base_row
+
     # ---- per-config pretrain cap ----
     max_batches_for_trial = max_pretrain_batches
     if target_pretrain_samples > 0:
