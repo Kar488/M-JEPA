@@ -135,6 +135,9 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
         "true",
         "True",
     }
+    _dbg(
+        f"wb_summary_update: start (disabled={wandb_disabled}) keys={list(payload.keys())}"
+    )
     # persist last payload to help debugging/offline export even when wandb is disabled
     _persist_payload(payload)
 
@@ -146,6 +149,8 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
     if wandb is None:
         if not wandb_disabled:
             _dbg("wb_summary_update: wandb import failed; skipping summary sync")
+        else:
+            _dbg("wb_summary_update: wandb disabled and import failed; exiting early")
         return
 
     timeout = float(os.getenv("WANDB_SWEEP_INIT_TIMEOUT", 20.0))
@@ -159,9 +164,17 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
     if run is None and target:
         try:
             api_run = wandb.Api().run(target)
+            _dbg(
+                "wb_summary_update: recovered run via Api.run",
+                getattr(api_run, "id", None),
+            )
         except Exception as exc:  # pragma: no cover - API availability varies in CI
             if not wandb_disabled:
                 _dbg("wb_summary_update: wandb.Api lookup failed:", exc)
+    elif run is None and not target:
+        _dbg(
+            "wb_summary_update: no wandb.run and no target for Api lookup; cannot fetch run"
+        )
 
     if run is None and api_run is None and not wandb_disabled:
         run = _wait_for_run(wandb, timeout)
@@ -170,7 +183,22 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
     if run_like is None:
         if not wandb_disabled:
             _dbg("wb_summary_update: no active run; skipping. keys=", list(payload.keys()))
+        else:
+            _dbg(
+                "wb_summary_update: wandb disabled and no run available; skipping. keys=",
+                list(payload.keys()),
+            )
         return
+
+    try:
+        _dbg(
+            "wb_summary_update: using run",
+            getattr(run_like, "id", None),
+            getattr(run_like, "entity", None),
+            getattr(run_like, "project", None),
+        )
+    except Exception as exc:
+        _dbg("wb_summary_update: unable to introspect run info:", exc)
 
     try:
         val_rmse = _coerce_from_candidates(payload, RMSE_CANDIDATES, _coerce_float)
@@ -188,6 +216,7 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
             _dbg("logging metrics:", {k: log_payload[k] for k in sorted(log_payload)})
             try:
                 wandb.log(log_payload)
+                _dbg("wandb.log succeeded")
             except Exception as exc:
                 _dbg("wandb.log failed:", exc)
 
@@ -204,12 +233,15 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
                 summary_payload["val_mae"] = mae_val
 
         try:
+            _dbg("wb_summary_update: calling summary.update with keys", list(summary_payload.keys()))
             run_like.summary.update(summary_payload)
+            _dbg("wb_summary_update: summary.update succeeded")
         except Exception as exc:
             _dbg("wb_summary_update summary.update failed:", exc)
             for key, value in summary_payload.items():
                 try:
                     run_like.summary[key] = value
+                    _dbg(f"wb_summary_update: wrote summary[{key!r}] via fallback")
                 except Exception as inner:
                     _dbg(f"failed to set summary[{key!r}]:", inner)
     except Exception as exc:
