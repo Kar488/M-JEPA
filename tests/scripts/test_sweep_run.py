@@ -5,6 +5,8 @@ import types
 
 import pytest
 
+pytest.importorskip("yaml")
+
 import models.encoder  # noqa: F401
 import models.factory  # noqa: F401
 from scripts import train_jepa as tj
@@ -730,3 +732,108 @@ def test_phase2_sweep_waits_for_wandb_run_before_summary(monkeypatch, tmp_path):
     assert fake_wandb.run is not None
     assert "pair_id" in fake_wandb.run.summary
     assert pytest.approx(fake_wandb.run.summary.get("val_auc"), rel=1e-6) == 0.88
+
+
+def test_cmd_sweep_run_updates_full_config(monkeypatch, tmp_path):
+    sweep_cfg = {
+        "training_method": {"value": "jepa"},
+        "model": {"gnn_type": {"value": "gat"}},
+        "optim": {"lr": {"value": 0.1}},
+    }
+
+    def fake_loader(dirpath, **kwargs):
+        return DummyDataset(dirpath)
+
+    monkeypatch.setattr(tj, "load_directory_dataset", fake_loader)
+
+    class DummyConfig:
+        def __init__(self, payload):
+            self._payload = payload
+            self.updated_payload = None
+
+        def as_dict(self):
+            return self._payload
+
+        def update(self, payload, allow_val_change=True):
+            self.updated_payload = payload
+
+        def __setitem__(self, key, value):
+            self.update({key: value})
+
+    class DummyRun:
+        def __init__(self, cfg):
+            self.config = cfg
+            self.project = "proj"
+            self.entity = "ent"
+            self.url = "http://example"
+
+    dummy_config = DummyConfig(sweep_cfg)
+    dummy_run = DummyRun(dummy_config)
+
+    wandb_mod = types.SimpleNamespace(run=dummy_run, config=dummy_config)
+    monkeypatch.setitem(sys.modules, "wandb", wandb_mod)
+
+    wb_mod = types.ModuleType("wandb_safety")
+    wb_mod.wb_get_or_init = lambda *a, **k: dummy_run
+    wb_mod.wb_summary_update = lambda *a, **k: None
+    wb_mod.wb_finish_safely = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "wandb_safety", wb_mod)
+
+    grid_mod = types.ModuleType("experiments.grid_search")
+    grid_mod.Config = lambda **kwargs: kwargs
+    grid_mod.AugmentationConfig = lambda *a, **k: None
+    grid_mod._run_one_config_method = lambda **kwargs: {"val_rmse": 0.1}
+    monkeypatch.setitem(sys.modules, "experiments.grid_search", grid_mod)
+
+    args = argparse.Namespace(
+        add_3d=1,
+        contiguity=0,
+        mask_ratio=0.1,
+        hidden_dim=32,
+        num_layers=2,
+        gnn_type="gcn",
+        ema_decay=0.99,
+        pretrain_batch_size=1,
+        finetune_batch_size=1,
+        pretrain_epochs=1,
+        finetune_epochs=1,
+        learning_rate=0.001,
+        temperature=0.1,
+        training_method="jepa",
+        labeled_dir=str(tmp_path),
+        unlabeled_dir=str(tmp_path),
+        label_col="y",
+        sample_unlabeled=0,
+        sample_labeled=0,
+        task_type="regression",
+        seed=0,
+        max_pretrain_batches=1,
+        max_finetune_batches=1,
+        num_workers=0,
+        cache_dir=None,
+        use_wandb=1,
+        cache_datasets=0,
+    )
+
+    def _flatten(d, parent_key: str = "", sep: str = "."):
+        out = {}
+        for k, v in (d or {}).items():
+            nk = f"{parent_key}{sep}{k}" if parent_key else str(k)
+            if isinstance(v, dict):
+                if "value" in v:
+                    out[k] = v["value"]
+                    out[nk] = v["value"]
+                    out.update(_flatten(v, nk, sep))
+                    continue
+                out.update(_flatten(v, nk, sep))
+            else:
+                out[nk] = v
+                out[k] = v
+        return out
+
+    expected = {k: v for k, v in _flatten(sweep_cfg).items() if not isinstance(v, dict)}
+
+    tj.cmd_sweep_run(args)
+
+    for key, value in expected.items():
+        assert dummy_config.updated_payload.get(key) == value

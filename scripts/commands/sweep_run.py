@@ -719,11 +719,13 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         except Exception:
             pass
 
-    if using_wandb and config_payload:
+    if using_wandb and (config_payload or full_cfg):
         if run is None:
             run = _wait_for_wandb_run()
         if run is not None:
-            config_updated = _update_run_config(run, config_payload)
+            merged_cfg = dict(full_cfg)
+            merged_cfg.update(config_payload)
+            config_updated = _update_run_config(run, merged_cfg)
         if not config_updated:
             print("⚠️ W&B is disabled or failed to init, skipping config update", flush=True)
 
@@ -742,6 +744,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     # logging metrics via wandb.log and updating the run summary.
     if should_publish_summary:
         try:
+            print(f"[sweep-run] publishing payload: {payload}", flush=True)
             _wb_summary_update(payload)
         except Exception as exc:
             print(
