@@ -426,7 +426,7 @@ def _stream_directory_to_cache(
     # ``_discover_existing_shards`` can replay on the next invocation.
     should_write_manifest = not (hit_run_cap and not hit_global_cap)
     if should_write_manifest:
-        _write_manifest(cache_path, accumulator, log)
+        _write_manifest(cache_path, accumulator, log, exhausted=not hit_run_cap)
     if hit_run_cap and not hit_global_cap:
         log(
             f"{kind} per-run cap reached after {graphs_emitted - processed} new graphs; rerun to continue"
@@ -434,13 +434,16 @@ def _stream_directory_to_cache(
         return
 
 
-def _write_manifest(cache_path: str, accumulator: _ShardAccumulator, log: Callable[[str], None]) -> None:
+def _write_manifest(
+    cache_path: str, accumulator: _ShardAccumulator, log: Callable[[str], None], *, exhausted: bool = False
+) -> None:
     manifest = {
         "__dataset_cache_format__": dataset_cache.SHARDED_CACHE_FORMAT,
         "version": dataset_cache.SHARDED_CACHE_VERSION,
         "shards": accumulator.records,
         "total_graphs": accumulator.total_emitted,
         "has_labels": bool(accumulator.labels_present),
+        "exhausted": bool(exhausted),
     }
     with open(cache_path, "wb") as fh:
         pickle.dump(manifest, fh)
@@ -527,6 +530,11 @@ def _warm_dataset_in_chunks(
     previous_total = 0
     if manifest and not force:
         previous_total = int(manifest.get("total_graphs") or 0)
+        if manifest.get("exhausted"):
+            log(
+                f"{kind} dataset cache marked exhausted at {previous_total} graphs; skipping warmup"
+            )
+            return
         if previous_total >= sample:
             log(
                 f"{kind} dataset already has {previous_total} graphs (>= target {sample}); skipping warmup"
@@ -590,6 +598,11 @@ def _warm_dataset_in_chunks(
             log(
                 f"{kind} cache warm made no progress; corpus likely exhausted at {current_total} graphs"
             )
+            if manifest.get("__dataset_cache_format__") == dataset_cache.SHARDED_CACHE_FORMAT:
+                manifest = dict(manifest)
+                manifest["exhausted"] = True
+                with open(cache_path, "wb") as fh:
+                    pickle.dump(manifest, fh)
             break
         if current_total >= sample:
             break
@@ -607,7 +620,7 @@ def _warm_dataset_in_chunks(
             shard_size=_DEFAULT_SHARD_SIZE,
             existing=manifest.get("shards", []),
             expect_labels=bool(manifest.get("has_labels")),
-        ), log)
+        ), log, exhausted=bool(manifest.get("exhausted")))
     log(f"{kind} cache reached target with {current_total} graphs")
 
 

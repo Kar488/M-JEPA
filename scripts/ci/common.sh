@@ -1403,6 +1403,18 @@ mjepa_init_cache_dirs() {
     CACHE_DIR="$(_mjepa_rewrite_legacy_graph_cache_root "$CACHE_DIR" "$default_cache_root")"
     SWEEP_CACHE_DIR="$(_mjepa_rewrite_legacy_graph_cache_root "${SWEEP_CACHE_DIR:-}" "$default_cache_root")"
 
+    if [[ "${DATA_ROOT:-}" == "/data/mjepa" ]]; then
+      local vast_cache_root="/data/mjepa/cache/graphs_10m"
+      if [[ "${CACHE_DIR:-}" != "$vast_cache_root" ]]; then
+        mjepa_log_warn "pinning CACHE_DIR to $vast_cache_root on Vast"
+        CACHE_DIR="$vast_cache_root"
+      fi
+      if [[ "${SWEEP_CACHE_DIR:-}" != "$vast_cache_root" ]]; then
+        mjepa_log_warn "pinning SWEEP_CACHE_DIR to $vast_cache_root on Vast"
+        SWEEP_CACHE_DIR="$vast_cache_root"
+      fi
+    fi
+
     if [[ -z "${SWEEP_CACHE_DIR:-}" ]]; then
       SWEEP_CACHE_DIR="$CACHE_DIR"
     fi
