@@ -158,9 +158,13 @@ def _ensure_graph_dataset(obj: Any) -> Any:
         and not isinstance(obj, (str, bytes, Mapping))
     ):
         graphs = list(obj)
-        labels = getattr(obj, "labels", None) or _extract_attr(graphs, "y")
+
+        labels = getattr(obj, "labels", None)
+        if labels is None:
+            labels = _extract_attr(graphs, "y")
+
         smiles_attr = getattr(obj, "smiles", None)
-        smiles = smiles_attr or _extract_attr(graphs, "smiles")
+        smiles = smiles_attr if smiles_attr is not None else _extract_attr(graphs, "smiles")
         logger.debug("Built GraphDataset shim with %d graphs", len(graphs))
         return _GraphDatasetShim(graphs=graphs, labels=labels, smiles=smiles)
 
@@ -596,7 +600,8 @@ def _run_one_config_method(
 
     n_pretrain = _dataset_len(ds_pre)
     n_eval = _dataset_len(ds_eval)
-    n_labels = len(getattr(ds_eval, "labels", []) or [])
+    labels = getattr(ds_eval, "labels", None)
+    n_labels = len(labels) if labels is not None else 0
 
     if n_eval == 0 or n_labels == 0:
         logger.warning(
