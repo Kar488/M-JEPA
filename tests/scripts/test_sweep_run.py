@@ -615,7 +615,7 @@ def test_cmd_sweep_run_logs_wandb_urls(monkeypatch, tmp_path, capsys):
     stub_ws.wb_finish_safely = lambda *a, **k: None
     monkeypatch.setitem(sys.modules, "wandb_safety", stub_ws)
 
-    args = _sweep_args(tmp_path)
+    args = _sweep_args(tmp_path, task_type="classification")
     sweep_mod.cmd_sweep_run(args)
 
     out = capsys.readouterr().out
@@ -656,6 +656,30 @@ def test_cmd_sweep_run_logs_env_urls_when_run_missing(monkeypatch, tmp_path, cap
     assert "[sweep-run] start sweep link: https://wandb.ai/ent/proj/sweeps/abcd1234" in out
     assert "[sweep-run] start run link:   https://wandb.ai/ent/proj/runs/run-42" in out
     assert out.count("project:    https://wandb.ai/ent/proj") >= 2
+
+
+def test_cmd_sweep_run_promotes_mean_auc(monkeypatch, tmp_path):
+    sweep_mod = _prepare_sweep_module(
+        monkeypatch, tmp_path, result_payload={"roc_auc_mean": 0.81}
+    )
+
+    captures = {}
+    stub_ws = types.ModuleType("wandb_safety")
+    stub_ws.wb_get_or_init = lambda *a, **k: None
+    stub_ws.wb_summary_update = lambda payload: captures.update(payload)
+    stub_ws.wb_finish_safely = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "wandb_safety", stub_ws)
+
+    fake_wandb = types.ModuleType("wandb")
+    fake_wandb.run = types.SimpleNamespace(config={}, summary={})
+    fake_wandb.finish = lambda **kwargs: None
+    fake_wandb.log = lambda payload: payload
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+
+    args = _sweep_args(tmp_path, task_type="classification")
+    sweep_mod.cmd_sweep_run(args)
+
+    assert captures["val_auc"] == pytest.approx(0.81)
 
 
 def test_phase2_sweep_waits_for_wandb_run_before_summary(monkeypatch, tmp_path):

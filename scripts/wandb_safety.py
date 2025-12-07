@@ -116,6 +116,17 @@ def _wait_for_run(module, timeout_s: float) -> Optional["Run"]:
     return run
 
 
+def _coerce_from_candidates(payload: Dict[str, Any], candidates, coerce_fn):
+    for key in candidates:
+        value = coerce_fn(payload.get(key))
+        if value is not None:
+            return value
+        mean_value = coerce_fn(payload.get(f"{key}_mean"))
+        if mean_value is not None:
+            return mean_value
+    return None
+
+
 def wb_summary_update(payload: Dict[str, Any]) -> None:
     """Safe summary update: waits for an active run and logs canonical metrics."""
     silence_pydantic_field_warnings()
@@ -162,27 +173,9 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
         return
 
     try:
-        val_rmse = _coerce_float(payload.get("val_rmse"))
-        if val_rmse is None:
-            for key in RMSE_CANDIDATES:
-                if key == "val_rmse":
-                    continue
-                candidate = _coerce_float(payload.get(key))
-                if candidate is not None:
-                    val_rmse = candidate
-                    break
-
-        val_auc = _coerce_float(payload.get("val_auc"))
-        if val_auc is None:
-            for key in AUC_CANDIDATES:
-                if key == "val_auc":
-                    continue
-                candidate = _coerce_float(payload.get(key))
-                if candidate is not None:
-                    val_auc = candidate
-                    break
-
-        best_step = _coerce_int(payload.get("best_step"))
+        val_rmse = _coerce_from_candidates(payload, RMSE_CANDIDATES, _coerce_float)
+        val_auc = _coerce_from_candidates(payload, AUC_CANDIDATES, _coerce_float)
+        best_step = _coerce_from_candidates(payload, ("best_step", "epoch", "step"), _coerce_int)
 
         log_payload = {}
         if val_rmse is not None:

@@ -93,12 +93,33 @@ def _infer_best_step(payload: Dict[str, Any]) -> int:
     for key in ("best_step", "best_epoch", "epoch", "epochs", "step", "global_step"):
         value = payload.get(key)
         if value is None:
+            value = payload.get(f"{key}_mean")
+        if value is None:
             continue
         try:
             return int(value)
         except Exception:
             continue
     return 0
+
+
+def _maybe_promote_metric(payload: Dict[str, Any], target: str, candidates: tuple[str, ...]) -> None:
+    if target in payload:
+        return
+    for key in candidates:
+        for candidate in (key, f"{key}_mean"):
+            value = payload.get(candidate)
+            if value is None:
+                continue
+            try:
+                payload[target] = float(value)
+                print(
+                    f"[sweep-run] publishing {target}={payload[target]:.6f} (from key={candidate})",
+                    flush=True,
+                )
+                return
+            except Exception:
+                continue
 
 
 def _local_result_file(exp_id: Optional[str], config_idx: Optional[int], seed: Optional[int]) -> Optional[pathlib.Path]:
@@ -643,36 +664,12 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             payload = {}
 
     if args.task_type == "regression":
-        if "val_rmse" not in payload:
-            for k in ("metric", "rmse", "rmse_mean", "probe_rmse_mean"):
-                v = payload.get(k)
-                if v is not None:
-                    try:
-                        rmse = float(v)
-                        print(
-                            f"[sweep-run] publishing val_rmse={rmse:.6f} (from key={k})",
-                            flush=True,
-                        )
-                        payload["val_rmse"] = rmse
-                    except Exception:
-                        pass
-                    break
+        _maybe_promote_metric(
+            payload, target="val_rmse", candidates=("metric", "rmse", "probe_rmse_mean")
+        )
     else:
         # classification: ensure val_auc lands in summary
-        if "val_auc" not in payload:
-            for k in ("auc", "roc_auc", "pr_auc"):
-                v = payload.get(k)
-                if v is not None:
-                    try:
-                        auc = float(v)
-                        print(
-                            f"[sweep-run] publishing val_auc={auc:.6f} (from key={k})",
-                            flush=True,
-                        )
-                        payload["val_auc"] = auc
-                    except Exception:
-                        pass
-                    break
+        _maybe_promote_metric(payload, target="val_auc", candidates=("auc", "roc_auc", "pr_auc"))
                
     metadata = {
         "pair_id": pair_id,
