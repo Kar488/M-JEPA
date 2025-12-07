@@ -123,13 +123,51 @@ def _normalized_payload(dirpath: str, add_3d: bool, sample: int, label_col: Opti
         "add_3d": bool(add_3d),
         "sample": int(sample or 0),
     }
-    # ``dataset_cache.dataset_cache_path`` hashes the payload; include the label
-    # column explicitly so runs that pass ``label_col=None`` resolve to the same
-    # cache key as the cache warmer. Otherwise, the warmer drops the key while
-    # sweep agents include it, producing distinct digests and repeated rebuilds
-    # of the labeled dataset.
-    payload["label_col"] = label_col
+    # Only include ``label_col`` when it is explicitly set; omitting ``None``
+    # keeps cache keys stable for unlabeled datasets and matches callers that do
+    # not pass the key at all when labels are absent. When ``label_col`` is
+    # provided, it still participates in the hash to avoid collisions between
+    # differently labelled corpora.
+    if label_col is not None:
+        payload["label_col"] = label_col
     return payload
+
+
+def _upgrade_legacy_unlabeled_cache(
+    kind: str, payload: Dict[str, Any], cache_root: str, log: Callable[[str], None]
+) -> Optional[str]:
+    """Move legacy unlabeled caches that were keyed with ``label_col=None``.
+
+    Previous versions of the warmers always injected ``label_col: None`` into the
+    payload hash for unlabeled datasets. The normalization now omits that key so
+    unlabeled and labeled payloads avoid collisions. To keep existing caches, we
+    move the legacy file (and shard directory, if present) into the new path when
+    the hash differs.
+    """
+
+    cache_path = dataset_cache.dataset_cache_path(kind, payload, cache_root)
+    if cache_path is None or "label_col" in payload:
+        return cache_path
+
+    legacy_payload = {**payload, "label_col": None}
+    legacy_cache_path = dataset_cache.dataset_cache_path(kind, legacy_payload, cache_root)
+    if not legacy_cache_path or not os.path.exists(legacy_cache_path):
+        return cache_path
+
+    if os.path.exists(cache_path):
+        return cache_path
+
+    log(
+        f"found legacy {kind} cache keyed with label_col=None; migrating to {cache_path}"
+    )
+    shutil.move(legacy_cache_path, cache_path)
+
+    legacy_shards = f"{legacy_cache_path}.parts"
+    new_shards = f"{cache_path}.parts"
+    if os.path.isdir(legacy_shards) and not os.path.exists(new_shards):
+        shutil.move(legacy_shards, new_shards)
+
+    return cache_path
 
 
 def _normalize_cache_dir(path: str) -> str:
@@ -517,7 +555,7 @@ def _warm_dataset_in_chunks(
     force: bool,
     log: Callable[[str], None],
 ) -> None:
-    cache_path = dataset_cache.dataset_cache_path(kind, payload, cache_root)
+    cache_path = _upgrade_legacy_unlabeled_cache(kind, payload, cache_root, log)
     if cache_path is None:
         raise RuntimeError(f"unable to resolve cache path for {kind}")
 
