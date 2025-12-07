@@ -38,6 +38,9 @@ def wb_get_or_init(args) -> Optional["wandb.sdk.wandb_run.Run"]:
         return run
 
     wandb_disabled = os.getenv("WANDB_MODE") == "disabled" or os.getenv("WANDB_DISABLED") in {"true", "1", "True"}
+    _dbg(
+        "wb_get_or_init: disabled=", wandb_disabled, "use_wandb_arg=", getattr(args, "use_wandb", None)
+    )
 
     # prefer shared helper if present
     try:
@@ -160,6 +163,15 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
     entity = os.getenv("WANDB_ENTITY")
     project = os.getenv("WANDB_PROJECT") or "m-jepa"
     target = "/".join([p for p in (entity, project, run_id) if p]) if run_id else None
+
+    _dbg(
+        "wb_summary_update: target run:",
+        target if target else "(none)",
+        "run_present=",
+        run is not None,
+        "wandb_disabled=",
+        wandb_disabled,
+    )
 
     if run is None and target:
         try:

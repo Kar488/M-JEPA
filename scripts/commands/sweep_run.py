@@ -181,6 +181,21 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     wandb_run = getattr(wandb, "run", None) if wandb is not None else None
     wandb_enabled = _as_bool(getattr(args, "use_wandb", 1)) or wandb_run is not None
 
+    wandb_mode_env = os.getenv("WANDB_MODE")
+    wandb_disabled_env = os.getenv("WANDB_DISABLED")
+    app_dir_env = os.getenv("APP_DIR")
+    print(
+        "[sweep-run] wandb flags:",
+        f"arg_use_wandb={getattr(args, 'use_wandb', None)}",
+        f"wandb_enabled={wandb_enabled}",
+        f"WANDB_MODE={wandb_mode_env}",
+        f"WANDB_DISABLED={wandb_disabled_env}",
+        f"APP_DIR={app_dir_env}",
+        f"script={__file__}",
+        sep=" ",
+        flush=True,
+    )
+
     _wandb_mod = wandb
     _wandb_wait_timeout = float(os.getenv("WANDB_SWEEP_INIT_TIMEOUT", 20.0))
 
@@ -708,6 +723,16 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     if val_rmse is not None:
         payload["val_rmse"] = val_rmse
 
+    try:
+        print(
+            "[sweep-run] payload snapshot before summary sync:",
+            f"keys={sorted(payload.keys())}",
+            f"val_rmse={payload.get('val_rmse')}",
+            flush=True,
+        )
+    except Exception:
+        pass
+
     best_step = _infer_best_step(payload)
     payload["best_step"] = best_step
 
@@ -725,6 +750,11 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             except Exception as exc:
                 print(f"[sweep-run] direct wandb.log failed: {exc}", flush=True)
             try:
+                print(
+                    "[sweep-run] direct summary update payload keys:",
+                    sorted(payload.keys()),
+                    flush=True,
+                )
                 direct_run.summary.update(payload)
                 print(
                     f"[sweep-run] direct run.summary.update succeeded (keys={list(payload.keys())})",
@@ -776,6 +806,13 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     # logging metrics via wandb.log and updating the run summary.
     if should_publish_summary:
         try:
+            print(
+                "[sweep-run] wb_summary_update payload keys:",
+                sorted(payload.keys()),
+                "val_rmse=",
+                payload.get("val_rmse"),
+                flush=True,
+            )
             print(f"[sweep-run] publishing payload: {payload}", flush=True)
             _wb_summary_update(payload)
         except Exception as exc:
