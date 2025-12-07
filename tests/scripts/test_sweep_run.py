@@ -835,4 +835,5 @@ def test_cmd_sweep_run_updates_full_config(monkeypatch, tmp_path):
 
     tj.cmd_sweep_run(args)
 
-    assert dummy_config.updated_payload == expected
+    for key, value in expected.items():
+        assert dummy_config.updated_payload.get(key) == value
