@@ -279,6 +279,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
                 out[k] = v  # also expose short key (last segment)
         return out
     sweep_cfg = _flatten(sweep_cfg or {})
+    full_cfg = {k: v for k, v in sweep_cfg.items() if not isinstance(v, dict)}
     try:
         sample_keys = sorted(list(sweep_cfg.keys()))[:10]
     except Exception:
@@ -532,6 +533,9 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             upd["add_3d"] = int(add_3d)  # ensure Phase-2 sees the gated value
         config_payload = {k: v for k, v in upd.items() if v is not None}
 
+    if using_wandb and run is not None:
+        _update_run_config(run, full_cfg)
+
     import time as _t
     _deadline = None
     if getattr(args, "time_budget_mins", 0):
@@ -665,7 +669,9 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     if args.task_type == "regression":
         _maybe_promote_metric(
-            payload, target="val_rmse", candidates=("metric", "rmse", "probe_rmse_mean")
+            payload,
+            target="val_rmse",
+            candidates=("metric", "rmse", "rmse_mean", "probe_rmse_mean"),
         )
     else:
         # classification: ensure val_auc lands in summary
