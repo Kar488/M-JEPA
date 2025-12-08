@@ -499,6 +499,16 @@ phase2_candidate_grid_dirs() {
     local candidate="$1"
     [[ -n "$candidate" ]] || return 0
     candidate="${candidate%/}"
+    [[ -n "$candidate" ]] || return 0
+
+    # Skip roots that are not writable to avoid fatal mkdir errors when running
+    # on GitHub-hosted runners without the Vast data volume mounted.  mjepa_try_dir
+    # creates the directory when possible; otherwise it returns non-zero and we
+    # silently ignore the candidate.
+    if ! mjepa_try_dir "$candidate" 2>/dev/null; then
+      return 0
+    fi
+
     local existing
     for existing in "${roots[@]}"; do
       if [[ "$existing" == "$candidate" ]]; then

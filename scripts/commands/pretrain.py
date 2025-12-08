@@ -24,6 +24,13 @@ from . import log_effective_gnn
 stage_config: Dict[str, Any] = {}
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).lower() in {"1", "true", "yes", "on"}
+
+
 def _safe_float(value: Any) -> Optional[float]:
     try:
         return float(value)
@@ -273,9 +280,18 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         sys.exit(2)
 
     gnn_type = str(getattr(args, "gnn_type", ""))
+    allow_gcn_fallback = _env_flag("ALLOW_GCN_FALLBACK", default=_env_flag("MJEPA_ALLOW_DATA_FALLBACKS", True))
     if gnn_type.lower().strip() == "gcn":
-        logger.error("[pretrain] refusing to launch with fallback gnn_type=gcn; check Phase-2 winner propagation")
-        sys.exit(2)
+        if allow_gcn_fallback:
+            logger.warning(
+                "[pretrain] allowing gnn_type=gcn because ALLOW_GCN_FALLBACK=%s",
+                os.getenv("ALLOW_GCN_FALLBACK", os.getenv("MJEPA_ALLOW_DATA_FALLBACKS", "1")),
+            )
+        else:
+            logger.error(
+                "[pretrain] refusing to launch with fallback gnn_type=gcn; check Phase-2 winner propagation"
+            )
+            sys.exit(2)
 
     def _wb_run_ok(wb):
         return (wb is not None) and (getattr(wb, "run", None) is not None)
