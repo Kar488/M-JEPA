@@ -87,7 +87,7 @@ sync_remote_dir() {
   fi
 
   if command -v scp >/dev/null 2>&1; then
-    if "${SCP[@]}" -r "$REMOTE:${remote_dir%/}" "$local_dir/" >/dev/null 2>&1; then
+    if "${SCP[@]}" -r "$REMOTE:${remote_dir%/}/." "$local_dir/" >/dev/null 2>&1; then
       return 0
     fi
     echo "[ci][warn] ${label}: scp failed for ${remote_dir}; attempting tar stream" >&2
@@ -95,7 +95,7 @@ sync_remote_dir() {
 
   local parent="${remote_dir%/*}" basename="${remote_dir##*/}"
   [[ -z "$parent" || "$parent" == "$remote_dir" ]] && parent="/"
-  if ssh "${SSH_OPTS[@]}" "$REMOTE" "cd '${parent}' && tar -cf - '${basename}'" | tar -xf - -C "$local_dir"; then
+  if ssh "${SSH_OPTS[@]}" "$REMOTE" "cd '${parent}' && tar -cf - '${basename}'" | tar -xf - -C "$local_dir" --strip-components=1; then
     return 0
   fi
 
