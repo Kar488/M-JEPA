@@ -373,6 +373,8 @@ def test_bestcfg_no_epochs_respected_for_tox21():
     assert "--pretrain-epochs" not in stdout
     assert "--finetune-epochs" not in stdout
     summary = extract_summary(stderr)
+    assert summary.get("no_epochs") is True
+    assert set(summary.get("dropped_epochs", [])) == {"pretrain_epochs", "finetune_epochs"}
     assert set(["pretrain_epochs", "finetune_epochs"]).issubset(set(summary["skipped"]))
 
 

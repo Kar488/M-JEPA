@@ -2003,6 +2003,10 @@ best_config_args() {
   local stage="$1"
   local -a grid_roots=()
 
+  if [[ "${BESTCFG_NO_EPOCHS:-}" == "1" ]]; then
+    echo "[bestcfg] BESTCFG_NO_EPOCHS=1 → dropping pretrain_epochs/finetune_epochs from best config" >&2
+  fi
+
   add_grid_root() {
     local root="$1"
     [[ -z "$root" ]] && return
@@ -2101,6 +2105,7 @@ best_config_args() {
     shopt -s nullglob
     local fallback_candidate
     for fallback_candidate in \
+      "$emergency_grid"/*/phase2_winner_config.csv \
       "$emergency_grid"/*/phase2_export/stage-outputs/best_grid_config.json \
       "$emergency_grid"/*/phase2_recheck/stage-outputs/best_grid_config.json \
       "$emergency_grid"/*/phase2_export/best_grid_config.json \
@@ -2114,6 +2119,7 @@ best_config_args() {
   for grid_root in "${grid_roots[@]}"; do
     [[ -n "$grid_root" ]] || continue
     if (( prefer_phase2 )); then
+      add_winner_candidate "${grid_root}/phase2_winner_config.csv"
       add_winner_candidate "${grid_root}/phase2_export/stage-outputs/best_grid_config.json"
       add_winner_candidate "${grid_root}/phase2_recheck/stage-outputs/best_grid_config.json"
       add_winner_candidate "${grid_root}/phase2_export/best_grid_config.json"
@@ -2123,6 +2129,7 @@ best_config_args() {
       add_winner_candidate "${grid_root}/phase2_export/best_grid_config.json"
       add_winner_candidate "${grid_root}/phase2_export/stage-outputs/best_grid_config.json"
       add_winner_candidate "${grid_root}/phase2_recheck/stage-outputs/best_grid_config.json"
+      add_winner_candidate "${grid_root}/phase2_winner_config.csv"
     fi
   done
 
@@ -2172,6 +2179,7 @@ best_config_args() {
   local bestcfg_policy_env="${BESTCFG_POLICY:-$bestcfg_policy_default}"
   BESTCFG_POLICY="$bestcfg_policy_env" "$py" - "$cfg" "$stage" <<'PY'
 import argparse
+import csv
 import json
 import os
 import sys
@@ -2182,12 +2190,84 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     yaml = None
 
-path = sys.argv[1]
+path = Path(sys.argv[1])
 # normalize stage and support 'benchmark' alias
 stage = (sys.argv[2].lower().strip() if len(sys.argv) > 2 else "bench")
 if stage == "benchmark":
     stage = "bench"
-raw = json.load(open(path))
+
+
+def _maybe_deserialise(value: str):
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return json.loads(stripped)
+        except Exception:
+            return stripped
+    return value
+
+
+def _load_from_csv(csv_path: Path) -> dict:
+    rows = []
+    with csv_path.open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            if row:
+                rows.append(row)
+    if not rows:
+        return {}
+
+    metric_keys = (
+        "val_rmse",
+        "metrics/val_rmse",
+        "validation.rmse",
+        "metric_rmse",
+        "metric",
+    )
+
+    def _metric_value(row: dict):
+        for key in metric_keys:
+            raw_val = row.get(key)
+            if raw_val is None:
+                continue
+            try:
+                return True, float(raw_val)
+            except Exception:
+                continue
+        return False, float("inf")
+
+    best_row = rows[0]
+    best_has_metric, best_metric = _metric_value(best_row)
+    for row in rows[1:]:
+        has_metric, metric_val = _metric_value(row)
+        if not has_metric and best_has_metric:
+            continue
+        if has_metric and not best_has_metric:
+            best_row, best_metric, best_has_metric = row, metric_val, True
+            continue
+        if has_metric and metric_val < best_metric:
+            best_row, best_metric, best_has_metric = row, metric_val, True
+
+    config: dict = {}
+    for key, value in best_row.items():
+        if value is None:
+            continue
+        cleaned_key = key
+        if cleaned_key.startswith("config."):
+            cleaned_key = cleaned_key.split(".", 1)[1]
+        deserialised = _maybe_deserialise(value)
+        if deserialised is None:
+            continue
+        config[cleaned_key] = deserialised
+    return config
+
+
+if path.suffix.lower() == ".csv":
+    raw = _load_from_csv(path)
+else:
+    raw = json.load(open(path))
 
 # --- flatten possible W&B shapes ---
 _MISSING = object()
@@ -2717,11 +2797,33 @@ for key, flag in mapping.items():
 summary = {
     "stage": stage,
     "policy_file": policy_path,
+    "no_epochs": os.environ.get("BESTCFG_NO_EPOCHS") == "1",
     "best_config_keys": sorted(cfg.keys()),
     "yaml_owned": sorted(dropped_yaml),
     "skipped": sorted(dropped_skip),
     "forced": sorted(forced_keep),
 }
+if summary["no_epochs"]:
+    summary["dropped_epochs"] = [
+        key for key in ("pretrain_epochs", "finetune_epochs") if key in dropped_skip
+    ]
+hyper_keys = (
+    "gnn_type",
+    "hidden_dim",
+    "num_layers",
+    "lr",
+    "mask_ratio",
+    "ema_decay",
+    "contiguity",
+    "add_3d",
+    "devices",
+    "sample_unlabeled",
+)
+hyper_summary = {k: cfg.get(k) for k in hyper_keys if k in cfg}
+print(
+    f"[bestcfg][source] stage={stage} path={path} values=" + json.dumps(hyper_summary, sort_keys=True),
+    file=sys.stderr,
+)
 print("[bestcfg][summary] " + json.dumps(summary, sort_keys=True), file=sys.stderr)
 PY
 }

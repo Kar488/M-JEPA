@@ -250,6 +250,33 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
     )
     log_effective_gnn(args, logger, wb)
 
+    lr_value = getattr(args, "lr", None)
+    mask_ratio = getattr(args, "mask_ratio", None)
+    sample_unlabeled = getattr(args, "sample_unlabeled", None)
+    logger.info(
+        "[pretrain] effective_hparams gnn_type=%s hidden_dim=%s num_layers=%s lr=%s mask_ratio=%s sample_unlabeled=%s",
+        getattr(args, "gnn_type", None),
+        getattr(args, "hidden_dim", None),
+        getattr(args, "num_layers", None),
+        lr_value,
+        mask_ratio,
+        sample_unlabeled if sample_unlabeled not in (None, 0) else "all",
+    )
+
+    try:
+        lr_float = float(lr_value)
+    except (TypeError, ValueError):
+        lr_float = None
+
+    if lr_float is None or lr_float <= 0:
+        logger.error("[pretrain] invalid non-positive learning rate: %s", lr_value)
+        sys.exit(2)
+
+    gnn_type = str(getattr(args, "gnn_type", ""))
+    if gnn_type.lower().strip() == "gcn":
+        logger.error("[pretrain] refusing to launch with fallback gnn_type=gcn; check Phase-2 winner propagation")
+        sys.exit(2)
+
     def _wb_run_ok(wb):
         return (wb is not None) and (getattr(wb, "run", None) is not None)
 

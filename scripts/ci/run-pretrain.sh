@@ -3,6 +3,13 @@ set -euo pipefail
 
 trap 'echo "[ci] error at line $LINENO: $BASH_COMMAND" >&2' ERR
 
+if [[ -z "${PRETRAIN_SAMPLE_UNLABELED:-}" ]]; then
+  BESTCFG_SKIP="sample_unlabeled ${BESTCFG_SKIP:-}"
+else
+  BESTCFG_KEEP="sample_unlabeled ${BESTCFG_KEEP:-}"
+fi
+export BESTCFG_SKIP BESTCFG_KEEP
+
 ensure_tox21_gate_stub() {
   # Ensure downstream artifact syncs never fail due to a missing optional
   # tox21 gate file.  When the gate has not run yet seed a conservative default.
