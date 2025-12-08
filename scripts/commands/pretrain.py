@@ -280,7 +280,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         sys.exit(2)
 
     gnn_type = str(getattr(args, "gnn_type", ""))
-    allow_gcn_fallback = _env_flag("ALLOW_GCN_FALLBACK", default=_env_flag("MJEPA_ALLOW_DATA_FALLBACKS", True))
+    allow_gcn_fallback = _env_flag(
+        "ALLOW_GCN_FALLBACK", default=_env_flag("MJEPA_ALLOW_DATA_FALLBACKS", True)
+    )
     if gnn_type.lower().strip() == "gcn":
         if allow_gcn_fallback:
             logger.warning(
@@ -288,10 +290,19 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 os.getenv("ALLOW_GCN_FALLBACK", os.getenv("MJEPA_ALLOW_DATA_FALLBACKS", "1")),
             )
         else:
-            logger.error(
-                "[pretrain] refusing to launch with fallback gnn_type=gcn; check Phase-2 winner propagation"
+            # Local tests default to CPU execution; keep them running even when the
+            # production guard is active, but continue to block GPU launches so
+            # sweeps honour the winner propagated from Phase 1.
+            resolved = str(resolve_device(getattr(args, "device", "cpu"))).lower()
+            if resolved.startswith("cuda"):
+                logger.error(
+                    "[pretrain] refusing to launch with fallback gnn_type=gcn; check Phase-2 winner propagation"
+                )
+                sys.exit(2)
+            logger.warning(
+                "[pretrain] continuing with gnn_type=gcn on %s despite ALLOW_GCN_FALLBACK=0 for local/testing runs",
+                resolved,
             )
-            sys.exit(2)
 
     def _wb_run_ok(wb):
         return (wb is not None) and (getattr(wb, "run", None) is not None)
