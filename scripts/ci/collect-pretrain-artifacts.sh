@@ -28,7 +28,20 @@ chmod 600 "$KEY_PATH"
 REMOTE="${VAST_USER}@${VAST_HOST}"
 SSH_OPTS=(-i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
 SSH_CMD=(ssh "${SSH_OPTS[@]}")
+copy_with_rsync=0
+rsync_path=""
+if command -v rsync >/dev/null 2>&1; then
+  rsync_path="$(command -v rsync)"
+  if [[ -x "$rsync_path" ]] && rsync --version >/dev/null 2>&1; then
+    copy_with_rsync=1
+  else
+    echo "[collect-pretrain-artifacts] rsync present at ${rsync_path:-unknown} but unusable; falling back" >&2
+  fi
+else
+  echo "[collect-pretrain-artifacts] rsync unavailable; will use cp/scp fallbacks" >&2
+fi
 RSYNC=(rsync -avz --chmod=ugo=rwX -e "ssh ${SSH_OPTS[*]}")
+SCP=(scp -p -i "$KEY_PATH" -P "$VAST_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
 
 check_remote_reachable() {
   if ssh "${SSH_OPTS[@]}" "$REMOTE" "echo ok" >/dev/null 2>&1; then
@@ -47,9 +60,106 @@ echo "[collect] PRETRAIN_EXPERIMENT_ROOT=$PRETRAIN_EXPERIMENT_ROOT" >&2
 "${SSH_CMD[@]}" "$REMOTE" \
   "mkdir -p '${PRETRAIN_EXPERIMENT_ROOT}/artifacts' '${PRETRAIN_EXPERIMENT_ROOT}/pretrain/stage-outputs'"
 
+copy_remote_path() {
+  local remote_path="$1"
+  local dest_dir="$2"
+  local label="$3"
+  local allow_dir="$4"
+
+  mkdir -p "$dest_dir"
+
+  if [[ -e "$remote_path" ]]; then
+    if (( copy_with_rsync )); then
+      if rsync -av --chmod=ugo=rwX "$remote_path" "$dest_dir"; then
+        echo "[collect] used local rsync for $label from $remote_path" >&2
+        return 0
+      fi
+      echo "::warning::local rsync failed for $label at $remote_path; falling back to cp" >&2
+    else
+      echo "[collect-pretrain-artifacts] rsync unavailable; using cp fallback for $label (src=$remote_path dst=$dest_dir)" >&2
+    fi
+
+    if [[ -d "$remote_path" ]]; then
+      if (( allow_dir )); then
+        if cp -a "$remote_path" "$dest_dir/"; then
+          echo "[collect] used cp -a for directory $label from $remote_path to $dest_dir" >&2
+        else
+          echo "::warning::cp -a failed for directory $label at $remote_path" >&2
+        fi
+      else
+        echo "[collect] info: $label at $remote_path is a directory; skipping copy (allow_dir=0)" >&2
+      fi
+    else
+      if cp --preserve=mode,timestamps "$remote_path" "$dest_dir/"; then
+        echo "[collect] used cp --preserve for $label from $remote_path to $dest_dir" >&2
+      else
+        echo "::warning::cp fallback failed for $label at $remote_path" >&2
+      fi
+    fi
+    return 0
+  fi
+
+  if (( copy_with_rsync )); then
+    if "${RSYNC[@]}" "$REMOTE:$remote_path" "$dest_dir"; then
+      echo "[collect] used rsync for $label from $remote_path" >&2
+      return 0
+    fi
+    echo "::warning::rsync failed for $label at $remote_path; falling back to scp/cp" >&2
+  else
+    echo "[collect] rsync unavailable; falling back to scp/cp for $label" >&2
+  fi
+
+  # Prefer scp -p when available; fall back to streaming via ssh + tar for directories
+  local target_name
+  target_name="${remote_path##*/}"
+  if remote_path_is_dir "$remote_path"; then
+    if (( allow_dir )); then
+      if command -v scp >/dev/null 2>&1; then
+        if "${SCP[@]}" -r "$REMOTE:$remote_path" "$dest_dir/"; then
+          echo "[collect] used scp for directory $label from $remote_path" >&2
+          return 0
+        fi
+        echo "::warning::scp failed for directory $label at $remote_path" >&2
+      fi
+      if ssh "${SSH_OPTS[@]}" "$REMOTE" "tar -cf - '$remote_path'" | tar -xf - -C "$dest_dir"; then
+        echo "[collect] used tar stream for directory $label from $remote_path" >&2
+        return 0
+      fi
+      echo "::warning::tar fallback failed for directory $label at $remote_path" >&2
+    else
+      echo "[collect] info: $label at $remote_path is a directory; skipping copy (allow_dir=0)" >&2
+    fi
+    return 0
+  fi
+
+  if command -v scp >/dev/null 2>&1; then
+    if "${SCP[@]}" "$REMOTE:$remote_path" "$dest_dir/"; then
+      echo "[collect] used scp for $label from $remote_path" >&2
+      return 0
+    fi
+    echo "::warning::scp failed for $label at $remote_path" >&2
+  fi
+
+  # Final fallback: stream file contents over ssh and preserve mtimes when possible
+  local dest_path="$dest_dir/$target_name"
+  if ssh "${SSH_OPTS[@]}" "$REMOTE" "cat '$remote_path'" >"$dest_path"; then
+    local mtime
+    mtime="$(ssh "${SSH_OPTS[@]}" "$REMOTE" "stat -c '%y' '$remote_path'" 2>/dev/null || true)"
+    if [[ -n "$mtime" ]]; then
+      touch -d "$mtime" "$dest_path" 2>/dev/null || true
+    fi
+    echo "[collect] copied $label from $remote_path via ssh stream" >&2
+    return 0
+  fi
+
+  echo "::warning::all copy strategies failed for $label at $remote_path" >&2
+  return 0
+}
+
 sync_file() {
   local remote_path="$1"
   local label="$2"
+  local dest_dir="$3"
   if [[ -z "$remote_path" ]]; then
     echo "::warning::skip $label because remote path is empty" >&2
     return 0
@@ -58,11 +168,7 @@ sync_file() {
     echo "::warning::remote $label missing at $remote_path" >&2
     return 0
   fi
-  if "${RSYNC[@]}" "$REMOTE:$remote_path" "$DEST_DIR"; then
-    return 0
-  fi
-  echo "::warning::rsync failed for $label at $remote_path" >&2
-  return 0
+  copy_remote_path "$remote_path" "$dest_dir" "$label" 0
 }
 
 remote_file_exists() {
@@ -89,6 +195,18 @@ exit 1
 EOS
 }
 
+remote_path_is_dir() {
+  local remote_path="$1"
+  "${SSH_CMD[@]}" "$REMOTE" bash -s -- "$remote_path" <<'EOS' >/dev/null 2>&1
+set -euo pipefail
+path="${1:-}"
+if [[ -d "$path" ]]; then
+  exit 0
+fi
+exit 1
+EOS
+}
+
 sync_optional_file() {
   local remote_path="$1"
   local label="$2"
@@ -98,11 +216,7 @@ sync_optional_file() {
     return 0
   fi
   if remote_file_exists "$remote_path"; then
-    if "${RSYNC[@]}" "$REMOTE:$remote_path" "$dest_dir"; then
-      echo "[collect] fetched optional $label from $remote_path" >&2
-      return 0
-    fi
-    echo "::warning::rsync failed for optional $label at $remote_path" >&2
+    copy_remote_path "$remote_path" "$dest_dir" "$label" 0
     return 0
   fi
   echo "[collect] info: $label not found at $remote_path; skipping" >&2
@@ -118,19 +232,15 @@ sync_optional_path() {
     return 0
   fi
   if remote_path_exists "$remote_path"; then
-    if "${RSYNC[@]}" "$REMOTE:$remote_path" "$dest_dir"; then
-      echo "[collect] fetched optional $label from $remote_path" >&2
-      return 0
-    fi
-    echo "::warning::rsync failed for optional $label at $remote_path" >&2
+    copy_remote_path "$remote_path" "$dest_dir" "$label" 1
     return 0
   fi
   echo "[collect] info: $label not found at $remote_path; skipping" >&2
   return 0
 }
 
-sync_file "${PRETRAIN_ENCODER_PATH:-${PRETRAIN_EXPERIMENT_ROOT}/pretrain/encoder.pt}" "encoder"
-sync_file "${PRETRAIN_MANIFEST:-${PRETRAIN_EXPERIMENT_ROOT}/artifacts/encoder_manifest.json}" "manifest"
+sync_file "${PRETRAIN_ENCODER_PATH:-${PRETRAIN_EXPERIMENT_ROOT}/pretrain/encoder.pt}" "encoder" "$DEST_DIR"
+sync_file "${PRETRAIN_MANIFEST:-${PRETRAIN_EXPERIMENT_ROOT}/artifacts/encoder_manifest.json}" "manifest" "$DEST_DIR"
 stage_outputs_missing=1
 stage_outputs_local="$DEST_DIR/pretrain.json"
 
@@ -169,7 +279,7 @@ for candidate in "${stage_output_candidates[@]}"; do
   seen_candidates+=("$candidate")
   if remote_file_exists "$candidate"; then
     echo "[collect] found stage outputs at $candidate" >&2
-    sync_file "$candidate" "stage-outputs"
+    sync_file "$candidate" "stage-outputs" "$DEST_DIR"
     if [[ -f "$stage_outputs_local" ]]; then
       stage_outputs_missing=0
       break
@@ -184,7 +294,7 @@ fi
 if (( stage_outputs_missing )); then
   echo "::notice::stage-outputs missing remotely; will attempt reconstruction" >&2
 fi
-sync_file "${PRETRAIN_STATE_FILE:-${PRETRAIN_EXPERIMENT_ROOT}/pretrain_state.json}" "pretrain-state"
+sync_file "${PRETRAIN_STATE_FILE:-${PRETRAIN_EXPERIMENT_ROOT}/pretrain_state.json}" "pretrain-state" "$DEST_DIR"
 
 # Rebuild stage outputs locally when the remote file is missing but the other
 # artifacts were synced successfully.  This keeps downstream jobs working on
@@ -260,6 +370,25 @@ if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
   reports_remote="${PRETRAIN_EXPERIMENT_ROOT%/}/reports"
   sync_optional_path "$graphs_remote" "graph visuals" "$DEST_DIR"
   sync_optional_path "$reports_remote" "reports" "$DEST_DIR"
+fi
+
+cache_root="${PRETRAIN_CACHE_DIR:-/data/mjepa/cache/pretrain}"
+if [[ -n "$cache_root" ]]; then
+  cache_root="${cache_root%/}"
+  if [[ ! -f "$DEST_DIR/encoder.pt" ]]; then
+    cache_encoder="${cache_root}/encoder.pt"
+    if remote_file_exists "$cache_encoder"; then
+      echo "[collect] encoder missing in experiment; using cache at $cache_encoder" >&2
+      copy_remote_path "$cache_encoder" "$DEST_DIR" "encoder-cache" 0
+    fi
+  fi
+  if [[ ! -f "$DEST_DIR/encoder_manifest.json" ]]; then
+    cache_manifest="${cache_root}/encoder_manifest.json"
+    if remote_file_exists "$cache_manifest"; then
+      echo "[collect] manifest missing in experiment; using cache at $cache_manifest" >&2
+      copy_remote_path "$cache_manifest" "$DEST_DIR" "manifest-cache" 0
+    fi
+  fi
 fi
 
 if (( stage_outputs_missing )); then

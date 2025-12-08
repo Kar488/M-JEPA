@@ -197,6 +197,36 @@ if ! command -v bsdtar >/dev/null 2>&1; then
   sudo apt-get update -qq
   sudo apt-get install -y libarchive-tools
 fi
+
+ensure_rsync_available() {
+  local rsync_path
+  if command -v rsync >/dev/null 2>&1 && rsync --version >/dev/null 2>&1; then
+    rsync_path="$(command -v rsync)"
+    echo "[prepare-env] rsync available at ${rsync_path}"
+    return 0
+  fi
+
+  echo "[prepare-env][warn] rsync missing or unusable; attempting install"
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "[prepare-env] installing rsync via apt-get…"
+    if sudo apt-get update -qq && sudo apt-get install -y rsync; then
+      echo "[prepare-env] rsync installed via apt-get"
+      return 0
+    fi
+    echo "[prepare-env][warn] apt-get install rsync failed; will try micromamba"
+  else
+    echo "[prepare-env][warn] apt-get not available; will try micromamba for rsync"
+  fi
+
+  if micromamba_with_retry 3 install -y -n "$ENV_NAME" -c conda-forge rsync; then
+    echo "[prepare-env] rsync installed via micromamba env ${ENV_NAME}"
+    return 0
+  fi
+
+  echo "[prepare-env][warn] unable to install rsync via apt-get or micromamba; continuing without it"
+  return 0
+}
+
 # Guarantee the micromamba binary directory is on PATH so wrappers like
 # `timeout` can invoke it directly without relying on the shell hook.
 export PATH="${MM_PREFIX}/bin:${PATH}"
@@ -211,6 +241,8 @@ if ! [ -x "$MM_BIN" ]; then
 fi
 export MAMBA_ROOT_PREFIX
 eval "$("$MM_BIN" shell hook -s bash)"
+
+ensure_rsync_available
 
 
 # ----------- env create if needed -----------

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import numbers
@@ -72,6 +73,76 @@ def _coerce_positive_int(raw: Optional[str], label: str) -> Optional[int]:
         print(f"[recheck][warn] ignoring non-positive {label}={raw!r}", flush=True)
         return None
     return value
+
+
+WINNER_FALLBACK: Optional[Dict[str, Any]] = None
+WINNER_SOURCE: Optional[str] = None
+
+
+def _maybe_deserialise(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except Exception:
+        return value
+
+
+def _load_winner_config() -> Dict[str, Any]:
+    global WINNER_FALLBACK, WINNER_SOURCE
+    if WINNER_FALLBACK is not None:
+        return dict(WINNER_FALLBACK)
+
+    grid_dir = os.environ.get("GRID_DIR") or os.environ.get("GRID_SOURCE_DIR") or os.environ.get("GRID_CACHE_DIR")
+    candidates: List[pathlib.Path] = []
+    if grid_dir:
+        grid_root = pathlib.Path(grid_dir)
+        candidates.extend(
+            [
+                grid_root / "phase2_winner_config.csv",
+                grid_root / "phase2_export" / "phase2_winner_config.csv",
+                grid_root / "phase2_export" / "best_grid_config.json",
+                grid_root / "best_grid_config.json",
+            ]
+        )
+    candidates.append(pathlib.Path("/data/mjepa/cache/grid/phase2_winner_config.csv"))
+
+    def _parse_csv(path: pathlib.Path) -> Dict[str, Any]:
+        try:
+            with path.open("r", newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+        except Exception:
+            return {}
+        if not rows:
+            return {}
+        row = rows[0]
+        cfg: Dict[str, Any] = {}
+        for key, value in row.items():
+            if value is None:
+                continue
+            cleaned = key.split(".", 1)[1] if key.startswith("config.") else key
+            text = str(value).strip()
+            if not text:
+                continue
+            cfg[cleaned] = _maybe_deserialise(text)
+        return cfg
+
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        if candidate.suffix.lower() == ".csv":
+            cfg = _parse_csv(candidate)
+        else:
+            try:
+                cfg = json.load(candidate.open())
+            except Exception:
+                cfg = {}
+        if cfg:
+            WINNER_FALLBACK = cfg
+            WINNER_SOURCE = str(candidate)
+            break
+
+    if WINNER_FALLBACK is None:
+        WINNER_FALLBACK = {}
+    return dict(WINNER_FALLBACK)
 
 
 def _discover_visible_gpu_ids() -> List[str]:
@@ -697,6 +768,18 @@ def run_once(
             env["CUDA_VISIBLE_DEVICES"] = mask
         else:
             env.pop("CUDA_VISIBLE_DEVICES", None)
+
+    winner_cfg = _load_winner_config()
+    if winner_cfg:
+        merged_cfg = dict(winner_cfg)
+        merged_cfg.update({k: v for k, v in cfg.items() if v is not None})
+        if merged_cfg != cfg:
+            source_note = f" from {WINNER_SOURCE}" if WINNER_SOURCE else ""
+            print(
+                f"[recheck][defaults] merged Phase-2 winner config{source_note} for cfg {config_idx}",
+                flush=True,
+            )
+        cfg = merged_cfg
 
     args = [
         mm, "run", "-n", "mjepa", "env", "PYTHONUNBUFFERED=1",
