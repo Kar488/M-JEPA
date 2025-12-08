@@ -1524,6 +1524,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Serialize GraphDataset objects for reuse across sweep trials",
     )
+    sweep.add_argument(
+        "--pair-id",
+        "--pair_id",
+        dest="pair_id",
+        default=None,
+        help="Optional pairing identifier supplied by sweep seeds; ignored when absent",
+    )
 
     # pull in perf/common knobs once (devices, workers, pin/prefetch/bf16/use-wandb, etc.)
     _add_common_args(sweep, "sweep")

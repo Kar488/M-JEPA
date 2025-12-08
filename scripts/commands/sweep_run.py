@@ -509,7 +509,12 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         "contiguity": int(getattr(args, "contiguity", 0)),
     }
 
-    pair_id = hashlib.sha1(json.dumps(pid_cfg, sort_keys=True).encode()).hexdigest()[:8]
+    pair_id_override = getattr(args, "pair_id", None)
+    pair_id = (
+        str(pair_id_override)
+        if pair_id_override is not None and str(pair_id_override).strip()
+        else hashlib.sha1(json.dumps(pid_cfg, sort_keys=True).encode()).hexdigest()[:8]
+    )
     print(
         f"[sweep-run] pair_id={pair_id} | gnn_type={args.gnn_type} | "
         f"hidden_dim={args.hidden_dim} | num_layers={args.num_layers} | "
