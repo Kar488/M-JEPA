@@ -492,6 +492,153 @@ phase2_step_diag() {
   echo "[ci] STEP=${step} EXP_ID=${EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_DIR=${GRID_DIR:-<unset>} GRID_SOURCE_DIR=${GRID_SOURCE_DIR:-<unset>} EXP_ROOT=${EXP_ROOT:-<unset>}" >&2
 }
 
+phase2_candidate_grid_dirs() {
+  local -a roots=()
+
+  add_root() {
+    local candidate="$1"
+    [[ -n "$candidate" ]] || return 0
+    candidate="${candidate%/}"
+    local existing
+    for existing in "${roots[@]}"; do
+      if [[ "$existing" == "$candidate" ]]; then
+        return 0
+      fi
+    done
+    roots+=("$candidate")
+  }
+
+  add_root "${GRID_DIR:-}"
+  add_root "${GRID_SOURCE_DIR:-}"
+  if [[ -n "${EXPERIMENTS_ROOT:-}" && -n "${GRID_EXP_ID:-}" ]]; then
+    add_root "${EXPERIMENTS_ROOT%/}/${GRID_EXP_ID}/grid"
+  fi
+  if [[ -n "${GRID_CACHE_DIR:-}" ]]; then
+    add_root "${GRID_CACHE_DIR%/}"
+    if [[ -n "${GRID_EXP_ID:-}" ]]; then
+      add_root "${GRID_CACHE_DIR%/}/${GRID_EXP_ID}"
+    fi
+  fi
+  add_root "/data/mjepa/cache/grid"
+  add_root "/cache/grid"
+  if [[ -n "${GRID_EXP_ID:-}" ]]; then
+    add_root "/data/mjepa/cache/grid/${GRID_EXP_ID}"
+    add_root "/cache/grid/${GRID_EXP_ID}"
+  fi
+
+  printf '%s\n' "${roots[@]}"
+}
+
+phase2_log_grid_roots() {
+  local step_label="${1:-phase2}"
+  local -a roots=()
+  mapfile -t roots < <(phase2_candidate_grid_dirs)
+  echo "[${step_label}] candidate grid roots: ${roots[*]:-<none>}" >&2
+}
+
+phase2_copy_file_if_exists() {
+  local step_label="$1" src="$2" dst="$3" label="$4"
+  [[ -n "$src" && -n "$dst" ]] || return 0
+  if [[ -f "$src" ]]; then
+    mkdir -p "$(dirname "$dst")" || return 0
+    if cp -f "$src" "$dst"; then
+      echo "[${step_label}] copied ${label:-$(basename "$src")} -> ${dst}" >&2
+    fi
+  fi
+}
+
+phase2_sync_stage_dirs() {
+  local step_label="$1" stage_name="$2" source_root="$3" target_root="$4"
+  local src_logs="${source_root%/}/${stage_name}/logs"
+  local src_outputs="${source_root%/}/${stage_name}/stage-outputs"
+  local dst_logs="${target_root%/}/${stage_name}/logs"
+  local dst_outputs="${target_root%/}/${stage_name}/stage-outputs"
+
+  if [[ "$src_logs" != "$dst_logs" && -d "$src_logs" ]]; then
+    mkdir -p "$dst_logs"
+    cp -a "$src_logs/." "$dst_logs/" || true
+    echo "[${step_label}] mirrored logs ${src_logs} -> ${dst_logs}" >&2
+  fi
+  if [[ "$src_outputs" != "$dst_outputs" && -d "$src_outputs" ]]; then
+    mkdir -p "$dst_outputs"
+    cp -a "$src_outputs/." "$dst_outputs/" || true
+    echo "[${step_label}] mirrored outputs ${src_outputs} -> ${dst_outputs}" >&2
+  fi
+}
+
+phase2_publish_recheck_artifacts() {
+  local step_label="$1" source_root="$2"
+  local -a roots=()
+  mapfile -t roots < <(phase2_candidate_grid_dirs)
+  local src_root="${source_root%/}"
+  local sentinel_rel="phase2_recheck/recheck_done.ok"
+  local incomplete_rel="phase2_recheck/recheck_incomplete.ok"
+
+  local rel
+  for rel in "best_grid_config.json" "recheck_summary.json" "phase2_winner_config.csv" "phase2_winner.txt" "phase2_sweep_id.txt" "$sentinel_rel" "$incomplete_rel"; do
+    local src_path="${src_root}/${rel}"
+    local root
+    for root in "${roots[@]}"; do
+      root="${root%/}"
+      [[ "$root" == "$src_root" || -z "$root" ]] && continue
+      local dst_path="${root}/${rel}"
+      phase2_copy_file_if_exists "$step_label" "$src_path" "$dst_path" "$rel"
+    done
+  done
+
+  local stage_name
+  for stage_name in phase2_recheck phase2_export phase2_sweep; do
+    local root
+    for root in "${roots[@]}"; do
+      root="${root%/}"
+      [[ "$root" == "$src_root" || -z "$root" ]] && continue
+      phase2_sync_stage_dirs "$step_label" "$stage_name" "$src_root" "$root"
+    done
+  done
+}
+
+phase2_try_recheck_fallback() {
+  local step_label="$1" primary_root="$2"
+  local primary_sentinel="${primary_root%/}/phase2_recheck/recheck_done.ok"
+  local primary_summary="${primary_root%/}/recheck_summary.json"
+  local primary_best="${primary_root%/}/best_grid_config.json"
+
+  if [[ -f "$primary_sentinel" && -f "$primary_summary" && -f "$primary_best" ]]; then
+    return 0
+  fi
+
+  local -a roots=()
+  mapfile -t roots < <(phase2_candidate_grid_dirs)
+  local root
+  for root in "${roots[@]}"; do
+    root="${root%/}"
+    [[ -z "$root" || "$root" == "${primary_root%/}" ]] && continue
+    local sentinel="${root}/phase2_recheck/recheck_done.ok"
+    local summary="${root}/recheck_summary.json"
+    local best="${root}/best_grid_config.json"
+    if [[ -f "$sentinel" ]]; then
+      echo "[${step_label}] fallback: found sentinel under ${root}; syncing into ${primary_root}" >&2
+      phase2_copy_file_if_exists "$step_label" "$sentinel" "$primary_sentinel" "recheck_done.ok"
+      phase2_copy_file_if_exists "$step_label" "$summary" "$primary_summary" "recheck_summary.json"
+      phase2_copy_file_if_exists "$step_label" "$best" "$primary_best" "best_grid_config.json"
+      phase2_publish_recheck_artifacts "$step_label" "$root"
+      return 0
+    fi
+  done
+
+  echo "[${step_label}] fallback: no cache/grid root exposed a recheck sentinel" >&2
+  return 1
+}
+
+phase2_cleanup_stale_sweep_stub() {
+  local step_label="$1" root="$2"
+  local sweep_stub="${root%/}/phase2_sweep_id.txt"
+  if [[ -f "$sweep_stub" ]]; then
+    echo "[${step_label}][warn] removing stale phase2_sweep_id stub at ${sweep_stub}" >&2
+    rm -f "$sweep_stub" || true
+  fi
+}
+
 phase2_promote_local_grid() {
   local step_label="${1:-phase2_recheck}"
   local best_path="${GRID_DIR:-}/best_grid_config.json"
@@ -637,6 +784,9 @@ run_phase2_sweep_stage() {
   local dir="$1" step="$2"
 
   phase2_step_diag "$step"
+  phase2_log_grid_roots "$step"
+
+  echo "[${step}] starting (logs=${dir}/logs stage_dir=${dir} grid_root=${GRID_DIR:-<unset>} source=${GRID_SOURCE_DIR:-<unset>})" >&2
 
   local sweep_id_file="${GRID_SOURCE_DIR}/phase2_sweep_id.txt"
   if [[ ! -f "$sweep_id_file" ]]; then
@@ -897,6 +1047,18 @@ with open(tmp, "w", encoding="utf-8") as handle:
 os.replace(tmp, path)
 PY
 
+  local primary_root="${GRID_DIR%/}"
+  local -a roots=()
+  mapfile -t roots < <(phase2_candidate_grid_dirs)
+  local root
+  for root in "${roots[@]}"; do
+    root="${root%/}"
+    [[ -z "$root" || "$root" == "$primary_root" ]] && continue
+    phase2_sync_stage_dirs "$step" "$step" "$primary_root" "$root"
+  done
+
+  echo "[${step}] finished (logs=${dir}/logs stage_dir=${dir})" >&2
+
   restore_env_var LOG_DIR "$prev_log_dir"
   restore_env_var HARD_WALL_MINS "$prev_wall"
 
@@ -907,6 +1069,7 @@ run_phase2_recheck_stage() {
   local dir="$1" step="$2"
 
   phase2_step_diag "$step"
+  phase2_log_grid_roots "$step"
 
   : "${TOPK_RECHECK:=5}"
   : "${EXTRA_SEEDS:=3}"
@@ -924,14 +1087,14 @@ run_phase2_recheck_stage() {
     return 2
   fi
 
-    local sweep_id
-    sweep_id="$(<"$sweep_id_file")"
-    export WANDB_SWEEP_ID2="$sweep_id"
+  local sweep_id
+  sweep_id="$(<"$sweep_id_file")"
+  export WANDB_SWEEP_ID2="$sweep_id"
 
-    echo "[$step] appending recheck trials to sweep ${sweep_id} (TOPK_RECHECK=${TOPK_RECHECK} EXTRA_SEEDS=${EXTRA_SEEDS}); total runs will exceed the sweep-stage WANDB_COUNT." >&2
+  echo "[$step] appending recheck trials to sweep ${sweep_id} (TOPK_RECHECK=${TOPK_RECHECK} EXTRA_SEEDS=${EXTRA_SEEDS}); total runs will exceed the sweep-stage WANDB_COUNT." >&2
 
-    local prev_log_dir="${LOG_DIR:-}"
-    local step_log_dir="${dir}/logs"
+  local prev_log_dir="${LOG_DIR:-}"
+  local step_log_dir="${dir}/logs"
   mkdir -p "$step_log_dir"
   export LOG_DIR="$step_log_dir"
 
@@ -942,10 +1105,15 @@ run_phase2_recheck_stage() {
   local incomplete="${recheck_dir}/recheck_incomplete.ok"
   local heartbeat_path="${recheck_dir}/heartbeat"
 
+  echo "[${step}] starting (logs=${step_log_dir} recheck_dir=${recheck_dir} grid_root=${GRID_DIR:-<unset>} source=${GRID_SOURCE_DIR:-<unset>})" >&2
+
+  phase2_try_recheck_fallback "$step" "${GRID_DIR:-${dir%/}}" || true
+
   if [[ -f "$sentinel" ]]; then
     echo "[$step] sentinel present; skipping" >&2
     phase2_promote_local_grid "$step"
     phase2_sync_grid_artifacts "$step"
+    phase2_publish_recheck_artifacts "$step" "${GRID_DIR:-${dir%/}}"
     restore_env_var LOG_DIR "$prev_log_dir"
     return 0
   fi
@@ -1087,7 +1255,12 @@ run_phase2_recheck_stage() {
   fi
 
   if [[ ! -f "$sentinel" ]]; then
+    phase2_try_recheck_fallback "$step" "${GRID_DIR:-${dir%/}}" || true
+  fi
+
+  if [[ ! -f "$sentinel" ]]; then
     echo "[$step][fatal] sentinel missing after successful recheck execution: $sentinel" >&2
+    phase2_cleanup_stale_sweep_stub "$step" "${GRID_DIR:-${dir%/}}"
     restore_env_var LOG_DIR "$prev_log_dir"
     return 4
   fi
@@ -1140,6 +1313,8 @@ PY
   unset PHASE2_SEED_WALL_SECS || true
   unset PHASE2_RECHECK_HEARTBEAT PHASE2_RECHECK_SENTINEL PHASE2_RECHECK_RESUME PHASE2_RECHECK_INCOMPLETE || true
   phase2_promote_local_grid "$step"
+  phase2_publish_recheck_artifacts "$step" "${GRID_DIR:-${dir%/}}"
+  echo "[${step}] finished (logs=${step_log_dir} recheck_dir=${recheck_dir})" >&2
   return 0
 }
 
@@ -1147,10 +1322,13 @@ run_phase2_export_stage() {
   local dir="$1" step="$2"
 
   phase2_step_diag "$step"
+  phase2_log_grid_roots "$step"
 
   phase2_promote_local_grid "$step"
   phase2_sync_grid_artifacts "$step"
   phase2_promote_grid_artifacts "$step"
+
+  echo "[${step}] starting (logs=${dir}/logs export_dir=${dir} grid_root=${GRID_DIR:-<unset>} source=${GRID_SOURCE_DIR:-<unset>})" >&2
 
   local sweep_id_file="${GRID_SOURCE_DIR}/phase2_sweep_id.txt"
   if [[ ! -f "$sweep_id_file" ]]; then
@@ -1167,6 +1345,11 @@ run_phase2_export_stage() {
   recheck_dir="$(stage_dir phase2_recheck)"
   local sentinel="${recheck_dir}/recheck_done.ok"
   local incomplete="${recheck_dir}/recheck_incomplete.ok"
+  local primary_root="${GRID_DIR:-${dir%/}}"
+
+  phase2_try_recheck_fallback "$step" "$primary_root" || true
+  echo "[${step}] checking recheck artifacts (sentinel=${sentinel} summary=${GRID_DIR}/recheck_summary.json best=${GRID_DIR}/best_grid_config.json)" >&2
+
   if [[ -f "$incomplete" ]]; then
     echo "[$step][fatal] recheck incomplete marker present: $incomplete. Rerun phase2_recheck before exporting." >&2
     restore_env_var LOG_DIR "$prev_log_dir"
@@ -1174,6 +1357,7 @@ run_phase2_export_stage() {
   fi
   if [[ ! -f "$sentinel" ]]; then
     echo "[$step][fatal] recheck sentinel missing: $sentinel. Complete phase2_recheck before export." >&2
+    phase2_cleanup_stale_sweep_stub "$step" "$primary_root"
     restore_env_var LOG_DIR "$prev_log_dir"
     return 4
   fi
@@ -1181,14 +1365,20 @@ run_phase2_export_stage() {
   local best_json="${GRID_DIR}/best_grid_config.json"
   local summary_json="${GRID_DIR}/recheck_summary.json"
 
+  if [[ ! -f "$best_json" || ! -f "$summary_json" ]]; then
+    phase2_try_recheck_fallback "$step" "$primary_root" || true
+  fi
+
   if [[ ! -f "$best_json" ]]; then
     echo "[$step][fatal] expected best_grid_config.json at $best_json but it is missing (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>})." >&2
+    phase2_cleanup_stale_sweep_stub "$step" "$primary_root"
     restore_env_var LOG_DIR "$prev_log_dir"
     return 3
   fi
 
   if [[ ! -f "$summary_json" ]]; then
     echo "[$step][fatal] expected recheck_summary.json at $summary_json but it is missing (GRID_EXP_ID=${GRID_EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>})." >&2
+    phase2_cleanup_stale_sweep_stub "$step" "$primary_root"
     restore_env_var LOG_DIR "$prev_log_dir"
     return 3
   fi
@@ -1273,7 +1463,10 @@ PY
     echo "[$step] cleared lineage sweep stub ${source_sweep_id} after export" >&2
   fi
 
-  printf '[%s] validated Phase-2 best configuration\n' "$step" | tee -a "${step_log_dir}/export.log" >/dev/null
+  printf "[%s] validated Phase-2 best configuration\n" "$step" | tee -a "${step_log_dir}/export.log" >/dev/null
+
+  phase2_publish_recheck_artifacts "$step" "$primary_root"
+  echo "[${step}] finished (logs=${step_log_dir} export_dir=${dir})" >&2
 
   restore_env_var LOG_DIR "$prev_log_dir"
   return 0
