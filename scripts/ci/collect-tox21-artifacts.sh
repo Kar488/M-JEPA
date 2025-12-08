@@ -30,7 +30,20 @@ chmod 600 "$key_path"
 
 REMOTE="${VAST_USER}@${VAST_HOST}"
 SSH_OPTS=(-i "$key_path" -p "$VAST_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
+copy_with_rsync=0
+rsync_path=""
+if command -v rsync >/dev/null 2>&1; then
+  rsync_path="$(command -v rsync)"
+  if [[ -x "$rsync_path" ]] && rsync --version >/dev/null 2>&1; then
+    copy_with_rsync=1
+  else
+    echo "[collect][warn] rsync present at ${rsync_path:-unknown} but unusable; falling back" >&2
+  fi
+else
+  echo "[collect][warn] rsync unavailable; will use scp/ssh fallbacks" >&2
+fi
 RSYNC=(rsync -avz --chmod=ugo=rwX -e "ssh ${SSH_OPTS[*]}")
+SCP=(scp -p -i "$key_path" -P "$VAST_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
 
 check_remote_reachable() {
   if ssh "${SSH_OPTS[@]}" "$REMOTE" "echo ok" >/dev/null 2>&1; then
@@ -81,10 +94,29 @@ collect_dir() {
     return 0
   fi
   mkdir -p "$local_path"
-  if ! "${RSYNC[@]}" "$REMOTE:${remote_path}/" "$local_path/" >/dev/null 2>&1; then
-    echo "[collect][warn] ${label}: rsync failed for $remote_path" >&2
+  if (( copy_with_rsync )); then
+    if "${RSYNC[@]}" "$REMOTE:${remote_path%/}/" "$local_path/" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "[collect][warn] ${label}: rsync failed for $remote_path; attempting scp" >&2
+  else
+    echo "[collect][warn] ${label}: rsync unavailable; attempting scp/ssh" >&2
+  fi
+
+  if command -v scp >/dev/null 2>&1; then
+    if "${SCP[@]}" -r "$REMOTE:${remote_path%/}" "$local_path/" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "[collect][warn] ${label}: scp failed for $remote_path; attempting tar stream" >&2
+  fi
+
+  local parent="${remote_path%/*}" basename="${remote_path##*/}"
+  [[ -z "$parent" || "$parent" == "$remote_path" ]] && parent="/"
+  if ssh "${SSH_OPTS[@]}" "$REMOTE" "cd '$parent' && tar -cf - '$basename'" | tar -xf - -C "$local_path"; then
     return 0
   fi
+
+  echo "[collect][warn] ${label}: all copy strategies failed for $remote_path" >&2
   return 0
 }
 
@@ -113,9 +145,7 @@ collect_files_matching() {
           [[ -z "$rel" ]] && continue
           local dest_path="${local_dir}/${rel}"
           mkdir -p "$(dirname "$dest_path")"
-          if ! "${RSYNC[@]}" "$REMOTE:${remote_dir}/${rel}" "$dest_path" >/dev/null 2>&1; then
-            echo "[collect][warn] failed to copy ${remote_dir}/${rel}" >&2
-          fi
+          copy_file "${remote_dir}/${rel}" "$dest_path" "${remote_dir}/${rel}"
         done <<<"$found"
       fi
     fi
@@ -134,9 +164,31 @@ copy_file() {
     return 0
   fi
   mkdir -p "$(dirname "$local_path")"
-  if ! "${RSYNC[@]}" "$REMOTE:${remote_path}" "$local_path" >/dev/null 2>&1; then
-    echo "[collect][warn] ${label}: rsync failed for $remote_path" >&2
+  if (( copy_with_rsync )); then
+    if "${RSYNC[@]}" "$REMOTE:${remote_path}" "$local_path" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "[collect][warn] ${label}: rsync failed for $remote_path; attempting scp" >&2
   fi
+
+  if command -v scp >/dev/null 2>&1; then
+    if "${SCP[@]}" "$REMOTE:${remote_path}" "$local_path" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "[collect][warn] ${label}: scp failed for $remote_path; attempting ssh stream" >&2
+  fi
+
+  if ssh "${SSH_OPTS[@]}" "$REMOTE" "cat '$remote_path'" >"$local_path"; then
+    local mtime
+    mtime="$(ssh "${SSH_OPTS[@]}" "$REMOTE" "stat -c '%y' '$remote_path'" 2>/dev/null || true)"
+    if [[ -n "$mtime" ]]; then
+      touch -d "$mtime" "$local_path" 2>/dev/null || true
+    fi
+    echo "[collect] copied ${label} from $remote_path via ssh stream" >&2
+    return 0
+  fi
+
+  echo "[collect][warn] ${label}: all copy strategies failed for $remote_path" >&2
 }
 
 # Stage outputs (tox21_*.json) live under stage-outputs/
