@@ -525,40 +525,48 @@ phase2_sync_grid_artifacts() {
   fi
 
   local source_dir="${source%/}"
-  local -a pairs=(
-    "${source_dir}/phase2_sweep_id.txt" "${dest_dir}/phase2_sweep_id.txt"
-    "${source_dir}/best_grid_config.json" "${dest_dir}/best_grid_config.json"
-    "${source_dir}/recheck_summary.json" "${dest_dir}/recheck_summary.json"
-  )
+  echo "[${step_label}] syncing grid artifacts source=${source_dir} dest=${dest_dir}" >&2
 
-  local idx=0
-  while (( idx < ${#pairs[@]} )); do
-    local src="${pairs[$idx]}"
-    local dst="${pairs[$((idx+1))]}"
-    ((idx+=2))
-
+  sync_pair() {
+    local src="$1" dst="$2" label="$3"
     if [[ "$src" == "$dst" ]]; then
-      continue
+      return 0
     fi
-    if [[ ! -f "$src" ]]; then
-      continue
+    local src_exists=0 dst_exists=0
+    [[ -f "$src" ]] && src_exists=1
+    [[ -f "$dst" ]] && dst_exists=1
+    if (( !src_exists && !dst_exists )); then
+      return 0
     fi
-    mkdir -p "$(dirname "$dst")" || continue
-    if ! cmp -s "$src" "$dst" 2>/dev/null; then
-      cp -f "$src" "$dst"
-      echo "[${step_label}] synced $(basename "$src") -> ${dst}" >&2
+
+    local src_mtime=0 dst_mtime=0
+    if (( src_exists )); then
+      src_mtime=$(stat -c %Y "$src" 2>/dev/null || echo 0)
     fi
-  done
+    if (( dst_exists )); then
+      dst_mtime=$(stat -c %Y "$dst" 2>/dev/null || echo 0)
+    fi
+
+    local from="$src" to="$dst"
+    if (( dst_exists && (!src_exists || dst_mtime > src_mtime) )); then
+      from="$dst"
+      to="$src"
+    fi
+
+    mkdir -p "$(dirname "$to")" || return 0
+    if ! cmp -s "$from" "$to" 2>/dev/null; then
+      cp -f "$from" "$to"
+      echo "[${step_label}] synced ${label:-$(basename "$from")} -> ${to}" >&2
+    fi
+  }
+
+  sync_pair "${source_dir}/phase2_sweep_id.txt" "${dest_dir}/phase2_sweep_id.txt" "phase2_sweep_id.txt"
+  sync_pair "${source_dir}/best_grid_config.json" "${dest_dir}/best_grid_config.json" "best_grid_config.json"
+  sync_pair "${source_dir}/recheck_summary.json" "${dest_dir}/recheck_summary.json" "recheck_summary.json"
 
   local sentinel_src="${source_dir}/phase2_recheck/recheck_done.ok"
   local sentinel_dst="$(stage_dir phase2_recheck)/recheck_done.ok"
-  if [[ -f "$sentinel_src" && "$sentinel_src" != "$sentinel_dst" ]]; then
-    mkdir -p "$(dirname "$sentinel_dst")" || return 0
-    if ! cmp -s "$sentinel_src" "$sentinel_dst" 2>/dev/null; then
-      cp -f "$sentinel_src" "$sentinel_dst"
-      echo "[${step_label}] synced $(basename "$sentinel_src") -> ${sentinel_dst}" >&2
-    fi
-  fi
+  sync_pair "$sentinel_src" "$sentinel_dst" "recheck_done.ok"
 }
 
 phase2_promote_grid_artifacts_single() {
@@ -1241,6 +1249,29 @@ with open(tmp, "w", encoding="utf-8") as handle:
     handle.write("\n")
 os.replace(tmp, path)
 PY
+
+  local archived_sweep_id="${outputs_dir}/phase2_sweep_id.txt"
+  local working_sweep_id="${GRID_DIR%/}/phase2_sweep_id.txt"
+  local source_sweep_id=""
+  if [[ -n "${GRID_SOURCE_DIR:-}" ]]; then
+    source_sweep_id="${GRID_SOURCE_DIR%/}/phase2_sweep_id.txt"
+  fi
+
+  if [[ -f "$working_sweep_id" ]]; then
+    mkdir -p "$(dirname "$archived_sweep_id")"
+    cp -f "$working_sweep_id" "$archived_sweep_id"
+    rm -f "$working_sweep_id"
+    echo "[$step] archived sweep id to ${archived_sweep_id} and cleared ${working_sweep_id}" >&2
+  fi
+
+  if [[ -n "$source_sweep_id" && "$source_sweep_id" != "$working_sweep_id" && -f "$source_sweep_id" ]]; then
+    if [[ ! -f "$archived_sweep_id" ]]; then
+      mkdir -p "$(dirname "$archived_sweep_id")"
+      cp -f "$source_sweep_id" "$archived_sweep_id"
+    fi
+    rm -f "$source_sweep_id"
+    echo "[$step] cleared lineage sweep stub ${source_sweep_id} after export" >&2
+  fi
 
   printf '[%s] validated Phase-2 best configuration\n' "$step" | tee -a "${step_log_dir}/export.log" >/dev/null
 
