@@ -1304,6 +1304,7 @@ class GraphDataset:
         labels_all: List[Any] = []
         smiles_all: List[str] = []
         labels_present = False
+        files_read: List[str] = []
 
         files = [
             f for f in os.listdir(dirpath) if f.lower().endswith(f".{ext.lower()}")
@@ -1366,6 +1367,10 @@ class GraphDataset:
             else:
                 raise ValueError(f"Unsupported ext: {ext}")
 
+            if len(ds.graphs) == 0:
+                continue
+
+            files_read.append(path)
             graphs_all.extend(ds.graphs)
             smiles_all.extend(ds.smiles or [])
             if ds.labels is not None:
@@ -1381,7 +1386,13 @@ class GraphDataset:
 
         labels = np.asarray(labels_all) if labels_present else None
         smiles = smiles_all if smiles_all else None
-        return cls(graphs_all, labels, smiles)
+        dataset = cls(graphs_all, labels, smiles)
+        try:
+            dataset.source_files = tuple(files_read)
+        except Exception:
+            # Accessory metadata only; ignore failures when attributes are frozen.
+            pass
+        return dataset
 
 
 # ------------------ Geometry helpers (angles/dihedrals) ------------------ #

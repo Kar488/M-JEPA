@@ -956,6 +956,7 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     """Add arguments common to multiple commands."""
 
     d = CommonArgDefaults.from_config(section)
+    p.set_defaults(_epochs_provided=False)
     p.add_argument("--add-3d", "--add_3d", dest="add_3d", action=BoolFlag, default=d.add_3d, help="Augment with 3D coordinate featurisation")
     p.add_argument("--cache-dir", type=str, default=d.cache_dir, help="Directory to cache processed graphs")
     p.add_argument("--contiguity", "--contiguous", dest="contiguity", action=BoolFlag, default=d.contiguous, help="Use contiguous subgraph masking (JEPA)")
@@ -965,7 +966,13 @@ def _add_common_args(p: argparse.ArgumentParser, section: str) -> None:
     p.add_argument("--aug-bond-deletion", "--aug_bond_deletion", dest="aug_bond_deletion", action=BoolFlag, default=d.aug_bond_deletion, help="Randomly delete bonds during pretraining")
     p.add_argument("--aug-atom-masking", "--aug_atom_masking", dest="aug_atom_masking", action=BoolFlag, default=d.aug_atom_masking, help="Mask random atom features during pretraining")
     p.add_argument("--aug-subgraph-removal", "--aug_subgraph_removal", dest="aug_subgraph_removal", action=BoolFlag, default=d.aug_subgraph_removal, help="Remove small subgraphs during pretraining")
-    p.add_argument("--epochs", type=int, default=d.epochs, help="Number of training epochs")
+    p.add_argument(
+        "--epochs",
+        type=int,
+        default=d.epochs,
+        action=_RecordProvided,
+        help="Number of training epochs",
+    )
     p.add_argument("--batch-size", type=int, default=d.batch_size, help="Batch size")
     p.add_argument("--lr", type=float, default=d.lr, help="Learning rate")
     p.add_argument("--seeds", type=int, nargs="*", default=d.seeds, help="Random seeds for averaging results")

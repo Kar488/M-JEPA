@@ -2,6 +2,12 @@
 #set -x   # bash prints each command before executing
 set -euo pipefail
 
+if [[ "${BESTCFG_NO_EPOCHS:-}" == "1" && -z "${PRETRAIN_FALLBACK_EPOCHS:-}" ]]; then
+  # When epochs are stripped from the best config, keep pretrain from collapsing
+  # to a single epoch by providing a sensible default.
+  export PRETRAIN_FALLBACK_EPOCHS=5
+fi
+
 ci_setup_vast_ssh_key() {
   local key="${SSH_KEY:-}"
   [[ -n "$key" ]] || return 0
