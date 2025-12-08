@@ -133,6 +133,30 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     Run one hyperparameter config (JEPA or contrastive) for W&B sweeps.
     Mirrors one row of grid-search, but logs directly to W&B.
     """
+    commit_hint = (
+        os.getenv("MJEPACI_COMMIT_SHA")
+        or os.getenv("GITHUB_SHA")
+        or os.getenv("CI_COMMIT_SHA")
+    )
+    if not commit_hint:
+        try:
+            import subprocess
+
+            commit_hint = (
+                subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True)
+                .strip()
+            )
+        except Exception:
+            commit_hint = "(unknown)"
+    recheck_env = {k: v for k, v in os.environ.items() if k.startswith("RECHECK_")}
+    print(
+        f"[sweep-run][debug] using sweep_run.py from {__file__}",
+        f"commit={commit_hint}",
+        f"cwd={os.getcwd()}",
+        f"recheck_env_keys={sorted(recheck_env.keys())}",
+        sep=" ",
+        flush=True,
+    )
     try:
         from experiments.grid_search import (
             AugmentationConfig,
@@ -815,6 +839,16 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             )
             print(f"[sweep-run] publishing payload: {payload}", flush=True)
             _wb_summary_update(payload)
+            try:
+                print(
+                    "[sweep-run] wb_summary_update complete",
+                    f"val_rmse={payload.get('val_rmse')}",
+                    f"keys={sorted(payload.keys())}",
+                    sep=" ",
+                    flush=True,
+                )
+            except Exception:
+                pass
         except Exception as exc:
             print(
                 f"[sweep-run] failed to publish canonical summary metrics: {exc}",
