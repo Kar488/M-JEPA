@@ -27,7 +27,7 @@ from . import log_effective_gnn
 # descriptor leak that triggers "Too many open files" crashes.
 torch.multiprocessing.set_sharing_strategy("file_system")
 
-from data.mdataset import GraphData
+from data.mdataset import GraphData, GraphDataset
 from data.scaffold_split import scaffold_split_indices
 from utils.graph_ops import _encode_graph
 from utils.pooling import global_mean_pool
