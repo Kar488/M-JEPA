@@ -35,7 +35,20 @@ fi
 
 REMOTE="${VAST_USER}@${VAST_HOST}"
 SSH_OPTS=(-i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
+copy_with_rsync=0
+rsync_path=""
+if command -v rsync >/dev/null 2>&1; then
+  rsync_path="$(command -v rsync)"
+  if [[ -x "$rsync_path" ]] && rsync --version >/dev/null 2>&1; then
+    copy_with_rsync=1
+  else
+    echo "[ci][warn] rsync present at ${rsync_path:-unknown} but unusable; falling back" >&2
+  fi
+else
+  echo "[ci][warn] rsync unavailable; will use scp/ssh fallbacks" >&2
+fi
 RSYNC=(rsync -avz --chmod=ugo=rwX -e "ssh ${SSH_OPTS[*]}")
+SCP=(scp -p -i "$KEY_PATH" -P "$VAST_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
 
 check_remote_reachable() {
   if ssh "${SSH_OPTS[@]}" "$REMOTE" "echo ok" >/dev/null 2>&1; then
@@ -48,6 +61,91 @@ check_remote_reachable() {
 }
 
 check_remote_reachable
+
+sync_remote_dir() {
+  local remote_dir="$1"
+  local local_dir="$2"
+  local label="$3"
+
+  if [[ -z "$remote_dir" ]]; then
+    return 0
+  fi
+  if ! ssh "${SSH_OPTS[@]}" "$REMOTE" "test -d '${remote_dir}'" >/dev/null 2>&1; then
+    echo "[ci][warn] ${label}: remote directory missing: ${remote_dir}" >&2
+    return 0
+  fi
+
+  mkdir -p "$local_dir"
+
+  if (( copy_with_rsync )); then
+    if "${RSYNC[@]}" "$REMOTE:${remote_dir%/}/" "$local_dir/" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "[ci][warn] ${label}: rsync failed for ${remote_dir}; attempting scp" >&2
+  else
+    echo "[ci][warn] ${label}: rsync unavailable; attempting scp/ssh" >&2
+  fi
+
+  if command -v scp >/dev/null 2>&1; then
+    if "${SCP[@]}" -r "$REMOTE:${remote_dir%/}" "$local_dir/" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "[ci][warn] ${label}: scp failed for ${remote_dir}; attempting tar stream" >&2
+  fi
+
+  local parent="${remote_dir%/*}" basename="${remote_dir##*/}"
+  [[ -z "$parent" || "$parent" == "$remote_dir" ]] && parent="/"
+  if ssh "${SSH_OPTS[@]}" "$REMOTE" "cd '${parent}' && tar -cf - '${basename}'" | tar -xf - -C "$local_dir"; then
+    return 0
+  fi
+
+  echo "[ci][warn] ${label}: all copy strategies failed for ${remote_dir}" >&2
+  return 0
+}
+
+sync_remote_file() {
+  local remote_file="$1"
+  local local_dir="$2"
+  local label="$3"
+
+  if [[ -z "$remote_file" ]]; then
+    return 0
+  fi
+  if ! ssh "${SSH_OPTS[@]}" "$REMOTE" "test -f '${remote_file}'" >/dev/null 2>&1; then
+    echo "[ci][warn] ${label}: remote file missing: ${remote_file}" >&2
+    return 0
+  fi
+
+  mkdir -p "$local_dir"
+
+  if (( copy_with_rsync )); then
+    if "${RSYNC[@]}" "$REMOTE:${remote_file}" "$local_dir/" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "[ci][warn] ${label}: rsync failed for ${remote_file}; attempting scp" >&2
+  fi
+
+  if command -v scp >/dev/null 2>&1; then
+    if "${SCP[@]}" "$REMOTE:${remote_file}" "$local_dir/" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "[ci][warn] ${label}: scp failed for ${remote_file}; attempting ssh stream" >&2
+  fi
+
+  local dest_path="${local_dir}/$(basename "$remote_file")"
+  if ssh "${SSH_OPTS[@]}" "$REMOTE" "cat '${remote_file}'" >"$dest_path"; then
+    local mtime
+    mtime="$(ssh "${SSH_OPTS[@]}" "$REMOTE" "stat -c '%y' '${remote_file}'" 2>/dev/null || true)"
+    if [[ -n "$mtime" ]]; then
+      touch -d "$mtime" "$dest_path" 2>/dev/null || true
+    fi
+    echo "[ci] copied ${label} via ssh stream from ${remote_file}" >&2
+    return 0
+  fi
+
+  echo "[ci][warn] ${label}: all copy strategies failed for ${remote_file}" >&2
+  return 0
+}
 
 discover_remote_phase2_lineage() {
   local target_dir="${GRID_DIR:-}" target_id="${GRID_EXP_ID:-}" need_lookup=0
@@ -533,19 +631,13 @@ collect_tree() {
       continue
     fi
 
-    if ! "${RSYNC[@]}" "$REMOTE:${remote_dir%/}/logs/" "$local_dir/logs" 2>/dev/null; then
-      echo "[ci][warn] missing or empty logs for $label/$step at ${remote_dir%/}/logs" >&2
-    fi
-    if ! "${RSYNC[@]}" "$REMOTE:${remote_dir%/}/stage-outputs/" "$local_dir/stage-outputs" 2>/dev/null; then
-      echo "[ci][warn] missing stage outputs for $label/$step at ${remote_dir%/}/stage-outputs" >&2
-    fi
+    sync_remote_dir "${remote_dir%/}/logs" "$local_dir/logs" "${label}/${step} logs"
+    sync_remote_dir "${remote_dir%/}/stage-outputs" "$local_dir/stage-outputs" "${label}/${step} stage-outputs"
   done
 
   mkdir -p "${dest_root}/grid"
   for name in best_grid_config.json recheck_summary.json grid_state.json; do
-    if "${RSYNC[@]}" "$REMOTE:${remote_grid}/${name}" "${dest_root}/grid/" 2>/dev/null; then
-      continue
-    fi
+    sync_remote_file "${remote_grid}/${name}" "${dest_root}/grid" "${label} ${name}" && continue
 
     local fallback=""
     if fallback=$(ssh "${SSH_OPTS[@]}" "$REMOTE" \
@@ -554,7 +646,7 @@ collect_tree() {
     fi
 
     if [[ -n "$fallback" ]]; then
-      "${RSYNC[@]}" "$REMOTE:${remote_grid%/}/${fallback}" "${dest_root}/grid/" 2>/dev/null || true
+      sync_remote_file "${remote_grid%/}/${fallback}" "${dest_root}/grid" "${label} ${name} (fallback)"
     else
       echo "[ci][warn] unable to copy ${name} from ${remote_grid} (${label})" >&2
     fi
@@ -571,7 +663,7 @@ collect_tree() {
     mkdir -p "${dest_root}/grid/helpers"
     for rel in "${helper_files[@]}"; do
       [[ -z "$rel" ]] && continue
-      "${RSYNC[@]}" "$REMOTE:${remote_grid}/${rel}" "${dest_root}/grid/helpers/" 2>/dev/null || true
+      sync_remote_file "${remote_grid}/${rel}" "${dest_root}/grid/helpers" "${label} helper ${rel}" || true
     done
   fi
 }
