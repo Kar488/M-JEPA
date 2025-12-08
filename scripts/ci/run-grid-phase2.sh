@@ -359,5 +359,12 @@ fi
 
 steps=(phase2_sweep phase2_recheck phase2_export)
 for step in "${steps[@]}"; do
-  "$STAGE_BIN" "$step"
+  echo "[ci][phase2] starting ${step} (GRID_DIR=${GRID_DIR:-<unset>} GRID_SOURCE_DIR=${GRID_SOURCE_DIR:-<unset>} EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>})" >&2
+  if "$STAGE_BIN" "$step"; then
+    echo "[ci][phase2] finished ${step}" >&2
+  else
+    rc=$?
+    echo "[ci][phase2][fatal] ${step} failed (rc=${rc})" >&2
+    exit "$rc"
+  fi
 done
