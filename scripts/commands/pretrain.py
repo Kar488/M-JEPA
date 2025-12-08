@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import math
 import os
 import sys
 import time
 import random
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 import torch
+try:  # pragma: no cover - optional dependency
+    from tabulate import tabulate
+except Exception:  # pragma: no cover
+    tabulate = None  # type: ignore[assignment]
 
 try:
     from utils.wandb_filters import silence_pydantic_field_warnings
@@ -22,6 +28,20 @@ except Exception:  # pragma: no cover - helper optional in minimal installs
 from . import log_effective_gnn
 
 stage_config: Dict[str, Any] = {}
+_TOX21_ASSAYS: Sequence[str] = (
+    "NR-AR",
+    "NR-AR-LBD",
+    "NR-AhR",
+    "NR-Aromatase",
+    "NR-ER",
+    "NR-ER-LBD",
+    "NR-PPAR-gamma",
+    "SR-ARE",
+    "SR-ATAD5",
+    "SR-HSE",
+    "SR-MMP",
+    "SR-p53",
+)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -212,6 +232,112 @@ def _metric_is_better(new: Dict[str, Any], old: Optional[Dict[str, Any]]) -> boo
     return new_val < old_val
 
 
+def _candidate_phase2_winner_paths() -> Iterable[str]:
+    candidates = [
+        os.getenv("PHASE2_WINNER_CONFIG"),
+        os.getenv("PHASE2_WINNER_CSV"),
+    ]
+
+    grid_dir = os.getenv("GRID_DIR")
+    grid_exp = os.getenv("GRID_EXP_ID")
+    grid_source = os.getenv("GRID_SOURCE_DIR")
+    grid_cache = os.getenv("GRID_CACHE_DIR")
+
+    for root in (grid_dir, grid_source, grid_cache):
+        if root:
+            candidates.append(os.path.join(root, "phase2_winner_config.csv"))
+            if grid_exp:
+                candidates.append(
+                    os.path.join(root, grid_exp, "phase2_winner_config.csv")
+                )
+
+    for root in ("/data/mjepa/cache/grid", "/cache/grid"):
+        candidates.append(os.path.join(root, "phase2_winner_config.csv"))
+
+    return [c for c in candidates if c]
+
+
+def _load_phase2_winner_record() -> Optional[Dict[str, Any]]:
+    for candidate in _candidate_phase2_winner_paths():
+        if not candidate or not os.path.isfile(candidate):
+            continue
+        try:
+            with open(candidate, "r", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                first = next(reader, None)
+                if first is not None:
+                    logger.info("[pretrain] loaded Phase-2 winner config from %s", candidate)
+                    return first
+        except Exception:
+            logger.debug("Failed to parse Phase-2 winner config at %s", candidate, exc_info=True)
+    return None
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _extract_baseline_settings(record: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    baseline: Dict[str, Any] = {}
+    if record:
+        for key, value in record.items():
+            key_lower = key.lower()
+            if not key_lower.startswith("config."):
+                continue
+            stripped = key_lower[len("config.") :]
+            if stripped.startswith("baseline_"):
+                name = stripped[len("baseline_") :]
+                if name in {"hidden_dim", "num_layers"}:
+                    baseline[name] = _coerce_float(value) or value
+                elif name in {"lr", "learning_rate"}:
+                    lr_val = _coerce_float(value)
+                    if lr_val is not None:
+                        baseline["learning_rate"] = lr_val
+                elif name == "gnn_type":
+                    baseline["gnn_type"] = value
+
+    baseline.setdefault("gnn_type", os.getenv("BASELINE_GNN_TYPE", "gcn"))
+    baseline.setdefault(
+        "learning_rate",
+        _coerce_float(os.getenv("BASELINE_LR", None))
+        if os.getenv("BASELINE_LR") is not None
+        else 2e-5,
+    )
+    if "hidden_dim" not in baseline:
+        env_dim = _coerce_float(os.getenv("BASELINE_HIDDEN_DIM", None))
+        if env_dim is not None:
+            baseline["hidden_dim"] = env_dim
+    if "num_layers" not in baseline:
+        env_layers = _coerce_float(os.getenv("BASELINE_NUM_LAYERS", None))
+        if env_layers is not None:
+            baseline["num_layers"] = env_layers
+
+    return baseline
+
+
+def _render_table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
+    if tabulate is None:
+        # Manual fallback to avoid importing optional dependency in minimal envs
+        col_widths = [len(str(h)) for h in headers]
+        for row in rows:
+            for idx, cell in enumerate(row):
+                col_widths[idx] = max(col_widths[idx], len(str(cell)))
+
+        def _fmt(row_vals: Sequence[Any]) -> str:
+            return " | ".join(str(val).ljust(col_widths[i]) for i, val in enumerate(row_vals))
+
+        divider = "-+-".join("-" * w for w in col_widths)
+        parts = [_fmt(headers), divider]
+        for row in rows:
+            parts.append(_fmt(row))
+        return "\n".join(parts)
+
+    return tabulate(rows, headers=headers, tablefmt="github")
+
+
 def _collect_run_metadata(wb) -> Dict[str, Any]:
     run = getattr(wb, "run", None)
     if run is None:
@@ -337,6 +463,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
     os.makedirs(args.ckpt_dir, exist_ok=True)
     save_every = max(1, int(getattr(args, "save_every", 1)))
     start_epoch = 0
+    num_source_files = 0
 
     if getattr(args, "resume_ckpt", None):
         _wb_log(wb, {"phase": "pretrain", "status": "resume", "ckpt": args.resume_ckpt})
@@ -382,13 +509,35 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 n_rows_per_file=rows_per_file,
                 max_graphs=sample_ul,
             )  # type: ignore[arg-type]
+            source_files = getattr(unlabeled, "source_files", None)
+            num_source_files = len(source_files) if source_files else 0
+            if not num_source_files:
+                try:
+                    num_source_files = len(
+                        [
+                            f
+                            for f in os.listdir(args.unlabeled_dir)
+                            if f.lower().endswith(".parquet")
+                        ]
+                    )
+                except Exception:
+                    num_source_files = 0
+
             logger.info(
-                "Loaded unlabeled dataset in %.2fs (%s graphs)",
-                time.time() - t0,
+                "Loaded unlabeled dataset with %s graphs from %s files in %.2fs",
                 len(unlabeled),
+                num_source_files or "<unknown>",
+                time.time() - t0,
             )
 
-            _wb_log(wb, {"phase": "data_load", "unlabeled_graphs": len(unlabeled)})
+            _wb_log(
+                wb,
+                {
+                    "phase": "data_load",
+                    "unlabeled_graphs": len(unlabeled),
+                    "unlabeled_files": num_source_files,
+                },
+            )
         except Exception:
             logger.exception("Failed to load unlabeled dataset")
             _wb_log(wb, {"phase": "data_load", "status": "error"})
@@ -401,6 +550,40 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             else unlabeled.graphs[0].edge_attr.shape[1]
         )
         device = resolve_device(args.device)
+
+        steps_per_epoch = max(1, math.ceil(len(unlabeled) / max(1, args.batch_size)))
+        max_pretrain_batches = max(0, int(getattr(args, "max_pretrain_batches", 0) or 0))
+        epochs_source = "cli"
+        fallback_epochs_env = _coerce_float(os.getenv("PRETRAIN_FALLBACK_EPOCHS"))
+        if not getattr(args, "_epochs_provided", False) and os.getenv("BESTCFG_NO_EPOCHS") == "1":
+            if max_pretrain_batches and steps_per_epoch:
+                args.epochs = max(1, math.ceil(max_pretrain_batches / steps_per_epoch))
+                epochs_source = "derived_from_max_pretrain_batches"
+            else:
+                default_epochs = int(fallback_epochs_env) if fallback_epochs_env else 5
+                args.epochs = max(int(args.epochs or 0), default_epochs)
+                epochs_source = "fallback_default"
+
+        effective_steps_per_epoch = steps_per_epoch
+        if max_pretrain_batches:
+            effective_steps_per_epoch = min(steps_per_epoch, max_pretrain_batches)
+        est_total_steps = int(args.epochs * effective_steps_per_epoch)
+        logger.info(
+            "[pretrain] epochs=%s (source=%s, steps/epoch≈%s, capped_batches=%s, est_total_steps≈%s)",
+            args.epochs,
+            epochs_source,
+            steps_per_epoch,
+            max_pretrain_batches or "<none>",
+            est_total_steps,
+        )
+        _wb_log(
+            wb,
+            {
+                "pretrain/epochs": args.epochs,
+                "pretrain/steps_per_epoch": steps_per_epoch,
+                "pretrain/total_estimated_steps": est_total_steps,
+            },
+        )
 
         # Build encoder and EMA copy
         encoder = build_encoder(
@@ -566,6 +749,52 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 logger.exception("Contrastive pretraining failed")
                 _wb_log(wb, {"phase": "pretrain_contrastive", "status": "error"})
                 sys.exit(2)
+
+        baseline_record = _load_phase2_winner_record()
+        baseline_cfg = _extract_baseline_settings(baseline_record)
+        pretrain_cfg = {
+            "gnn_type": args.gnn_type,
+            "hidden_dim": args.hidden_dim,
+            "num_layers": args.num_layers,
+            "mask_ratio": args.mask_ratio,
+            "ema_decay": args.ema_decay,
+            "learning_rate": args.lr,
+            "epochs": args.epochs,
+            "graphs": len(unlabeled),
+            "files": num_source_files,
+        }
+
+        table_headers = [
+            "assay",
+            "pretrain_gnn",
+            "baseline_gnn",
+            "pretrain_lr",
+            "baseline_lr",
+            "graphs",
+            "hidden_dim",
+        ]
+        table_rows: List[List[Any]] = []
+        for assay in _TOX21_ASSAYS:
+            table_rows.append(
+                [
+                    assay,
+                    pretrain_cfg.get("gnn_type"),
+                    baseline_cfg.get("gnn_type"),
+                    pretrain_cfg.get("learning_rate"),
+                    baseline_cfg.get("learning_rate"),
+                    pretrain_cfg.get("graphs"),
+                    pretrain_cfg.get("hidden_dim"),
+                ]
+            )
+
+        table_str = _render_table(table_headers, table_rows)
+        logger.info("[pretrain] pretrain vs baseline hyper-parameters:\n%s", table_str)
+        wandb_payload: Dict[str, Any] = {"pretrain_vs_baseline": table_str}
+        for key, value in pretrain_cfg.items():
+            wandb_payload[f"pretrain/{key}"] = value
+        for key, value in baseline_cfg.items():
+            wandb_payload[f"baseline/{key}"] = value
+        _wb_log(wb, wandb_payload)
 
         # Save checkpoints
         ckpt_base = args.output
