@@ -104,7 +104,7 @@ collect_dir() {
   fi
 
   if command -v scp >/dev/null 2>&1; then
-    if "${SCP[@]}" -r "$REMOTE:${remote_path%/}" "$local_path/" >/dev/null 2>&1; then
+    if "${SCP[@]}" -r "$REMOTE:${remote_path%/}/." "$local_path/" >/dev/null 2>&1; then
       return 0
     fi
     echo "[collect][warn] ${label}: scp failed for $remote_path; attempting tar stream" >&2
