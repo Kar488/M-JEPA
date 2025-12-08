@@ -405,6 +405,13 @@ def _metric_candidates(metric: str) -> List[str]:
     _add_variants(base)
 
     lower = base.lower()
+    # If the metric already uses a dotted or slashed namespace, avoid expanding
+    # it into suffix/prefix variants that can over-match unrelated keys.
+    if any(sep in base for sep in ("/", ".")):
+        if lower != base:
+            _add_variants(lower)
+        return candidates
+
     prefixes = ("val_", "val.", "val/", "validation_", "validation.", "validation/")
     core = lower
     for prefix in prefixes:
