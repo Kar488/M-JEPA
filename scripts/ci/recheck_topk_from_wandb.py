@@ -382,12 +382,57 @@ def _norm_cfg(cfg: Mapping[str, Any]) -> Dict[str, Any]:
     return out
 
 def _metric_candidates(metric: str) -> List[str]:
-    candidates = [metric]
-    if "/" in metric:
-        candidates.append(metric.replace("/", "."))
-    if "." in metric:
-        candidates.append(metric.replace(".", "/"))
-    return list(dict.fromkeys(candidates))
+    base = str(metric).strip()
+    candidates: List[str] = []
+    seen: set[str] = set()
+
+    def _add(key: str) -> None:
+        k = key.strip()
+        if not k or k in seen:
+            return
+        seen.add(k)
+        candidates.append(k)
+
+    def _add_variants(name: str) -> None:
+        _add(name)
+        for repl in ("/", "."):
+            _add(name.replace("_", repl))
+        if "/" in name:
+            _add(name.replace("/", "."))
+        if "." in name:
+            _add(name.replace(".", "/"))
+
+    _add_variants(base)
+
+    lower = base.lower()
+    prefixes = ("val_", "val.", "val/", "validation_", "validation.", "validation/")
+    core = lower
+    for prefix in prefixes:
+        if core.startswith(prefix):
+            core = core[len(prefix) :]
+            break
+    if core and core != lower:
+        _add_variants(core)
+
+    common_suffixes = ("_mean", ".mean", "/mean", ".value", "/value")
+    for name in list(candidates):
+        for suffix in common_suffixes:
+            _add(name + suffix)
+
+    # Explicitly include historical metric spellings for RMSE-style probes.
+    if "rmse" in core or "rmse" in lower:
+        for alias in (
+            "rmse",
+            "rmse_mean",
+            "rmse/value",
+            "rmse.mean",
+            "metrics/rmse",
+            "metrics.rmse",
+            "probe_rmse_mean",
+        ):
+            _add_variants(alias)
+
+    return candidates
 
 
 def _history_latest(run: Any, candidates: Sequence[str], limit: int = 512) -> Tuple[Optional[float], Optional[str]]:
@@ -478,17 +523,34 @@ def metric_of(run: Any, name: str, default: Optional[float] = None) -> Optional[
             if payload:
                 summary_sources.append(payload)
 
+    summary_keys: List[str] = []
     # Try summaries first (fast path)
     for summary in summary_sources:
+        try:
+            summary_keys.extend(list(summary.keys()))
+        except Exception:
+            pass
         for candidate in candidates:
-            numeric = _coerce_numeric(_lookup_nested(summary, candidate))
-            if numeric is not None:
-                return numeric
+            for alias in (candidate, f"{candidate}_mean", f"{candidate}.mean", f"{candidate}/mean", f"{candidate}.value", f"{candidate}/value"):
+                numeric = _coerce_numeric(_lookup_nested(summary, alias))
+                if numeric is not None:
+                    return numeric
 
     # 2) History fallback: latest non-NaN/finite across candidates
     history_value, _ = _history_latest(run, candidates)
     if history_value is not None:
         return history_value
+
+    run_id = _safe_getattr(run, "id") or _safe_getattr(run, "name") or "(unknown)"
+    try:
+        summary_preview = dict(list(summary_sources[0].items())[:10]) if summary_sources else {}
+    except Exception:
+        summary_preview = {}
+    print(
+        f"[recheck][debug] metric '{name}' not found for run {run_id}; candidates={candidates}; "
+        f"summary_keys={sorted(set(summary_keys))}; summary_preview={summary_preview}",
+        flush=True,
+    )
 
     return default
 
@@ -510,6 +572,12 @@ def pick_topk(api: wandb.Api, sweep: Any, metric: str, maximize: bool, k: int,
         "missing": [],
         "method_counts": Counter(),
     }
+
+    metric_candidates = _metric_candidates(metric)
+    print(
+        f"[recheck] metric candidates for '{metric}': {metric_candidates}",
+        flush=True,
+    )
 
     if isinstance(sweep, str):
         sweep_path = sweep
@@ -629,6 +697,12 @@ def run_once(
         "--unlabeled-dir", unlabeled,
         "--labeled-dir", labeled,
     ]
+
+    print(
+        f"[recheck][launch] program={program} subcmd={subcmd} use_wandb=1 ",
+        f"cwd={os.getcwd()} device_mask={device_mask} APP_DIR={env.get('APP_DIR')}",
+        flush=True,
+    )
 
     method = str(cfg.get("training_method", "jepa")).lower()
     args += ["--training_method", method]
