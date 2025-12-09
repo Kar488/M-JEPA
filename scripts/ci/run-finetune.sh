@@ -3,7 +3,7 @@ set -euo pipefail
 
 trap 'echo "[ci] error at line $LINENO: $BASH_COMMAND" >&2' ERR
 
-export BESTCFG_NO_EPOCHS=1              # drop both epochs from best_config
+unset BESTCFG_NO_EPOCHS
 export MJEPACI_STAGE="finetune"
 
 source "$(dirname "$0")/common.sh"

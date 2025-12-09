@@ -362,6 +362,20 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         logger.error("Pretraining modules are unavailable.")
         sys.exit(2)
 
+    if getattr(args, "pretrain_epochs", None) is None:
+        args.pretrain_epochs = getattr(args, "epochs", None)
+
+    if getattr(args, "_pretrain_epochs_provided", False):
+        setattr(args, "_epochs_provided", True)
+
+    target_epochs = args.pretrain_epochs
+    if target_epochs is None:
+        target_epochs = getattr(args, "epochs", None)
+    if target_epochs is None:
+        target_epochs = 1
+    args.pretrain_epochs = target_epochs
+    args.epochs = target_epochs
+
     # W&B run
     wb = maybe_init_wandb(
         args.use_wandb,
@@ -374,6 +388,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             "num_layers": args.num_layers,
             "mask_ratio": args.mask_ratio,
             "epochs": args.epochs,
+            "pretrain_epochs": args.pretrain_epochs,
             "batch_size": args.batch_size,
             "lr": args.lr,
             "temperature": args.temperature,
@@ -573,6 +588,15 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             _wb_log(wb, {"phase": "data_load", "status": "error"})
             sys.exit(1)
 
+        graphs = getattr(unlabeled, "graphs", None)
+        if not graphs:
+            logger.error(
+                "No unlabeled graphs found in %s. Check that --unlabeled-dir points to the ZINC dataset, not the cache.",
+                args.unlabeled_dir,
+            )
+            _wb_log(wb, {"phase": "data_load", "status": "error", "unlabeled_graphs": 0})
+            return
+
         input_dim = unlabeled.graphs[0].x.shape[1]
         edge_dim = (
             None
@@ -592,9 +616,11 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         if not getattr(args, "_epochs_provided", False) and os.getenv("BESTCFG_NO_EPOCHS") == "1":
             if max_pretrain_batches and steps_per_epoch:
                 args.epochs = max(1, math.ceil(max_pretrain_batches / steps_per_epoch))
+                args.pretrain_epochs = args.epochs
                 epochs_source = "derived_from_max_pretrain_batches"
             else:
                 args.epochs = max(int(args.epochs or 0), dataset_aware_default)
+                args.pretrain_epochs = args.epochs
                 epochs_source = "dataset_default"
 
         effective_steps_per_epoch = steps_per_epoch

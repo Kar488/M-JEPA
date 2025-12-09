@@ -3,6 +3,8 @@ set -euo pipefail
 
 trap 'echo "[ci] error at line $LINENO: $BASH_COMMAND" >&2' ERR
 
+unset BESTCFG_NO_EPOCHS
+
 if [[ -z "${PRETRAIN_SAMPLE_UNLABELED:-}" ]]; then
   BESTCFG_SKIP="sample_unlabeled ${BESTCFG_SKIP:-}"
 else
@@ -175,7 +177,6 @@ EOF
   [[ -f "$expected_manifest" ]]
 }
 
-export BESTCFG_NO_EPOCHS=1              # drop both epochs from best_config
 export MJEPACI_STAGE="pretrain"
 
 if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then

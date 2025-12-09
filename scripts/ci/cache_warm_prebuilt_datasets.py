@@ -198,6 +198,24 @@ def _ensure_dir(path: str, name: str) -> str:
     return resolved
 
 
+def _validate_dataset_root(dirpath: str, name: str) -> List[Tuple[str, str]]:
+    normalized = dirpath.rstrip(os.sep)
+    suffix = os.path.basename(normalized)
+    if suffix.startswith("graphs_"):
+        raise FileNotFoundError(
+            f"{name} directory points to a cache root ({normalized}); pass the source dataset instead"
+        )
+
+    files = _list_dataset_files(normalized)
+    if not files:
+        raise FileNotFoundError(
+            f"No parquet/csv shards found in {normalized} for the {name} dataset;"
+            " ensure --"
+            f"{name}-dir targets the ZINC corpus, not an empty cache"
+        )
+    return files
+
+
 def _log(msg: str) -> None:
     print(f"[cache-warm] {msg}", flush=True)
 
@@ -672,7 +690,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     unlabeled_dir = _ensure_dir(args.unlabeled_dir, "unlabeled")
     labeled_dir = _ensure_dir(args.labeled_dir, "labeled")
+    unlabeled_files = _validate_dataset_root(unlabeled_dir, "unlabeled")
+    labeled_files = _validate_dataset_root(labeled_dir, "labeled")
     cache_dir = _normalize_cache_dir(args.cache_dir)
+
+    sample_unlabeled = args.sample_unlabeled
+    cache_suffix = os.path.basename(cache_dir.rstrip(os.sep))
+    if cache_suffix == "graphs_10m" and sample_unlabeled == _DEFAULT_SAMPLE_UNLABELED:
+        sample_unlabeled = 0
+        _log(
+            "detected graphs_10m cache target; overriding default sample-unlabeled to stream the full dataset"
+        )
 
     cache_root = dataset_cache.prepare_cache_root(cache_dir, enabled=True)
     if not cache_root:
@@ -681,8 +709,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     _log(
         f"warming dataset caches at {cache_root} (add_3d={int(bool(args.add_3d))}, force={int(bool(args.force))})"
     )
+    _log(
+        f"discovered {len(unlabeled_files)} unlabeled shard(s) and {len(labeled_files)} labeled shard(s);"
+        " cache inputs stay anchored to the dataset roots"
+    )
 
-    unlabeled_payload = _normalized_payload(unlabeled_dir, args.add_3d, args.sample_unlabeled, None)
+    unlabeled_payload = _normalized_payload(unlabeled_dir, args.add_3d, sample_unlabeled, None)
     unlabeled_builder = _make_streaming_builder(
         kind="unlabeled",
         payload=unlabeled_payload,
@@ -690,7 +722,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         cache_root=cache_root,
         label_col=None,
         add_3d=bool(args.add_3d),
-        sample=args.sample_unlabeled,
+        sample=sample_unlabeled,
         per_run_limit=args.max_graphs_per_run,
         chunk_size=args.stream_chunk_size,
         num_workers=args.num_workers,
@@ -702,7 +734,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         payload=unlabeled_payload,
         builder=unlabeled_builder,
         cache_root=cache_root,
-        sample=args.sample_unlabeled,
+        sample=sample_unlabeled,
         per_run_limit=args.max_graphs_per_run,
         force=args.force,
         log=_log,

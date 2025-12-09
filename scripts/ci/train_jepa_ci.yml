@@ -34,7 +34,7 @@ grid_search:
   sample_unlabeled: 100000
   sample_labeled: 5000
   n_rows_per_file: 1000
-  max_pretrain_batches: 200
+  max_pretrain_batches: 0
   max_finetune_batches: 0
   time_budget_mins: 540
   force_tqdm: true
@@ -50,9 +50,10 @@ pretrain:
   n_rows_per_file: 1000
   ckpt_dir: ${PRETRAIN_DIR}
   save_every: 1
-  pretrain_epochs: ${PRETRAIN_EPOCHS:-3}    # maps to --epochs for "pretrain"
+  pretrain_epochs: ${PRETRAIN_EPOCHS:-3}    # maps to --pretrain-epochs for "pretrain"
   pretrain_batch_size: 256
   sample_unlabeled: 10000000
+  max_pretrain_batches: 0
   output: ${PRETRAIN_DIR}/encoder.pt
   force_tqdm: true
   use_wandb: true

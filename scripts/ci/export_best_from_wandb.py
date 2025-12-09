@@ -927,9 +927,13 @@ def main():
         ),
     )
     # phase-2 data roots (externalizable via CI YAML/env)
-    ap.add_argument("--phase2_unlabeled_dir", "--phase2-unlabeled-dir",
-                    dest="phase2_unlabeled_dir",
-                    default=os.path.join(APP_DIR, "data", "ZINC-canonicalized"))
+    ap.add_argument(
+        "--phase2_unlabeled_dir",
+        "--phase2-unlabeled-dir",
+        dest="phase2_unlabeled_dir",
+        default=os.path.join(APP_DIR, "data", "ZINC-canonicalized"),
+        help="Directory of the source unlabeled dataset (e.g., ZINC-canonicalized)",
+    )
     ap.add_argument("--phase2_labeled_dir", "--phase2-labeled-dir",
                     dest="phase2_labeled_dir",
                     default=os.path.join(APP_DIR, "data", "katielinkmoleculenet_benchmark", "train"))
