@@ -588,6 +588,15 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             _wb_log(wb, {"phase": "data_load", "status": "error"})
             sys.exit(1)
 
+        graphs = getattr(unlabeled, "graphs", None)
+        if not graphs:
+            logger.error(
+                "No unlabeled graphs found in %s. Check that --unlabeled-dir points to the ZINC dataset, not the cache.",
+                args.unlabeled_dir,
+            )
+            _wb_log(wb, {"phase": "data_load", "status": "error", "unlabeled_graphs": 0})
+            return
+
         input_dim = unlabeled.graphs[0].x.shape[1]
         edge_dim = (
             None
