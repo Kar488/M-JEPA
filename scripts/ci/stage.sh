@@ -894,7 +894,7 @@ PY
   fi
 
   : "${PHASE2_LABELED_DIR:=$APP_DIR/data/katielinkmoleculenet_benchmark/train}"
-  : "${PHASE2_UNLABELED_DIR:=$APP_DIR/data/ZINC-canonicalized}"
+  : "${PHASE2_UNLABELED_DIR:=${CACHE_DIR:-$APP_DIR/cache/graphs_10m}}"
 
   if (( ! sweep_exhausted )); then
     if [[ ! -d "$PHASE2_LABELED_DIR" ]]; then
@@ -1091,7 +1091,7 @@ run_phase2_recheck_stage() {
   : "${EXTRA_SEEDS:=3}"
   : "${PHASE2_METRIC:=val_rmse}"
   : "${PHASE2_DIRECTION:=min}"
-  : "${PHASE2_UNLABELED_DIR:=$APP_DIR/data/ZINC-canonicalized}"
+  : "${PHASE2_UNLABELED_DIR:=${CACHE_DIR:-$APP_DIR/cache/graphs_10m}}"
   : "${PHASE2_LABELED_DIR:=$APP_DIR/data/katielinkmoleculenet_benchmark/train}"
   : "${PHASE2_RECHECK_WALL_MINS:=540}"
   : "${PHASE2_SEED_WALL_MINS:=}"

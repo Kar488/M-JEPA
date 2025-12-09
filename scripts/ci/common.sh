@@ -2489,7 +2489,7 @@ grid_only = {
 pretrain_only = {
     "mask_ratio": "--mask-ratio",
     "pretrain_batch_size": "--batch-size",
-    "pretrain_epochs": "--epochs",
+    "pretrain_epochs": "--pretrain-epochs",
     "save_every": "--save-every",
     "sample_unlabeled": "--sample-unlabeled",
 }
