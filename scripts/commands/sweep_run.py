@@ -752,16 +752,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     if val_rmse is not None:
         payload["val_rmse"] = val_rmse
 
-    try:
-        print(
-            "[sweep-run] payload snapshot before summary sync:",
-            f"keys={sorted(payload.keys())}",
-            f"val_rmse={payload.get('val_rmse')}",
-            flush=True,
-        )
-    except Exception:
-        pass
-
     best_step = _infer_best_step(payload)
     payload["best_step"] = best_step
 
@@ -779,16 +769,9 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             except Exception as exc:
                 print(f"[sweep-run] direct wandb.log failed: {exc}", flush=True)
             try:
-                print(
-                    "[sweep-run] direct summary update payload keys:",
-                    sorted(payload.keys()),
-                    flush=True,
-                )
+                
                 direct_run.summary.update(payload)
-                print(
-                    f"[sweep-run] direct run.summary.update succeeded (keys={list(payload.keys())})",
-                    flush=True,
-                )
+                
             except Exception as exc:
                 print(f"[sweep-run] direct run.summary.update failed: {exc}", flush=True)
         else:
@@ -835,25 +818,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     # logging metrics via wandb.log and updating the run summary.
     if should_publish_summary:
         try:
-            print(
-                "[sweep-run] wb_summary_update payload keys:",
-                sorted(payload.keys()),
-                "val_rmse=",
-                payload.get("val_rmse"),
-                flush=True,
-            )
-            print(f"[sweep-run] publishing payload: {payload}", flush=True)
             _wb_summary_update(payload)
-            try:
-                print(
-                    "[sweep-run] wb_summary_update complete",
-                    f"val_rmse={payload.get('val_rmse')}",
-                    f"keys={sorted(payload.keys())}",
-                    sep=" ",
-                    flush=True,
-                )
-            except Exception:
-                pass
         except Exception as exc:
             print(
                 f"[sweep-run] failed to publish canonical summary metrics: {exc}",

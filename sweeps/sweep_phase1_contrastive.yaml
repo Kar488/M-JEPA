@@ -22,7 +22,7 @@ parameters:
   num_layers:           {value: 3}
 
   # Keep budgets aligned with the paired-effect filter thresholds (see run-grid-or-phase1.sh).
-  pretrain_epochs:      {value: 1}
+  pretrain_epochs:      {value: 5}
   max_pretrain_batches: {value: 200}
   finetune_epochs:      {value: 10}
   learning_rate:        {value: 1e-4}

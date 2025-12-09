@@ -1016,7 +1016,6 @@ def _run_one_config_method(
     # materialize seeds to count reliably (iterables can be one-shot)
     _seeds = tuple(seeds) if not isinstance(seeds, tuple) else seeds
     row = {**asdict(cfg), **agg, "method": method, "seeds": len(_seeds)}
-    logger.info("Aggregated payload for %s: %s", method, row)
     return row
 
 

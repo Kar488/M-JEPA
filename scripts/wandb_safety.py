@@ -138,9 +138,6 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
         "true",
         "True",
     }
-    _dbg(
-        f"wb_summary_update: start (disabled={wandb_disabled}) keys={list(payload.keys())}"
-    )
     # persist last payload to help debugging/offline export even when wandb is disabled
     _persist_payload(payload)
 
