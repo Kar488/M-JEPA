@@ -500,7 +500,7 @@ jobs:
           EXPORT_PHASE2_PATH: ${{ env.GRID_DIR }}/grid_sweep_phase2.yaml
           PHASE2_UNLABELED_DIR: ${{ env.APP_DIR }}/data/ZINC-canonicalized
           PHASE2_LABELED_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/train
-          PE_MIN_PRETRAIN_EPOCHS: 1
+          PE_MIN_PRETRAIN_EPOCHS: 5
           PE_MIN_FINETUNE_EPOCHS: 1
           PE_MIN_PRETRAIN_BATCHES: 200
           # W&B sweeps pair runs via PHASE1_BACKBONES/PHASE1_SEEDS; PHASE1_SWEEP_SEED is deprecated.
