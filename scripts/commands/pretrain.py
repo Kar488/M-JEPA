@@ -523,11 +523,41 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 except Exception:
                     num_source_files = 0
 
+            requested_graphs = sample_ul if sample_ul is not None else getattr(args, "sample_unlabeled", None)
+            try:
+                unlabeled.actual_graphs = len(unlabeled)  # type: ignore[attr-defined]
+                unlabeled.requested_graphs = requested_graphs  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+            meets_request = None
+            if requested_graphs is not None:
+                meets_request = len(unlabeled) >= int(requested_graphs)
+                if not meets_request:
+                    warning_msg = (
+                        "WARNING: requested "
+                        f"{int(requested_graphs):_} unlabeled graphs but only {len(unlabeled):_} "
+                        f"were found in {os.path.basename(args.unlabeled_dir) or args.unlabeled_dir}. "
+                        "Training will proceed on the available graphs."
+                    )
+                    logger.warning(warning_msg)
+
+            load_note = ""
+            if requested_graphs is not None:
+                load_note = (
+                    f"; loaded {len(unlabeled):_} of {int(requested_graphs):_} requested unlabeled graphs"
+                )
+                if meets_request is False:
+                    load_note += "; training will be limited by available data"
+                else:
+                    load_note += "; met requested sample"
+
             logger.info(
-                "Loaded unlabeled dataset with %s graphs from %s files in %.2fs",
+                "Loaded unlabeled dataset with %s graphs from %s files in %.2fs%s",
                 len(unlabeled),
                 num_source_files or "<unknown>",
                 time.time() - t0,
+                load_note,
             )
 
             _wb_log(
@@ -555,14 +585,17 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         max_pretrain_batches = max(0, int(getattr(args, "max_pretrain_batches", 0) or 0))
         epochs_source = "cli"
         fallback_epochs_env = _coerce_float(os.getenv("PRETRAIN_FALLBACK_EPOCHS"))
+        dataset_aware_default = max(5, math.ceil(len(unlabeled) / 100_000))
+        if fallback_epochs_env:
+            dataset_aware_default = max(dataset_aware_default, int(fallback_epochs_env))
+
         if not getattr(args, "_epochs_provided", False) and os.getenv("BESTCFG_NO_EPOCHS") == "1":
             if max_pretrain_batches and steps_per_epoch:
                 args.epochs = max(1, math.ceil(max_pretrain_batches / steps_per_epoch))
                 epochs_source = "derived_from_max_pretrain_batches"
             else:
-                default_epochs = int(fallback_epochs_env) if fallback_epochs_env else 5
-                args.epochs = max(int(args.epochs or 0), default_epochs)
-                epochs_source = "fallback_default"
+                args.epochs = max(int(args.epochs or 0), dataset_aware_default)
+                epochs_source = "dataset_default"
 
         effective_steps_per_epoch = steps_per_epoch
         if max_pretrain_batches:
@@ -575,6 +608,12 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             steps_per_epoch,
             max_pretrain_batches or "<none>",
             est_total_steps,
+        )
+        logger.info(
+            "[pretrain] final schedule: epochs_run=%s, steps_per_epoch=%s, total_steps=%s",
+            max(0, args.epochs - start_epoch),
+            effective_steps_per_epoch,
+            max(0, args.epochs - start_epoch) * effective_steps_per_epoch,
         )
         _wb_log(
             wb,
@@ -752,6 +791,13 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
         baseline_record = _load_phase2_winner_record()
         baseline_cfg = _extract_baseline_settings(baseline_record)
+        graphs_requested = (
+            getattr(unlabeled, "requested_graphs", None)
+            if requested_graphs is None
+            else requested_graphs
+        )
+        epochs_run = max(0, args.epochs - start_epoch)
+        total_steps = epochs_run * effective_steps_per_epoch
         pretrain_cfg = {
             "gnn_type": args.gnn_type,
             "hidden_dim": args.hidden_dim,
@@ -760,41 +806,77 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             "ema_decay": args.ema_decay,
             "learning_rate": args.lr,
             "epochs": args.epochs,
+            "epochs_run": epochs_run,
+            "steps_per_epoch": steps_per_epoch,
+            "effective_steps_per_epoch": effective_steps_per_epoch,
+            "total_steps": total_steps,
             "graphs": len(unlabeled),
+            "requested_graphs": graphs_requested,
             "files": num_source_files,
         }
 
-        table_headers = [
+        summary_headers = [
+            "context",
             "assay",
+            "graphs_loaded",
+            "graphs_requested",
+            "epochs_run",
+            "steps_per_epoch",
+            "effective_steps_per_epoch",
+            "total_steps",
             "pretrain_gnn",
             "baseline_gnn",
             "pretrain_lr",
             "baseline_lr",
-            "graphs",
             "hidden_dim",
+            "num_layers",
         ]
-        table_rows: List[List[Any]] = []
-        for assay in _TOX21_ASSAYS:
-            table_rows.append(
-                [
-                    assay,
-                    pretrain_cfg.get("gnn_type"),
-                    baseline_cfg.get("gnn_type"),
-                    pretrain_cfg.get("learning_rate"),
-                    baseline_cfg.get("learning_rate"),
-                    pretrain_cfg.get("graphs"),
-                    pretrain_cfg.get("hidden_dim"),
-                ]
-            )
+        summary_rows: List[List[Any]] = [
+            [
+                "pretrain",
+                "-",
+                len(unlabeled),
+                graphs_requested if graphs_requested is not None else "-",
+                epochs_run,
+                steps_per_epoch,
+                effective_steps_per_epoch,
+                total_steps,
+                pretrain_cfg.get("gnn_type"),
+                baseline_cfg.get("gnn_type"),
+                pretrain_cfg.get("learning_rate"),
+                baseline_cfg.get("learning_rate"),
+                pretrain_cfg.get("hidden_dim"),
+                pretrain_cfg.get("num_layers"),
+            ]
+        ]
 
-        table_str = _render_table(table_headers, table_rows)
-        logger.info("[pretrain] pretrain vs baseline hyper-parameters:\n%s", table_str)
-        wandb_payload: Dict[str, Any] = {"pretrain_vs_baseline": table_str}
+        baseline_row = [
+            "baseline",
+            "all assays",
+            len(unlabeled),
+            graphs_requested if graphs_requested is not None else "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            pretrain_cfg.get("gnn_type"),
+            baseline_cfg.get("gnn_type"),
+            pretrain_cfg.get("learning_rate"),
+            baseline_cfg.get("learning_rate"),
+            baseline_cfg.get("hidden_dim", "-"),
+            baseline_cfg.get("num_layers", "-"),
+        ]
+        summary_rows.append(baseline_row)
+
+        table_str = _render_table(summary_headers, summary_rows)
+        logger.info("[pretrain] pretrain summary:\n%s", table_str)
+        wandb_payload: Dict[str, Any] = {"pretrain_summary": table_str}
         for key, value in pretrain_cfg.items():
             wandb_payload[f"pretrain/{key}"] = value
         for key, value in baseline_cfg.items():
             wandb_payload[f"baseline/{key}"] = value
         _wb_log(wb, wandb_payload)
+        _wb_summary(wb, {"pretrain_summary": table_str})
 
         # Save checkpoints
         ckpt_base = args.output
