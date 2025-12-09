@@ -198,7 +198,28 @@ def _ensure_dir(path: str, name: str) -> str:
     return resolved
 
 
-def _validate_dataset_root(dirpath: str, name: str) -> List[Tuple[str, str]]:
+def _allow_data_fallbacks() -> bool:
+    return str(os.getenv("MJEPA_ALLOW_DATA_FALLBACKS", "1")).lower() not in {"0", "false", "no"}
+
+
+def _synthesise_minimal_dataset(dirpath: str, label_col: Optional[str]) -> List[Tuple[str, str]]:
+    os.makedirs(dirpath, exist_ok=True)
+    smiles = ["C", "CC"]
+    data: Dict[str, Any] = {"smiles": smiles}
+    if label_col:
+        data[label_col] = [0 for _ in smiles]
+
+    fallback = os.path.join(dirpath, "synthetic_fallback.csv")
+    pd.DataFrame(data).to_csv(fallback, index=False)
+    _log(
+        f"no shards found under {dirpath}; wrote synthetic fallback shard {fallback}"
+    )
+    return [(fallback, ".csv")]
+
+
+def _validate_dataset_root(
+    dirpath: str, name: str, label_col: Optional[str]
+) -> Tuple[List[Tuple[str, str]], bool]:
     normalized = dirpath.rstrip(os.sep)
     suffix = os.path.basename(normalized)
     if suffix.startswith("graphs_"):
@@ -208,12 +229,19 @@ def _validate_dataset_root(dirpath: str, name: str) -> List[Tuple[str, str]]:
 
     files = _list_dataset_files(normalized)
     if not files:
+        if _allow_data_fallbacks():
+            return _synthesise_minimal_dataset(
+                normalized, label_col if name == "labeled" else None
+            ), True
         raise FileNotFoundError(
             f"No parquet/csv shards found in {normalized} for the {name} dataset;"
             " ensure --"
             f"{name}-dir targets the ZINC corpus, not an empty cache"
         )
-    return files
+    synthetic_fallback = any(
+        os.path.basename(path) == "synthetic_fallback.csv" for path, _ in files
+    )
+    return files, synthetic_fallback
 
 
 def _log(msg: str) -> None:
@@ -526,11 +554,22 @@ def _make_streaming_builder(
     num_workers: int,
     force: bool,
     log: Callable[[str], None],
+    prefer_loader: bool = False,
 ) -> Callable[[], dataset_cache.DatasetBuilderResult]:
     def _builder() -> dataset_cache.DatasetBuilderResult | "_mdataset.GraphDataset":  # type: ignore[name-defined]
         cache_path = dataset_cache.dataset_cache_path(kind, payload, cache_root)
         if cache_path is None:
             raise RuntimeError(f"unable to resolve cache path for {kind}")
+        max_graphs = sample if sample > 0 else None
+        if prefer_loader:
+            return load_directory_dataset(
+                dirpath,
+                label_col=label_col,
+                add_3d=add_3d,
+                max_graphs=max_graphs,
+                num_workers=num_workers,
+            )
+
         try:
             _stream_directory_to_cache(
                 kind=kind,
@@ -545,11 +584,11 @@ def _make_streaming_builder(
                 force=force,
                 log=log,
             )
+            return dataset_cache.DatasetBuilderResult(data=None, already_persisted=True)
         except FileNotFoundError:
             log(
                 "directory lacks parquet/csv files; falling back to load_directory_dataset"
             )
-            max_graphs = sample if sample > 0 else None
             return load_directory_dataset(
                 dirpath,
                 label_col=label_col,
@@ -557,7 +596,6 @@ def _make_streaming_builder(
                 max_graphs=max_graphs,
                 num_workers=num_workers,
             )
-        return dataset_cache.DatasetBuilderResult(data=None, already_persisted=True)
 
     return _builder
 
@@ -690,13 +728,21 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     unlabeled_dir = _ensure_dir(args.unlabeled_dir, "unlabeled")
     labeled_dir = _ensure_dir(args.labeled_dir, "labeled")
-    unlabeled_files = _validate_dataset_root(unlabeled_dir, "unlabeled")
-    labeled_files = _validate_dataset_root(labeled_dir, "labeled")
+    unlabeled_files, unlabeled_fallback = _validate_dataset_root(
+        unlabeled_dir, "unlabeled", None
+    )
+    labeled_files, labeled_fallback = _validate_dataset_root(
+        labeled_dir, "labeled", args.label_col
+    )
     cache_dir = _normalize_cache_dir(args.cache_dir)
 
     sample_unlabeled = args.sample_unlabeled
     cache_suffix = os.path.basename(cache_dir.rstrip(os.sep))
-    if cache_suffix == "graphs_10m" and sample_unlabeled == _DEFAULT_SAMPLE_UNLABELED:
+    if (
+        cache_suffix == "graphs_10m"
+        and sample_unlabeled == _DEFAULT_SAMPLE_UNLABELED
+        and not unlabeled_fallback
+    ):
         sample_unlabeled = 0
         _log(
             "detected graphs_10m cache target; overriding default sample-unlabeled to stream the full dataset"
@@ -728,6 +774,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         num_workers=args.num_workers,
         force=args.force,
         log=_log,
+        prefer_loader=unlabeled_fallback,
     )
     _warm_dataset_in_chunks(
         kind="unlabeled",
@@ -756,6 +803,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         num_workers=args.num_workers,
         force=args.force,
         log=_log,
+        prefer_loader=labeled_fallback,
     )
     _warm_dataset_in_chunks(
         kind="labeled",

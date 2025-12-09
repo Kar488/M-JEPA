@@ -2489,7 +2489,10 @@ grid_only = {
 pretrain_only = {
     "mask_ratio": "--mask-ratio",
     "pretrain_batch_size": "--batch-size",
-    "pretrain_epochs": "--pretrain-epochs",
+    # Prefer the shared --epochs flag for pretrain so best_config_args outputs
+    # a consistent interface across stages. train_jepa.py still accepts
+    # --pretrain-epochs as an alias, but the canonical flag remains --epochs.
+    "pretrain_epochs": "--epochs",
     "save_every": "--save-every",
     "sample_unlabeled": "--sample-unlabeled",
 }
