@@ -2489,7 +2489,12 @@ grid_only = {
 pretrain_only = {
     "mask_ratio": "--mask-ratio",
     "pretrain_batch_size": "--batch-size",
-    "pretrain_epochs": "--pretrain-epochs",
+    # Prefer the common --epochs flag for pretraining so downstream tooling that
+    # expects the shared shape (e.g., tests/ci/test_best_config_args.py) sees a
+    # consistent interface across stages. The dedicated --pretrain-epochs flag
+    # remains available via the parser, but best_config_args uses the shared
+    # spelling to avoid stage-specific special-casing.
+    "pretrain_epochs": "--epochs",
     "save_every": "--save-every",
     "sample_unlabeled": "--sample-unlabeled",
 }
