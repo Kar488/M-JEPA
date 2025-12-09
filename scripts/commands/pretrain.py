@@ -595,7 +595,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 args.unlabeled_dir,
             )
             _wb_log(wb, {"phase": "data_load", "status": "error", "unlabeled_graphs": 0})
-            return
+            sys.exit(1)
 
         input_dim = unlabeled.graphs[0].x.shape[1]
         edge_dim = (
