@@ -14,6 +14,13 @@ DEFAULT_MAX_GRAPHS_PER_RUN = cache_warm._DEFAULT_MAX_GRAPHS_PER_RUN
 SWEEP_TEMPLATE_DEFAULTS = cache_warm._SWEEP_TEMPLATE_DEFAULTS
 
 
+@pytest.fixture(autouse=True)
+def _enable_data_fallbacks(monkeypatch):
+    """Ensure synthetic shards are permitted when datasets are absent."""
+
+    monkeypatch.setenv("MJEPA_ALLOW_DATA_FALLBACKS", "1")
+
+
 def test_default_sample_unlabeled_tracks_sweep_templates():
     repo_root = Path(__file__).resolve().parents[2]
     expected = None
