@@ -1095,6 +1095,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable torch.compile wrappers for the encoder and predictor.",
     )
+    pre.add_argument(
+        "--pretrain-epochs",
+        "--pretrain_epochs",
+        dest="pretrain_epochs",
+        type=int,
+        default=None,
+        action=_RecordProvided,
+        help="Number of epochs for JEPA pretraining (defaults to --epochs when unset)",
+    )
 
     _add_common_args(pre, "pretrain")
     _add_model_args(pre)
