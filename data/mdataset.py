@@ -1130,6 +1130,7 @@ class GraphDataset:
         random_seed: Optional[int] = None,
         n_rows: Optional[int] = None,  # subset helper
         num_workers: int = 0,
+        min_graphs: Optional[int] = None,
     ) -> "GraphDataset":
         """Load a dataset from a Parquet file of SMILES.
 
@@ -1137,8 +1138,11 @@ class GraphDataset:
         to GraphData via ``smiles_to_graph``. Optionally the featurisation
         runs in a process pool when ``num_workers > 0``.
         """
+        cols = [smiles_col] + ([label_col] if label_col else [])
         cache_path = None
-        if cache_dir and n_rows is None:
+        cache_fallback: Optional["GraphDataset"] = None
+        df_cached: Optional[pd.DataFrame] = None
+        if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
             cache_name = os.path.splitext(os.path.basename(filepath))[0]
             cache_name = f"{cache_name}_{_cache_schema_suffix(add_3d)}.pkl"
@@ -1156,7 +1160,55 @@ class GraphDataset:
                         ds_cached.validate_cached_schema(
                             payload.get("schema"), source=cache_path
                         )
-                        return ds_cached
+                        if min_graphs is not None and len(ds_cached) < int(
+                            min_graphs
+                        ):
+                            try:
+                                df_cached = pd.read_parquet(filepath, columns=cols)
+                                if len(ds_cached) >= len(df_cached):
+                                    logger.info(
+                                        "Cached dataset %s covers all %d rows; reusing",
+                                        cache_path,
+                                        len(df_cached),
+                                    )
+                                    if n_rows is not None and len(ds_cached) > int(
+                                        n_rows
+                                    ):
+                                        ds_cached = cls(
+                                            ds_cached.graphs[: int(n_rows)],
+                                            None
+                                            if ds_cached.labels is None
+                                            else ds_cached.labels[: int(n_rows)],
+                                            None
+                                            if ds_cached.smiles is None
+                                            else ds_cached.smiles[: int(n_rows)],
+                                        )
+                                    return ds_cached
+                                logger.warning(
+                                    "Cached dataset %s has %d graphs (<%d requested); rebuilding",
+                                    cache_path,
+                                    len(ds_cached),
+                                    int(min_graphs),
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Could not count rows in %s (%s); attempting rebuild",
+                                    filepath,
+                                    exc,
+                                )
+                            cache_fallback = ds_cached
+                        else:
+                            if n_rows is not None and len(ds_cached) > int(n_rows):
+                                ds_cached = cls(
+                                    ds_cached.graphs[: int(n_rows)],
+                                    None
+                                    if ds_cached.labels is None
+                                    else ds_cached.labels[: int(n_rows)],
+                                    None
+                                    if ds_cached.smiles is None
+                                    else ds_cached.smiles[: int(n_rows)],
+                                )
+                            return ds_cached
                     except Exception as exc:
                         logger.warning(
                             "Cached dataset %s invalid (%s); rebuilding",
@@ -1164,8 +1216,18 @@ class GraphDataset:
                             exc,
                         )
 
-        cols = [smiles_col] + ([label_col] if label_col else [])
-        df = pd.read_parquet(filepath, columns=cols) 
+        try:
+            df = df_cached if df_cached is not None else pd.read_parquet(filepath, columns=cols)
+        except Exception as exc:
+            if cache_fallback is not None:
+                logger.warning(
+                    "Failed to rebuild %s (%s); using cached fallback with %d graphs",
+                    filepath,
+                    exc,
+                    len(cache_fallback),
+                )
+                return cache_fallback
+            raise
         if n_rows is not None:
             df = df.head(int(n_rows))
         smiles = df[smiles_col].astype(str).tolist()
@@ -1205,7 +1267,7 @@ class GraphDataset:
                     pad = np.zeros((g.x.shape[0], min_dim - g.x.shape[1]), dtype=g.x.dtype)
                     g.x = np.concatenate([g.x, pad], axis=1)
         dataset = cls(graphs, labels, smiles_out)
-        if cache_path:
+        if cache_path and n_rows is None:
             _write_graph_cache(cache_path, dataset)
 
         return dataset
@@ -1222,9 +1284,12 @@ class GraphDataset:
         random_seed: Optional[int] = None,
         n_rows: Optional[int] = None,
         num_workers: Optional[int] = 0,
+        min_graphs: Optional[int] = None,
     ) -> "GraphDataset":
         cache_path = None
-        if cache_dir and n_rows is None:
+        cache_fallback: Optional["GraphDataset"] = None
+        df_cached: Optional[pd.DataFrame] = None
+        if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
             cache_name = os.path.splitext(os.path.basename(filepath))[0]
             cache_name = f"{cache_name}_{_cache_schema_suffix(add_3d)}.pkl"
@@ -1242,7 +1307,55 @@ class GraphDataset:
                         ds_cached.validate_cached_schema(
                             payload.get("schema"), source=cache_path
                         )
-                        return ds_cached
+                        if min_graphs is not None and len(ds_cached) < int(
+                            min_graphs
+                        ):
+                            try:
+                                df_cached = pd.read_csv(filepath, sep=sep)
+                                if len(ds_cached) >= len(df_cached):
+                                    logger.info(
+                                        "Cached dataset %s covers all %d rows; reusing",
+                                        cache_path,
+                                        len(df_cached),
+                                    )
+                                    if n_rows is not None and len(ds_cached) > int(
+                                        n_rows
+                                    ):
+                                        ds_cached = cls(
+                                            ds_cached.graphs[: int(n_rows)],
+                                            None
+                                            if ds_cached.labels is None
+                                            else ds_cached.labels[: int(n_rows)],
+                                            None
+                                            if ds_cached.smiles is None
+                                            else ds_cached.smiles[: int(n_rows)],
+                                        )
+                                    return ds_cached
+                                logger.warning(
+                                    "Cached dataset %s has %d graphs (<%d requested); rebuilding",
+                                    cache_path,
+                                    len(ds_cached),
+                                    int(min_graphs),
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Could not count rows in %s (%s); attempting rebuild",
+                                    filepath,
+                                    exc,
+                                )
+                            cache_fallback = ds_cached
+                        else:
+                            if n_rows is not None and len(ds_cached) > int(n_rows):
+                                ds_cached = cls(
+                                    ds_cached.graphs[: int(n_rows)],
+                                    None
+                                    if ds_cached.labels is None
+                                    else ds_cached.labels[: int(n_rows)],
+                                    None
+                                    if ds_cached.smiles is None
+                                    else ds_cached.smiles[: int(n_rows)],
+                                )
+                            return ds_cached
                     except Exception as exc:
                         logger.warning(
                             "Cached dataset %s invalid (%s); rebuilding",
@@ -1250,7 +1363,18 @@ class GraphDataset:
                             exc,
                         )
 
-        df = pd.read_csv(filepath, sep=sep)
+        try:
+            df = df_cached if df_cached is not None else pd.read_csv(filepath, sep=sep)
+        except Exception as exc:
+            if cache_fallback is not None:
+                logger.warning(
+                    "Failed to rebuild %s (%s); using cached fallback with %d graphs",
+                    filepath,
+                    exc,
+                    len(cache_fallback),
+                )
+                return cache_fallback
+            raise
         if n_rows is not None:
             df = df.head(int(n_rows))
         smiles = df[smiles_col].astype(str).tolist()
@@ -1280,7 +1404,7 @@ class GraphDataset:
             labels = labels_array[valid_indices]
 
         dataset = cls(graphs, labels, smiles_out)
-        if cache_path:
+        if cache_path and n_rows is None:
             _write_graph_cache(cache_path, dataset)
 
         return dataset
@@ -1342,6 +1466,7 @@ class GraphDataset:
                     random_seed=random_seed,
                     n_rows=n_rows,
                     num_workers=num_workers,
+                    min_graphs=n_rows,
                 )
             elif ext.lower() == "csv":
                 ds = cls.from_csv(
@@ -1363,6 +1488,7 @@ class GraphDataset:
                     add_3d=add_3d,
                     random_seed=random_seed,
                     n_rows=n_rows,
+                    min_graphs=n_rows,
                 )
             else:
                 raise ValueError(f"Unsupported ext: {ext}")
