@@ -242,9 +242,7 @@ def wb_summary_update(payload: Dict[str, Any]) -> None:
                 summary_payload["val_mae"] = mae_val
 
         try:
-            _dbg("wb_summary_update: calling summary.update with keys", list(summary_payload.keys()))
             run_like.summary.update(summary_payload)
-            _dbg("wb_summary_update: summary.update succeeded")
         except Exception as exc:
             _dbg("wb_summary_update summary.update failed:", exc)
             for key, value in summary_payload.items():

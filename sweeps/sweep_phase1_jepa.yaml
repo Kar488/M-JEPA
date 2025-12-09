@@ -24,7 +24,8 @@ parameters:
 
   # Keep budgets aligned with the paired-effect filter thresholds (see run-grid-or-phase1.sh).
   pretrain_epochs:      {value: 5}
-  max_pretrain_batches: {value: 200}
+  #5 * steps_per_epoch=5*391
+  max_pretrain_batches: {value: 4000}
   finetune_epochs:      {value: 10}
   learning_rate:        {value: 1e-4}
   

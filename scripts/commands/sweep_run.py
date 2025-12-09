@@ -577,10 +577,6 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         try:
             cfg_obj = getattr(run, "config", None)
             cfg_keys = list(cfg_obj.keys()) if cfg_obj is not None else []
-            print(
-                f"[sweep-run] run.config keys after full update: {sorted(cfg_keys)}",
-                flush=True,
-            )
         except Exception as exc:
             print(
                 f"[sweep-run] unable to inspect run.config keys: {exc}", flush=True
