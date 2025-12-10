@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import pickle
 import re
@@ -629,7 +630,7 @@ def _warm_dataset_in_chunks(
             return
         if per_run_limit > 0 and sample <= 0:
             log(
-                f"{kind} dataset requested without a sample cap; bypassing per-run limits and warming in a single pass"
+                f"{kind} dataset requested without a sample cap; streaming everything in one run (per-run cap ignored)"
             )
         dataset_cache.ensure_dataset_cache(
             kind, payload, builder, cache_root, force=force, log=log
@@ -643,17 +644,14 @@ def _warm_dataset_in_chunks(
         previous_total = int(manifest.get("total_graphs") or 0)
         if manifest.get("exhausted"):
             log(
-                f"{kind} dataset cache marked exhausted at {previous_total} graphs; skipping warmup"
+                f"{kind} cache marked exhausted at {previous_total} graphs; nothing to do"
             )
             return
         if previous_total >= sample:
             log(
-                f"{kind} dataset already has {previous_total} graphs (>= target {sample}); skipping warmup"
+                f"{kind} cache already has {previous_total}/{sample} graphs; nothing to do"
             )
             return
-        log(
-            f"{kind} dataset already has {previous_total} graphs; continuing warmup toward {sample}"
-        )
     elif cache_exists and not force:
         log(f"{kind} dataset already cached in non-sharded format; skipping warmup")
         return
@@ -673,8 +671,16 @@ def _warm_dataset_in_chunks(
             }
             previous_total = processed
             log(
-                f"{kind} dataset found {processed} graphs in partial shards; continuing warmup toward {sample}"
+                f"{kind} cache found {processed} graphs in partial shards; resuming toward {sample}"
             )
+
+    remaining_target = sample - previous_total
+    if remaining_target > 0:
+        runs_needed = math.ceil(remaining_target / per_run_limit)
+        run_word = "run" if runs_needed == 1 else "runs"
+        log(
+            f"{kind} cache progress: {previous_total}/{sample} ready; {remaining_target} to go (~{runs_needed} {run_word} of {per_run_limit} graphs)"
+        )
 
     first_force = force
     while True:
