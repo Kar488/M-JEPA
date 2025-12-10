@@ -419,17 +419,16 @@ def _stream_directory_to_cache(
     if per_run_cap is None:
         run_cap = remaining_global
     elif remaining_global is None:
-        # No global sample target; stream the full dataset without per-run ceilings.
-        run_cap = None
-        log(
-            f"{kind} dataset has no sample target; ignoring per-run limit and streaming all available graphs"
-        )
+        # No global sample target; respect the per-run ceiling so callers can
+        # advance in resumable chunks rather than consuming the full corpus in a
+        # single pass.
+        run_cap = per_run_cap
     else:
         run_cap = min(per_run_cap, remaining_global)
     if per_run_cap is not None and run_cap is not None:
-        target_desc = f"toward the {max_graphs} target" if max_graphs is not None else ""
+        target_desc = f" toward the {max_graphs} target" if max_graphs is not None else " (no global cap)"
         log(
-            f"{kind} dataset will emit at most {per_run_cap} new graphs this run {target_desc}; rerun to continue"
+            f"{kind} dataset will emit at most {per_run_cap} new graphs this run{target_desc}; rerun to continue"
         )
     if chunk_size > 0:
         log(f"{kind} dataset will stream files in chunks of {chunk_size} rows to control memory usage")
@@ -620,20 +619,84 @@ def _warm_dataset_in_chunks(
     if cache_path is None:
         raise RuntimeError(f"unable to resolve cache path for {kind}")
 
-    # If there is no per-run ceiling or no target sample, fall back to the
-    # single invocation flow.
-    if per_run_limit <= 0 or sample <= 0:
+    if per_run_limit <= 0:
         if not force and dataset_cache.cache_exists(kind, payload, cache_root):
             log(
                 f"{kind} dataset cache already exists; skipping warmup (pass --force to rebuild)"
             )
             return
-        if per_run_limit > 0 and sample <= 0:
-            log(
-                f"{kind} dataset requested without a sample cap; streaming everything in one run (per-run cap ignored)"
-            )
         dataset_cache.ensure_dataset_cache(
             kind, payload, builder, cache_root, force=force, log=log
+        )
+        return
+
+    if sample <= 0:
+        manifest = _load_sharded_manifest(cache_path)
+        cache_exists = os.path.exists(cache_path)
+        previous_total = 0
+        if manifest and not force and manifest.get("exhausted"):
+            previous_total = int(manifest.get("total_graphs") or 0)
+            log(
+                f"{kind} cache marked exhausted at {previous_total} graphs; nothing to do"
+            )
+            return
+        if cache_exists and manifest is None and not force:
+            log(f"{kind} dataset already cached in non-sharded format; skipping warmup")
+            return
+
+        if manifest:
+            previous_total = int(manifest.get("total_graphs") or 0)
+            log(
+                f"{kind} cache found {previous_total} graphs; warming another {per_run_limit} before rechecking"
+            )
+        else:
+            shard_dir = f"{cache_path}.parts"
+            existing_shards, processed = _discover_existing_shards(shard_dir, os.path.dirname(cache_path))
+            if existing_shards:
+                manifest = {
+                    "__dataset_cache_format__": dataset_cache.SHARDED_CACHE_FORMAT,
+                    "version": dataset_cache.SHARDED_CACHE_VERSION,
+                    "shards": existing_shards,
+                    "total_graphs": processed,
+                    "has_labels": any("labels" in shard for shard in existing_shards),
+                }
+                previous_total = processed
+                log(
+                    f"{kind} cache found {processed} graphs in partial shards; warming another {per_run_limit} before rechecking"
+                )
+            else:
+                log(
+                    f"{kind} cache uncapped; warming the first {per_run_limit} graphs (pass --sample-{kind} to cap)"
+                )
+
+        if not force:
+            try:
+                os.remove(cache_path)
+            except FileNotFoundError:
+                pass
+        dataset_cache.ensure_dataset_cache(
+            kind, payload, builder, cache_root, force=force, log=log
+        )
+
+        manifest = _load_sharded_manifest(cache_path)
+        if manifest is None:
+            shard_dir = f"{cache_path}.parts"
+            existing_shards, processed = _discover_existing_shards(shard_dir, os.path.dirname(cache_path))
+            manifest = {
+                "__dataset_cache_format__": dataset_cache.SHARDED_CACHE_FORMAT,
+                "version": dataset_cache.SHARDED_CACHE_VERSION,
+                "shards": existing_shards,
+                "total_graphs": processed,
+                "has_labels": any("labels" in shard for shard in existing_shards),
+            }
+        current_total = int(manifest.get("total_graphs") or 0)
+        if manifest.get("exhausted"):
+            log(
+                f"{kind} cache reached the end of the corpus at {current_total} graphs"
+            )
+            return
+        log(
+            f"{kind} cache warmed {current_total - previous_total} new graphs this run; rerun to continue"
         )
         return
 
@@ -756,16 +819,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     cache_dir = _normalize_cache_dir(args.cache_dir)
 
     sample_unlabeled = args.sample_unlabeled
-    cache_suffix = os.path.basename(cache_dir.rstrip(os.sep))
-    if (
-        cache_suffix == "graphs_10m"
-        and sample_unlabeled == _DEFAULT_SAMPLE_UNLABELED
-        and not unlabeled_fallback
-    ):
-        sample_unlabeled = 0
-        _log(
-            "detected graphs_10m cache target; overriding default sample-unlabeled to stream the full dataset"
-        )
 
     cache_root = dataset_cache.prepare_cache_root(cache_dir, enabled=True)
     if not cache_root:
