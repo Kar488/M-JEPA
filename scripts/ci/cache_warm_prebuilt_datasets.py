@@ -418,10 +418,14 @@ def _stream_directory_to_cache(
     if per_run_cap is None:
         run_cap = remaining_global
     elif remaining_global is None:
-        run_cap = per_run_cap
+        # No global sample target; stream the full dataset without per-run ceilings.
+        run_cap = None
+        log(
+            f"{kind} dataset has no sample target; ignoring per-run limit and streaming all available graphs"
+        )
     else:
         run_cap = min(per_run_cap, remaining_global)
-    if per_run_cap is not None:
+    if per_run_cap is not None and run_cap is not None:
         target_desc = f"toward the {max_graphs} target" if max_graphs is not None else ""
         log(
             f"{kind} dataset will emit at most {per_run_cap} new graphs this run {target_desc}; rerun to continue"
@@ -618,6 +622,15 @@ def _warm_dataset_in_chunks(
     # If there is no per-run ceiling or no target sample, fall back to the
     # single invocation flow.
     if per_run_limit <= 0 or sample <= 0:
+        if not force and dataset_cache.cache_exists(kind, payload, cache_root):
+            log(
+                f"{kind} dataset cache already exists; skipping warmup (pass --force to rebuild)"
+            )
+            return
+        if per_run_limit > 0 and sample <= 0:
+            log(
+                f"{kind} dataset requested without a sample cap; bypassing per-run limits and warming in a single pass"
+            )
         dataset_cache.ensure_dataset_cache(
             kind, payload, builder, cache_root, force=force, log=log
         )
