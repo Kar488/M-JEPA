@@ -12,7 +12,7 @@ common: &common
 
 grid_search:
   <<: *common
-  unlabeled_dir: ${CACHE_DIR}
+  unlabeled_dir: ${APP_DIR}/data/ZINC-canonicalized
   labeled_dir: ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
   label_col: "measured log solubility in mols per litre"
   task_type: regression
@@ -44,7 +44,7 @@ grid_search:
 
 pretrain:
   <<: *common
-  unlabeled_dir: ${CACHE_DIR}
+  unlabeled_dir: ${APP_DIR}/data/ZINC-canonicalized
   labeled_dir:   ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
   plot_dir: ${PRETRAIN_DIR}/plots
   n_rows_per_file: 1000
