@@ -425,7 +425,7 @@ PY
         --include-sweep "${WANDB_ENTITY}/${WANDB_PROJECT}/${CONTRAST_ID}" \
         --out "$TMP_BEST" \
         --phase2-yaml "$TMP_PHASE2" \
-        --phase2-unlabeled-dir "${PHASE2_UNLABELED_DIR:-${CACHE_DIR:-$APP_DIR/cache/graphs_10m}}" \
+        --phase2-unlabeled-dir "${PHASE2_UNLABELED_DIR:-${DATA_ROOT:-$APP_DIR}/data/ZINC-canonicalized}" \
         --phase2-labeled-dir   "${PHASE2_LABELED_DIR:-$APP_DIR/data/katielinkmoleculenet_benchmark/train}" \
       2>&1 | tee "$LOG_TMP"
 

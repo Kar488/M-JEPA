@@ -894,7 +894,7 @@ PY
   fi
 
   : "${PHASE2_LABELED_DIR:=$APP_DIR/data/katielinkmoleculenet_benchmark/train}"
-  : "${PHASE2_UNLABELED_DIR:=${CACHE_DIR:-$APP_DIR/cache/graphs_10m}}"
+  : "${PHASE2_UNLABELED_DIR:=${DATA_ROOT:-$APP_DIR}/data/ZINC-canonicalized}"
 
   if (( ! sweep_exhausted )); then
     if [[ ! -d "$PHASE2_LABELED_DIR" ]]; then
@@ -905,6 +905,13 @@ PY
     fi
     if [[ ! -d "$PHASE2_UNLABELED_DIR" ]]; then
       echo "[$step][fatal] not a dir: $PHASE2_UNLABELED_DIR" >&2
+      restore_env_var LOG_DIR "$prev_log_dir"
+      restore_env_var HARD_WALL_MINS "$prev_wall"
+      return 2
+    fi
+    local cache_unlabeled_dir="${DATA_ROOT:-$APP_DIR}/cache/graphs_10m"
+    if [[ "$PHASE2_UNLABELED_DIR" == "$cache_unlabeled_dir" ]]; then
+      echo "[$step][fatal] PHASE2_UNLABELED_DIR points at the cache (${cache_unlabeled_dir}); set it to the ZINC corpus instead (e.g., ${DATA_ROOT:-$APP_DIR}/data/ZINC-canonicalized)." >&2
       restore_env_var LOG_DIR "$prev_log_dir"
       restore_env_var HARD_WALL_MINS "$prev_wall"
       return 2
@@ -1091,7 +1098,7 @@ run_phase2_recheck_stage() {
   : "${EXTRA_SEEDS:=3}"
   : "${PHASE2_METRIC:=val_rmse}"
   : "${PHASE2_DIRECTION:=min}"
-  : "${PHASE2_UNLABELED_DIR:=${CACHE_DIR:-$APP_DIR/cache/graphs_10m}}"
+  : "${PHASE2_UNLABELED_DIR:=${DATA_ROOT:-$APP_DIR}/data/ZINC-canonicalized}"
   : "${PHASE2_LABELED_DIR:=$APP_DIR/data/katielinkmoleculenet_benchmark/train}"
   : "${PHASE2_RECHECK_WALL_MINS:=540}"
   : "${PHASE2_SEED_WALL_MINS:=}"
