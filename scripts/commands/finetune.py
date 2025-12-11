@@ -2347,7 +2347,10 @@ def evaluate_finetuned_head(
                         logger.info("Resolved finetune head at %s", path)
                         return str(path)
 
-        raise FileNotFoundError(raw)
+        logger.info(
+            "Checkpoint path '%s' not found on disk; delegating to loader", raw
+        )
+        return raw
 
     resolved_ckpt = _resolve_ckpt_path(ckpt_path)
     state = load_checkpoint(resolved_ckpt)
