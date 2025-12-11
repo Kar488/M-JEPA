@@ -426,17 +426,20 @@ def _apply_best_config_overrides(args: argparse.Namespace) -> None:
     _apply("epochs", best_overrides.get("epochs"), flags=("--epochs",))
 
     lr_override = best_overrides.get("lr")
-    lr_split_flags = ("--head-lr", "--head_lr", "--encoder-lr", "--encoder_lr")
-    split_lrs_active = any(
-        getattr(args, attr, None) is not None for attr in ("head_lr", "encoder_lr")
-    )
-    if lr_override is not None and not _flag_was_provided(lr_split_flags):
-        if not split_lrs_active:
-            _apply("lr", lr_override, flags=("--lr",))
-        else:
+    head_lr_flag = _flag_was_provided(("--head-lr", "--head_lr"))
+    encoder_lr_flag = _flag_was_provided(("--encoder-lr", "--encoder_lr"))
+    split_lrs_active = head_lr_flag or encoder_lr_flag
+    if lr_override is not None:
+        if split_lrs_active:
             logger.info(
                 "Skipping best_config lr override because encoder/head learning rates are already specified."
             )
+        else:
+            _apply("lr", lr_override, flags=("--lr",))
+            if getattr(args, "head_lr", None) is not None and not head_lr_flag:
+                setattr(args, "head_lr", None)
+            if getattr(args, "encoder_lr", None) is not None and not encoder_lr_flag:
+                setattr(args, "encoder_lr", None)
 
     if inherited and best_path is not None:
         logger.info(
