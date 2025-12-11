@@ -38,6 +38,7 @@ def make_args(
         contiguous=False,
         device="cpu",
         devices=devices,
+        stream_chunk_size=0,
         aug_rotate=aug_rotate,
         aug_mask_angle=aug_mask_angle,
         aug_dihedral=aug_dihedral,
@@ -61,19 +62,26 @@ class DummyGraph:
 
 
 class DummyDataset:
-    def __init__(self):
-        self.graphs = [DummyGraph()]
+    def __init__(self, size: int = 1, on_close=None):
+        self.graphs = [DummyGraph() for _ in range(size)]
+        self._on_close = on_close
 
     def __len__(self):
-        return 1
+        return len(self.graphs)
+
+    def close(self):
+        if self._on_close:
+            self._on_close()
 
 
-def setup_stubs(monkeypatch, calls):
-    dummy_dataset = DummyDataset()
+def setup_stubs(monkeypatch, calls, datasets=None):
+    dataset_pool = list(datasets) if datasets is not None else [DummyDataset()]
 
     def load_dataset_stub(path, add_3d=False, **kwargs):
-        calls["load_directory_dataset"] += 1
-        return dummy_dataset
+        calls["load_directory_dataset"] = calls.get("load_directory_dataset", 0) + 1
+        calls.setdefault("load_kwargs", []).append(kwargs)
+        idx = min(calls["load_directory_dataset"] - 1, len(dataset_pool) - 1)
+        return dataset_pool[idx]
 
     monkeypatch.setattr(tj, "load_directory_dataset", load_dataset_stub)
 
@@ -169,6 +177,42 @@ def test_cmd_pretrain_creates_checkpoint_and_calls_training(tmp_path, monkeypatc
     assert "perturb_dihedral" not in calls["train_jepa_kwargs"]
     assert calls["plot_training_curves"] == 1
     assert os.path.exists(os.path.join(args.plot_dir, "pretrain_loss.png"))
+
+
+def test_cmd_pretrain_streams_unlabeled_chunks(tmp_path, monkeypatch):
+    for idx in range(3):
+        (tmp_path / f"chunk_{idx}.parquet").write_text("", encoding="utf-8")
+
+    calls = {
+        "load_directory_dataset": 0,
+        "build_encoder": 0,
+        "EMA": 0,
+        "MLPPredictor": 0,
+        "train_jepa": 0,
+        "train_contrastive": 0,
+        "maybe_init_wandb": 0,
+        "train_jepa_kwargs": {},
+        "train_contrastive_kwargs": {},
+        "plot_training_curves": 0,
+        "saved_plot": None,
+        "dataset_closed": 0,
+    }
+
+    def _on_close():
+        calls["dataset_closed"] += 1
+
+    datasets = [DummyDataset(on_close=_on_close) for _ in range(3)]
+    setup_stubs(monkeypatch, calls, datasets=datasets)
+
+    args = make_args(tmp_path, contrastive=False)
+    args.stream_chunk_size = 1
+    args.sample_unlabeled = 3
+    args.ckpt_dir = str(tmp_path / "ckpts")
+    tj.cmd_pretrain(args)
+
+    assert calls["train_jepa"] == 3
+    assert calls["dataset_closed"] >= 3
+    assert all(kwargs.get("prefix_filter") for kwargs in calls.get("load_kwargs", []))
 
 
 def test_cmd_pretrain_forwards_devices_to_contrastive(tmp_path, monkeypatch):

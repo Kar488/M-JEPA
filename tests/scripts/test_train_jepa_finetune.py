@@ -58,6 +58,15 @@ class DummyDataset:
         return 1
 
 
+def test_parse_pos_class_weight_handles_scalar_and_mapping():
+    import scripts.commands.finetune as ft
+
+    parsed = ft._parse_pos_class_weight(["NR-AR=3.0", "1.25"])
+    assert isinstance(parsed, dict)
+    assert parsed.get("NR-AR") == pytest.approx(3.0)
+    assert parsed.get("default") == pytest.approx(1.25)
+
+
 def test_cmd_finetune_inherits_best_config_overrides(tmp_path, monkeypatch):
     import scripts.commands.finetune as ft
 

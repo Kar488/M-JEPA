@@ -232,6 +232,19 @@ def _metric_is_better(new: Dict[str, Any], old: Optional[Dict[str, Any]]) -> boo
     return new_val < old_val
 
 
+def _teardown_dataset(dataset: Any) -> None:
+    """Release dataset resources early when supported."""
+
+    if dataset is None:
+        return
+    close = getattr(dataset, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+
+
 def _candidate_phase2_winner_paths() -> Iterable[str]:
     candidates = [
         os.getenv("PHASE2_WINNER_CONFIG"),
@@ -507,23 +520,58 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             # Sample a subset of the unlabeled dataset if requested.  Use getattr to
             # avoid AttributeError when the caller hasn’t set sample_unlabeled.
             sample_ul = getattr(args, "sample_unlabeled", 0) or None
+            stream_chunk_size = max(0, int(getattr(args, "stream_chunk_size", 0) or 0))
+            stream_enabled = stream_chunk_size > 0
             rows_per_file = getattr(args, "n_rows_per_file", None)
+            if stream_enabled:
+                rows_per_file = stream_chunk_size
+
+            def _load_unlabeled_chunk(prefix_filter: Optional[str], remaining: Optional[int]):
+                return load_directory_dataset(
+                    args.unlabeled_dir,
+                    add_3d=args.add_3d,
+                    num_workers=getattr(args, "num_workers", -1),
+                    cache_dir=getattr(args, "cache_dir", None),
+                    n_rows_per_file=rows_per_file,
+                    max_graphs=remaining,
+                    prefix_filter=prefix_filter,
+                )  # type: ignore[arg-type]
+
             logger.info(
-                "Loading unlabeled (cap=%s, rows_per_file=%s, workers=%s)…",
+                "Loading unlabeled (cap=%s, rows_per_file=%s, workers=%s%s)…",
                 sample_ul,
                 rows_per_file,
                 getattr(args, "num_workers", -1),
+                "; streaming enabled" if stream_enabled else "",
             )
             t0 = time.time()
 
-            unlabeled = load_directory_dataset(
-                args.unlabeled_dir,
-                add_3d=args.add_3d,
-                num_workers=getattr(args, "num_workers", -1),
-                cache_dir=getattr(args, "cache_dir", None),
-                n_rows_per_file=rows_per_file,
-                max_graphs=sample_ul,
-            )  # type: ignore[arg-type]
+            stream_files: List[str] = []
+            initial_stream_index = 0
+            if stream_enabled:
+                stream_files = [
+                    f for f in os.listdir(args.unlabeled_dir) if f.lower().endswith(".parquet")
+                ]
+                stream_files.sort()
+                if not stream_files:
+                    raise FileNotFoundError(
+                        f"No parquet files found under {args.unlabeled_dir} for streaming"
+                    )
+                unlabeled = None
+                while unlabeled is None or len(unlabeled) == 0:
+                    if initial_stream_index >= len(stream_files):
+                        raise ValueError(
+                            "No unlabeled graphs found in streaming mode; check the input directory."
+                        )
+                    prefix = os.path.splitext(stream_files[initial_stream_index])[0]
+                    unlabeled = _load_unlabeled_chunk(prefix, sample_ul)
+                    if len(unlabeled) == 0:
+                        _teardown_dataset(unlabeled)
+                        unlabeled = None
+                        initial_stream_index += 1
+            else:
+                unlabeled = _load_unlabeled_chunk(prefix_filter=None, remaining=sample_ul)
+
             source_files = getattr(unlabeled, "source_files", None)
             num_source_files = len(source_files) if source_files else 0
             if not num_source_files:
@@ -537,21 +585,27 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     )
                 except Exception:
                     num_source_files = 0
+            if stream_enabled and stream_files:
+                num_source_files = len(stream_files)
 
             requested_graphs = sample_ul if sample_ul is not None else getattr(args, "sample_unlabeled", None)
+            dataset_len_hint = len(unlabeled)
+            if stream_enabled:
+                per_pass = stream_chunk_size * max(num_source_files, 1)
+                dataset_len_hint = requested_graphs or per_pass
             try:
-                unlabeled.actual_graphs = len(unlabeled)  # type: ignore[attr-defined]
+                unlabeled.actual_graphs = dataset_len_hint  # type: ignore[attr-defined]
                 unlabeled.requested_graphs = requested_graphs  # type: ignore[attr-defined]
             except Exception:
                 pass
 
             meets_request = None
             if requested_graphs is not None:
-                meets_request = len(unlabeled) >= int(requested_graphs)
+                meets_request = dataset_len_hint >= int(requested_graphs)
                 if not meets_request:
                     warning_msg = (
                         "WARNING: requested "
-                        f"{int(requested_graphs):_} unlabeled graphs but only {len(unlabeled):_} "
+                        f"{int(requested_graphs):_} unlabeled graphs but only {dataset_len_hint:_} "
                         f"were found in {os.path.basename(args.unlabeled_dir) or args.unlabeled_dir}. "
                         "Training will proceed on the available graphs."
                     )
@@ -560,16 +614,18 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             load_note = ""
             if requested_graphs is not None:
                 load_note = (
-                    f"; loaded {len(unlabeled):_} of {int(requested_graphs):_} requested unlabeled graphs"
+                    f"; loaded {dataset_len_hint:_} of {int(requested_graphs):_} requested unlabeled graphs"
                 )
                 if meets_request is False:
                     load_note += "; training will be limited by available data"
                 else:
                     load_note += "; met requested sample"
+            if stream_enabled:
+                load_note += f"; streaming chunks of {stream_chunk_size} rows per file"
 
             logger.info(
                 "Loaded unlabeled dataset with %s graphs from %s files in %.2fs%s",
-                len(unlabeled),
+                dataset_len_hint,
                 num_source_files or "<unknown>",
                 time.time() - t0,
                 load_note,
@@ -579,7 +635,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 wb,
                 {
                     "phase": "data_load",
-                    "unlabeled_graphs": len(unlabeled),
+                    "unlabeled_graphs": dataset_len_hint,
                     "unlabeled_files": num_source_files,
                 },
             )
@@ -605,11 +661,11 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         )
         device = resolve_device(args.device)
 
-        steps_per_epoch = max(1, math.ceil(len(unlabeled) / max(1, args.batch_size)))
+        steps_per_epoch = max(1, math.ceil(dataset_len_hint / max(1, args.batch_size)))
         max_pretrain_batches = max(0, int(getattr(args, "max_pretrain_batches", 0) or 0))
         epochs_source = "cli"
         fallback_epochs_env = _coerce_float(os.getenv("PRETRAIN_FALLBACK_EPOCHS"))
-        dataset_aware_default = max(5, math.ceil(len(unlabeled) / 100_000))
+        dataset_aware_default = max(5, math.ceil(dataset_len_hint / 100_000))
         if fallback_epochs_env:
             dataset_aware_default = max(dataset_aware_default, int(fallback_epochs_env))
 
@@ -700,41 +756,108 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         try:
             _wb_log(wb, {"phase": "pretrain", "status": "start"})
             for epoch in range(start_epoch, args.epochs):
-                ep_loss = train_jepa(
-                    dataset=unlabeled,
-                    encoder=encoder,
-                    ema_encoder=ema_encoder,
-                    predictor=predictor,
-                    ema=ema_helper,
-                    epochs=1,  # one epoch per loop so we can checkpoint each epoch
-                    max_batches=getattr(
-                        args, "max_pretrain_batches", 0
-                    ),  # ensure it does not crash for unit tests
-                    time_budget_mins=getattr(
-                        args, "time_budget_mins", 0
-                    ),  # ensure it does not crash for unit tests
-                    batch_size=args.batch_size,
-                    mask_ratio=args.mask_ratio,
-                    contiguous=getattr(args, "contiguity", False),
-                    lr=args.lr,
-                    device=device,
-                    devices=getattr(args, "devices", 1),
-                    reg_lambda=1e-4,
-                    use_wandb=args.use_wandb,
-                    wandb_project=args.wandb_project,
-                    wandb_tags=args.wandb_tags,
-                    disable_tqdm=(not getattr(args, "force_tqdm", False))
-                    and (not sys.stdout.isatty()),
-                    # dataloader & AMP knobs
-                    num_workers=getattr(args, "num_workers", -1),
-                    pin_memory=getattr(args, "pin_memory", True),
-                    persistent_workers=getattr(args, "persistent_workers", True),
-                    prefetch_factor=getattr(args, "prefetch_factor", 4),
-                    bf16=getattr(args, "bf16", False),
-                    compile_models=not getattr(args, "no_compile", False),
-                    # forward augmentation flags only when enabled
-                    **kwargs,
-                )
+                ep_loss: List[float] = []
+                graphs_seen_epoch = 0
+                if stream_enabled:
+                    for file_idx, fname in enumerate(stream_files):
+                        if sample_ul is not None and graphs_seen_epoch >= sample_ul:
+                            break
+                        use_cached = (
+                            epoch == start_epoch
+                            and file_idx == initial_stream_index
+                            and unlabeled is not None
+                        )
+                        if use_cached:
+                            stream_chunk = unlabeled
+                        else:
+                            remaining = (
+                                None
+                                if sample_ul is None
+                                else max(sample_ul - graphs_seen_epoch, 0)
+                            )
+                            stream_chunk = _load_unlabeled_chunk(
+                                os.path.splitext(fname)[0], remaining
+                            )
+                        if stream_chunk is None or len(stream_chunk) == 0:
+                            _teardown_dataset(stream_chunk)
+                            continue
+
+                        losses = train_jepa(
+                            dataset=stream_chunk,
+                            encoder=encoder,
+                            ema_encoder=ema_encoder,
+                            predictor=predictor,
+                            ema=ema_helper,
+                            epochs=1,  # one epoch per loop so we can checkpoint each epoch
+                            max_batches=getattr(
+                                args, "max_pretrain_batches", 0
+                            ),  # ensure it does not crash for unit tests
+                            time_budget_mins=getattr(
+                                args, "time_budget_mins", 0
+                            ),  # ensure it does not crash for unit tests
+                            batch_size=args.batch_size,
+                            mask_ratio=args.mask_ratio,
+                            contiguous=getattr(args, "contiguity", False),
+                            lr=args.lr,
+                            device=device,
+                            devices=getattr(args, "devices", 1),
+                            reg_lambda=1e-4,
+                            use_wandb=args.use_wandb,
+                            wandb_project=args.wandb_project,
+                            wandb_tags=args.wandb_tags,
+                            disable_tqdm=(not getattr(args, "force_tqdm", False))
+                            and (not sys.stdout.isatty()),
+                            # dataloader & AMP knobs
+                            num_workers=getattr(args, "num_workers", -1),
+                            pin_memory=getattr(args, "pin_memory", True),
+                            persistent_workers=getattr(args, "persistent_workers", True),
+                            prefetch_factor=getattr(args, "prefetch_factor", 4),
+                            bf16=getattr(args, "bf16", False),
+                            compile_models=not getattr(args, "no_compile", False),
+                            # forward augmentation flags only when enabled
+                            **kwargs,
+                        )
+                        ep_loss.extend(losses)
+                        graphs_seen_epoch += len(stream_chunk)
+                        _teardown_dataset(stream_chunk)
+                        if use_cached:
+                            unlabeled = None
+                else:
+                    ep_loss = train_jepa(
+                        dataset=unlabeled,
+                        encoder=encoder,
+                        ema_encoder=ema_encoder,
+                        predictor=predictor,
+                        ema=ema_helper,
+                        epochs=1,  # one epoch per loop so we can checkpoint each epoch
+                        max_batches=getattr(
+                            args, "max_pretrain_batches", 0
+                        ),  # ensure it does not crash for unit tests
+                        time_budget_mins=getattr(
+                            args, "time_budget_mins", 0
+                        ),  # ensure it does not crash for unit tests
+                        batch_size=args.batch_size,
+                        mask_ratio=args.mask_ratio,
+                        contiguous=getattr(args, "contiguity", False),
+                        lr=args.lr,
+                        device=device,
+                        devices=getattr(args, "devices", 1),
+                        reg_lambda=1e-4,
+                        use_wandb=args.use_wandb,
+                        wandb_project=args.wandb_project,
+                        wandb_tags=args.wandb_tags,
+                        disable_tqdm=(not getattr(args, "force_tqdm", False))
+                        and (not sys.stdout.isatty()),
+                        # dataloader & AMP knobs
+                        num_workers=getattr(args, "num_workers", -1),
+                        pin_memory=getattr(args, "pin_memory", True),
+                        persistent_workers=getattr(args, "persistent_workers", True),
+                        prefetch_factor=getattr(args, "prefetch_factor", 4),
+                        bf16=getattr(args, "bf16", False),
+                        compile_models=not getattr(args, "no_compile", False),
+                        # forward augmentation flags only when enabled
+                        **kwargs,
+                    )
                 pretrain_losses.extend(ep_loss)
                 # save after each epoch (or every N epochs)
                 if (epoch + 1) % save_every == 0 or (epoch + 1) == args.epochs:
@@ -771,6 +894,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         cont_losses: List[float] = []
         cont_path: Optional[str] = None
         if args.contrastive:
+            cont_dataset = unlabeled
+            if cont_dataset is None:
+                cont_dataset = _load_unlabeled_chunk(prefix_filter=None, remaining=sample_ul)
             cont_encoder = build_encoder(
                 gnn_type=args.gnn_type,
                 input_dim=input_dim,
@@ -781,7 +907,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             try:
                 _wb_log(wb, {"phase": "pretrain_contrastive", "status": "start"})
                 cont_losses = train_contrastive(  # type: ignore[call-arg]
-                    dataset=unlabeled,
+                    dataset=cont_dataset,
                     encoder=cont_encoder,
                     epochs=args.epochs,
                     batch_size=args.batch_size,

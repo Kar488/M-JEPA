@@ -1091,6 +1091,15 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--sample-unlabeled", type=int, default=0, help="If >0, load at most N graphs from the unlabeled dataset.")
     pre.add_argument("--n-rows-per-file", type=int, default=None, help="If set, limit rows read per file when loading datasets.")
     pre.add_argument(
+        "--stream-chunk-size",
+        type=int,
+        default=0,
+        help=(
+            "If >0, stream unlabeled Parquet files in chunks of this many rows per file during pretraining "
+            "instead of loading the full dataset into memory."
+        ),
+    )
+    pre.add_argument(
         "--no-compile",
         action="store_true",
         help="Disable torch.compile wrappers for the encoder and predictor.",
@@ -1183,7 +1192,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=CONFIG.get("finetune", {}).get("unfreeze", "none"),
         help=(
             "Encoder update policy: none=frozen probe, partial=top layers trainable, "
-            "full=end-to-end. When enabling updates start with head_lr≈1e-4 and encoder_lr≈1e-5 "
+            "full=end-to-end. When enabling updates start with head_lr≈1e-4 and encoder_lr≈1e-4 "
             "for partial unfreeze; full unfreeze typically prefers encoder_lr in the 3e-6–1e-5 range."
         ),
     )
@@ -1191,15 +1200,87 @@ def build_parser() -> argparse.ArgumentParser:
         "--encoder-lr",
         dest="encoder_lr",
         type=float,
-        default=None,
-        help="Learning rate for encoder parameters when trainable (defaults to head_lr*0.1 if unset)",
+        default=1e-4,
+        help="Learning rate for encoder parameters when trainable (defaults to 1e-4)",
     )
     ft.add_argument(
         "--head-lr",
         dest="head_lr",
         type=float,
+        default=1e-4,
+        help="Learning rate for the fine-tuning head (defaults to 1e-4)",
+    )
+    ft.add_argument(
+        "--layerwise-decay",
+        dest="layerwise_decay",
+        type=float,
         default=None,
-        help="Learning rate for the fine-tuning head",
+        help="Optional multiplicative decay applied to deeper encoder layers (e.g., 0.9)",
+    )
+    ft.add_argument(
+        "--use-focal-loss",
+        dest="use_focal_loss",
+        action=BoolFlag,
+        default=False,
+        help="Wrap BCEWithLogits in focal loss for imbalanced labels",
+    )
+    ft.add_argument(
+        "--focal-gamma",
+        dest="focal_gamma",
+        type=float,
+        default=2.0,
+        help="Gamma exponent for focal loss (ignored when disabled)",
+    )
+    ft.add_argument(
+        "--dynamic-pos-weight",
+        dest="dynamic_pos_weight",
+        action=BoolFlag,
+        default=False,
+        help="Recompute pos_weight from the current training split each epoch",
+    )
+    ft.add_argument(
+        "--oversample-minority",
+        dest="oversample_minority",
+        action=BoolFlag,
+        default=False,
+        help="Use a WeightedRandomSampler to upsample positive labels during fine-tune",
+    )
+    ft.add_argument(
+        "--calibrate-probabilities",
+        dest="calibrate_probabilities",
+        action=BoolFlag,
+        default=False,
+        help="Apply post-hoc probability calibration (temperature scaling or isotonic)",
+    )
+    ft.add_argument(
+        "--calibration-method",
+        dest="calibration_method",
+        choices=["temperature", "isotonic"],
+        default="temperature",
+        help="Calibration routine to pair with --calibrate-probabilities",
+    )
+    ft.add_argument(
+        "--threshold-metric",
+        dest="threshold_metric",
+        choices=["f1", "roc_auc"],
+        default="f1",
+        help="Validation metric to optimise when tuning the decision threshold",
+    )
+    ft.add_argument(
+        "--pos-class-weight",
+        dest="pos_weight",
+        action="append",
+        default=None,
+        help=(
+            "Positive class weight (float) or per-task override TASK=weight; repeatable for multiple tasks"
+        ),
+    )
+    ft.add_argument(
+        "--per-task-hparams",
+        dest="per_task_hparams",
+        type=str,
+        default=None,
+        help="JSON or YAML mapping of task → hyperparameters (e.g., pos_weight overrides)",
     )
     ft.add_argument(
         "--max-finetune-batches",
@@ -1530,6 +1611,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
     )
     sweep.add_argument("--sample-unlabeled", "--sample_unlabeled", dest="sample_unlabeled", type=int, default=0)
+    sweep.add_argument(
+        "--stream-chunk-size",
+        "--stream_chunk_size",
+        dest="stream_chunk_size",
+        type=int,
+        default=0,
+    )
     sweep.add_argument("--sample-labeled", "--sample_labeled", dest="sample_labeled", type=int, default=0)
     sweep.add_argument("--time-budget-mins", type=int, default=0)
     sweep.add_argument(
@@ -1607,6 +1695,15 @@ def build_parser() -> argparse.ArgumentParser:
     grid.add_argument("--wandb-tags", nargs="*", default=CONFIG.get("wandb", {}).get("tags", []), help="W&B tags for grid search runs")
     grid.add_argument("--force-tqdm", action="store_true", help="Force-enable tqdm progress bars even when not attached to a TTY")
     grid.add_argument("--sample-unlabeled", type=int, default=0, help="If >0, load at most N graphs from the unlabeled dataset.")
+    grid.add_argument(
+        "--stream-chunk-size",
+        type=int,
+        default=0,
+        help=(
+            "If >0, stream unlabeled Parquet files in chunks of this many rows per file during pretraining "
+            "instead of loading the full dataset into memory."
+        ),
+    )
     grid.add_argument("--sample-labeled", type=int, default=0, help="If >0, load at most N graphs from the labeled dataset.")
     grid.add_argument("--n-rows-per-file", type=int, default=None, help="If set, limit rows read per file when loading datasets.")
     grid.add_argument("--max-pretrain-batches", type=int, default=0, help="If >0, stop each pretrain epoch after this many batches.")

@@ -491,6 +491,9 @@ if [ -f "$APP_DIR/requirements.txt" ]; then
   if [ -s /tmp/req-safe.txt ]; then
     micromamba run -n "$ENV_NAME" python -m pip install -r /tmp/req-safe.txt
   fi
+  if grep -qiE '^(pillow|pycairo|cairosvg)\b' "$APP_DIR/requirements.txt"; then
+    micromamba run -n "$ENV_NAME" python -m pip install --no-cache-dir pillow pycairo cairosvg || true
+  fi
 fi
 
 # ----------- sanity -----------

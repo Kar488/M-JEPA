@@ -131,8 +131,17 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
         `--pretrain-lr` to tune pretraining without perturbing the linear head. When running with
         `--evaluation-mode fine_tuned` the command automatically enables full encoder fine-tuning when no
         checkpoint is supplied.
+      - CI keeps its larger pretraining sample sizes and streaming chunk knobs in `scripts/ci/train_jepa_ci.yml` so
+        stage defaults in `scripts/default.yaml` remain lightweight for local runs; the best-config merger
+        treats those CI-owned values as YAML-only so cached grids cannot overwrite them.
+      - Fine-tuning defaults favour longer runs on smaller batches (50 epochs, batch size 128, patience 5) and expose
+        separate `--encoder-lr` / `--head-lr` knobs so the backbone can adapt as quickly as the probe.
       - You can now dial in class imbalance and encoder updates explicitly:
         * `--pos-class-weight` accepts either a float or per-task `TASK=weight` override to up-weight rare positives.
+        * `--use-focal-loss/--dynamic-pos-weight/--oversample-minority` mitigate skewed datasets; combine them with
+          `--layerwise-decay` to slow learning in deeper encoder blocks.
+        * Post-hoc calibration is supported via `--calibrate-probabilities` with temperature scaling or isotonic
+          regression plus automatic validation-threshold tuning (`--threshold-metric`).
         * `--freeze-encoder/--no-freeze-encoder` toggles whether the backbone remains frozen even in fine-tuned mode.
         * `--head-ensemble-size` trains several lightweight heads and averages their predictions for a quick ensemble boost.
         * Pair these with `--no-calibrate` to benchmark calibrated vs. raw ROC-AUC without editing the code.

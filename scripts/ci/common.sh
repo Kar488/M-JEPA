@@ -2414,6 +2414,7 @@ dataset_loader = {
     "bf16": "--bf16",
     "devices": "--devices",
     "device": "--device",
+    "stream_chunk_size": "--stream-chunk-size",
 }
 
 # 2) Model architecture & training hyperparams (shared)
@@ -2478,6 +2479,7 @@ grid_only = {
     "sample_unlabeled": "--sample-unlabeled",
     "sample_labeled": "--sample-labeled",
     "n_rows_per_file": "--n-rows-per-file",
+    "stream_chunk_size": "--stream-chunk-size",
     "max_pretrain_batches": "--max-pretrain-batches",
     "target_pretrain_samples": "--target-pretrain-samples",
     "max_finetune_batches": "--max-finetune-batches",

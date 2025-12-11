@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import yaml
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -113,6 +115,44 @@ def _coerce_float_like(value: Any) -> Optional[float]:
         return float(value)
     except Exception:
         return None
+
+
+def _parse_pos_class_weight(values: Optional[Iterable[str]]) -> Optional[Any]:
+    if not values:
+        return None
+    scalar: Optional[float] = None
+    mapping: Dict[str, float] = {}
+    for raw in values:
+        if raw is None:
+            continue
+        token = str(raw).strip()
+        if not token:
+            continue
+        if "=" in token:
+            key, weight = token.split("=", 1)
+            key = key.strip()
+            try:
+                mapping[key] = float(weight)
+            except Exception:
+                logger.warning(
+                    "Failed to parse pos_class_weight pair '%s'; ignoring",
+                    token,
+                    exc_info=True,
+                )
+        else:
+            try:
+                scalar = float(token)
+            except Exception:
+                logger.warning(
+                    "Failed to parse pos_class_weight '%s'; ignoring",
+                    token,
+                    exc_info=True,
+                )
+    if mapping:
+        if scalar is not None and "default" not in mapping:
+            mapping["default"] = scalar
+        return mapping
+    return scalar
 
 
 def _resolve_labeled_dataset_source(args: argparse.Namespace) -> str:
@@ -345,7 +385,19 @@ def _apply_best_config_overrides(args: argparse.Namespace) -> None:
     _apply("bf16", best_overrides.get("bf16"), flags=("--bf16",))
     _apply("batch_size", best_overrides.get("batch_size"), flags=("--batch-size", "--batch_size"))
     _apply("epochs", best_overrides.get("epochs"), flags=("--epochs",))
-    _apply("lr", best_overrides.get("lr"), flags=("--lr",))
+
+    lr_override = best_overrides.get("lr")
+    lr_split_flags = ("--head-lr", "--head_lr", "--encoder-lr", "--encoder_lr")
+    split_lrs_active = any(
+        getattr(args, attr, None) is not None for attr in ("head_lr", "encoder_lr")
+    )
+    if lr_override is not None and not _flag_was_provided(lr_split_flags):
+        if not split_lrs_active:
+            _apply("lr", lr_override, flags=("--lr",))
+        else:
+            logger.info(
+                "Skipping best_config lr override because encoder/head learning rates are already specified."
+            )
 
     if inherited and best_path is not None:
         logger.info(
@@ -431,6 +483,20 @@ def _resolve_label_columns(args: argparse.Namespace) -> List[str]:
         if entry and entry not in seen:
             seen.append(entry)
     return seen
+
+
+def _load_task_hparams(path: str) -> Dict[str, Any]:
+    config_path = Path(path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Per-task hyperparameters file not found: {path}")
+    text = config_path.read_text(encoding="utf-8")
+    if config_path.suffix.lower() in {".yml", ".yaml"}:
+        data = yaml.safe_load(text)
+    else:
+        data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("Per-task hyperparameters must decode to a mapping")
+    return data
 
 
 def _sanitize_dataset_labels(dataset) -> tuple[Any, Dict[str, int]]:
@@ -782,6 +848,18 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
     else:
         seeds = CONFIG.get("finetune", {}).get("seeds", [0])  # type: ignore[assignment]
 
+    parsed_pos_weight = _parse_pos_class_weight(getattr(args, "pos_weight", None))
+    setattr(args, "pos_weight", parsed_pos_weight)
+
+    task_hparam_map: Dict[str, Any] = {}
+    per_task_path = getattr(args, "per_task_hparams", None)
+    if per_task_path:
+        try:
+            raw_map = _load_task_hparams(str(per_task_path))
+            task_hparam_map = {str(k).strip().lower(): v for k, v in raw_map.items()}
+        except Exception:
+            logger.warning("Failed to load per-task hyperparameters from %s", per_task_path, exc_info=True)
+
     try:
         dataset_path = _resolve_labeled_dataset_source(args)
     except FileNotFoundError:
@@ -817,6 +895,13 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
             "prefetch_factor": getattr(args, "prefetch_factor", None),
             "bf16": bool(getattr(args, "bf16", False)),
             "use_scaffold": bool(getattr(args, "use_scaffold", False)),
+            "use_focal_loss": bool(getattr(args, "use_focal_loss", False)),
+            "dynamic_pos_weight": bool(getattr(args, "dynamic_pos_weight", False)),
+            "oversample_minority": bool(getattr(args, "oversample_minority", False)),
+            "pos_class_weight": parsed_pos_weight,
+            "layerwise_decay": getattr(args, "layerwise_decay", None),
+            "calibrate_probabilities": bool(getattr(args, "calibrate_probabilities", False)),
+            "threshold_metric": getattr(args, "threshold_metric", None),
             "dataset_override_reason": os.getenv("FINETUNE_DATASET_OVERRIDE_REASON"),
         },
     )
@@ -933,6 +1018,9 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
         auto_scaffold = True
         setattr(args, "use_scaffold", True)
         logger.info("[finetune] enabling scaffold split for Tox21 fine-tune dataset")
+
+    label_key_norm = label_col_name.strip().lower()
+    task_overrides: Dict[str, Any] = task_hparam_map.get(label_key_norm, {}) if task_hparam_map else {}
 
     input_dim = labeled.graphs[0].x.shape[1]
     edge_dim = (
@@ -1363,8 +1451,9 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
             p for p in _iter_trainable_params(encoder) if getattr(p, "requires_grad", False)
         ]
         head_params = [p for p in head.parameters() if p.requires_grad]
-        optimizer_groups = []
-        raw_head_lr = getattr(args, "head_lr", None)
+        optimizer_groups: List[Dict[str, Any]] = []
+        layerwise_decay = task_overrides.get("layerwise_decay", getattr(args, "layerwise_decay", None))
+        raw_head_lr = task_overrides.get("head_lr", getattr(args, "head_lr", None))
         head_lr = raw_head_lr if raw_head_lr is not None else args.lr
         try:
             head_lr = float(head_lr)
@@ -1372,7 +1461,7 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
             logger.warning("Failed to parse head_lr=%s; falling back to lr=%s", raw_head_lr, args.lr)
             head_lr = float(args.lr)
 
-        raw_encoder_lr = getattr(args, "encoder_lr", None)
+        raw_encoder_lr = task_overrides.get("encoder_lr", getattr(args, "encoder_lr", None))
         encoder_lr = None
         if raw_encoder_lr is not None:
             try:
@@ -1384,21 +1473,18 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
                 encoder_lr = None
         if encoder_params:
             if encoder_lr is None:
-                encoder_lr = 3e-4
-                logger.info("Encoder LR defaulting to 3.00e-04")
+                encoder_lr = head_lr
             optimizer_groups.append({"params": encoder_params, "lr": encoder_lr})
         if head_params:
             optimizer_groups.append({"params": head_params, "lr": head_lr})
 
-        optimizer = (
-            torch.optim.AdamW(
+        optimizer = None
+        if optimizer_groups and layerwise_decay is None:
+            optimizer = torch.optim.AdamW(
                 optimizer_groups,
                 lr=head_lr,
                 weight_decay=1e-4,
             )
-            if optimizer_groups
-            else None
-        )
         if encoder_params:
             logger.info(
                 "Optimizer encoder group: %d tensors lr=%.2e",
@@ -1435,21 +1521,43 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
 
         cache_embeddings = not bool(encoder_params)
 
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=args.epochs
-        )
-        logger.info(
-            "CosineAnnealingLR configured with T_max=%d epochs for fine-tuning.",
-            args.epochs,
-        )
+        scheduler = None
+        if optimizer is not None:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=args.epochs
+            )
+            logger.info(
+                "CosineAnnealingLR configured with T_max=%d epochs for fine-tuning.",
+                args.epochs,
+            )
 
         # If resuming, load head/optim/scheduler from checkpoint
         if "head" in resume_state:
             head.load_state_dict(resume_state["head"], strict=False)
         if "optimizer" in resume_state:
             optimizer.load_state_dict(resume_state["optimizer"], strict=False)
-        if "scheduler" in resume_state:
+        if scheduler is not None and "scheduler" in resume_state:
             scheduler.load_state_dict(resume_state["scheduler"], strict=False)
+
+        pos_weight_override = task_overrides.get("pos_weight", getattr(args, "pos_weight", None))
+        class_weight_override = task_overrides.get("class_weight", getattr(args, "class_weight", None))
+        use_focal_flag = bool(task_overrides.get("use_focal_loss", getattr(args, "use_focal_loss", False)))
+        focal_gamma_value = task_overrides.get("focal_gamma", getattr(args, "focal_gamma", 2.0))
+        dynamic_pos_flag = bool(
+            task_overrides.get("dynamic_pos_weight", getattr(args, "dynamic_pos_weight", False))
+        )
+        oversample_flag = bool(
+            task_overrides.get("oversample_minority", getattr(args, "oversample_minority", False))
+        )
+        calibrate_probs_flag = bool(
+            task_overrides.get("calibrate_probabilities", getattr(args, "calibrate_probabilities", False))
+        )
+        calibration_method_norm = str(
+            task_overrides.get("calibration_method", getattr(args, "calibration_method", "temperature"))
+        )
+        threshold_metric_value = str(
+            task_overrides.get("threshold_metric", getattr(args, "threshold_metric", "f1"))
+        )
 
         # epoch to start from (resume file stores last finished epoch)
         start_epoch = int(resume_state.get("epoch", -1)) + 1
@@ -1505,6 +1613,16 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
                     train_indices=train_split,
                     val_indices=val_split,
                     test_indices=test_split,
+                    pos_weight=pos_weight_override,
+                    class_weight=class_weight_override,
+                    use_focal_loss=use_focal_flag,
+                    focal_gamma=focal_gamma_value,
+                    dynamic_pos_weight=dynamic_pos_flag,
+                    oversample_minority=oversample_flag,
+                    layerwise_decay=layerwise_decay,
+                    calibrate_probabilities=calibrate_probs_flag,
+                    calibration_method=calibration_method_norm,
+                    threshold_metric=threshold_metric_value,
                 )
 
                 train_batches = float(metrics.get("train/batches", 0.0) or 0.0)

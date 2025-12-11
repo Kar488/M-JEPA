@@ -27,7 +27,9 @@ import torch.nn.functional as F
 
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
+from sklearn.isotonic import IsotonicRegression
+from sklearn.metrics import f1_score, roc_curve
 
 from data.mdataset import GraphDataset
 from data.scaffold_split import scaffold_split_indices
@@ -89,6 +91,145 @@ def get_stage_config() -> Dict[str, Any]:
     """Return a shallow copy of the active stage configuration."""
 
     return dict(_STAGE_CONFIG)
+
+
+def _sigmoid_np(x: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-x, dtype=np.float64))
+
+
+def _prob_to_logit(p: np.ndarray) -> np.ndarray:
+    clipped = np.clip(p, 1e-7, 1.0 - 1e-7)
+    return np.log(clipped / (1.0 - clipped))
+
+
+def _compute_pos_weight_from_labels(labels: np.ndarray) -> Optional[np.ndarray]:
+    if labels.size == 0:
+        return None
+    arr = np.asarray(labels, dtype=np.float64)
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    valid = np.isfinite(arr)
+    if not valid.any():
+        return None
+    pos_mask = (arr > 0) & valid
+    neg_mask = (~pos_mask) & valid
+    pos_counts = pos_mask.sum(axis=0).astype(np.float64)
+    neg_counts = neg_mask.sum(axis=0).astype(np.float64)
+    weights: List[float] = []
+    for pos, neg in zip(pos_counts, neg_counts):
+        if pos <= 0:
+            weights.append(float("nan"))
+            continue
+        if neg <= 0:
+            weights.append(1.0)
+            continue
+        weights.append(neg / pos)
+    cleaned = [w for w in weights if math.isfinite(w) and w > 0]
+    if not cleaned:
+        return None
+    filled = [w if (math.isfinite(w) and w > 0) else cleaned[0] for w in weights]
+    return np.asarray(filled, dtype=np.float32)
+
+
+def _build_layerwise_param_groups(module: nn.Module, base_lr: float, decay: float) -> List[Dict[str, Any]]:
+    groups: List[Dict[str, Any]] = []
+    seen: Set[int] = set()
+    stack: List[Tuple[nn.Module, int]] = [(module, 0)]
+    while stack:
+        mod, depth = stack.pop()
+        params = list(mod.named_parameters(recurse=False))
+        if params:
+            lr = base_lr * (decay ** depth)
+            lr = max(lr, 0.0)
+            group_params = []
+            for _, param in params:
+                if not param.requires_grad:
+                    continue
+                pid = id(param)
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                group_params.append(param)
+            if group_params:
+                groups.append({"params": group_params, "lr": lr})
+        for child in mod.children():
+            stack.append((child, depth + 1))
+    return groups
+
+
+def _apply_threshold_offset(logits: np.ndarray, threshold: Optional[float]) -> np.ndarray:
+    if threshold is None:
+        return logits
+    if threshold <= 0 or threshold >= 1:
+        return logits
+    odds = threshold / (1.0 - threshold)
+    return logits - math.log(odds)
+
+
+def _temperature_scale_logits(logits: np.ndarray, targets: np.ndarray) -> Tuple[np.ndarray, float]:
+    logits_t = torch.as_tensor(logits, dtype=torch.float32)
+    targets_t = torch.as_tensor(targets, dtype=torch.float32)
+    temperature = torch.ones(1, requires_grad=True)
+    optimizer = torch.optim.LBFGS([temperature], lr=0.1, max_iter=50)
+    loss_fn = torch.nn.BCEWithLogitsLoss()
+
+    def _closure():
+        optimizer.zero_grad()
+        loss = loss_fn(logits_t / temperature, targets_t)
+        loss.backward()
+        return loss
+
+    optimizer.step(_closure)
+    temp_value = float(temperature.detach().clamp(min=1e-3).item())
+    return logits / temp_value, temp_value
+
+
+def _isotonic_calibration(logits: np.ndarray, targets: np.ndarray) -> Tuple[np.ndarray, IsotonicRegression]:
+    probs = _sigmoid_np(logits.reshape(-1))
+    iso = IsotonicRegression(out_of_bounds="clip")
+    iso.fit(probs, targets.reshape(-1))
+    calibrated = iso.transform(probs)
+    return calibrated.reshape(logits.shape), iso
+
+
+def _tune_threshold(y_true: np.ndarray, probs: np.ndarray, metric: str = "f1") -> Tuple[Optional[float], Optional[float]]:
+    y = np.asarray(y_true, dtype=np.float64).reshape(-1)
+    p = np.asarray(probs, dtype=np.float64).reshape(-1)
+    mask = np.isfinite(y) & np.isfinite(p)
+    if mask.sum() <= 0:
+        return None, None
+    y = y[mask]
+    p = p[mask]
+    if y.size == 0 or p.size == 0:
+        return None, None
+
+    best_threshold: Optional[float] = None
+    best_score: Optional[float] = None
+    metric = (metric or "f1").lower()
+
+    if metric == "roc_auc":
+        fpr, tpr, thresholds = roc_curve(y, p)
+        if thresholds.size == 0:
+            return None, None
+        scores = tpr - fpr
+        idx = int(np.argmax(scores))
+        best_threshold = float(thresholds[idx])
+        best_score = float(scores[idx])
+    else:
+        candidates = np.linspace(0.05, 0.95, 19, dtype=np.float64)
+        for candidate in candidates:
+            preds = (p >= candidate).astype(np.int64)
+            try:
+                score = f1_score(y.astype(np.int64), preds)
+            except Exception:
+                continue
+            if not math.isfinite(score):
+                continue
+            if best_score is None or score > best_score:
+                best_score = float(score)
+                best_threshold = float(candidate)
+
+    return best_threshold, best_score
 
 
 def _resolve_cuda_spawn_context(device_type: str):
@@ -942,6 +1083,14 @@ def _train_linear_head_impl(
     stage_config: Optional[Dict[str, Any]] = None,
     pos_weight: Optional[Any] = None,
     class_weight: Optional[Any] = None,
+    use_focal_loss: bool = False,
+    focal_gamma: float = 2.0,
+    dynamic_pos_weight: bool = False,
+    oversample_minority: bool = False,
+    layerwise_decay: Optional[float] = None,
+    calibrate_probabilities: bool = False,
+    calibration_method: str = "temperature",
+    threshold_metric: str = "f1",
     explain_mode: Optional[str] = None,
     explain_config: Optional[Dict[str, Any]] = None,
     **unused,
@@ -1271,13 +1420,19 @@ def _train_linear_head_impl(
     head_initial_mode = head_module.training
     if task_type == "classification":
         pos_weight_tensor: Optional[torch.Tensor] = None
-        if pos_weight is not None:
+
+        def _coerce_pos_weight(value: Any) -> Optional[torch.Tensor]:
+            if value is None:
+                return None
             try:
-                pos_weight_tensor = torch.as_tensor(pos_weight, dtype=torch.float32)
+                tensor = torch.as_tensor(value, dtype=torch.float32)
             except Exception:
                 logger.warning("Failed to coerce pos_weight to tensor; ignoring", exc_info=True)
-                pos_weight_tensor = None
-        elif class_weight is not None:
+                return None
+            return tensor
+
+        pos_weight_tensor = _coerce_pos_weight(pos_weight)
+        if pos_weight_tensor is None and class_weight is not None:
             neg_weight: Optional[float] = None
             pos_weight_value: Optional[float] = None
             if isinstance(class_weight, dict):
@@ -1303,10 +1458,29 @@ def _train_linear_head_impl(
                     logger.warning(
                         "Failed to derive pos_weight from class_weight; ignoring", exc_info=True
                     )
+
         if pos_weight_tensor is not None:
             pos_weight_tensor = pos_weight_tensor.to(device_t).reshape(-1)
-        loss_kwargs = {"pos_weight": pos_weight_tensor} if pos_weight_tensor is not None else {}
-        loss_fn = nn.BCEWithLogitsLoss(**loss_kwargs)
+
+        def _make_loss_fn(weight: Optional[torch.Tensor]) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+            kwargs = {"pos_weight": weight} if weight is not None else {}
+            if not use_focal_loss:
+                return nn.BCEWithLogitsLoss(**kwargs)
+
+            focal_base = nn.BCEWithLogitsLoss(reduction="none", **kwargs)
+            gamma = float(focal_gamma) if focal_gamma is not None else 2.0
+
+            def _focal(preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+                bce = focal_base(preds, targets)
+                probs = torch.sigmoid(preds)
+                pt = torch.where(targets > 0, probs, 1 - probs)
+                modulating = torch.pow(1 - pt, gamma)
+                loss = modulating * bce
+                return loss.mean()
+
+            return _focal
+
+        loss_fn = _make_loss_fn(pos_weight_tensor)
     else:
         loss_fn = nn.MSELoss()
     optimiser: Optimizer
@@ -1321,13 +1495,19 @@ def _train_linear_head_impl(
         enc_params = [p for p in enc_for_opt.parameters() if p.requires_grad]
         head_params = [p for p in head_param_source.parameters() if p.requires_grad]
         param_groups = []
+        enc_lr_resolved = encoder_lr if encoder_lr is not None else lr
         if enc_params:
-            param_groups.append({"params": enc_params, "lr": encoder_lr or lr})
+            if layerwise_decay is not None and layerwise_decay > 0:
+                param_groups.extend(
+                    _build_layerwise_param_groups(enc_for_opt, float(enc_lr_resolved), float(layerwise_decay))
+                )
+            else:
+                param_groups.append({"params": enc_params, "lr": enc_lr_resolved})
         if head_params:
             param_groups.append({"params": head_params, "lr": head_lr or lr})
 
         if param_groups:
-            base_lr = head_lr or encoder_lr or lr
+            base_lr = param_groups[0].get("lr", head_lr or encoder_lr or lr)
             optimiser = torch.optim.Adam(param_groups, lr=base_lr)
         elif head_params:
             optimiser = torch.optim.Adam(head_params, lr=head_lr or lr)
@@ -1336,6 +1516,33 @@ def _train_linear_head_impl(
     rank = get_rank() if distributed else 0
     world = get_world_size() if distributed else 1
     train_idx_rank = train_idx[rank::world]
+
+    train_sampler_weights: Optional[List[float]] = None
+    if task_type == "classification" and oversample_minority and len(train_idx_rank) > 0:
+        labels_attr = getattr(dataset, "labels", None)
+        if labels_attr is not None:
+            labels_arr = np.asarray(labels_attr)
+            try:
+                subset = labels_arr[train_idx_rank]
+            except Exception:
+                subset = labels_arr
+            computed_weights = _compute_pos_weight_from_labels(np.asarray(subset))
+            if computed_weights is not None:
+                scale = float(np.nanmean(computed_weights))
+                if math.isfinite(scale) and scale > 0:
+                    weights = np.ones(len(train_idx_rank), dtype=np.float32)
+                    pos_mask = subset > 0 if subset.ndim == 1 else (subset > 0).any(axis=1)
+                    weights[np.asarray(pos_mask, dtype=bool)] = scale
+                    weights = np.clip(weights, 1e-6, None)
+                    train_sampler_weights = weights.tolist()
+
+    if task_type == "classification" and dynamic_pos_weight and pos_weight_tensor is None:
+        labels_attr = getattr(dataset, "labels", None)
+        if labels_attr is not None and len(train_idx_rank) > 0:
+            dynamic_weight_np = _compute_pos_weight_from_labels(np.asarray(labels_attr)[train_idx_rank])
+            if dynamic_weight_np is not None:
+                pos_weight_tensor = torch.as_tensor(dynamic_weight_np, dtype=torch.float32, device=device_t).reshape(-1)
+                loss_fn = _make_loss_fn(pos_weight_tensor)
 
     collate_fn = _GraphBatchCollator(dataset, task_type)
     pin_memory_enabled = bool(pin_memory and device_t.type == "cuda")
@@ -1470,7 +1677,7 @@ def _train_linear_head_impl(
             )
         return effective
 
-    def _build_loader(indices: List[int], shuffle: bool) -> Optional[DataLoader]:
+    def _build_loader(indices: List[int], shuffle: bool, split_name: str) -> Optional[DataLoader]:
         if not indices:
             return None
         worker_count = _effective_worker_count(len(indices))
@@ -1489,6 +1696,20 @@ def _train_linear_head_impl(
         elif loader_prefetch is not None:
             batches_for_split = max(1, math.ceil(len(indices) / max(1, batch_size)))
             loader_prefetch = max(1, min(loader_prefetch, max(2, batches_for_split)))
+        sampler = None
+        if (
+            split_name == "train"
+            and oversample_minority
+            and train_sampler_weights is not None
+            and len(train_sampler_weights) == len(indices)
+        ):
+            sampler = WeightedRandomSampler(
+                weights=train_sampler_weights,
+                num_samples=len(train_sampler_weights),
+                replacement=True,
+            )
+            shuffle = False
+
         loader_kwargs = {
             "batch_size": batch_size,
             "shuffle": shuffle,
@@ -1497,6 +1718,8 @@ def _train_linear_head_impl(
             "collate_fn": collate_fn,
             "drop_last": False,
         }
+        if sampler is not None:
+            loader_kwargs["sampler"] = sampler
         if worker_count > 0:
             loader_kwargs["persistent_workers"] = bool(persistent_workers)
             if loader_prefetch is not None:
@@ -1576,9 +1799,9 @@ def _train_linear_head_impl(
             _remove_loader_iterator(loader)
         _reset_mp_loader_iters(existing)
         return (
-            _build_loader(train_idx_rank, shuffle=True),
-            _build_loader(val_idx, shuffle=False),
-            _build_loader(test_idx, shuffle=False),
+            _build_loader(train_idx_rank, shuffle=True, split_name="train"),
+            _build_loader(val_idx, shuffle=False, split_name="val"),
+            _build_loader(test_idx, shuffle=False, split_name="test"),
         )
 
     def _refresh_loaders() -> Tuple[Optional[DataLoader], Optional[DataLoader], Optional[DataLoader]]:
@@ -1949,6 +2172,14 @@ def _train_linear_head_impl(
                 logger.info("Time budget hit before epoch %d; stopping training.", epoch)
                 break
 
+            if task_type == "classification" and dynamic_pos_weight:
+                labels_attr = getattr(dataset, "labels", None)
+                if labels_attr is not None and len(train_idx_rank) > 0:
+                    updated = _compute_pos_weight_from_labels(np.asarray(labels_attr)[train_idx_rank])
+                    if updated is not None:
+                        pos_weight_tensor = torch.as_tensor(updated, dtype=torch.float32, device=device_t).reshape(-1)
+                        loss_fn = _make_loss_fn(pos_weight_tensor)
+
             encoder.eval()
             head_module.train()
             batch_losses = []
@@ -2163,19 +2394,27 @@ def _train_linear_head_impl(
         )
 
     metrics: Dict[str, Any] = {"head": head_param_source}
+    tuned_threshold: Optional[float] = None
+    tuned_score: Optional[float] = None
+    calibration_payload: Dict[str, Any] = {}
+    calibrator: Optional[Tuple[str, Any]] = None
+
     if is_main_process() or not distributed:
         encoder.eval()
         head_module.eval()
-        all_targets = []
-        all_preds = []
 
-        if test_loader is not None:
-            for batch in _yield_batches("test"):
+        def _collect_outputs(split: str, *, log_meta: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+            preds_list: List[np.ndarray] = []
+            targets_list: List[np.ndarray] = []
+            loader = _get_loader(split)
+            if loader is None:
+                return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
+            for batch in _yield_batches(split):
                 batch_x, batch_adj, batch_ptr, batch_labels, batch_meta = _move_batch_to_device(
                     batch, device_t, pin_memory_enabled
                 )
                 if batch_labels is None:
-                    raise ValueError("Test loader returned samples without labels.")
+                    raise ValueError(f"{split} loader returned samples without labels.")
 
                 graph_emb = _get_graph_embeddings(batch_x, batch_adj, batch_ptr, batch_meta)
                 param = next(head_param_source.parameters(), None)
@@ -2191,7 +2430,6 @@ def _train_linear_head_impl(
                     preds = raw_preds.squeeze(-1)
 
                 preds = torch.nan_to_num(preds)
-
                 targets = batch_labels
                 try:
                     targets = targets.reshape(preds.shape)
@@ -2200,20 +2438,62 @@ def _train_linear_head_impl(
                         f"Target size {tuple(batch_labels.shape)} must match predictions {tuple(preds.shape)}"
                     ) from exc
 
-                all_preds.append(preds.detach().to(torch.float32).cpu().numpy())
-                all_targets.append(targets.detach().to(torch.float32).cpu().numpy())
-                if ig_logger is not None:
+                preds_list.append(preds.detach().to(torch.float32).cpu().numpy())
+                targets_list.append(targets.detach().to(torch.float32).cpu().numpy())
+                if log_meta and ig_logger is not None:
                     ig_logger.process_batch(batch_meta)
 
-        if all_targets and all_preds:
-            y_true = np.concatenate(all_targets)
-            y_pred = np.concatenate(all_preds)
-        else:
-            y_true = np.array([], dtype=np.float32)
-            y_pred = np.array([], dtype=np.float32)
+            if preds_list and targets_list:
+                return (
+                    np.concatenate(preds_list),
+                    np.concatenate(targets_list),
+                )
+            return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
+
+        val_logits, val_targets = _collect_outputs("val")
+        test_logits, test_targets = _collect_outputs("test", log_meta=True)
+
+        eval_val_logits = np.nan_to_num(val_logits, nan=0.0, posinf=0.0, neginf=0.0)
+        eval_test_logits = np.nan_to_num(test_logits, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if task_type == "classification":
+            if calibrate_probabilities and val_targets.size > 0:
+                method_norm = (calibration_method or "temperature").lower()
+                if method_norm == "isotonic":
+                    calibrated_probs, iso_model = _isotonic_calibration(eval_val_logits, val_targets)
+                    eval_val_logits = _prob_to_logit(calibrated_probs)
+                    calibrator = ("isotonic", iso_model)
+                else:
+                    eval_val_logits, temp_value = _temperature_scale_logits(eval_val_logits, val_targets)
+                    calibrator = ("temperature", temp_value)
+                    calibration_payload["calibration/temperature"] = float(temp_value)
+                calibration_payload["calibration/method"] = calibrator[0]
+
+            def _apply_calibrator_to_logits(logits: np.ndarray) -> np.ndarray:
+                if calibrator is None:
+                    return logits
+                if calibrator[0] == "temperature":
+                    temp = float(calibrator[1]) if calibrator[1] is not None else 1.0
+                    return logits / max(temp, 1e-3)
+                calibrated = calibrator[1].transform(_sigmoid_np(logits.reshape(-1))).reshape(logits.shape)
+                return _prob_to_logit(calibrated)
+
+            eval_test_logits = _apply_calibrator_to_logits(eval_test_logits)
+            if calibrator is not None:
+                eval_val_logits = _apply_calibrator_to_logits(eval_val_logits)
+
+            val_probs = _sigmoid_np(eval_val_logits)
+            tuned_threshold, tuned_score = _tune_threshold(val_targets, val_probs, threshold_metric)
+            if tuned_threshold is not None:
+                eval_test_logits = _apply_threshold_offset(eval_test_logits, tuned_threshold)
+                eval_val_logits = _apply_threshold_offset(eval_val_logits, tuned_threshold)
+                calibration_payload["threshold/value"] = float(tuned_threshold)
+            if tuned_score is not None:
+                calibration_payload["threshold/score"] = float(tuned_score)
+
         # Final safety net
-        y_true = np.nan_to_num(y_true, nan=0.0, posinf=0.0, neginf=0.0)
-        y_pred = np.nan_to_num(y_pred, nan=0.0, posinf=0.0, neginf=0.0)
+        y_true = np.nan_to_num(test_targets, nan=0.0, posinf=0.0, neginf=0.0)
+        y_pred = np.nan_to_num(eval_test_logits, nan=0.0, posinf=0.0, neginf=0.0)
         if task_type == "classification":
             metrics.update(compute_classification_metrics(y_true, y_pred))
         else:
@@ -2222,6 +2502,7 @@ def _train_linear_head_impl(
             metrics.update(best_val_snapshot)
         elif val_loader is not None:
             metrics.setdefault("val_loss", float("nan"))
+        metrics.update(calibration_payload)
         metrics["train/batches"] = float(total_batches_done)
         metrics["train/loader_batches"] = float(planned_train_batches)
         metrics["train/epoch_batches"] = float(last_epoch_batches)
@@ -2288,6 +2569,14 @@ def train_linear_head(
     stage_config: Optional[Dict[str, Any]] = None,
     pos_weight: Optional[Any] = None,
     class_weight: Optional[Any] = None,
+    use_focal_loss: bool = False,
+    focal_gamma: float = 2.0,
+    dynamic_pos_weight: bool = False,
+    oversample_minority: bool = False,
+    layerwise_decay: Optional[float] = None,
+    calibrate_probabilities: bool = False,
+    calibration_method: str = "temperature",
+    threshold_metric: str = "f1",
     explain_mode: Optional[str] = None,
     explain_config: Optional[Dict[str, Any]] = None,
     **unused,
@@ -2334,6 +2623,14 @@ def train_linear_head(
             stage_config=stage_config,
             pos_weight=pos_weight,
             class_weight=class_weight,
+            use_focal_loss=use_focal_loss,
+            focal_gamma=focal_gamma,
+            dynamic_pos_weight=dynamic_pos_weight,
+            oversample_minority=oversample_minority,
+            layerwise_decay=layerwise_decay,
+            calibrate_probabilities=calibrate_probabilities,
+            calibration_method=calibration_method,
+            threshold_metric=threshold_metric,
             explain_mode=explain_mode,
             explain_config=explain_config,
             **unused,
@@ -2399,6 +2696,14 @@ def train_linear_head(
                 stage_config=stage_config,
                 pos_weight=pos_weight,
                 class_weight=class_weight,
+                use_focal_loss=use_focal_loss,
+                focal_gamma=focal_gamma,
+                dynamic_pos_weight=dynamic_pos_weight,
+                oversample_minority=oversample_minority,
+                layerwise_decay=layerwise_decay,
+                calibrate_probabilities=calibrate_probabilities,
+                calibration_method=calibration_method,
+                threshold_metric=threshold_metric,
                 **unused,
             )
         finally:

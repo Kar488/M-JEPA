@@ -65,6 +65,8 @@ default:
 pretrain:
   yaml_only:
     - save_every
+    - stream_chunk_size
+    - n_rows_per_file
   bestcfg_only:
     - mask_ratio
     - pretrain_batch_size
@@ -73,9 +75,24 @@ finetune:
   yaml_only:
     - jepa_encoder
     - ckpt_dir
-  bestcfg_only:
     - finetune_batch_size
     - finetune_epochs
+    - patience
+    - lr
+    - learning_rate
+    - encoder_lr
+    - head_lr
+    - layerwise_decay
+    - use_focal_loss
+    - focal_gamma
+    - dynamic_pos_weight
+    - oversample_minority
+    - pos_weight
+    - calibrate_probabilities
+    - calibration_method
+    - threshold_metric
+    - per_task_hparams
+  bestcfg_only: []
 bench:
   yaml_only:
     - dataset
