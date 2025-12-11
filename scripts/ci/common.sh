@@ -1882,15 +1882,32 @@ simulate_progress() {
 yaml_args() {
   # Usage: yaml_args <section>
   # Prints one argument per line: --key <value> OR --flag (for booleans)
-  # Rules: 
+  # Rules:
   #  - Convert underscores to kebab-case flags (cache_dir -> --cache-dir)
   #  - Strings with spaces => wrap in double quotes
   #  - Env refs like ${VAR} or $VAR => keep for shell to expand (double-quote)
   #  - Lists => repeat the flag
   #  - true => boolean flag present; false => omitted
   # Determine a python interpreter (python, python3, etc.)
-   local py; py=$(python_bin) || { echo "python not found" >&2; return 127; }
-   "$py" - "$@" <<'PY'
+   local py_cmd=()
+   local py
+
+   if py=$(python_bin 2>/dev/null); then
+     if "$py" - <<'PY' >/dev/null 2>&1
+import importlib.util, sys
+sys.exit(0 if importlib.util.find_spec("yaml") else 1)
+PY
+     then
+       py_cmd=("$py")
+     fi
+   fi
+
+   if [[ ${#py_cmd[@]} -eq 0 ]]; then
+     ensure_micromamba
+     py_cmd=("$MMBIN" run -n mjepa python)
+   fi
+
+   "${py_cmd[@]}" - "$@" <<'PY'
 import sys, os, yaml, re
 section = sys.argv[1] if len(sys.argv) > 1 else "grid_search"
 with open(os.environ.get("TRAIN_JEPA_CI"), "r") as f:
