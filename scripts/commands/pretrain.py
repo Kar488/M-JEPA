@@ -953,6 +953,14 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         )
         epochs_run = max(0, args.epochs - start_epoch)
         total_steps = epochs_run * effective_steps_per_epoch
+        # ``unlabeled`` may have been released when streaming chunks; keep the
+        # cached length hint so summary rows remain informative.
+        graphs_loaded = (
+            dataset_len_hint
+            if dataset_len_hint is not None
+            else len(unlabeled) if unlabeled is not None else 0
+        )
+
         pretrain_cfg = {
             "gnn_type": args.gnn_type,
             "hidden_dim": args.hidden_dim,
@@ -965,7 +973,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             "steps_per_epoch": steps_per_epoch,
             "effective_steps_per_epoch": effective_steps_per_epoch,
             "total_steps": total_steps,
-            "graphs": len(unlabeled),
+            "graphs": graphs_loaded,
             "requested_graphs": graphs_requested,
             "files": num_source_files,
         }
@@ -990,7 +998,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             [
                 "pretrain",
                 "-",
-                len(unlabeled),
+                graphs_loaded,
                 graphs_requested if graphs_requested is not None else "-",
                 epochs_run,
                 steps_per_epoch,
@@ -1008,7 +1016,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         baseline_row = [
             "baseline",
             "all assays",
-            len(unlabeled),
+            graphs_loaded,
             graphs_requested if graphs_requested is not None else "-",
             "-",
             "-",
