@@ -112,8 +112,12 @@ def test_load_dataset_recovers_when_graphdataset_returns_zero(tmp_path, monkeypa
     monkeypatch.setattr(graph_visuals, "GRAPH_DATASET_AVAILABLE", True)
     monkeypatch.setattr(graph_visuals, "_FORCE_FALLBACK_LOADER", False)
 
-    dataset_obj, loader = graph_visuals._load_dataset(str(dataset), limit=2)
+    dataset_obj, loader, dataset_label, fallback_reason = graph_visuals._load_dataset(
+        str(dataset), limit=2
+    )
     assert loader == "fallback"
+    assert dataset_label == str(dataset.resolve())
+    assert fallback_reason is None
     assert graph_visuals._graph_count(dataset_obj) > 0
 
 
