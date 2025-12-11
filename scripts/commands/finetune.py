@@ -2268,7 +2268,46 @@ def evaluate_finetuned_head(
         except Exception:
             return x
 
-    state = load_checkpoint(ckpt_path)
+    from pathlib import Path
+
+    def _resolve_ckpt_path(raw: str) -> str:
+        base = Path(raw)
+        if base.is_file():
+            return str(base)
+
+        if base.is_dir():
+            direct = base / "head.pt"
+            if direct.is_file():
+                return str(direct)
+
+            label_candidates: List[str] = []
+            arg_label = getattr(args, "label_col", None)
+            if arg_label:
+                label_candidates.append(str(arg_label))
+
+            try:
+                for label in _resolve_label_columns(args):
+                    if label and label not in label_candidates:
+                        label_candidates.append(label)
+            except Exception:
+                pass
+
+            search_dirs = []
+            for label in label_candidates:
+                search_dirs.append(base / label)
+                search_dirs.append(base / _sanitize_alias(label))
+
+            for candidate_dir in search_dirs:
+                for fname in ("head.pt", "ft_best.pt"):
+                    path = candidate_dir / fname
+                    if path.is_file():
+                        logger.info("Resolved finetune head at %s", path)
+                        return str(path)
+
+        raise FileNotFoundError(raw)
+
+    resolved_ckpt = _resolve_ckpt_path(ckpt_path)
+    state = load_checkpoint(resolved_ckpt)
     if "encoder" not in state or "head" not in state:
         logger.warning("Checkpoint missing encoder or head: %s", ckpt_path)
         return {}
@@ -2289,7 +2328,7 @@ def evaluate_finetuned_head(
 
     import torch
 
-    sidecar = os.path.join(os.path.dirname(ckpt_path or ""), "encoder.pt")
+    sidecar = os.path.join(os.path.dirname(resolved_ckpt or ""), "encoder.pt")
     side_state = None
     if not enc_cfg and os.path.isfile(sidecar):
         try:
