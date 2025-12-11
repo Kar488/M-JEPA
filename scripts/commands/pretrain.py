@@ -592,7 +592,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 num_source_files = len(stream_files)
 
             requested_graphs = sample_ul if sample_ul is not None else getattr(args, "sample_unlabeled", None)
-            dataset_len_hint = len(unlabeled)
+            dataset_len_hint = len(unlabeled) if unlabeled is not None else 0
             if stream_enabled:
                 per_pass = stream_chunk_size * max(num_source_files, 1)
                 dataset_len_hint = requested_graphs or per_pass

@@ -76,8 +76,6 @@ finetune:
     - jepa_encoder
     - ckpt_dir
     - patience
-    - lr
-    - learning_rate
     - encoder_lr
     - head_lr
     - layerwise_decay
