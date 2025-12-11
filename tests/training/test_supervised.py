@@ -72,6 +72,23 @@ class DummyDataset:
         return batch_x, batch_adj, ptr, batch_labels
 
 
+class TinyEncoder(nn.Module):
+    """Small encoder to exercise layer-wise parameter grouping."""
+
+    def __init__(self, hidden_dim: int = 4):
+        super().__init__()
+        self.scale = nn.Parameter(torch.ones(1))
+        self.stem = nn.Linear(hidden_dim, hidden_dim)
+        self.encoder = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+    def forward(self, x):  # pragma: no cover - helpers only
+        return self.encoder(self.stem(x)) * self.scale
+
+
 def test_pool_batch_embeddings_handles_variable_sizes():
     node_emb = torch.arange(15, dtype=torch.float32).reshape(5, 3)
     batch_ptr = torch.tensor([0, 2, 5], dtype=torch.long)
