@@ -42,22 +42,22 @@ grid_search:
   best_config_out: ${GRID_DIR}/best_grid_config.json
   use_wandb: true
 
-  pretrain:
-    <<: *common
-    unlabeled_dir: ${APP_DIR}/data/ZINC-canonicalized
-    labeled_dir:   ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
-    plot_dir: ${PRETRAIN_DIR}/plots
-    ckpt_dir: ${PRETRAIN_DIR}
-    save_every: 1
-    pretrain_epochs: ${PRETRAIN_EPOCHS:-3}    # maps to --pretrain-epochs for "pretrain"
-    pretrain_batch_size: 256
-    sample_unlabeled: 10000000
-    stream_chunk_size: 50000
-    n_rows_per_file: 50000
-    max_pretrain_batches: 0
-    output: ${PRETRAIN_DIR}/encoder.pt
-    force_tqdm: true
-    use_wandb: true
+pretrain:
+  <<: *common
+  unlabeled_dir: ${APP_DIR}/data/ZINC-canonicalized
+  labeled_dir:   ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
+  plot_dir: ${PRETRAIN_DIR}/plots
+  ckpt_dir: ${PRETRAIN_DIR}
+  save_every: 1
+  pretrain_epochs: ${PRETRAIN_EPOCHS:-3}    # maps to --pretrain-epochs for "pretrain"
+  pretrain_batch_size: 256
+  sample_unlabeled: 10000000
+  stream_chunk_size: 50000
+  n_rows_per_file: 50000
+  max_pretrain_batches: 0
+  output: ${PRETRAIN_DIR}/encoder.pt
+  force_tqdm: true
+  use_wandb: true
 
 finetune:
   <<: *common
