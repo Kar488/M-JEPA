@@ -565,6 +565,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                         )
                     prefix = os.path.splitext(stream_files[initial_stream_index])[0]
                     unlabeled = _load_unlabeled_chunk(prefix, sample_ul)
+                    if unlabeled is None:
+                        initial_stream_index += 1
+                        continue
                     if len(unlabeled) == 0:
                         _teardown_dataset(unlabeled)
                         unlabeled = None
