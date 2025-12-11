@@ -255,14 +255,14 @@ def _guess_extension(path: str) -> str:
     )
 
 
-def _synthetic_dataset(limit: Optional[int]) -> Tuple[GraphDataset, str]:
+def _synthetic_dataset(limit: Optional[int], reason: str) -> Tuple[GraphDataset, str, str, str]:
     target = limit if (limit is not None and limit > 0) else len(_SYNTHETIC_SMILES)
     target = max(target, 1)
     smiles = list(islice(cycle(_SYNTHETIC_SMILES), target))
     logger.warning(
         "Falling back to %d synthetic molecules for graph visualisation", target
     )
-    return FALLBACK_GRAPH_DATASET(smiles), "synthetic"
+    return FALLBACK_GRAPH_DATASET(smiles), "synthetic", "synthetic", reason
 
 
 def _graph_count(dataset: Any) -> int:
@@ -279,9 +279,11 @@ def _graph_count(dataset: Any) -> int:
         return 0
 
 
-def _load_dataset(dataset_path: Optional[str], limit: Optional[int]) -> Tuple[GraphDataset, str]:
+def _load_dataset(
+    dataset_path: Optional[str], limit: Optional[int]
+) -> Tuple[GraphDataset, str, str, Optional[str]]:
     if not dataset_path:
-        return _synthetic_dataset(limit)
+        return _synthetic_dataset(limit, "dataset path missing (DATASET_DIR unset)")
 
     dataset_path = os.path.abspath(dataset_path)
     try:
@@ -292,7 +294,7 @@ def _load_dataset(dataset_path: Optional[str], limit: Optional[int]) -> Tuple[Gr
             dataset_path,
             exc,
         )
-        return _synthetic_dataset(limit)
+        return _synthetic_dataset(limit, f"dataset unreachable: {exc}")
     limit = None if (limit is None or limit <= 0) else limit
     loader_label = "fallback"
     use_fallback = _FORCE_FALLBACK_LOADER or not GRAPH_DATASET_AVAILABLE
@@ -323,7 +325,7 @@ def _load_dataset(dataset_path: Optional[str], limit: Optional[int]) -> Tuple[Gr
                 )
                 use_fallback = True
             else:
-                return dataset, loader_label
+                return dataset, loader_label, dataset_path, None
         except Exception as exc:
             logger.warning(
                 "GraphDataset loader failed for %s (%s); falling back to CSV-only parser",
@@ -351,14 +353,14 @@ def _load_dataset(dataset_path: Optional[str], limit: Optional[int]) -> Tuple[Gr
                 raise ValueError(
                     "Fallback graph loader only supports CSV inputs; set DATASET_DIR to a CSV file"
                 )
-            return dataset, "fallback"
+            return dataset, "fallback", dataset_path, None
         except Exception as exc:
             logger.error(
                 "Fallback graph loader failed for %s (%s); using synthetic molecules",
                 dataset_path,
                 exc,
             )
-            return _synthetic_dataset(limit)
+            return _synthetic_dataset(limit, f"fallback loader failed: {exc}")
     raise RuntimeError("Unexpected dataset loading state")
 
 
@@ -1039,8 +1041,14 @@ def _write_index_html(output_dir: Path) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="[graph-visuals] %(message)s")
     args = parse_args(argv)
-    dataset, loader_label = _load_dataset(args.dataset_path, args.num_samples)
-    dataset_label = args.dataset_path or "synthetic"
+    dataset, loader_label, dataset_label, fallback_reason = _load_dataset(
+        args.dataset_path, args.num_samples
+    )
+    if fallback_reason:
+        logger.warning(
+            "Graph visuals are using a synthetic dataset (%s). Set DATASET_DIR or pass --dataset-path to render real molecules.",
+            fallback_reason,
+        )
     total = len(dataset.graphs)
     if total == 0:
         logger.warning("Dataset %s contained zero graphs; nothing to render", dataset_label)
@@ -1073,10 +1081,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             logger.info(
                 "RDKit unavailable; matplotlib fallback rendered all samples."
             )
+        logger.error(
+            "Install RDKit to enable 2-D depictions: pip install rdkit-pypi==2022.9.5 (Python < 3.12) "
+            "or micromamba install -c conda-forge rdkit=2023.09.5. Import error: %s",
+            RDKit_IMPORT_ERROR or "unknown",
+        )
     summary = {
-        "dataset_path": os.path.abspath(dataset_label)
-        if args.dataset_path
-        else "synthetic",
+        "dataset_path": dataset_label,
+        "fallback_reason": fallback_reason,
         "output_dir": str(output_dir.resolve()),
         "num_graphs": total,
         "num_rendered": len(indices),
