@@ -19,6 +19,7 @@ from models.base import EncoderBase
 from training.supervised import (
     _resolve_cuda_spawn_context,
     _pool_batch_embeddings,
+    _build_layerwise_param_groups,
     stratified_split,
     train_linear_head,
 )
@@ -579,6 +580,39 @@ def test_train_linear_head_recovers_from_emfile(monkeypatch):
 
     assert failure["raised"]
     assert "head" in metrics
+
+
+def test_layerwise_param_groups_decay():
+    encoder = TinyEncoder()
+    groups = _build_layerwise_param_groups(encoder, base_lr=0.01, decay=0.5)
+    lrs = [g.get("lr") for g in groups]
+    assert max(lrs) == pytest.approx(0.01)
+    assert min(lrs) < max(lrs)
+
+
+def test_train_linear_head_handles_focal_dynamic_and_calibration():
+    np.random.seed(2)
+    torch.manual_seed(2)
+    labels = [0] * 8 + [1] * 4
+    dataset = DummyDataset(labels)
+    enc = DummyEncoder(4)
+    metrics = train_linear_head(
+        dataset,
+        enc,
+        "classification",
+        epochs=2,
+        batch_size=2,
+        lr=0.01,
+        patience=1,
+        device="cpu",
+        use_focal_loss=True,
+        dynamic_pos_weight=True,
+        oversample_minority=True,
+        calibrate_probabilities=True,
+    )
+
+    assert "roc_auc" in metrics
+    assert metrics.get("calibration/method") in {None, "temperature", "isotonic"}
 def test_resolve_cuda_spawn_context_prefers_spawn(monkeypatch):
     sentinel = object()
 

@@ -161,3 +161,14 @@ def test_graph_positions_and_edges_fallbacks():
 def test_normalise_matrix_handles_iterables():
     assert graph_visuals._normalise_matrix([[1, 2], (3, 4)]) == [[1.0, 2.0], [3.0, 4.0]]
     assert graph_visuals._normalise_matrix(None) is None
+
+
+def test_rdkit_draw_stack_available(tmp_path):
+    pytest.importorskip("rdkit.Chem.Draw.rdMolDraw2D")
+
+    png_path = tmp_path / "rdkit.png"
+    rendered = graph_visuals._draw_rdkit_2d("C", png_path)
+
+    assert graph_visuals.RDKit_AVAILABLE is True
+    assert rendered is True
+    assert png_path.exists()

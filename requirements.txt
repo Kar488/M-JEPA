@@ -8,8 +8,13 @@ scikit-learn
 #torch-geometric==2.5.3 # done through git workflow but if we want clean local test environments (perhaps move later to environment.yml)
 tensorflow
 
+# RDKit core (already included via conda in prepare_env.sh)
 # Latest stable RDKit wheels on PyPI stop at 2022.9.x; wheels are unavailable for Python>=3.12.
 rdkit-pypi==2022.9.5; python_version < "3.12"  # PyPI-friendly RDKit builds for graph visuals and featurisation
+# Optional RDKit drawing dependencies for 2-D/3-D rendering (see scripts/ci/generate_graph_visuals.py)
+pillow
+pycairo
+cairosvg  # or other backend as appropriate
 pyyaml
 joblib
 fastparquet             # optional parquet I/O alternative

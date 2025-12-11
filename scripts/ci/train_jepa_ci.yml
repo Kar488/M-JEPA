@@ -25,10 +25,10 @@ grid_search:
   ema_decays: [0.996, 0.998, 0.999]
   add_3d_options: [1]
   pretrain_batch_sizes: [256]
-  finetune_batch_sizes: [256]
+  finetune_batch_sizes: [128]
   temperatures: [0.07, 0.1, 0.2]
   pretrain_epochs_options: [1]
-  finetune_epochs_options: [10]
+  finetune_epochs_options: [50]
   learning_rates: [3e-4, 1e-4]
   seeds: [1, 2, 3]
   sample_unlabeled: 100000
@@ -42,21 +42,22 @@ grid_search:
   best_config_out: ${GRID_DIR}/best_grid_config.json
   use_wandb: true
 
-pretrain:
-  <<: *common
-  unlabeled_dir: ${APP_DIR}/data/ZINC-canonicalized
-  labeled_dir:   ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
-  plot_dir: ${PRETRAIN_DIR}/plots
-  n_rows_per_file: 1000
-  ckpt_dir: ${PRETRAIN_DIR}
-  save_every: 1
-  pretrain_epochs: ${PRETRAIN_EPOCHS:-3}    # maps to --pretrain-epochs for "pretrain"
-  pretrain_batch_size: 256
-  sample_unlabeled: 10000000
-  max_pretrain_batches: 0
-  output: ${PRETRAIN_DIR}/encoder.pt
-  force_tqdm: true
-  use_wandb: true
+  pretrain:
+    <<: *common
+    unlabeled_dir: ${APP_DIR}/data/ZINC-canonicalized
+    labeled_dir:   ${APP_DIR}/data/katielinkmoleculenet_benchmark/train
+    plot_dir: ${PRETRAIN_DIR}/plots
+    ckpt_dir: ${PRETRAIN_DIR}
+    save_every: 1
+    pretrain_epochs: ${PRETRAIN_EPOCHS:-3}    # maps to --pretrain-epochs for "pretrain"
+    pretrain_batch_size: 256
+    sample_unlabeled: 10000000
+    stream_chunk_size: 50000
+    n_rows_per_file: 50000
+    max_pretrain_batches: 0
+    output: ${PRETRAIN_DIR}/encoder.pt
+    force_tqdm: true
+    use_wandb: true
 
 finetune:
   <<: *common
@@ -67,15 +68,19 @@ finetune:
   label_col: "${FINETUNE_LABEL_COL:-measured log solubility in mols per litre}"
   ckpt_dir: ${FINETUNE_DIR}
   save_every: 1
-  finetune_epochs: ${FINETUNE_EPOCHS:-10}    # maps to --epochs for "finetune"
+  finetune_epochs: ${FINETUNE_EPOCHS:-50}    # maps to --epochs for "finetune"
   metric: "${FINETUNE_METRIC:-val_auc}"
-  patience: 15
+  patience: ${FINETUNE_PATIENCE:-5}
+  batch_size: ${FINETUNE_BATCH_SIZE:-128}
   max_finetune_batches: 0
   no_freeze_encoder: true  # let Vast reruns update encoder weights once the Tox21 gate fails
   use_scaffold: ${FINETUNE_USE_SCAFFOLD:-false}
   hidden_dim: ${FINETUNE_HIDDEN_DIM:-256}
   num_layers: ${FINETUNE_NUM_LAYERS:-3}
   dropout: ${FINETUNE_DROPOUT:-0.1}
+  encoder_lr: ${FINETUNE_ENCODER_LR:-1.0e-4}
+  head_lr: ${FINETUNE_HEAD_LR:-1.0e-4}
+  layerwise_decay: ${FINETUNE_LAYERWISE_DECAY:-}
   seeds:
     - ${FINETUNE_SEED_0:-0}
     - ${FINETUNE_SEED_1:-}

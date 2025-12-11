@@ -60,6 +60,22 @@ def test_finetune_parser_defaults_and_handler(tmp_path):
     assert args.lr == CONFIG["finetune"]["lr"]
     assert args.patience == CONFIG["finetune"]["patience"]
     assert args.use_scaffold is False
+    assert args.pos_weight is None
+
+    args = parser.parse_args(
+        [
+            "finetune",
+            "--labeled-dir",
+            str(tmp_path),
+            "--encoder",
+            "enc.pt",
+            "--pos-class-weight",
+            "NR-AR=3.0",
+            "--pos-class-weight",
+            "1.5",
+        ]
+    )
+    assert args.pos_weight == ["NR-AR=3.0", "1.5"]
 
 
 def test_evaluate_parser_defaults_and_handler(tmp_path):
