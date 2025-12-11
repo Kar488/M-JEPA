@@ -67,6 +67,67 @@ def test_parse_pos_class_weight_handles_scalar_and_mapping():
     assert parsed.get("default") == pytest.approx(1.25)
 
 
+def test_cmd_finetune_resolves_task_pos_weight(tmp_path, monkeypatch):
+    import scripts.commands.finetune as ft
+
+    dataset = DummyDataset()
+
+    def load_dataset_stub(*_args, **_kwargs):
+        return dataset
+
+    monkeypatch.setattr(tj, "load_directory_dataset", load_dataset_stub, raising=False)
+    monkeypatch.setattr(ft, "load_directory_dataset", load_dataset_stub, raising=False)
+
+    class SimpleEncoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(3, 2)
+
+    monkeypatch.setattr(tj, "build_encoder", lambda **_: SimpleEncoder(), raising=False)
+    monkeypatch.setattr(ft, "build_encoder", lambda **_: SimpleEncoder(), raising=False)
+
+    class DummyWB:
+        def log(self, *_args, **_kwargs):
+            pass
+
+        def finish(self):
+            pass
+
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: DummyWB(), raising=False)
+    monkeypatch.setattr(ft, "maybe_init_wandb", lambda *a, **k: DummyWB(), raising=False)
+
+    captured = {}
+
+    class DummyHead(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(2, 1)
+
+    def train_linear_head_stub(**kwargs):
+        captured["pos_weight"] = kwargs.get("pos_weight")
+        return {
+            "val_auc": 0.7,
+            "head": DummyHead(),
+            "train/batches": 1.0,
+            "train/epoch_batches": 1.0,
+        }
+
+    monkeypatch.setattr(tj, "train_linear_head", train_linear_head_stub, raising=False)
+    monkeypatch.setattr(ft, "train_linear_head", train_linear_head_stub, raising=False)
+
+    args = make_args(tmp_path, seeds=[0])
+    args.pos_weight = ["NR-AR=2.5", "1.0"]
+    args.metric = "val_auc"
+    args.label_col = "NR-AR"
+    args.use_scaffold = False
+    args.ckpt_dir = str(tmp_path / "pos_weight_ckpts")
+    args.encoder = ""
+
+    tj.cmd_finetune(args)
+
+    assert captured.get("pos_weight") == pytest.approx(2.5)
+
+
 def test_cmd_finetune_inherits_best_config_overrides(tmp_path, monkeypatch):
     import scripts.commands.finetune as ft
 

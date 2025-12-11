@@ -11,7 +11,7 @@ import random
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import yaml
 
@@ -153,6 +153,45 @@ def _parse_pos_class_weight(values: Optional[Iterable[str]]) -> Optional[Any]:
             mapping["default"] = scalar
         return mapping
     return scalar
+
+
+def _resolve_pos_weight_for_task(
+    pos_weight: Any, task_name: Optional[str]
+) -> Optional[float]:
+    """Return the scalar pos_weight for the current task if provided."""
+
+    if pos_weight is None:
+        return None
+
+    candidate: Any = pos_weight
+    if isinstance(pos_weight, Mapping):
+        keys_to_try = []
+        if task_name:
+            keys_to_try.extend(
+                [
+                    str(task_name),
+                    str(task_name).lower(),
+                    str(task_name).upper(),
+                ]
+            )
+        keys_to_try.extend(["default", "Default", "*", "all"])
+        for key in keys_to_try:
+            if key in pos_weight:
+                candidate = pos_weight[key]
+                break
+        else:
+            candidate = None
+
+    if candidate is None:
+        return None
+
+    try:
+        return float(candidate)
+    except Exception:
+        logger.warning(
+            "Failed to parse pos_class_weight=%s; ignoring override", candidate, exc_info=True
+        )
+        return None
 
 
 def _resolve_labeled_dataset_source(args: argparse.Namespace) -> str:
@@ -1539,7 +1578,8 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
         if scheduler is not None and "scheduler" in resume_state:
             scheduler.load_state_dict(resume_state["scheduler"], strict=False)
 
-        pos_weight_override = task_overrides.get("pos_weight", getattr(args, "pos_weight", None))
+        raw_pos_weight = task_overrides.get("pos_weight", getattr(args, "pos_weight", None))
+        pos_weight_override = _resolve_pos_weight_for_task(raw_pos_weight, label_col_name)
         class_weight_override = task_overrides.get("class_weight", getattr(args, "class_weight", None))
         use_focal_flag = bool(task_overrides.get("use_focal_loss", getattr(args, "use_focal_loss", False)))
         focal_gamma_value = task_overrides.get("focal_gamma", getattr(args, "focal_gamma", 2.0))
