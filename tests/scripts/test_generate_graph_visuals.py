@@ -88,6 +88,22 @@ def test_generate_graph_visuals_falls_back_when_requested(tmp_path):
     assert summary.get("fallback_forced") is True
 
 
+def test_generate_graph_visuals_uses_rdkit_when_installed(tmp_path):
+    pytest.importorskip("rdkit")
+
+    dataset = tmp_path / "rdkit.csv"
+    dataset.write_text("smiles\nCCO\n", encoding="utf-8")
+    output_dir = tmp_path / "visuals_rdkit"
+
+    _run_script(dataset, output_dir)
+    summary = _assert_visuals(output_dir)
+
+    renderers = summary.get("png_renderers", {})
+    assert summary.get("rdkit_available") is True
+    assert renderers.get("rdkit", 0) >= 1
+    assert renderers.get("placeholder", 0) == 0
+
+
 def test_load_dataset_recovers_when_graphdataset_returns_zero(tmp_path, monkeypatch):
     dataset = tmp_path / "toy.csv"
     dataset.write_text("smiles\nC\n", encoding="utf-8")
