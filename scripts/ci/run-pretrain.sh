@@ -44,6 +44,46 @@ run_graph_visuals_helper() {
   return 1
 }
 
+create_graph_visuals_placeholder() {
+  local output_dir="${PRETRAIN_EXPERIMENT_ROOT:-}"
+  if [[ -z "${output_dir}" ]]; then
+    return 1
+  fi
+
+  output_dir="${output_dir%/}/graphs"
+  mkdir -p "$output_dir"
+
+  local summary_path="${output_dir}/summary.json"
+  if [[ ! -f "$summary_path" ]]; then
+    cat >"$summary_path" <<EOF
+{
+  "dataset_path": "${DATASET_DIR:-<unset>}",
+  "fallback_reason": "graph visuals helper failed",
+  "output_dir": "${output_dir}",
+  "num_graphs": 0,
+  "num_rendered": 0,
+  "loader": "placeholder",
+  "fallback_forced": false,
+  "rdkit_available": false,
+  "rdkit_installed": false,
+  "rdkit_import_error": "graph visuals helper failed",
+  "png_renderers": {"placeholder": 1}
+}
+EOF
+  fi
+
+  : >"${output_dir}/placeholder.png"
+  cat >"${output_dir}/index.html" <<'EOF'
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Graph Visuals (placeholder)</title></head>
+<body>
+<p>Graph visualisation generation failed; placeholder assets materialised by run-pretrain.sh.</p>
+</body>
+</html>
+EOF
+}
+
 ci_pretrain_materialize_manifest() {
   local stage_outputs="$1"
   local expected_manifest="$2"
@@ -278,6 +318,13 @@ PY
 
   if ! run_graph_visuals_helper; then
     echo "::warning::graph visualisation generation failed" >&2
+    create_graph_visuals_placeholder || true
+  else
+    graphs_dir="${PRETRAIN_EXPERIMENT_ROOT%/}/graphs"
+    if [[ ! -d "$graphs_dir" || ! -f "${graphs_dir}/summary.json" ]]; then
+      echo "::warning::graph visuals helper completed but outputs missing; seeding placeholders" >&2
+      create_graph_visuals_placeholder || true
+    fi
   fi
 
   ensure_tox21_gate_stub "$pretrain_root"
