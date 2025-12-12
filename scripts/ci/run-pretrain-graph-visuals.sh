@@ -4,6 +4,28 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="${SCRIPT_DIR}/generate_graph_visuals.py"
 
+COMMON_SH="${SCRIPT_DIR}/common.sh"
+if [[ -r "${COMMON_SH}" ]]; then
+  # shellcheck source=scripts/ci/common.sh
+  source "${COMMON_SH}"
+fi
+
+PYTHON=()
+if declare -F resolve_ci_python >/dev/null 2>&1; then
+  resolve_ci_python PYTHON
+fi
+if [[ ${#PYTHON[@]} -eq 0 ]]; then
+  if command -v python >/dev/null 2>&1; then
+    PYTHON=(python)
+  elif command -v python3 >/dev/null 2>&1; then
+    PYTHON=(python3)
+  elif [[ -n "${MMBIN:-}" ]]; then
+    PYTHON=("${MMBIN}" run -n mjepa python)
+  else
+    PYTHON=(python3)
+  fi
+fi
+
 DATASET_ARG=""
 OUTPUT_ARG=""
 PASSTHROUGH=()
@@ -40,7 +62,7 @@ fi
 
 mkdir -p "${OUTPUT_ARG}"
 
-cmd=(python3 "${PYTHON_SCRIPT}" --output-dir "${OUTPUT_ARG}")
+cmd=("${PYTHON[@]}" "${PYTHON_SCRIPT}" --output-dir "${OUTPUT_ARG}")
 if [[ -n "${DATASET_ARG}" ]]; then
   cmd+=(--dataset-path "${DATASET_ARG}")
 fi
