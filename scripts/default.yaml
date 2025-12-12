@@ -28,11 +28,11 @@ pretrain:
   seeds: [0]            # Random seeds for pretraining
 
 finetune:
-  epochs: 50            # Training epochs for the linear probe
-  patience: 5           # Early stopping patience on validation set
-  lr: 1.0e-4            # Learning rate for fine‑tuning the probe
-  batch_size: 128       # Batch size for downstream training
-  seeds: [0]            # Random seed for downstream runs (can be overridden)
+  epochs: 50            # Training epochs for the linear probe (override with FINETUNE_EPOCHS)
+  patience: 5           # Early stopping patience on validation set (override with FINETUNE_PATIENCE)
+  lr: 1.0e-4            # Learning rate for fine‑tuning the probe (override with FINETUNE_LR/FINETUNE_ENCODER_LR/FINETUNE_HEAD_LR)
+  batch_size: 128       # Batch size for downstream training (override with FINETUNE_BATCH_SIZE)
+  seeds: [0]            # Random seed for downstream runs (can be overridden with FINETUNE_SEED_*)
   unfreeze: none        # Encoder update policy during fine‑tuning (none|partial|full)
 
 evaluate:

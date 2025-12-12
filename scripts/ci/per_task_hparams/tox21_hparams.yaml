@@ -1,0 +1,24 @@
+NR-AR:
+  pos_weight: 22.511326860841425
+NR-AR-LBD:
+  pos_weight: 27.514767932489452
+NR-AhR:
+  pos_weight: 7.52734375
+NR-Aromatase:
+  pos_weight: 18.403333333333332
+NR-ER:
+  pos_weight: 6.809583858764187
+NR-ER-LBD:
+  pos_weight: 18.87142857142857
+NR-PPAR-gamma:
+  pos_weight: 33.67741935483871
+SR-ARE:
+  pos_weight: 5.191082802547771
+SR-ATAD5:
+  pos_weight: 25.78787878787879
+SR-HSE:
+  pos_weight: 16.384408602150536
+SR-MMP:
+  pos_weight: 5.328976034858388
+SR-p53:
+  pos_weight: 15.01418439716312

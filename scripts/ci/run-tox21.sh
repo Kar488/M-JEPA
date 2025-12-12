@@ -29,6 +29,9 @@ ci_print_env_diag "$STAGE_BIN"
 
 export EXP_ID EXPERIMENTS_ROOT EXPERIMENT_DIR PRETRAIN_DIR ARTIFACTS_DIR PRETRAIN_ARTIFACTS_DIR
 
+: "${FINETUNE_PER_TASK_HPARAMS:=${APP_DIR}/scripts/ci/per_task_hparams/tox21_hparams.yaml}"
+export FINETUNE_PER_TASK_HPARAMS
+
 : "${GITHUB_ENV:=${PRETRAIN_TOX21_ENV}}"
 mkdir -p "$(dirname "$GITHUB_ENV")"
 : >"$GITHUB_ENV"
