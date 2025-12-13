@@ -146,6 +146,8 @@ tox21:
   dropout: ${TOX21_DROPOUT:-0.15}
   head_ensemble_size: ${TOX21_HEAD_ENSEMBLE_SIZE:-3}
   head_scheduler: ${TOX21_HEAD_SCHEDULER:-cosine}
+  layerwise_decay: ${FINETUNE_LAYERWISE_DECAY:-}
+  unfreeze_top_layers: ${UNFREEZE_TOP_LAYERS:-0}
   triage_pct: ${TOX21_TRIAGE_PCT:-0.0}
   class_weights: "${TOX21_CLASS_WEIGHTS:-auto}"
   pos_class_weight: "${TOX21_POS_CLASS_WEIGHT:-}"

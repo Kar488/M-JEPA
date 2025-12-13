@@ -1,24 +1,108 @@
 NR-AR:
   pos_weight: 22.511326860841425
+  dynamic_pos_weight: true
+  oversample_minority: true
+  use_focal_loss: true
+  focal_gamma: 2.0
+  calibrate_probabilities: true
+  calibration_method: temperature
+  threshold_metric: roc_auc
 NR-AR-LBD:
   pos_weight: 27.514767932489452
+  dynamic_pos_weight: true
+  oversample_minority: true
+  use_focal_loss: true
+  focal_gamma: 2.0
+  calibrate_probabilities: true
+  calibration_method: temperature
+  threshold_metric: roc_auc
 NR-AhR:
   pos_weight: 7.52734375
+  dynamic_pos_weight: true
+  oversample_minority: true
+  use_focal_loss: true
+  focal_gamma: 2.0
+  calibrate_probabilities: true
+  calibration_method: temperature
+  threshold_metric: roc_auc
 NR-Aromatase:
   pos_weight: 18.403333333333332
+  dynamic_pos_weight: true
+  oversample_minority: true
+  use_focal_loss: true
+  focal_gamma: 2.0
+  calibrate_probabilities: true
+  calibration_method: temperature
+  threshold_metric: roc_auc
 NR-ER:
   pos_weight: 6.809583858764187
+  dynamic_pos_weight: true
+  oversample_minority: true
+  use_focal_loss: true
+  focal_gamma: 2.0
+  calibrate_probabilities: true
+  calibration_method: temperature
+  threshold_metric: roc_auc
 NR-ER-LBD:
   pos_weight: 18.87142857142857
+  dynamic_pos_weight: true
+  oversample_minority: true
+  use_focal_loss: true
+  focal_gamma: 2.0
+  calibrate_probabilities: true
+  calibration_method: temperature
+  threshold_metric: roc_auc
 NR-PPAR-gamma:
   pos_weight: 33.67741935483871
+  dynamic_pos_weight: true
+  oversample_minority: true
+  use_focal_loss: true
+  focal_gamma: 2.0
+  calibrate_probabilities: true
+  calibration_method: temperature
+  threshold_metric: roc_auc
 SR-ARE:
   pos_weight: 5.191082802547771
+  dynamic_pos_weight: true
+  oversample_minority: true
+  use_focal_loss: true
+  focal_gamma: 2.0
+  calibrate_probabilities: true
+  calibration_method: temperature
+  threshold_metric: roc_auc
 SR-ATAD5:
   pos_weight: 25.78787878787879
+  dynamic_pos_weight: true
+  oversample_minority: true
+  use_focal_loss: true
+  focal_gamma: 2.0
+  calibrate_probabilities: true
+  calibration_method: temperature
+  threshold_metric: roc_auc
 SR-HSE:
   pos_weight: 16.384408602150536
+  dynamic_pos_weight: true
+  oversample_minority: true
+  use_focal_loss: true
+  focal_gamma: 2.0
+  calibrate_probabilities: true
+  calibration_method: temperature
+  threshold_metric: roc_auc
 SR-MMP:
   pos_weight: 5.328976034858388
+  dynamic_pos_weight: true
+  oversample_minority: true
+  use_focal_loss: true
+  focal_gamma: 2.0
+  calibrate_probabilities: true
+  calibration_method: temperature
+  threshold_metric: roc_auc
 SR-p53:
   pos_weight: 15.01418439716312
+  dynamic_pos_weight: true
+  oversample_minority: true
+  use_focal_loss: true
+  focal_gamma: 2.0
+  calibrate_probabilities: true
+  calibration_method: temperature
+  threshold_metric: roc_auc
