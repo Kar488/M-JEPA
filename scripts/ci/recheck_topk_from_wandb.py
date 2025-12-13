@@ -1029,6 +1029,100 @@ def ci95(xs: Sequence[float]) -> Tuple[float, float]:
     return float(np.percentile(bs, 2.5)), float(np.percentile(bs, 97.5))
 
 
+def _std_error(xs: Sequence[float]) -> Optional[float]:
+    if not xs:
+        return None
+    if len(xs) == 1:
+        return 0.0
+    try:
+        return float(np.std(xs, ddof=1) / math.sqrt(len(xs)))
+    except Exception:
+        return None
+
+
+def _flatten_config(config: Mapping[str, Any]) -> Dict[str, Any]:
+    flat: Dict[str, Any] = {}
+
+    def _serialise_value(value: Any) -> Any:
+        if isinstance(value, (list, tuple, set, dict)):
+            try:
+                return json.dumps(value, sort_keys=True)
+            except Exception:
+                return str(value)
+        return value
+
+    def _walk(prefix: str, value: Any) -> None:
+        if isinstance(value, Mapping):
+            for key, inner in value.items():
+                _walk(f"{prefix}.{key}" if prefix else str(key), inner)
+            return
+        flat[prefix] = _serialise_value(_unwrap_config_value(value))
+
+    for key, value in config.items():
+        _walk(f"config.{key}", value)
+
+    return flat
+
+
+def _write_runs_csv(results: Sequence[Mapping[str, Any]], path: Optional[str], index_to_run_id: Mapping[int, Optional[str]]) -> int:
+    if not path or not results:
+        return 0
+
+    try:
+        out_path = pathlib.Path(path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return 0
+
+    winner_entry: Optional[Mapping[str, Any]] = None
+    winners = [entry for entry in results if entry.get("mean") is not None]
+    if winners:
+        winner_entry = min(winners, key=lambda item: item.get("mean"))
+    winner_index = winner_entry.get("index") if isinstance(winner_entry, Mapping) else None
+
+    rows: List[Dict[str, Any]] = []
+    for entry in results:
+        idx = entry.get("index") if isinstance(entry, Mapping) else None
+        cfg = entry.get("config") if isinstance(entry, Mapping) else None
+        config_flat = _flatten_config(cfg) if isinstance(cfg, Mapping) else {}
+        ci = entry.get("ci95") if isinstance(entry, Mapping) else None
+        ci_low = ci[0] if isinstance(ci, (list, tuple)) and ci else None
+        ci_high = ci[1] if isinstance(ci, (list, tuple)) and len(ci) > 1 else None
+        ci_r2 = entry.get("ci95_r2") if isinstance(entry, Mapping) else None
+        ci_r2_low = ci_r2[0] if isinstance(ci_r2, (list, tuple)) and ci_r2 else None
+        ci_r2_high = ci_r2[1] if isinstance(ci_r2, (list, tuple)) and len(ci_r2) > 1 else None
+
+        row: Dict[str, Any] = {
+            "index": idx,
+            "run_id": index_to_run_id.get(idx) if isinstance(idx, int) else None,
+            "rmse_mean": entry.get("mean") if isinstance(entry, Mapping) else None,
+            "rmse_se": entry.get("rmse_se") if isinstance(entry, Mapping) else None,
+            "rmse_ci95_low": ci_low,
+            "rmse_ci95_high": ci_high,
+            "rmse_n": entry.get("n") if isinstance(entry, Mapping) else None,
+            "r2_mean": entry.get("r2_mean") if isinstance(entry, Mapping) else None,
+            "r2_se": entry.get("r2_se") if isinstance(entry, Mapping) else None,
+            "r2_ci95_low": ci_r2_low,
+            "r2_ci95_high": ci_r2_high,
+            "r2_n": entry.get("r2_n") if isinstance(entry, Mapping) else None,
+            "is_winner": bool(idx is not None and winner_index is not None and idx == winner_index),
+        }
+        row.update(config_flat)
+        rows.append(row)
+
+    if not rows:
+        return 0
+
+    fieldnames: List[str] = sorted({key for row in rows for key in row.keys()})
+    with out_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+    return len(rows)
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -1049,6 +1143,12 @@ def main() -> None:
     ap.add_argument("--mm", default=os.environ.get("MMBIN", "micromamba"))
     ap.add_argument("--log_dir", default=os.environ.get("LOG_DIR", "./logs"))
     ap.add_argument("--out", default=None)
+    ap.add_argument(
+        "--runs-csv",
+        dest="runs_csv",
+        default=None,
+        help="Write per-configuration aggregates to this CSV (default: $GRID_DIR/phase2_export/stage-outputs/phase2_runs.csv)",
+    )
     ap.add_argument("--strict", action="store_true",
                     help="Fail if fewer than topk runs expose the metric after retries")
     ap.add_argument("--resume", action="store_true",
@@ -1113,6 +1213,24 @@ def main() -> None:
 
     args.out = _safe_out(args.out)
     args.log_dir = _safe_dir(args.log_dir)
+
+    def _resolve_runs_csv(path_hint: Optional[str]) -> str:
+        base = pathlib.Path(os.environ.get("GRID_DIR") or os.getcwd()) / "phase2_export" / "stage-outputs"
+        if path_hint:
+            candidate = pathlib.Path(path_hint)
+            if not candidate.is_absolute():
+                candidate = base / candidate
+        else:
+            candidate = base / "phase2_runs.csv"
+
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            candidate = pathlib.Path(tempfile.gettempdir()) / (candidate.name or "phase2_runs.csv")
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+        return str(candidate)
+
+    args.runs_csv = _resolve_runs_csv(args.runs_csv)
 
     out_dir = os.path.dirname(args.out)
     best_path = os.path.join(out_dir, "best_grid_config.json")
@@ -1662,12 +1780,30 @@ def main() -> None:
                 collect_attempts,
                 collect_delay,
             )
+            r2_metric_name = os.environ.get("PHASE2_R2_METRIC", "val_r2")
+            seed_to_r2 = _collect_seed_metrics(
+                api,
+                project_path,
+                cfg,
+                seeds,
+                r2_metric_name,
+                index,
+                exp_id,
+                collect_attempts,
+                collect_delay,
+                warn_missing=False,
+            )
 
             missing_seeds = [s for s in seeds if s not in seed_to_val]
             for missing_seed in missing_seeds:
                 _warn_missing_metric(args.metric, missing_seed)
 
             values = [seed_to_val[s] for s in seeds if s in seed_to_val]
+            r2_values = [seed_to_r2[s] for s in seeds if s in seed_to_r2]
+            r2_mean = float(np.mean(r2_values)) if r2_values else None
+            r2_low, r2_high = ci95(r2_values) if r2_values else (None, None)
+            r2_se = _std_error(r2_values)
+
             if values:
                 mean_value = float(np.mean(values))
                 low, high = ci95(values)
@@ -1676,6 +1812,11 @@ def main() -> None:
                     "mean": mean_value,
                     "ci95": [low, high],
                     "n": len(values),
+                    "rmse_se": _std_error(values),
+                    "r2_mean": r2_mean,
+                    "ci95_r2": [r2_low, r2_high],
+                    "r2_n": len(r2_values),
+                    "r2_se": r2_se,
                     "config": cfg,
                 }
             else:
@@ -1684,6 +1825,11 @@ def main() -> None:
                     "mean": None,
                     "ci95": [None, None],
                     "n": 0,
+                    "rmse_se": None,
+                    "r2_mean": r2_mean,
+                    "ci95_r2": [r2_low, r2_high],
+                    "r2_n": len(r2_values),
+                    "r2_se": r2_se,
                     "config": cfg,
                 }
 
@@ -1734,6 +1880,7 @@ def main() -> None:
                 )
         else:
             print(f"[recheck] final Phase-2 winner saved → {best_path}", flush=True)
+        _write_runs_csv(results, args.runs_csv, index_to_run_id)
         success = True
     except KeyboardInterrupt:
         produced_partial = True
@@ -1865,6 +2012,7 @@ def _collect_seed_metrics(
     exp_id: Optional[str],
     attempts: int,
     delay: float,
+    warn_missing: bool = True,
 ) -> Dict[int, float]:
     seeds = [int(s) for s in seeds]
     seed_to_val: Dict[int, float] = {}
@@ -1946,7 +2094,7 @@ def _collect_seed_metrics(
         if attempt == 3:
             _best_effort_wandb_sync()
 
-        if attempt < total_attempts:
+        if attempt < total_attempts and warn_missing:
             remaining = [s for s in seeds if s not in seed_to_val]
             print(
                 f"[recheck] waiting for metrics or fallback ({attempt}/{total_attempts}); missing seeds={remaining}",

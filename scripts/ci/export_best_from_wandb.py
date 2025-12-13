@@ -368,13 +368,14 @@ def _serialise_config_value(value: Any) -> Any:
     return value
 
 
-def _build_run_record(run: Any, sweep_id: str) -> Dict[str, Any]:
+def _build_run_record(run: Any, sweep_id: str, is_winner: bool = False) -> Dict[str, Any]:
     config = _sanitize_run_config(getattr(run, "config", {}) or {})
     record: Dict[str, Any] = {
         "sweep_id": sweep_id,
         "run_id": getattr(run, "id", ""),
         "run_name": getattr(run, "name", ""),
         "state": getattr(run, "state", ""),
+        "is_winner": bool(is_winner),
     }
     method = config.get("training_method")
     if isinstance(method, str):
@@ -906,13 +907,13 @@ def main():
     ap.add_argument(
         "--metrics-csv",
         dest="metrics_csv",
-        default=os.path.join(GRID_DIR, "phase1_runs.csv"),
-        help="Export per-run hyperparameters and metrics to this CSV (default: $GRID_DIR/phase1_runs.csv)",
+        default=os.path.join(GRID_DIR, "phase1_export", "stage-outputs", "phase1_runs.csv"),
+        help="Export per-run hyperparameters and metrics to this CSV (default: $GRID_DIR/phase1_export/stage-outputs/phase1_runs.csv)",
     )
     ap.add_argument(
         "--winner-csv",
         dest="winner_csv",
-        default=os.path.join(GRID_DIR, "phase2_winner_config.csv"),
+        default=os.path.join(GRID_DIR, "phase1_export", "stage-outputs", "phase2_winner_config.csv"),
         help="Export the selected Phase-2 seed configuration to this CSV",
     )
     ap.add_argument(
@@ -1001,6 +1002,22 @@ def main():
             )
             continue
 
+    # Task + metric plan
+    task = args.task if args.task != "auto" else detect_task(runs)
+    primary, maximize = pick_primary_metric(runs, task, args)
+    tiebreakers: List[Tuple[str,bool]] = []
+    if task == "regression":
+        if args.reg_tb1: tiebreakers.append((args.reg_tb1, False))
+    else:
+        if args.clf_tb1: tiebreakers.append((args.clf_tb1, False))
+        if args.clf_tb2: tiebreakers.append((args.clf_tb2, True))
+
+    # Pick best
+    best = choose_best(runs, primary, maximize, args.tie_eps, tiebreakers)
+
+    # Collect per-run metrics and annotate the winner
+    best_id = getattr(best, "id", "")
+    best_name = getattr(best, "name", "")
     metrics_records: List[Dict[str, Any]] = []
     seen: Set[Tuple[str, str]] = set()
     for sweep_key, sweep_runs in per_sweep_runs.items():
@@ -1011,7 +1028,15 @@ def main():
                 continue
             seen.add(dedup_key)
             try:
-                metrics_records.append(_build_run_record(run, sweep_key))
+                is_winner = False
+                if sweep_key == sweep_id:
+                    if run_id and run_id == best_id:
+                        is_winner = True
+                    elif not run_id and best_id:
+                        is_winner = False
+                    elif not best_id and getattr(run, "name", None) == best_name:
+                        is_winner = True
+                metrics_records.append(_build_run_record(run, sweep_key, is_winner=is_winner))
             except Exception as exc:  # pragma: no cover - defensive guard
                 print(
                     f"[export_best][warn] failed to serialise run {run_id} from {sweep_key}: {exc}",
@@ -1026,19 +1051,6 @@ def main():
             f"({rows_written} rows)",
             flush=True,
         )
-
-    # Task + metric plan
-    task = args.task if args.task != "auto" else detect_task(runs)
-    primary, maximize = pick_primary_metric(runs, task, args)
-    tiebreakers: List[Tuple[str,bool]] = []
-    if task == "regression":
-        if args.reg_tb1: tiebreakers.append((args.reg_tb1, False))
-    else:
-        if args.clf_tb1: tiebreakers.append((args.clf_tb1, False))
-        if args.clf_tb2: tiebreakers.append((args.clf_tb2, True))
-
-    # Pick best
-    best = choose_best(runs, primary, maximize, args.tie_eps, tiebreakers)
 
     # Log and write best config
     msg = f"[export_best] Best run={best.name} task={task} {primary}={metric(best, primary)}"
@@ -1064,12 +1076,26 @@ def main():
     )
 
     if args.winner_csv:
-        winner_rows = _write_records_csv(args.winner_csv, [_build_run_record(best, sweep_id)])
+        winner_records = [_build_run_record(best, sweep_id, is_winner=True)]
+        winner_rows = _write_records_csv(args.winner_csv, winner_records)
         if winner_rows:
             print(
                 f"[export_best] wrote Phase-2 winner metrics to {args.winner_csv}",
                 flush=True,
             )
+        legacy_winner = os.path.join(GRID_DIR, "phase2_winner_config.csv")
+        if os.path.abspath(args.winner_csv) != os.path.abspath(legacy_winner):
+            try:
+                _write_records_csv(legacy_winner, winner_records)
+                print(
+                    f"[export_best] mirrored winner metrics to legacy path {legacy_winner}",
+                    flush=True,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                print(
+                    f"[export_best][warn] unable to mirror winner metrics to {legacy_winner}: {exc}",
+                    flush=True,
+                )
 
     # Optionally derive narrowed Phase-2 ranges and write YAML for Step #3
     if args.emit_bounds:
