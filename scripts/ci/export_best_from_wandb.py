@@ -1052,6 +1052,20 @@ def main():
             flush=True,
         )
 
+        legacy_metrics = os.path.join(GRID_DIR, "phase1_runs.csv")
+        if os.path.abspath(args.metrics_csv) != os.path.abspath(legacy_metrics):
+            try:
+                _write_records_csv(legacy_metrics, metrics_records)
+                print(
+                    f"[export_best] mirrored Phase-1 metrics to legacy path {legacy_metrics}",
+                    flush=True,
+                )
+            except Exception as exc:  # pragma: no cover - defensive guard
+                print(
+                    f"[export_best][warn] unable to mirror metrics to {legacy_metrics}: {exc}",
+                    flush=True,
+                )
+
     # Log and write best config
     msg = f"[export_best] Best run={best.name} task={task} {primary}={metric(best, primary)}"
     for n,_mx in tiebreakers:
