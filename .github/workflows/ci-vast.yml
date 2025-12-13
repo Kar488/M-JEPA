@@ -529,6 +529,38 @@ jobs:
           EXPERIMENTS_ROOT: ${{ env.EXPERIMENTS_ROOT }}
           RUN_ID: ${{ github.run_id }}
         run: bash scripts/ci/publish_phase1_lineage.sh
+      - name: Collect Phase-1 artifacts
+        if: always()
+        env:
+          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+          VAST_USER: ${{ secrets.VAST_USER }}
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
+          EXP_ID: ${{ env.EXP_ID || steps.phase1_ids.outputs.grid_exp_id || github.run_id }}
+          GRID_EXP_ID: ${{ env.GRID_EXP_ID || steps.phase1_ids.outputs.grid_exp_id || github.run_id }}
+          EXPERIMENTS_ROOT: ${{ env.EXPERIMENTS_ROOT }}
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: bash scripts/ci/collect-phase1-artifacts.sh "$RUNNER_TEMP/phase1"
+      - name: Upload Phase-1 sweep logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-phase1-logs
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/phase1/logs
+            ${{ runner.temp }}/phase1/current/phase1/logs
+            ${{ runner.temp }}/phase1/lineage/phase1/logs
+      - name: Upload Phase-1 export outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-phase1-export
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/phase1/phase1_export
+            ${{ runner.temp }}/phase1/current/phase1_export
+            ${{ runner.temp }}/phase1/lineage/phase1_export
   # Option X: keep a single Vast job running sweep → recheck → export sequentially.
   vast_sweep_phase2:
     if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb') }}
@@ -857,7 +889,7 @@ jobs:
     runs-on: self-hosted #ubuntu-latest
     timeout-minutes: 1860
     needs: [vast_pretrain, vast_tox21_baseline, vast_finetune]
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_pretrain.result == 'success' && needs.vast_tox21_baseline.result == 'success' && needs.vast_finetune.result == 'success' }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -875,10 +907,6 @@ jobs:
           set -euo pipefail
           cd "$APP_DIR"
           bash scripts/ci/ensure_experiments_root.sh
-      - name: Summarise tox21 gate outcome
-        run: |
-          echo "TOX21_MET_GATE=${{ needs.vast_tox21_baseline.outputs.tox21_gate }}"
-
       - name: Benchmark
         if: ${{ needs.vast_finetune.result == 'success' }}
         env:
@@ -886,7 +914,6 @@ jobs:
           KILL_AFTER_SECS: 120
           BENCH_VAL_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/val
           BENCH_TEST_DIR: ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/test
-          TOX21_MET_GATE: ${{ needs.vast_tox21_baseline.outputs.tox21_gate }}
         shell: bash
         run: |
           set -euo pipefail

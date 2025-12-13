@@ -122,27 +122,63 @@ def _resolve_ckpt_dir(ckpt_path: Optional[str]) -> Optional[str]:
     if not ckpt_path:
         return None
 
-    try:
-        os.makedirs(ckpt_path, exist_ok=True)
-        return ckpt_path
-    except PermissionError:
+    def _fallback(original: str) -> Optional[str]:
         fallback_root = os.getenv("STAGE_OUTPUTS_DIR") or tempfile.gettempdir()
-        fallback = os.path.join(fallback_root, os.path.basename(ckpt_path))
+        fallback = os.path.join(fallback_root, os.path.basename(original))
 
         try:
             os.makedirs(fallback, exist_ok=True)
         except PermissionError:
             logger.warning(
                 "Checkpoint directory %s is not writable and fallback %s also failed",
-                ckpt_path,
+                original,
                 fallback,
             )
             return None
 
         logger.warning(
-            "Checkpoint directory %s is not writable; using fallback %s", ckpt_path, fallback
+            "Checkpoint directory %s is not writable; using fallback %s", original, fallback
         )
         return fallback
+
+    parent_dir = os.path.dirname(ckpt_path) or "."
+    try:
+        parent_mode = os.stat(parent_dir).st_mode
+    except OSError:
+        parent_mode = None
+
+    if parent_mode is not None and parent_mode & 0o222 == 0:
+        return _fallback(ckpt_path)
+
+    try:
+        os.makedirs(ckpt_path, exist_ok=True)
+    except PermissionError:
+        return _fallback(ckpt_path)
+
+    try:
+        mode = os.stat(ckpt_path).st_mode
+    except OSError:
+        mode = 0
+
+    if mode & 0o222 == 0:
+        return _fallback(ckpt_path)
+
+    if not os.access(ckpt_path, os.W_OK | os.X_OK):
+        return _fallback(ckpt_path)
+
+    probe_path = os.path.join(ckpt_path, ".ckpt_write_probe")
+    try:
+        with open(probe_path, "w", encoding="utf-8"):
+            pass
+    except PermissionError:
+        return _fallback(ckpt_path)
+    finally:
+        try:
+            os.remove(probe_path)
+        except OSError:
+            pass
+
+    return ckpt_path
 from utils.schedule import cosine_with_warmup
 
 
