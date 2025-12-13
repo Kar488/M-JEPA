@@ -28,6 +28,22 @@ ensure_tox21_gate_stub() {
   } >"$gate_path"
 }
 
+normalize_dataset_dir() {
+  local var_name="$1" default_dir="$2"
+  local current="${!var_name:-}" data_root="${DATA_ROOT:-${APP_DIR:-/srv/mjepa}}"
+  if [[ -z "$current" ]]; then
+    current="$default_dir"
+  fi
+  for cache_hint in "${data_root%/}/cache/graphs_10m" "${data_root%/}/cache/graphs_250k"; do
+    if [[ -n "$cache_hint" && "$current" == "$cache_hint" ]]; then
+      echo "[ci] info: ${var_name} points to a cache (${current}); switching to dataset corpus ${default_dir}" >&2
+      current="$default_dir"
+      break
+    fi
+  done
+  printf -v "$var_name" '%s' "$current"
+}
+
 run_graph_visuals_helper() {
   local helper_path
   helper_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-pretrain-graph-visuals.sh"
@@ -227,6 +243,11 @@ if [[ -n "${MJEPACI_STAGE_SHIM:-}" && -x "${MJEPACI_STAGE_SHIM}" ]]; then
   # (exit 127) when the helpers are invoked.
   source "$(dirname "$0")/common.sh"
 
+  DEFAULT_DATASET_DIR="${APP_DIR:-/srv/mjepa}/data/ZINC-canonicalized"
+  : "${DATASET_DIR:=${DEFAULT_DATASET_DIR}}"
+  normalize_dataset_dir DATASET_DIR "$DEFAULT_DATASET_DIR"
+  export DATASET_DIR
+
   if [[ -z "${EXP_ID:-}" || -z "${EXPERIMENTS_ROOT:-}" ]]; then
     echo "[ci] error: MJEPACI_STAGE_SHIM requires EXP_ID and EXPERIMENTS_ROOT" >&2
     exit 1
@@ -334,6 +355,11 @@ fi
 
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
+
+DEFAULT_DATASET_DIR="${APP_DIR:-/srv/mjepa}/data/ZINC-canonicalized"
+: "${DATASET_DIR:=${DEFAULT_DATASET_DIR}}"
+normalize_dataset_dir DATASET_DIR "$DEFAULT_DATASET_DIR"
+export DATASET_DIR
 
 if [[ -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
   STAGE_BIN="${MJEPACI_STAGE_SHIM}"
