@@ -857,7 +857,7 @@ jobs:
     runs-on: self-hosted #ubuntu-latest
     timeout-minutes: 1860
     needs: [vast_pretrain, vast_tox21_baseline, vast_finetune]
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_pretrain.result == 'success' && needs.vast_tox21_baseline.result == 'success' && needs.vast_finetune.result == 'success' }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -875,10 +875,6 @@ jobs:
           set -euo pipefail
           cd "$APP_DIR"
           bash scripts/ci/ensure_experiments_root.sh
-      - name: Summarise tox21 gate outcome
-        run: |
-          echo "TOX21_MET_GATE=${{ needs.vast_tox21_baseline.outputs.tox21_gate }}"
-
       - name: Benchmark
         if: ${{ needs.vast_finetune.result == 'success' }}
         env:
@@ -886,7 +882,6 @@ jobs:
           KILL_AFTER_SECS: 120
           BENCH_VAL_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/val
           BENCH_TEST_DIR: ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/test
-          TOX21_MET_GATE: ${{ needs.vast_tox21_baseline.outputs.tox21_gate }}
         shell: bash
         run: |
           set -euo pipefail
