@@ -1001,7 +1001,8 @@ def main():
 
     api = _init_wandb_api()
 
-    primary_runs = list(api.sweep(sweep_id).runs)
+    sweep = api.sweep(sweep_id)
+    primary_runs = list(sweep.runs)
     if not primary_runs:
         raise RuntimeError(f"No runs found in sweep {sweep_id}")
 
@@ -1149,7 +1150,7 @@ def main():
 
     # Optionally derive narrowed Phase-2 ranges and write YAML for Step #3
     if args.emit_bounds:
-        top = collect_topk(runs, primary, maximize, args.topk)
+        top = collect_topk(primary_runs, primary, maximize, args.topk)
         sweep_params = _sweep_param_map(sweep)
         template_params = _load_phase2_template_params(APP_DIR)
 
