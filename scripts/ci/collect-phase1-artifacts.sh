@@ -49,6 +49,21 @@ fi
 RSYNC=(rsync -avz --chmod=ugo=rwX -e "ssh ${SSH_OPTS[*]}")
 SCP=(scp -p -i "$KEY_PATH" -P "$VAST_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
 
+choose_local_python() {
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "python3"
+  elif command -v python >/dev/null 2>&1; then
+    printf '%s' "python"
+  else
+    printf '%s' ""
+  fi
+}
+
+PY_LOCAL="$(choose_local_python)"
+if [[ -z "$PY_LOCAL" ]]; then
+  echo "[ci][warn] no local python interpreter available; lineage resolution helpers will be skipped" >&2
+fi
+
 check_remote_reachable() {
   if ssh "${SSH_OPTS[@]}" "$REMOTE" "echo ok" >/dev/null 2>&1; then
     return 0
@@ -146,26 +161,6 @@ sync_remote_file() {
   return 0
 }
 
-parse_lineage_payload() {
-  local payload="$1" key="$2"
-  python - "$payload" "$key" <<'PY'
-import json
-import sys
-
-payload = {}
-try:
-    payload = json.loads(sys.argv[1])
-except Exception:
-    payload = {}
-key = sys.argv[2] if len(sys.argv) > 2 else ""
-val = payload.get(key, "")
-if isinstance(val, str):
-    print(val.strip())
-else:
-    print("")
-PY
-}
-
 discover_remote_phase1_lineage() {
   local app_dir="${APP_DIR:-/srv/mjepa}" default_id="${GRID_EXP_ID:-${EXP_ID}}"
   local payload=""
@@ -192,17 +187,37 @@ EOS
     payload=""
   fi
 
-  local resolved_grid
-  resolved_grid="$(parse_lineage_payload "$payload" grid_dir)"
-  local resolved_id
-  resolved_id="$(parse_lineage_payload "$payload" grid_exp_id)"
-  if [[ -n "$resolved_grid" ]]; then
-    GRID_DIR="$resolved_grid"
-    export GRID_DIR
-  fi
-  if [[ -n "$resolved_id" ]]; then
-    GRID_EXP_ID="$resolved_id"
-    export GRID_EXP_ID
+  if [[ -n "$payload" && -n "$PY_LOCAL" ]]; then
+    local -a resolved=()
+    if mapfile -t resolved < <("$PY_LOCAL" - "$payload" <<'PY'
+import json
+import sys
+
+try:
+    payload = json.loads(sys.argv[1])
+except Exception:
+    payload = {}
+
+def emit(key):
+    value = payload.get(key)
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+print(emit("grid_dir"))
+print(emit("grid_exp_id"))
+PY
+    ); then
+      local resolved_grid="${resolved[0]:-}" resolved_id="${resolved[1]:-}"
+      if [[ -n "$resolved_grid" ]]; then
+        GRID_DIR="$resolved_grid"
+        export GRID_DIR
+      fi
+      if [[ -n "$resolved_id" ]]; then
+        GRID_EXP_ID="$resolved_id"
+        export GRID_EXP_ID
+      fi
+    fi
   fi
 
   if [[ -n "${GITHUB_ENV:-}" ]]; then
