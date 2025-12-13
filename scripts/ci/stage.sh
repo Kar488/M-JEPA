@@ -1262,6 +1262,7 @@ run_phase2_recheck_stage() {
       --unlabeled-dir "${PHASE2_UNLABELED_DIR}" \
       --labeled-dir   "${PHASE2_LABELED_DIR}" \
       --out "${GRID_DIR}/recheck_summary.json" \
+      --runs-csv "${GRID_DIR}/phase2_export/stage-outputs/phase2_runs.csv" \
       --resume \
     2>&1 | tee "$log_path"
 

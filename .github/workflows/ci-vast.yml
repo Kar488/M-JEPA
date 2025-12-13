@@ -529,6 +529,38 @@ jobs:
           EXPERIMENTS_ROOT: ${{ env.EXPERIMENTS_ROOT }}
           RUN_ID: ${{ github.run_id }}
         run: bash scripts/ci/publish_phase1_lineage.sh
+      - name: Collect Phase-1 artifacts
+        if: always()
+        env:
+          SSH_KEY: ${{ secrets.VAST_SSH_KEY }}
+          VAST_USER: ${{ secrets.VAST_USER }}
+          VAST_HOST: ${{ secrets.VAST_HOST }}
+          VAST_PORT: ${{ secrets.VAST_PORT }}
+          EXP_ID: ${{ env.EXP_ID || steps.phase1_ids.outputs.grid_exp_id || github.run_id }}
+          GRID_EXP_ID: ${{ env.GRID_EXP_ID || steps.phase1_ids.outputs.grid_exp_id || github.run_id }}
+          EXPERIMENTS_ROOT: ${{ env.EXPERIMENTS_ROOT }}
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: bash scripts/ci/collect-phase1-artifacts.sh "$RUNNER_TEMP/phase1"
+      - name: Upload Phase-1 sweep logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-phase1-logs
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/phase1/logs
+            ${{ runner.temp }}/phase1/current/phase1/logs
+            ${{ runner.temp }}/phase1/lineage/phase1/logs
+      - name: Upload Phase-1 export outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vast-phase1-export
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/phase1/phase1_export
+            ${{ runner.temp }}/phase1/current/phase1_export
+            ${{ runner.temp }}/phase1/lineage/phase1_export
   # Option X: keep a single Vast job running sweep → recheck → export sequentially.
   vast_sweep_phase2:
     if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && ((github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb') == 'wandb') }}

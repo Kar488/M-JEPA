@@ -412,6 +412,8 @@ PY
   trap 'rm -f "$TMP_BEST" "$TMP_PHASE2"' EXIT
 
   LOG_TMP="$(mktemp)"
+  phase1_stage_outputs="${GRID_DIR:-$APP_DIR/grid}/phase1_export/stage-outputs"
+  mkdir -p "$phase1_stage_outputs"
   PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
     "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
       python -u "$APP_DIR/scripts/ci/export_best_from_wandb.py" \
@@ -419,8 +421,8 @@ PY
         --task "$TASK_FROM_PE" \
         --phase2-method bayes \
         --emit-bounds \
-        --metrics-csv "${GRID_DIR:-$APP_DIR/grid}/phase1_runs.csv" \
-        --winner-csv "${GRID_DIR:-$APP_DIR/grid}/phase2_winner_config.csv" \
+        --metrics-csv "${phase1_stage_outputs}/phase1_runs.csv" \
+        --winner-csv "${phase1_stage_outputs}/phase2_winner_config.csv" \
         --include-sweep "${WANDB_ENTITY}/${WANDB_PROJECT}/${JEPA_ID}" \
         --include-sweep "${WANDB_ENTITY}/${WANDB_PROJECT}/${CONTRAST_ID}" \
         --out "$TMP_BEST" \
