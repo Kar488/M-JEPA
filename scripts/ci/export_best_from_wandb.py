@@ -888,6 +888,29 @@ def pick_primary_metric(runs, task: str, args) -> Tuple[str, bool]:
 
 # ---------- main ----------
 
+def _collect_sweep_ids(primary: str, include_sweeps_raw: Optional[Sequence[str]], entity: str, project: str) -> List[str]:
+    include_sweeps_raw = include_sweeps_raw or []
+    include_sweeps: List[str] = []
+
+    def _maybe_add(raw: Optional[str]) -> None:
+        qualified = _qualify_sweep_id(raw, entity, project)
+        if qualified and qualified not in include_sweeps:
+            include_sweeps.append(qualified)
+
+    # Always include the primary sweep, then append any explicit include flags.
+    _maybe_add(primary)
+    for raw in include_sweeps_raw:
+        _maybe_add(raw)
+
+    # Mirror Phase-1 policy: automatically fold in both JEPA/contrastive sweeps
+    # when CI exported them via WANDB_SWEEP_ID{1,2}. This ensures metrics CSVs
+    # enumerate both methods even if the caller forgets to pass --include-sweep.
+    _maybe_add(os.environ.get("WANDB_SWEEP_ID1"))
+    _maybe_add(os.environ.get("WANDB_SWEEP_ID2"))
+
+    return include_sweeps
+
+
 def main():
     APP_DIR  = need_env("APP_DIR")
     GRID_DIR = need_env("GRID_DIR")
@@ -974,23 +997,16 @@ def main():
     args = ap.parse_args()
 
     sweep_id = args.sweep_id or f"{ENTITY}/{PROJECT}/{need_env('WANDB_SWEEP_ID1')}"
+    sweep_ids = _collect_sweep_ids(sweep_id, args.include_sweeps, ENTITY, PROJECT)
+
     api = _init_wandb_api()
-    sweep = api.sweep(sweep_id)
-    runs  = list(sweep.runs)
-    if not runs:
+
+    primary_runs = list(api.sweep(sweep_id).runs)
+    if not primary_runs:
         raise RuntimeError(f"No runs found in sweep {sweep_id}")
 
-    include_sweeps_raw = args.include_sweeps or []
-    include_sweeps: List[str] = []
-    for raw in include_sweeps_raw:
-        qualified = _qualify_sweep_id(raw, ENTITY, PROJECT)
-        if qualified and qualified not in include_sweeps:
-            include_sweeps.append(qualified)
-    if sweep_id not in include_sweeps:
-        include_sweeps.append(sweep_id)
-
-    per_sweep_runs: Dict[str, List[Any]] = {sweep_id: runs}
-    for extra_sweep in include_sweeps:
+    per_sweep_runs: Dict[str, List[Any]] = {sweep_id: primary_runs}
+    for extra_sweep in sweep_ids:
         if extra_sweep in per_sweep_runs:
             continue
         try:
@@ -1002,9 +1018,17 @@ def main():
             )
             continue
 
+    print(
+        "[export_best] discovered sweeps with run counts: "
+        + ", ".join(
+            f"{sid}={len(per_sweep_runs.get(sid, []))}" for sid in sweep_ids
+        ),
+        flush=True,
+    )
+
     # Task + metric plan
-    task = args.task if args.task != "auto" else detect_task(runs)
-    primary, maximize = pick_primary_metric(runs, task, args)
+    task = args.task if args.task != "auto" else detect_task(primary_runs)
+    primary, maximize = pick_primary_metric(primary_runs, task, args)
     tiebreakers: List[Tuple[str,bool]] = []
     if task == "regression":
         if args.reg_tb1: tiebreakers.append((args.reg_tb1, False))
@@ -1013,7 +1037,15 @@ def main():
         if args.clf_tb2: tiebreakers.append((args.clf_tb2, True))
 
     # Pick best
-    best = choose_best(runs, primary, maximize, args.tie_eps, tiebreakers)
+    best = choose_best(primary_runs, primary, maximize, args.tie_eps, tiebreakers)
+
+    winner_method: Optional[str] = None
+    best_cfg_method = _normalize_config_value(_config_lookup(getattr(best, "config", {}), "training_method"))
+    if isinstance(best_cfg_method, str):
+        winner_method = best_cfg_method
+    env_winner = os.environ.get("METHOD_WINNER")
+    if env_winner:
+        winner_method = env_winner.strip()
 
     # Collect per-run metrics and annotate the winner
     best_id = getattr(best, "id", "")
@@ -1029,14 +1061,18 @@ def main():
             seen.add(dedup_key)
             try:
                 is_winner = False
-                if sweep_key == sweep_id:
-                    if run_id and run_id == best_id:
-                        is_winner = True
-                    elif not run_id and best_id:
-                        is_winner = False
-                    elif not best_id and getattr(run, "name", None) == best_name:
-                        is_winner = True
-                metrics_records.append(_build_run_record(run, sweep_key, is_winner=is_winner))
+                if run_id and run_id == best_id:
+                    is_winner = True
+                elif not best_id and getattr(run, "name", None) == best_name:
+                    is_winner = True
+
+                record = _build_run_record(run, sweep_key, is_winner=is_winner)
+                if winner_method:
+                    record["phase1_winner_method"] = winner_method
+                    record["is_phase1_winner_method"] = (
+                        _normalize_config_value(record.get("training_method")) == _normalize_config_value(winner_method)
+                    )
+                metrics_records.append(record)
             except Exception as exc:  # pragma: no cover - defensive guard
                 print(
                     f"[export_best][warn] failed to serialise run {run_id} from {sweep_key}: {exc}",

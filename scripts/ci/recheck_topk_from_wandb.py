@@ -1064,7 +1064,11 @@ def _flatten_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     return flat
 
 
-def _write_runs_csv(results: Sequence[Mapping[str, Any]], path: Optional[str], index_to_run_id: Mapping[int, Optional[str]]) -> int:
+def _write_runs_csv(
+    results: Sequence[Mapping[str, Any]],
+    path: Optional[str],
+    index_to_run_id: Mapping[int, Optional[str]],
+) -> int:
     if not path or not results:
         return 0
 
@@ -1079,6 +1083,16 @@ def _write_runs_csv(results: Sequence[Mapping[str, Any]], path: Optional[str], i
     if winners:
         winner_entry = min(winners, key=lambda item: item.get("mean"))
     winner_index = winner_entry.get("index") if isinstance(winner_entry, Mapping) else None
+
+    winner_method: Optional[str] = None
+    if isinstance(winner_entry, Mapping):
+        winner_cfg = winner_entry.get("config") if isinstance(winner_entry.get("config"), Mapping) else {}
+        cfg_method = winner_cfg.get("training_method") if isinstance(winner_cfg, Mapping) else None
+        if isinstance(cfg_method, str):
+            winner_method = cfg_method
+    env_winner = os.environ.get("METHOD_WINNER")
+    if env_winner:
+        winner_method = env_winner.strip()
 
     rows: List[Dict[str, Any]] = []
     for entry in results:
@@ -1107,6 +1121,13 @@ def _write_runs_csv(results: Sequence[Mapping[str, Any]], path: Optional[str], i
             "r2_n": entry.get("r2_n") if isinstance(entry, Mapping) else None,
             "is_winner": bool(idx is not None and winner_index is not None and idx == winner_index),
         }
+        if isinstance(cfg, Mapping):
+            row["training_method"] = cfg.get("training_method")
+        if winner_method:
+            row["phase2_winner_method"] = winner_method
+            row["is_phase2_winner_method"] = (
+                isinstance(cfg, Mapping) and cfg.get("training_method") == winner_method
+            )
         row.update(config_flat)
         rows.append(row)
 
