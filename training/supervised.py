@@ -18,7 +18,7 @@ import random
 import re
 import time as _time
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 import numpy as np
 import torch
@@ -41,6 +41,12 @@ from explain.integrated_gradients import (
     describe_bond_types,
     normalise_attributions,
     render_molecule_heatmap,
+)
+from explain.motif_ig import (
+    aggregate_motif_ig,
+    compute_motif_deltas,
+    find_motifs,
+    save_motif_artifacts,
 )
 from models.encoder import GNNEncoder
 from utils.early_stopping import EarlyStopping
@@ -965,6 +971,239 @@ class _IGArtifactLogger:
             return
         metrics["ig_artifact_root"] = self.output_dir
         metrics["ig_artifacts"] = [dict(entry) for entry in self.records]
+
+
+class _MotifIGArtifactLogger:
+    """Manage motif-level IG aggregation and artifact export."""
+
+    def __init__(
+        self,
+        *,
+        dataset: GraphDataset,
+        encoder: nn.Module,
+        head_module: nn.Module,
+        task_type: str,
+        device: torch.device,
+        explain_mode: Optional[str],
+        explain_config: Optional[Dict[str, Any]],
+        stage_config: Optional[Dict[str, Any]],
+    ) -> None:
+        mode = (explain_mode or "").strip().lower()
+        self.enabled = mode == "ig_motif"
+        if not self.enabled:
+            return
+
+        self.dataset = dataset
+        self.encoder = encoder
+        self.head = head_module
+        self.task_type = task_type
+        self.device = device
+        self._seen: Set[int] = set()
+        self._warned_missing_idx = False
+        self.records: List[Dict[str, Any]] = []
+        self.smiles = getattr(dataset, "smiles", None)
+        config = dict(explain_config or {})
+        stage_cfg = dict(stage_config or {})
+
+        try:
+            steps = int(config.get("steps", 50))
+        except Exception:
+            steps = 50
+        self.steps = max(1, steps)
+        self.normalise_mode = str(config.get("normalise", "signed")).strip().lower()
+        raw_task_names = config.get("task_names") or stage_cfg.get("task_names")
+        if isinstance(raw_task_names, str):
+            raw_task_names = [raw_task_names]
+        self.task_names = [str(name) for name in raw_task_names] if raw_task_names else []
+
+        self.task_name = str(
+            config.get("task_name")
+            or stage_cfg.get("task_name")
+            or stage_cfg.get("task")
+            or "task"
+        )
+
+        base_dir = (
+            config.get("output_dir")
+            or stage_cfg.get("report_dir")
+            or stage_cfg.get("reports_dir")
+            or stage_cfg.get("stage_dir")
+            or os.path.join(os.getcwd(), "reports")
+        )
+        base_dir = os.path.abspath(str(base_dir))
+        self.output_dir = os.path.join(base_dir, "ig_motif_explanations", self.task_name)
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        logger.info("[ig_motif] exporting explanations to %s", self.output_dir)
+
+    def _format_identifier(self, idx: int, smiles: Optional[str]) -> str:
+        base = f"graph_{idx:05d}"
+        if smiles:
+            slug = re.sub(r"[^0-9A-Za-z]+", "_", smiles).strip("_")
+            if slug:
+                slug = slug[:48]
+                return f"{base}_{slug}"
+        return base
+
+    def _graph_to_namespace(self, graph: GraphData) -> SimpleNamespace:
+        ptr = torch.tensor([0, graph.num_nodes()], dtype=torch.long, device=self.device)
+        ns = SimpleNamespace(
+            x=torch.as_tensor(graph.x, dtype=torch.float32, device=self.device),
+            edge_index=torch.as_tensor(
+                getattr(graph, "edge_index", np.zeros((2, 0), dtype=np.int64)),
+                dtype=torch.long,
+                device=self.device,
+            ),
+            graph_ptr=ptr,
+        )
+        if getattr(graph, "edge_attr", None) is not None:
+            ns.edge_attr = torch.as_tensor(graph.edge_attr, dtype=torch.float32, device=self.device)
+        if getattr(graph, "pos", None) is not None:
+            ns.pos = torch.as_tensor(graph.pos, dtype=torch.float32, device=self.device)
+        return ns
+
+    def _model_callable_for_ig(self) -> Callable[[SimpleNamespace], torch.Tensor]:
+        encoder = self.encoder
+        head = self.head
+        task_type = self.task_type
+
+        def _forward(graph_obj: SimpleNamespace) -> torch.Tensor:
+            node_embeddings = _encode_graph(encoder, graph_obj)
+            ptr = getattr(graph_obj, "graph_ptr", None)
+            if ptr is None:
+                num_nodes = int(graph_obj.x.shape[0])
+                ptr = torch.tensor([0, num_nodes], dtype=torch.long, device=self.device)
+            graph_emb = _pool_batch_embeddings(node_embeddings, ptr)
+            output = head(graph_emb)
+            if task_type == "classification":
+                output = _ensure_binary_classification_logits(output)
+            else:
+                output = output.squeeze(-1)
+            return output.reshape(-1)[0]
+
+        return _forward
+
+    def _model_logits_callable(self) -> Callable[[SimpleNamespace], torch.Tensor]:
+        encoder = self.encoder
+        head = self.head
+        task_type = self.task_type
+
+        def _forward(graph_obj: SimpleNamespace) -> torch.Tensor:
+            node_embeddings = _encode_graph(encoder, graph_obj)
+            ptr = getattr(graph_obj, "graph_ptr", None)
+            if ptr is None:
+                num_nodes = int(graph_obj.x.shape[0])
+                ptr = torch.tensor([0, num_nodes], dtype=torch.long, device=self.device)
+            graph_emb = _pool_batch_embeddings(node_embeddings, ptr)
+            output = head(graph_emb)
+            if task_type == "classification":
+                output = _ensure_binary_classification_logits(output)
+            else:
+                output = output.squeeze(-1)
+            if output.dim() == 0:
+                output = output.unsqueeze(0)
+            if output.dim() == 1:
+                return output
+            return output.reshape(-1)
+
+        return _forward
+
+    def _resolve_task_names(self, baseline_logits: np.ndarray) -> List[str]:
+        if self.task_names:
+            return self.task_names
+        length = int(baseline_logits.reshape(-1).shape[0])
+        return [f"task_{i}" for i in range(length)]
+
+    def _compute_for_index(self, idx: int) -> None:
+        if idx in self._seen:
+            return
+        try:
+            graph = self.dataset.graphs[idx]
+        except Exception:
+            logger.warning("[ig_motif] failed to load graph %d", idx, exc_info=True)
+            return
+
+        baseline = build_zero_baseline_graph(graph)
+        ig_model = self._model_callable_for_ig()
+        logits_model = self._model_logits_callable()
+
+        try:
+            with torch.enable_grad():
+                node_scores, edge_scores = compute_integrated_gradients(
+                    ig_model,
+                    graph,
+                    baseline_graph=baseline,
+                    m_steps=self.steps,
+                    device=self.device,
+                )
+        except Exception:
+            logger.warning("[ig_motif] attribution failed for graph %d", idx, exc_info=True)
+            return
+
+        self._seen.add(idx)
+        smiles = self.smiles[idx] if self.smiles and idx < len(self.smiles) else None
+        molecule_id = self._format_identifier(idx, smiles)
+        motif_map = find_motifs(graph)
+        motif_scores = aggregate_motif_ig(
+            node_scores,
+            edge_scores,
+            motif_map,
+            getattr(graph, "edge_index", None),
+        )
+
+        baseline_ns = self._graph_to_namespace(graph)
+        with torch.no_grad():
+            baseline_logits = torch.as_tensor(logits_model(baseline_ns), dtype=torch.float32, device=self.device)
+        baseline_np = baseline_logits.detach().cpu().numpy().astype(np.float32, copy=False)
+
+        motif_deltas = compute_motif_deltas(
+            logits_model,
+            graph,
+            motif_map,
+            device=self.device,
+            baseline_logits=baseline_np,
+        )
+        task_names = self._resolve_task_names(baseline_np)
+
+        graph_dir = os.path.join(self.output_dir, molecule_id)
+        artifacts = save_motif_artifacts(
+            smiles=smiles,
+            motif_map=motif_map,
+            motif_scores=motif_scores,
+            motif_deltas=motif_deltas,
+            task_names=task_names,
+            output_dir=graph_dir,
+            normalise_mode=self.normalise_mode,
+        )
+
+        self.records.append(
+            {
+                "graph_index": idx,
+                "molecule_id": molecule_id,
+                "artifact_dir": graph_dir,
+                **{k: v for k, v in artifacts.items() if k != "motif_rows"},
+            }
+        )
+
+    def process_batch(self, batch_meta: object) -> None:
+        if not self.enabled:
+            return
+        indices = _extract_batch_indices(batch_meta)
+        if not indices:
+            if not self._warned_missing_idx:
+                logger.warning(
+                    "[ig_motif] batch metadata missing dataset indices; skipping explanation export."
+                )
+                self._warned_missing_idx = True
+            return
+        for idx in indices:
+            self._compute_for_index(idx)
+
+    def finalize(self, metrics: Dict[str, Any]) -> None:
+        if not self.enabled or not self.records:
+            return
+        metrics["ig_motif_artifact_root"] = self.output_dir
+        metrics["ig_motif_artifacts"] = [dict(entry) for entry in self.records]
 
 def stratified_split(
     indices: List[int], labels: np.ndarray, train_frac: float, val_frac: float
@@ -2380,9 +2619,13 @@ def _train_linear_head_impl(
         if isinstance(head_module, nn.parallel.DistributedDataParallel)
         else head_module
     )
-    ig_logger: Optional[_IGArtifactLogger] = None
-    if (explain_mode or "").strip().lower() == "ig" and (is_main_process() or not distributed):
-        ig_logger = _IGArtifactLogger(
+    ig_logger: Optional[Union[_IGArtifactLogger, _MotifIGArtifactLogger]] = None
+    explain_mode_normalised = (explain_mode or "").strip().lower()
+    if explain_mode_normalised in {"ig", "ig_motif"} and (is_main_process() or not distributed):
+        logger_cls: Union[type[_IGArtifactLogger], type[_MotifIGArtifactLogger]] = (
+            _MotifIGArtifactLogger if explain_mode_normalised == "ig_motif" else _IGArtifactLogger
+        )
+        ig_logger = logger_cls(
             dataset=dataset,
             encoder=base_encoder_for_ig,
             head_module=base_head_for_ig,
