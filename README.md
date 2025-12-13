@@ -452,9 +452,13 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
   
   8) Other todos
 
-  a. Break up train jepa and grid search to be more modular, they suffer from bloat because of procedural writes (evolving needs)
-  b. Train subsequent steps with not just ESOL but larger corpus
-  c. explore random and Bayesian search over grid search to optimise for timing of runs. Wire into pipeline of custom grid and then handover to bayesian
+  a. Implement a shared encoder that learns general chemical knowledge that helps all Tox 21 assays, while each head learns assay-specific details.
+  b. Exploring impact of of different gnn_types on tox21 results
+  c. Apply random and stratified on tox21 and compare results
+  d. cluster assays by biological similarity and rain them jointly, with shared representations and task-aware prompts (similar to Adapting differential molecular representation with  hierarchical prompts for multi-label property predictioj) - we are currently answering "“What is the true, per-assay generalization limit when no cross-task leakage is allowed?” NOT "“How well can we do if assays help each other?”"
+  e. report on reproducability of results
+  f. Fix all reporting in wandb
+  g. Broader training across all Moleculenet datasets
 
   ```bash
   export APP_DIR=/srv/mjepa
