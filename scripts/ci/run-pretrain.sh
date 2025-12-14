@@ -460,6 +460,17 @@ PY
 
 ci_pretrain_backfill_phase2_bindings || true
 
+pretrain_hidden_dim=""
+pretrain_num_layers=""
+phase2_resolve_structural_defaults pretrain_hidden_dim pretrain_num_layers
+if [[ -z "${PRETRAIN_HIDDEN_DIM:-}" ]]; then
+  PRETRAIN_HIDDEN_DIM="$pretrain_hidden_dim"
+fi
+if [[ -z "${PRETRAIN_NUM_LAYERS:-}" ]]; then
+  PRETRAIN_NUM_LAYERS="$pretrain_num_layers"
+fi
+export PRETRAIN_HIDDEN_DIM PRETRAIN_NUM_LAYERS
+
 if (( FROZEN )); then
   echo "[pretrain] encoder lineage ${PRETRAIN_EXP_ID:-<unset>} is frozen; skipping pretrain." >&2
   if [[ ! -f "${PRETRAIN_DIR}/encoder.pt" ]]; then

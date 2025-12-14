@@ -20,6 +20,42 @@ class DummyDataset:
         self.graphs = [name]
 
 
+def test_resolve_augmentation_profile_maps_geometric_flags():
+    from scripts.commands import sweep_run
+
+    resolved = sweep_run._resolve_augmentation_profile("geom_only", seed=7)
+
+    assert resolved["contiguity"] is True
+    assert resolved["add_3d"] is True
+    aug = resolved["augmentations"]
+    assert aug["random_rotate"] and aug["mask_angle"] and aug["perturb_dihedral"]
+    assert not aug["bond_deletion"]
+    assert not aug["atom_masking"]
+    assert not aug["subgraph_removal"]
+
+
+def test_resolve_augmentation_profile_draws_single_corruption():
+    from scripts.commands import sweep_run
+
+    resolved = sweep_run._resolve_augmentation_profile("graph_light", seed=0)
+
+    aug = resolved["augmentations"]
+    corruption_total = sum(
+        int(aug[key])
+        for key in ("bond_deletion", "atom_masking", "subgraph_removal")
+    )
+
+    assert corruption_total == 1
+    assert resolved["selected_corruption"] in {
+        "bond_deletion",
+        "atom_masking",
+        "subgraph_removal",
+    }
+    assert not aug["random_rotate"]
+    assert not aug["mask_angle"]
+    assert not aug["perturb_dihedral"]
+
+
 def test_cmd_sweep_run_invokes_run_one(monkeypatch, tmp_path):
     def fake_loader(dirpath, **kwargs):
         return f"ds:{dirpath}"
