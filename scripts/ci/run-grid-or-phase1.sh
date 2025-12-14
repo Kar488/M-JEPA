@@ -46,6 +46,12 @@ source "$(dirname "$0")/wandb_utils.sh"
 export WANDB_NAME="grid"
 export WANDB_JOB_TYPE="grid"
 
+# Enforce paired seeds/backbones for Phase-1 so paired-effect analysis sees
+# enough overlapping (pair_id, seed) combinations without changing core
+# training hyperparameters.
+PHASE1_MIN_SEED_PAIRS=${PHASE1_MIN_SEED_PAIRS:-3}
+PHASE1_BACKBONES=${PHASE1_BACKBONES:-gine,dmpnn,schnet3d}
+
 # Decide which mode to use
 : "${GRID_MODE:?GRID_MODE must be set to 'wandb' or 'custom'}"
 # allowed values: custom | wandb
@@ -102,159 +108,235 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   [[ -f "$CONTRAST_SPEC" ]] || { echo "[fatal] missing sweep spec $CONTRAST_SPEC" >&2; exit 1; }
 
 
-  TMP_JEPA="$(mktemp)";      yq ".method = \"random\"" "$JEPA_SPEC" > "$TMP_JEPA"
-  TMP_CONTRAST="$(mktemp)";  yq ".method = \"random\"" "$CONTRAST_SPEC" > "$TMP_CONTRAST"
-  # WandB sweeps ignore a top-level `seed`; pairing is instead controlled via
-  # PHASE1_BACKBONES / PHASE1_SEEDS so both specs enumerate identical combos.
+  TMP_BASE_JEPA="$(mktemp)";      yq ".method = \"random\"" "$JEPA_SPEC" > "$TMP_BASE_JEPA"
+  TMP_BASE_CONTRAST="$(mktemp)";  yq ".method = \"random\"" "$CONTRAST_SPEC" > "$TMP_BASE_CONTRAST"
 
-  if [[ -n "${PHASE1_BACKBONES:-}" ]]; then
-    export PHASE1_BACKBONES
-    for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
-      # Use -y to specify YAML output when editing in place
-      yq -y -i --arg backbones "$PHASE1_BACKBONES" '.parameters.gnn_type.values = ($backbones
-        | split(",")
-        | map(gsub("^\\s+|\\s+$"; ""))
-        | map(select(length > 0)))' "$spec"
+  IFS="," read -ra RAW_BACKBONES <<< "$PHASE1_BACKBONES"
+  BACKBONES=()
+  for raw in "${RAW_BACKBONES[@]}"; do
+    candidate="${raw//[[:space:]]/}"
+    if [[ -n "$candidate" ]]; then
+      BACKBONES+=("$candidate")
+    fi
+  done
+  if (( ${#BACKBONES[@]} == 0 )); then
+    echo "[phase1][fatal] no backbones resolved from PHASE1_BACKBONES='$PHASE1_BACKBONES'" >&2
+    exit 1
+  fi
+
+  # Harmonise seeds across methods and backbones, padding to ensure paired-effect
+  # sees enough (pair_id, seed) intersections.
+  PHASE1_SEED_LIST=()
+  if [[ -n "${PHASE1_SEEDS:-}" ]]; then
+    IFS="," read -ra RAW_SEEDS <<< "$PHASE1_SEEDS"
+    for seed in "${RAW_SEEDS[@]}"; do
+      token="${seed//[[:space:]]/}"
+      if [[ -n "$token" ]]; then
+        PHASE1_SEED_LIST+=("$token")
+      fi
+    done
+  else
+    mapfile -t PHASE1_SEED_LIST < <(yq '.parameters.seed.values[]' "$TMP_BASE_JEPA")
+  fi
+
+  if (( ${#PHASE1_SEED_LIST[@]} < PHASE1_MIN_SEED_PAIRS )); then
+    echo "[phase1][warn] extending PHASE1_SEEDS to guarantee at least ${PHASE1_MIN_SEED_PAIRS} paired seeds" >&2
+    next_seed=0
+    while (( ${#PHASE1_SEED_LIST[@]} < PHASE1_MIN_SEED_PAIRS )); do
+      candidate="$next_seed"
+      duplicate=0
+      for existing in "${PHASE1_SEED_LIST[@]}"; do
+        if [[ "$existing" == "$candidate" ]]; then
+          duplicate=1
+          break
+        fi
+      done
+      if (( ! duplicate )); then
+        PHASE1_SEED_LIST+=("$candidate")
+      fi
+      ((next_seed++))
     done
   fi
 
-  if [[ -n "${PHASE1_SEEDS:-}" ]]; then
-    export PHASE1_SEEDS
+  SEEDS_CSV="$(IFS=","; echo "${PHASE1_SEED_LIST[*]}")"
+
+  TMP_JEPA_SPECS=()
+  TMP_CONTRAST_SPECS=()
+  JEPA_IDS=()
+  CONTRAST_IDS=()
+
+  # Launch independent sweeps per backbone so pair_id semantics stay stable
+  # while avoiding cross-backbone confounding during paired-effect analysis.
+  for backbone in "${BACKBONES[@]}"; do
+    TMP_JEPA="$(mktemp)"; cp "$TMP_BASE_JEPA" "$TMP_JEPA"
+    TMP_CONTRAST="$(mktemp)"; cp "$TMP_BASE_CONTRAST" "$TMP_CONTRAST"
+
     for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
-      # Use -y to specify YAML output when editing in place
-      yq -y -i --arg seeds "$PHASE1_SEEDS" '.parameters.seed.values = ($seeds
+      yq -y -i --arg seeds "$SEEDS_CSV" '.parameters.seed.values = ($seeds
         | split(",")
         | map(gsub("^\\s+|\\s+$"; ""))
         | map(select(length > 0))
         | map(tonumber))' "$spec"
+      yq -y -i --arg backbone "$backbone" '.parameters.gnn_type.values = [$backbone]' "$spec"
     done
-  fi
 
-  check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
+    check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
 
-  JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
-  CONTRAST_ID="$(wandb_sweep_create "$TMP_CONTRAST")"
-  if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
-    echo "[phase1][fatal] bad sweep ids: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
-    exit 1
-  fi
-  echo "[phase1] JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
+    JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
+    CONTRAST_ID="$(wandb_sweep_create "$TMP_CONTRAST")"
+    if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
+      echo "[phase1][fatal] bad sweep ids for backbone ${backbone}: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
+      exit 1
+    fi
+    echo "[phase1] (${backbone}) JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
 
-  JEPA_SWEEP_ID="$(qualify_sweep_id "$JEPA_ID")"
-  CONTRAST_SWEEP_ID="$(qualify_sweep_id "$CONTRAST_ID")"
+    TMP_JEPA_SPECS+=("$TMP_JEPA")
+    TMP_CONTRAST_SPECS+=("$TMP_CONTRAST")
+    JEPA_IDS+=("$JEPA_ID")
+    CONTRAST_IDS+=("$CONTRAST_ID")
+  done
 
   cd "$APP_DIR"
   BASE_LOG_DIR="${LOG_DIR:-$APP_DIR/logs}"
   mapfile -t GRID_VISIBLE_GPUS < <(visible_gpu_ids)
   PHASE1_GPU_COUNT="${#GRID_VISIBLE_GPUS[@]}"
-  if (( PHASE1_GPU_COUNT >= 2 )); then
-    echo "[phase1] detected $PHASE1_GPU_COUNT GPUs; launching agents in parallel"
-    declare -a PHASE1_GPU_SPLITS
-    split_gpu_ids PHASE1_GPU_SPLITS 2 "${GRID_VISIBLE_GPUS[@]}"
 
-    (
-      export LOG_DIR="${BASE_LOG_DIR}/phase1_jepa"
-      mkdir -p "$LOG_DIR"
-      if [[ -n "${PHASE1_GPU_SPLITS[0]:-}" ]]; then
-        export CUDA_VISIBLE_DEVICES="${PHASE1_GPU_SPLITS[0]}"
-        echo "[phase1] JEPA agent using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+  run_backbone_agents() {
+    local jepa_id="$1" contrast_id="$2" backbone="$3"
+
+    local jepa_sweep contrast_sweep
+    jepa_sweep="$(qualify_sweep_id "$jepa_id")"
+    contrast_sweep="$(qualify_sweep_id "$contrast_id")"
+
+    local backbone_slug
+    backbone_slug="${backbone//[^a-zA-Z0-9_-]/}"
+    if [[ -z "$backbone_slug" ]]; then
+      backbone_slug="$backbone"
+    fi
+
+    if (( PHASE1_GPU_COUNT >= 2 )); then
+      declare -a PHASE1_GPU_SPLITS
+      split_gpu_ids PHASE1_GPU_SPLITS 2 "${GRID_VISIBLE_GPUS[@]}"
+
+      (
+        export LOG_DIR="${BASE_LOG_DIR}/phase1_jepa_${backbone_slug}"
+        mkdir -p "$LOG_DIR"
+        if [[ -n "${PHASE1_GPU_SPLITS[0]:-}" ]]; then
+          export CUDA_VISIBLE_DEVICES="${PHASE1_GPU_SPLITS[0]}"
+          echo "[phase1] (${backbone}) JEPA agent using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+        fi
+        export SWEEP_ID="$jepa_sweep"
+        export WANDB_COUNT="$PHASE1_JEPA_COUNT"
+        echo "[phase1] (${backbone}) launching JEPA agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
+        if ! run_with_timeout wandb_agent; then
+          rc=$?
+          if [[ $rc -eq 2 ]]; then
+            echo "[phase1][warn] (${backbone}) JEPA agent returned rc=2; treating as sweep exhaustion"
+          else
+            exit "$rc"
+          fi
+        fi
+      ) &
+      PHASE1_JEPA_PID=$!
+
+      (
+        export LOG_DIR="${BASE_LOG_DIR}/phase1_contrastive_${backbone_slug}"
+        mkdir -p "$LOG_DIR"
+        if [[ -n "${PHASE1_GPU_SPLITS[1]:-}" ]]; then
+          export CUDA_VISIBLE_DEVICES="${PHASE1_GPU_SPLITS[1]}"
+          echo "[phase1] (${backbone}) contrastive agent using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+        fi
+        export SWEEP_ID="$contrast_sweep"
+        export WANDB_COUNT="$PHASE1_CONTRAST_COUNT"
+        echo "[phase1] (${backbone}) launching contrastive agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
+        if ! run_with_timeout wandb_agent; then
+          rc=$?
+          if [[ $rc -eq 2 ]]; then
+            echo "[phase1][warn] (${backbone}) contrastive agent returned rc=2; treating as sweep exhaustion"
+          else
+            exit "$rc"
+          fi
+        fi
+      ) &
+      PHASE1_CONTRAST_PID=$!
+
+      set +e
+      wait "$PHASE1_JEPA_PID"; PHASE1_JEPA_RC=$?
+      wait "$PHASE1_CONTRAST_PID"; PHASE1_CONTRAST_RC=$?
+      if [[ $PHASE1_JEPA_RC -eq 2 ]]; then
+        echo "[phase1][warn] (${backbone}) normalising JEPA agent rc=2 to success (sweep exhaustion)"
+        PHASE1_JEPA_RC=0
       fi
-      export SWEEP_ID="$JEPA_SWEEP_ID"
+      if [[ $PHASE1_CONTRAST_RC -eq 2 ]]; then
+        echo "[phase1][warn] (${backbone}) normalising contrastive agent rc=2 to success (sweep exhaustion)"
+        PHASE1_CONTRAST_RC=0
+      fi
+      set -e
+
+      if (( PHASE1_JEPA_RC != 0 || PHASE1_CONTRAST_RC != 0 )); then
+        echo "[phase1][fatal] (${backbone}) sweep agents failed: JEPA rc=$PHASE1_JEPA_RC contrastive rc=$PHASE1_CONTRAST_RC" >&2
+        exit 1
+      fi
+    else
+      export SWEEP_ID="$jepa_sweep"
       export WANDB_COUNT="$PHASE1_JEPA_COUNT"
-      echo "[phase1] launching JEPA agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
-      if ! run_with_timeout wandb_agent; then
-        rc=$?
-        if [[ $rc -eq 2 ]]; then
-          echo "[phase1][warn] JEPA agent returned rc=2; treating as sweep exhaustion"
-        else
-          exit "$rc"
+      echo "[phase1] (${backbone}) launching JEPA agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
+      (
+        if ! run_with_timeout wandb_agent; then
+          rc=$?
+          if [[ $rc -eq 2 ]]; then
+            echo "[phase1][warn] (${backbone}) JEPA agent returned rc=2; treating as sweep exhaustion"
+          else
+            exit "$rc"
+          fi
         fi
-      fi
-    ) &
-    PHASE1_JEPA_PID=$!
+      )
 
-    (
-      export LOG_DIR="${BASE_LOG_DIR}/phase1_contrastive"
-      mkdir -p "$LOG_DIR"
-      if [[ -n "${PHASE1_GPU_SPLITS[1]:-}" ]]; then
-        export CUDA_VISIBLE_DEVICES="${PHASE1_GPU_SPLITS[1]}"
-        echo "[phase1] contrastive agent using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
-      fi
-      export SWEEP_ID="$CONTRAST_SWEEP_ID"
+      export SWEEP_ID="$contrast_sweep"
       export WANDB_COUNT="$PHASE1_CONTRAST_COUNT"
-      echo "[phase1] launching contrastive agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
-      if ! run_with_timeout wandb_agent; then
-        rc=$?
-        if [[ $rc -eq 2 ]]; then
-          echo "[phase1][warn] contrastive agent returned rc=2; treating as sweep exhaustion"
-        else
-          exit "$rc"
+      echo "[phase1] (${backbone}) launching contrastive agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
+      (
+        if ! run_with_timeout wandb_agent; then
+          rc=$?
+          if [[ $rc -eq 2 ]]; then
+            echo "[phase1][warn] (${backbone}) contrastive agent returned rc=2; treating as sweep exhaustion"
+          else
+            exit "$rc"
+          fi
         fi
-      fi
-    ) &
-    PHASE1_CONTRAST_PID=$!
-
-    set +e
-    wait "$PHASE1_JEPA_PID"
-    PHASE1_JEPA_RC=$?
-    wait "$PHASE1_CONTRAST_PID"
-    PHASE1_CONTRAST_RC=$?
-    if [[ $PHASE1_JEPA_RC -eq 2 ]]; then
-      echo "[phase1][warn] normalising JEPA agent rc=2 to success (sweep exhaustion)"
-      PHASE1_JEPA_RC=0
+      )
     fi
-    if [[ $PHASE1_CONTRAST_RC -eq 2 ]]; then
-      echo "[phase1][warn] normalising contrastive agent rc=2 to success (sweep exhaustion)"
-      PHASE1_CONTRAST_RC=0
-    fi
-    set -e
+  }
 
-    if (( PHASE1_JEPA_RC != 0 || PHASE1_CONTRAST_RC != 0 )); then
-      echo "[phase1][fatal] sweep agents failed: JEPA rc=$PHASE1_JEPA_RC contrastive rc=$PHASE1_CONTRAST_RC" >&2
-      exit 1
-    fi
-  else
-    export SWEEP_ID="$JEPA_SWEEP_ID"
-    export WANDB_COUNT="$PHASE1_JEPA_COUNT"
-    echo "[phase1] launching JEPA agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
-    (
-      if ! run_with_timeout wandb_agent; then
-        rc=$?
-        if [[ $rc -eq 2 ]]; then
-          echo "[phase1][warn] JEPA agent returned rc=2; treating as sweep exhaustion"
-        else
-          exit "$rc"
-        fi
-      fi
-    )
-
-    export SWEEP_ID="$CONTRAST_SWEEP_ID"
-    export WANDB_COUNT="$PHASE1_CONTRAST_COUNT"
-    echo "[phase1] launching contrastive agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
-    (
-      if ! run_with_timeout wandb_agent; then
-        rc=$?
-        if [[ $rc -eq 2 ]]; then
-          echo "[phase1][warn] contrastive agent returned rc=2; treating as sweep exhaustion"
-        else
-          exit "$rc"
-        fi
-      fi
-    )
-  fi
+  for idx in "${!BACKBONES[@]}"; do
+    run_backbone_agents "${JEPA_IDS[$idx]}" "${CONTRAST_IDS[$idx]}" "${BACKBONES[$idx]}"
+  done
 
   # Require that paired-effect analysis only considers runs that have reached
   # the minimum training budgets that Phase-1 sweeps schedule.  Allow
   # overrides via environment variables so CI callers can tighten or loosen the
-  # thresholds without editing this script.
+  # thresholds without editing this script, and align pretrain thresholds with
+  # the sweep's actual batch budgets to avoid early-terminated runs skewing
+  # comparisons.
   if [[ -z "${PE_MIN_PRETRAIN_EPOCHS+x}" ]]; then
     PE_MIN_PRETRAIN_EPOCHS=5
   fi
   if [[ -z "${PE_MIN_FINETUNE_EPOCHS+x}" ]]; then
     PE_MIN_FINETUNE_EPOCHS=1
   fi
+
+  : "${PE_MIN_PRETRAIN_BATCHES_FRAC:=0.8}"
+  max_pretrain_batches=$(yq '.parameters.max_pretrain_batches.value // (.parameters.max_pretrain_batches.values[0] // 0)' "${TMP_JEPA_SPECS[0]}")
+  computed_min_pretrain_batches=$(MAX_PRETRAIN_BATCHES="$max_pretrain_batches" PE_MIN_PRETRAIN_BATCHES_FRAC="$PE_MIN_PRETRAIN_BATCHES_FRAC" python - <<'PY'
+import math
+import os
+max_batches = int(os.environ.get("MAX_PRETRAIN_BATCHES", "0"))
+frac = float(os.environ.get("PE_MIN_PRETRAIN_BATCHES_FRAC", "0.8"))
+print(int(math.floor(max_batches * frac)))
+PY
+  )
   if [[ -z "${PE_MIN_PRETRAIN_BATCHES+x}" ]]; then
-    PE_MIN_PRETRAIN_BATCHES=200
+    PE_MIN_PRETRAIN_BATCHES="$computed_min_pretrain_batches"
   fi
 
   PE_FILTER_FLAGS=()
@@ -273,6 +355,11 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     exit 1
   fi
 
+  PE_SWEEP_FLAGS=()
+  for sweep_id in "${JEPA_IDS[@]}" "${CONTRAST_IDS[@]}"; do
+    PE_SWEEP_FLAGS+=("--sweep" "$sweep_id")
+  done
+
   "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
     python -u "$APP_DIR/scripts/ci/paired_effect_from_wandb.py" \
       --project "${WANDB_PROJECT}" \
@@ -280,8 +367,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
       --aggregate pair-seed \
       --seed "${CI_SEED:-42}" \
       --strict \
-      --sweep "$JEPA_ID" \
-      --sweep "$CONTRAST_ID" \
+      "${PE_SWEEP_FLAGS[@]}" \
       "${PE_FILTER_FLAGS[@]}" \
     2>&1 | tee "${LOG_DIR:-$APP_DIR/logs}/paired_effect.log"
 
@@ -374,7 +460,12 @@ PY
   echo "[phase1] paired-effect decided winner=${METHOD_WINNER} task=${TASK_FROM_PE}"
 
   WINNER="$METHOD_WINNER"
-  BEST_ID="$JEPA_ID"; [[ "$WINNER" == "contrastive" ]] && BEST_ID="$CONTRAST_ID"
+  if [[ "$WINNER" == "contrastive" ]]; then
+    WINNER_SWEEPS=("${CONTRAST_IDS[@]}")
+  else
+    WINNER_SWEEPS=("${JEPA_IDS[@]}")
+  fi
+  BEST_ID="${WINNER_SWEEPS[0]}"
   BEST_SWEEP="${WANDB_ENTITY}/${WANDB_PROJECT}/${BEST_ID}"
 
   phase1_force_reuse="$(normalize_bool "${CI_PHASE1_FORCE_REUSE_GRID:-0}" 0)"
@@ -414,6 +505,11 @@ PY
   LOG_TMP="$(mktemp)"
   phase1_stage_outputs="${GRID_DIR:-$APP_DIR/grid}/phase1_export/stage-outputs"
   mkdir -p "$phase1_stage_outputs"
+  EXPORT_INCLUDE_SWEEPS=()
+  for sweep_id in "${JEPA_IDS[@]}" "${CONTRAST_IDS[@]}"; do
+    EXPORT_INCLUDE_SWEEPS+=("--include-sweep" "${WANDB_ENTITY}/${WANDB_PROJECT}/${sweep_id}")
+  done
+
   PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
     "$MMBIN" run -n mjepa env PYTHONUNBUFFERED=1 \
       python -u "$APP_DIR/scripts/ci/export_best_from_wandb.py" \
@@ -423,8 +519,7 @@ PY
         --emit-bounds \
         --metrics-csv "${phase1_stage_outputs}/phase1_runs.csv" \
         --winner-csv "${phase1_stage_outputs}/phase2_winner_config.csv" \
-        --include-sweep "${WANDB_ENTITY}/${WANDB_PROJECT}/${JEPA_ID}" \
-        --include-sweep "${WANDB_ENTITY}/${WANDB_PROJECT}/${CONTRAST_ID}" \
+        "${EXPORT_INCLUDE_SWEEPS[@]}" \
         --out "$TMP_BEST" \
         --phase2-yaml "$TMP_PHASE2" \
         --phase2-unlabeled-dir "${PHASE2_UNLABELED_DIR:-${DATA_ROOT:-$APP_DIR}/data/ZINC-canonicalized}" \

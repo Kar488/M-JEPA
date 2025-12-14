@@ -346,6 +346,48 @@ R2_KEYS: Tuple[str, ...] = (
     "metrics/val_r2",
 )
 
+R2_MEAN_KEYS: Tuple[str, ...] = (
+    "val_r2_mean",
+    "metrics/val_r2_mean",
+    "validation.r2_mean",
+)
+
+R2_STD_KEYS: Tuple[str, ...] = (
+    "val_r2_std",
+    "metrics/val_r2_std",
+    "validation.r2_std",
+)
+
+R2_CI95_KEYS: Tuple[str, ...] = (
+    "val_r2_ci95",
+    "metrics/val_r2_ci95",
+    "validation.r2_ci95",
+)
+
+BRIER_KEYS: Tuple[str, ...] = (
+    "val_brier",
+    "validation.brier",
+    "metrics/val_brier",
+)
+
+BRIER_MEAN_KEYS: Tuple[str, ...] = (
+    "val_brier_mean",
+    "metrics/val_brier_mean",
+    "validation.brier_mean",
+)
+
+BRIER_STD_KEYS: Tuple[str, ...] = (
+    "val_brier_std",
+    "metrics/val_brier_std",
+    "validation.brier_std",
+)
+
+BRIER_CI95_KEYS: Tuple[str, ...] = (
+    "val_brier_ci95",
+    "metrics/val_brier_ci95",
+    "validation.brier_ci95",
+)
+
 
 def _resolve_metric_value(run: Any, candidates: Sequence[str]) -> Optional[float]:
     for key in candidates:
@@ -385,12 +427,36 @@ def _build_run_record(run: Any, sweep_id: str, is_winner: bool = False) -> Dict[
         if isinstance(summary_method, str):
             record["training_method"] = summary_method
 
+    # Export secondary metrics in raw form alongside aggregated statistics so
+    # sweep-level analysis can audit per-run trajectories without altering the
+    # selection logic.
     rmse_val = _resolve_metric_value(run, RMSE_KEYS)
     if rmse_val is not None:
         record["metric_rmse"] = rmse_val
     r2_val = _resolve_metric_value(run, R2_KEYS)
     if r2_val is not None:
         record["metric_r2"] = r2_val
+        record["val_r2"] = r2_val
+    for key_list, field in (
+        (R2_MEAN_KEYS, "val_r2_mean"),
+        (R2_STD_KEYS, "val_r2_std"),
+        (R2_CI95_KEYS, "val_r2_ci95"),
+    ):
+        value = _resolve_metric_value(run, key_list)
+        if value is not None:
+            record[field] = value
+
+    brier_val = _resolve_metric_value(run, BRIER_KEYS)
+    if brier_val is not None:
+        record["val_brier"] = brier_val
+    for key_list, field in (
+        (BRIER_MEAN_KEYS, "val_brier_mean"),
+        (BRIER_STD_KEYS, "val_brier_std"),
+        (BRIER_CI95_KEYS, "val_brier_ci95"),
+    ):
+        value = _resolve_metric_value(run, key_list)
+        if value is not None:
+            record[field] = value
 
     for key, value in config.items():
         record[f"config.{key}"] = _serialise_config_value(value)
