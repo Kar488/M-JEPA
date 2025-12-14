@@ -235,6 +235,9 @@ PY
   fi
 }
 
+remote_lineage_id="${GRID_EXP_ID:-${EXP_ID}}"
+remote_current_id="${EXP_ID:-${GRID_EXP_ID:-}}"
+
 if [[ -z "${GRID_DIR:-}" ]]; then
   discover_remote_phase1_lineage
 fi
