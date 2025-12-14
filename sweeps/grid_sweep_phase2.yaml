@@ -26,11 +26,16 @@ parameters:
   seed: { values: [0, 1] }
 
   # core hparams (contrastive)
-  contiguity: { values: [0, 1] }
-  hidden_dim: { values: [128, 256] }
-  num_layers: { values: [2, 3] }
+  hidden_dim: { values: [256, 384, 512] }
+  num_layers: { values: [3, 4, 5] }
   gnn_type: { values: [gine, dmpnn, schnet3d] }
-  add_3d: { values: [0, 1] }
+
+  augmentation_profile:
+    values:
+      - none
+      - geom_only
+      - graph_light
+      - mixed_light
 
   pretrain_batch_size: { value: 256 }
   finetune_batch_size: { value: 256 }
@@ -38,8 +43,8 @@ parameters:
   max_pretrain_batches: { value: 800 }
   finetune_epochs: { value: 25 }
   learning_rate:
-    min: 1.0e-4
-    max: 1.0e-2
+    min: 5.0e-5
+    max: 5.0e-3
     distribution: log_uniform
   temperature: { values: [0.07, 0.1, 0.2] }
 
@@ -55,14 +60,6 @@ parameters:
   task_type: { value: regression }
   label_col: { value: "measured log solubility in mols per litre" }
   max_graphs_per_run: { value: 250000 }
-
-  # geometric + structural augs (contrastive)
-  aug_rotate: { values: [0, 1] }
-  aug_mask_angle: { values: [0, 1] }
-  aug_dihedral: { values: [0, 1] }
-  aug_bond_deletion: { values: [0, 1] }
-  aug_atom_masking: { values: [0, 1] }
-  aug_subgraph_removal: { values: [0, 1] }
 
   sample_unlabeled: { value: 250000 }
   sample_labeled: { value: 5000 }

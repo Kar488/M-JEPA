@@ -3,6 +3,7 @@ import argparse
 import hashlib, json
 import os
 import pathlib
+import random
 import time
 from typing import Optional, Dict, Any
 from urllib.parse import urlparse
@@ -101,6 +102,67 @@ def _infer_best_step(payload: Dict[str, Any]) -> int:
         except Exception:
             continue
     return 0
+
+
+def _resolve_augmentation_profile(profile: Optional[str], *, seed: Optional[int] = None):
+    """Map an augmentation profile to concrete flags.
+
+    Returns a payload with ``contiguity``, ``add_3d`` and the augmentation
+    keyword arguments expected by :class:`AugmentationConfig`, or ``None`` when
+    the profile is unknown/absent.
+    """
+
+    if profile is None:
+        return None
+
+    name = str(profile).strip().lower()
+    if not name:
+        return None
+
+    rng = random.Random(seed)
+    augmentations = {
+        "random_rotate": False,
+        "mask_angle": False,
+        "perturb_dihedral": False,
+        "bond_deletion": False,
+        "atom_masking": False,
+        "subgraph_removal": False,
+    }
+
+    contiguity = False
+    add_3d = False
+    selected = None
+
+    if name == "none":
+        pass
+    elif name == "geom_only":
+        contiguity = True
+        add_3d = True
+        augmentations.update(
+            random_rotate=True, mask_angle=True, perturb_dihedral=True
+        )
+    elif name == "graph_light":
+        contiguity = True
+        selected = rng.choice(["bond_deletion", "atom_masking", "subgraph_removal"])
+        augmentations[selected] = True
+    elif name == "mixed_light":
+        contiguity = True
+        add_3d = True
+        augmentations.update(
+            random_rotate=True, mask_angle=True, perturb_dihedral=True
+        )
+        selected = rng.choice(["bond_deletion", "atom_masking", "subgraph_removal"])
+        augmentations[selected] = True
+    else:
+        return None
+
+    return {
+        "contiguity": contiguity,
+        "add_3d": add_3d,
+        "augmentations": augmentations,
+        "selected_corruption": selected,
+        "profile": name,
+    }
 
 
 def _maybe_promote_metric(payload: Dict[str, Any], target: str, candidates: tuple[str, ...]) -> None:
@@ -430,17 +492,31 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     elif "lr" in sweep_cfg:
         args.learning_rate = float(sweep_cfg["lr"])
 
+    profile_choice = sweep_cfg.get("augmentation_profile")
+    if isinstance(profile_choice, dict) and "value" in profile_choice:
+        profile_choice = profile_choice.get("value")
+    if profile_choice is not None:
+        setattr(args, "augmentation_profile", profile_choice)
+
+    profile_overrides = _resolve_augmentation_profile(
+        profile_choice, seed=getattr(args, "seed", None)
+    )
+
     # booleans used below
     to_bool = _as_bool
-    aug_contiguity = to_bool(getattr(args, "contiguity", 0))
+    aug_contiguity = bool(profile_overrides["contiguity"]) if profile_overrides else to_bool(getattr(args, "contiguity", 0))
     gnn = str(getattr(args, "gnn_type", "")).lower()
-    add_3d = gnn in ("schnet3d", "schnet")
+    add_3d = bool(profile_overrides["add_3d"]) if profile_overrides else to_bool(getattr(args, "add_3d", 0))
+    add_3d = add_3d or gnn in ("schnet3d", "schnet")
+
+    setattr(args, "contiguity", int(aug_contiguity))
+    setattr(args, "add_3d", int(add_3d))
 
     if os.environ.get("SWEEP_DUMP", "0") == "1":
         print(
             f"[sweep-run] gnn_type={gnn} hidden_dim={args.hidden_dim} num_layers={args.num_layers} "
-            f"add_3d={int(add_3d)} contiguity={to_bool(getattr(args,'contiguity',0))} "
-            f"lr={getattr(args,'learning_rate',None)}",
+            f"add_3d={int(add_3d)} contiguity={int(aug_contiguity)} "
+            f"lr={getattr(args,'learning_rate',None)} augmentation_profile={profile_choice}",
             flush=True,
         )
         return
@@ -458,14 +534,27 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
 
     G = lambda k, d=None: getattr(args, k, d)
 
-    aug_kwargs = {
-        "random_rotate": _b(G("aug_rotate", 0)),
-        "mask_angle": _b(G("aug_mask_angle", 0)),
-        "perturb_dihedral": _b(G("aug_dihedral", 0)),
-        "bond_deletion": _b(G("aug_bond_deletion", 0)),
-        "atom_masking": _b(G("aug_atom_masking", 0)),
-        "subgraph_removal": _b(G("aug_subgraph_removal", 0)),
-    }
+    if profile_overrides:
+        aug_kwargs = dict(profile_overrides["augmentations"])
+        legacy_keys = {
+            "random_rotate": "aug_rotate",
+            "mask_angle": "aug_mask_angle",
+            "perturb_dihedral": "aug_dihedral",
+            "bond_deletion": "aug_bond_deletion",
+            "atom_masking": "aug_atom_masking",
+            "subgraph_removal": "aug_subgraph_removal",
+        }
+        for src, dest in legacy_keys.items():
+            setattr(args, dest, int(bool(aug_kwargs.get(src, False))))
+    else:
+        aug_kwargs = {
+            "random_rotate": _b(G("aug_rotate", 0)),
+            "mask_angle": _b(G("aug_mask_angle", 0)),
+            "perturb_dihedral": _b(G("aug_dihedral", 0)),
+            "bond_deletion": _b(G("aug_bond_deletion", 0)),
+            "atom_masking": _b(G("aug_atom_masking", 0)),
+            "subgraph_removal": _b(G("aug_subgraph_removal", 0)),
+        }
     #print("[sweep-run] args: " + json.dumps(vars(args), sort_keys=True, default=str))
 
     # Build config object
@@ -570,6 +659,21 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
             upd["gnn_type"] = gnn
         if "add_3d" not in sweep_cfg:
             upd["add_3d"] = int(add_3d)  # ensure Phase-2 sees the gated value
+        if "contiguity" not in sweep_cfg:
+            upd["contiguity"] = int(aug_contiguity)
+        if profile_overrides:
+            upd["augmentation_profile"] = profile_overrides.get("profile", profile_choice)
+        legacy_keys = {
+            "random_rotate": "aug_rotate",
+            "mask_angle": "aug_mask_angle",
+            "perturb_dihedral": "aug_dihedral",
+            "bond_deletion": "aug_bond_deletion",
+            "atom_masking": "aug_atom_masking",
+            "subgraph_removal": "aug_subgraph_removal",
+        }
+        for src, dest in legacy_keys.items():
+            if dest not in sweep_cfg:
+                upd[dest] = int(bool(aug_kwargs.get(src, 0)))
         config_payload = {k: v for k, v in upd.items() if v is not None}
 
     if using_wandb and run is not None:
@@ -730,6 +834,7 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
         "gnn_type": gnn,
         "add_3d": int(add_3d),
         "contiguity": int(getattr(args, "contiguity", 0)),
+        "augmentation_profile": profile_choice if profile_overrides else None,
     }
     for key, value in metadata.items():
         if key not in payload and value is not None:

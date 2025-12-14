@@ -2849,3 +2849,80 @@ print(
 print("[bestcfg][summary] " + json.dumps(summary, sort_keys=True), file=sys.stderr)
 PY
 }
+
+phase2_resolve_structural_defaults() {
+  local __hidden_out="${1:?hidden_out_var}" __layers_out="${2:?layers_out_var}"
+  local default_hidden="${3:-384}" default_layers="${4:-4}"
+  local -a candidates=()
+  local grid_root
+
+  for grid_root in "${GRID_SOURCE_DIR:-}" "${GRID_DIR:-}"; do
+    [[ -n "$grid_root" ]] || continue
+    candidates+=(
+      "${grid_root%/}/phase2_winner_config.csv"
+      "${grid_root%/}/phase2_export/stage-outputs/best_grid_config.json"
+      "${grid_root%/}/phase2_recheck/stage-outputs/best_grid_config.json"
+      "${grid_root%/}/phase2_export/best_grid_config.json"
+      "${grid_root%/}/best_grid_config.json"
+    )
+  done
+
+  local cfg_path=""
+  for cfg_path in "${candidates[@]}"; do
+    if [[ -f "$cfg_path" ]]; then
+      break
+    fi
+    cfg_path=""
+  done
+
+  local resolved_hidden="" resolved_layers=""
+  if [[ -n "$cfg_path" ]]; then
+    local -a parsed=()
+    if mapfile -t parsed < <(python_inline "$cfg_path" <<'PY'
+import csv
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+hidden = ""
+layers = ""
+
+try:
+    if path.suffix.lower() == ".csv":
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            first = next(reader, {})
+            hidden = first.get("hidden_dim") or first.get("hidden-dim") or ""
+            layers = first.get("num_layers") or first.get("num-layers") or ""
+    else:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle) or {}
+        cfg = payload.get("config") if isinstance(payload, dict) else None
+        if not cfg:
+            cfg = payload if isinstance(payload, dict) else {}
+        hidden = (cfg.get("hidden_dim") or cfg.get("hidden-dim") or "") if isinstance(cfg, dict) else ""
+        layers = (cfg.get("num_layers") or cfg.get("num-layers") or "") if isinstance(cfg, dict) else ""
+except Exception:
+    hidden = ""
+    layers = ""
+
+print(hidden)
+print(layers)
+PY
+    ); then
+      resolved_hidden="${parsed[0]:-}"
+      resolved_layers="${parsed[1]:-}"
+    fi
+  fi
+
+  if [[ -z "$resolved_hidden" ]]; then
+    resolved_hidden="$default_hidden"
+  fi
+  if [[ -z "$resolved_layers" ]]; then
+    resolved_layers="$default_layers"
+  fi
+
+  printf -v "$__hidden_out" '%s' "$resolved_hidden"
+  printf -v "$__layers_out" '%s' "$resolved_layers"
+}

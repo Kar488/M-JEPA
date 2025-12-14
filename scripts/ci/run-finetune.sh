@@ -25,6 +25,17 @@ ci_print_env_diag
 
 : "${LINEAR_HEAD_SOFT_TIMEOUT_EXIT:=86}"
 
+finetune_hidden_dim=""
+finetune_num_layers=""
+phase2_resolve_structural_defaults finetune_hidden_dim finetune_num_layers
+if [[ -z "${FINETUNE_HIDDEN_DIM:-}" ]]; then
+  FINETUNE_HIDDEN_DIM="$finetune_hidden_dim"
+fi
+if [[ -z "${FINETUNE_NUM_LAYERS:-}" ]]; then
+  FINETUNE_NUM_LAYERS="$finetune_num_layers"
+fi
+export FINETUNE_HIDDEN_DIM FINETUNE_NUM_LAYERS
+
 if [[ -n "${BESTCFG_SKIP:-}" ]]; then
   BESTCFG_SKIP="${BESTCFG_SKIP} max_pretrain_batches max_finetune_batches task_type metric"
 else
