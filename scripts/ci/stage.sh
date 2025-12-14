@@ -1426,6 +1426,13 @@ PY
     cp -f "$summary_json" "${outputs_dir}/recheck_summary.json"
   fi
 
+  local runs_csv_src="${GRID_DIR}/phase2_export/stage-outputs/phase2_runs.csv"
+  if [[ -f "$runs_csv_src" ]]; then
+    cp -f "$runs_csv_src" "${outputs_dir}/phase2_runs.csv"
+  else
+    echo "[$step][warn] expected phase2_runs.csv at ${runs_csv_src} but it is missing; rerun phase2_recheck to emit it" >&2
+  fi
+
   local helper_dir="${outputs_dir}/helpers"
   mkdir -p "$helper_dir"
 
