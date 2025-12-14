@@ -82,6 +82,21 @@ def test_metric_supports_nested_keys_from_summary_metrics():
     assert eb.metric(run, "validation.rmse") == 0.43
 
 
+def test_collect_sweep_ids_respects_explicit_includes(monkeypatch):
+    monkeypatch.setenv("WANDB_SWEEP_ID1", "legacy1")
+    monkeypatch.setenv("WANDB_SWEEP_ID2", "legacy2")
+
+    sweep_ids = eb._collect_sweep_ids(
+        "ent/proj/primary", ["ent/proj/include1", "include2"], "ent", "proj"
+    )
+
+    assert sweep_ids == [
+        "ent/proj/primary",
+        "ent/proj/include1",
+        "ent/proj/include2",
+    ]
+
+
 def test_pick_primary_metric_handles_nested_aliases():
     args = types.SimpleNamespace(
         reg_primary="val_rmse",
