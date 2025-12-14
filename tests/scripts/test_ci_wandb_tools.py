@@ -82,6 +82,24 @@ def test_metric_supports_nested_keys_from_summary_metrics():
     assert eb.metric(run, "validation.rmse") == 0.43
 
 
+def test_build_run_record_exports_secondary_metrics():
+    run = FakeRun(
+        "secondary_metrics",
+        config={"training_method": "jepa", "gnn_type": "gine", "hidden_dim": 64, "num_layers": 3},
+        summary={"val_r2_mean": 0.81},
+        summary_metrics={"val_r2": 0.83, "val_r2_ci95": 0.05},
+        raw_attrs={"summaryMetrics": {"val_brier": 0.22, "val_brier_std": 0.03}},
+    )
+
+    record = eb._build_run_record(run, "sweep-secondary")
+
+    assert record["val_r2"] == 0.83
+    assert record["val_r2_mean"] == 0.81
+    assert record["val_r2_ci95"] == 0.05
+    assert record["val_brier"] == 0.22
+    assert record["val_brier_std"] == 0.03
+
+
 def test_collect_sweep_ids_respects_explicit_includes(monkeypatch):
     monkeypatch.setenv("WANDB_SWEEP_ID1", "legacy1")
     monkeypatch.setenv("WANDB_SWEEP_ID2", "legacy2")
@@ -112,6 +130,64 @@ def test_pick_primary_metric_handles_nested_aliases():
 
     assert primary == "metrics/rmse_mean"
     assert maximize is False
+
+
+def test_export_best_respects_winner_method_across_sweeps(monkeypatch, tmp_path):
+    runs_primary = [
+        FakeRun(
+            "contrastive_run",
+            {"training_method": "contrastive", "gnn_type": "gine", "hidden_dim": 32, "num_layers": 2},
+            {"val_auc": 0.52},
+            run_id="ctr",
+        )
+    ]
+    runs_extra = [
+        FakeRun(
+            "jepa_run",
+            {"training_method": "jepa", "gnn_type": "gine", "hidden_dim": 32, "num_layers": 2},
+            {"val_auc": 0.88},
+            run_id="jepa",
+        )
+    ]
+
+    class MultiSweepApi:
+        def sweep(self, sweep_id):  # pragma: no cover - trivial passthrough
+            if sweep_id.endswith("primary"):
+                return FakeSweep(runs_primary)
+            return FakeSweep(runs_extra)
+
+    monkeypatch.setenv("APP_DIR", "/app")
+    monkeypatch.setenv("GRID_DIR", str(tmp_path))
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setenv("WANDB_PROJECT", "proj")
+    monkeypatch.setenv("WANDB_SWEEP_ID1", "primary")
+    monkeypatch.setenv("METHOD_WINNER", "jepa")
+
+    monkeypatch.setattr(eb, "_init_wandb_api", lambda: MultiSweepApi())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_best",
+            "--sweep-id",
+            "ent/proj/primary",
+            "--include-sweep",
+            "ent/proj/extra",
+            "--out",
+            str(tmp_path / "best.json"),
+            "--phase2-yaml",
+            str(tmp_path / "phase2.yaml"),
+            "--metrics-csv",
+            str(tmp_path / "metrics.csv"),
+            "--winner-csv",
+            str(tmp_path / "winner.csv"),
+        ],
+    )
+
+    eb.main()
+
+    best_cfg = json.loads((tmp_path / "best.json").read_text())
+    assert best_cfg["training_method"] == "jepa"
 
 
 def test_paired_effect_accepts_serialized_config(monkeypatch, tmp_path):

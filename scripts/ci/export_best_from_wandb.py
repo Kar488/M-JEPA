@@ -346,6 +346,20 @@ R2_KEYS: Tuple[str, ...] = (
     "metrics/val_r2",
 )
 
+R2_SECONDARY_KEYS: Tuple[str, ...] = (
+    "val_r2",
+    "val_r2_mean",
+    "val_r2_std",
+    "val_r2_ci95",
+)
+
+BRIER_SECONDARY_KEYS: Tuple[str, ...] = (
+    "val_brier",
+    "val_brier_mean",
+    "val_brier_std",
+    "val_brier_ci95",
+)
+
 
 def _resolve_metric_value(run: Any, candidates: Sequence[str]) -> Optional[float]:
     for key in candidates:
@@ -370,6 +384,7 @@ def _serialise_config_value(value: Any) -> Any:
 
 def _build_run_record(run: Any, sweep_id: str, is_winner: bool = False) -> Dict[str, Any]:
     config = _sanitize_run_config(getattr(run, "config", {}) or {})
+    summary = _extract_summary(run)
     record: Dict[str, Any] = {
         "sweep_id": sweep_id,
         "run_id": getattr(run, "id", ""),
@@ -391,6 +406,18 @@ def _build_run_record(run: Any, sweep_id: str, is_winner: bool = False) -> Dict[
     r2_val = _resolve_metric_value(run, R2_KEYS)
     if r2_val is not None:
         record["metric_r2"] = r2_val
+
+    # Export secondary metrics directly so sweep-level CSVs capture raw values
+    # alongside aggregated statistics. This keeps paired-effect diagnostics
+    # transparent without altering the selection logic.
+    for key in R2_SECONDARY_KEYS:
+        value = _lookup_nested(summary, key)
+        if value is not None:
+            record[key] = value
+    for key in BRIER_SECONDARY_KEYS:
+        value = _lookup_nested(summary, key)
+        if value is not None:
+            record[key] = value
 
     for key, value in config.items():
         record[f"config.{key}"] = _serialise_config_value(value)
@@ -1033,9 +1060,29 @@ def main():
         flush=True,
     )
 
+    env_winner = os.environ.get("METHOD_WINNER")
+    winner_method: Optional[str] = env_winner.strip() if env_winner else None
+
+    # Respect paired-effect winners by evaluating the relevant training method
+    # across all Phase-1 sweeps. Fall back to the primary sweep when no method
+    # filter is provided or when no matching runs are available.
+    selection_runs: List[Any] = []
+    if winner_method:
+        winner_label = _normalize_config_value(winner_method)
+        for sweep_runs in per_sweep_runs.values():
+            for run in sweep_runs:
+                cfg_method = _normalize_config_value(
+                    _config_lookup(getattr(run, "config", {}) or {}, "training_method")
+                )
+                if cfg_method and cfg_method == winner_label:
+                    selection_runs.append(run)
+    if not selection_runs:
+        selection_runs = primary_runs
+
     # Task + metric plan
-    task = args.task if args.task != "auto" else detect_task(primary_runs)
-    primary, maximize = pick_primary_metric(primary_runs, task, args)
+    task_source = selection_runs or primary_runs
+    task = args.task if args.task != "auto" else detect_task(task_source)
+    primary, maximize = pick_primary_metric(task_source, task, args)
     tiebreakers: List[Tuple[str,bool]] = []
     if task == "regression":
         if args.reg_tb1: tiebreakers.append((args.reg_tb1, False))
@@ -1044,15 +1091,12 @@ def main():
         if args.clf_tb2: tiebreakers.append((args.clf_tb2, True))
 
     # Pick best
-    best = choose_best(primary_runs, primary, maximize, args.tie_eps, tiebreakers)
+    best = choose_best(selection_runs, primary, maximize, args.tie_eps, tiebreakers)
 
-    winner_method: Optional[str] = None
-    best_cfg_method = _normalize_config_value(_config_lookup(getattr(best, "config", {}), "training_method"))
-    if isinstance(best_cfg_method, str):
-        winner_method = best_cfg_method
-    env_winner = os.environ.get("METHOD_WINNER")
-    if env_winner:
-        winner_method = env_winner.strip()
+    if winner_method is None:
+        best_cfg_method = _normalize_config_value(_config_lookup(getattr(best, "config", {}), "training_method"))
+        if isinstance(best_cfg_method, str):
+            winner_method = best_cfg_method
 
     # Collect per-run metrics and annotate the winner
     best_id = getattr(best, "id", "")

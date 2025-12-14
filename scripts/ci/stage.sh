@@ -1552,7 +1552,7 @@ build_stage_args() {
         "$py" "$APP_DIR/scripts/train_jepa.py" "$subcmd" --help 2>&1
       ); then
         mapfile -t ALLOWED < <(printf '%s\n' "$help_output" |
-          sed -n 's/.*\(--[a-z0-9-]\+\).*/\1/p' | sort -u)
+          sed -n 's/.*\(--[A-Za-z0-9_-]\+\).*/\1/p' | sort -u)
       else
         local status=$?
         fallback_to_micromamba=1
@@ -1575,7 +1575,7 @@ build_stage_args() {
         "$MMBIN" run -n mjepa python "$APP_DIR/scripts/train_jepa.py" "$subcmd" --help 2>&1
       ); then
         mapfile -t ALLOWED < <(printf '%s\n' "$help_output" |
-          sed -n 's/.*\(--[a-z0-9-]\+\).*/\1/p' | sort -u)
+          sed -n 's/.*\(--[A-Za-z0-9_-]\+\).*/\1/p' | sort -u)
       else
         local status=$?
         printf '[stage:%s] failed to execute %s --help even via micromamba python (exit %d).\n' \
