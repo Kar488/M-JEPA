@@ -326,16 +326,26 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   fi
 
   : "${PE_MIN_PRETRAIN_BATCHES_FRAC:=0.8}"
-  max_pretrain_batches=$(yq '.parameters.max_pretrain_batches.value // (.parameters.max_pretrain_batches.values[0] // 0)' "${TMP_JEPA_SPECS[0]}")
-  computed_min_pretrain_batches=$(MAX_PRETRAIN_BATCHES="$max_pretrain_batches" PE_MIN_PRETRAIN_BATCHES_FRAC="$PE_MIN_PRETRAIN_BATCHES_FRAC" python - <<'PY'
+  if [[ -z "${PE_MIN_PRETRAIN_BATCHES+x}" && -n "${PHASE1_MAX_PRETRAIN_BATCHES:-}" ]]; then
+    PE_MIN_PRETRAIN_BATCHES=$(PHASE1_MAX_PRETRAIN_BATCHES="$PHASE1_MAX_PRETRAIN_BATCHES" \
+      PE_MIN_PRETRAIN_BATCHES_FRAC="$PE_MIN_PRETRAIN_BATCHES_FRAC" python - <<'PY'
+import math
+import os
+frac = float(os.environ.get("PE_MIN_PRETRAIN_BATCHES_FRAC", "0.8"))
+budget = float(os.environ.get("PHASE1_MAX_PRETRAIN_BATCHES", "0"))
+print(int(math.floor(budget * frac)))
+PY
+    )
+  elif [[ -z "${PE_MIN_PRETRAIN_BATCHES+x}" ]]; then
+    max_pretrain_batches=$(yq '.parameters.max_pretrain_batches.value // (.parameters.max_pretrain_batches.values[0] // 0)' "${TMP_JEPA_SPECS[0]}")
+    computed_min_pretrain_batches=$(MAX_PRETRAIN_BATCHES="$max_pretrain_batches" PE_MIN_PRETRAIN_BATCHES_FRAC="$PE_MIN_PRETRAIN_BATCHES_FRAC" python - <<'PY'
 import math
 import os
 max_batches = int(os.environ.get("MAX_PRETRAIN_BATCHES", "0"))
 frac = float(os.environ.get("PE_MIN_PRETRAIN_BATCHES_FRAC", "0.8"))
 print(int(math.floor(max_batches * frac)))
 PY
-  )
-  if [[ -z "${PE_MIN_PRETRAIN_BATCHES+x}" ]]; then
+    )
     PE_MIN_PRETRAIN_BATCHES="$computed_min_pretrain_batches"
   fi
 
