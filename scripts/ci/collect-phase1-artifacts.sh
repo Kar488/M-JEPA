@@ -242,6 +242,9 @@ if [[ -z "${GRID_DIR:-}" ]]; then
   discover_remote_phase1_lineage
 fi
 
+remote_lineage_id="${GRID_EXP_ID:-${EXP_ID}}"
+remote_current_id="${EXP_ID:-${GRID_EXP_ID:-}}"
+
 remote_lineage_grid="${GRID_DIR:-${EXPERIMENTS_ROOT%/}/${remote_lineage_id}/grid}"
 remote_current_grid="${EXPERIMENTS_ROOT%/}/${remote_current_id}/grid"
 
