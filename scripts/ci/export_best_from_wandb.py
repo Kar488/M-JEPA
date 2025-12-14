@@ -905,8 +905,14 @@ def _collect_sweep_ids(primary: str, include_sweeps_raw: Optional[Sequence[str]]
     # Mirror Phase-1 policy: automatically fold in both JEPA/contrastive sweeps
     # when CI exported them via WANDB_SWEEP_ID{1,2}. This ensures metrics CSVs
     # enumerate both methods even if the caller forgets to pass --include-sweep.
-    _maybe_add(os.environ.get("WANDB_SWEEP_ID1"))
-    _maybe_add(os.environ.get("WANDB_SWEEP_ID2"))
+    #
+    # However, when the caller explicitly provides include sweeps we should not
+    # also inject the environment defaults; stale WANDB_SWEEP_ID* bindings from
+    # older runs can otherwise leak into the export and pollute the metrics CSV
+    # with unrelated runs.
+    if not include_sweeps_raw:
+        _maybe_add(os.environ.get("WANDB_SWEEP_ID1"))
+        _maybe_add(os.environ.get("WANDB_SWEEP_ID2"))
 
     return include_sweeps
 

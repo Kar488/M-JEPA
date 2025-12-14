@@ -33,3 +33,4 @@ psutil
 # Testing
 pytest
 pytest-cov
+requests

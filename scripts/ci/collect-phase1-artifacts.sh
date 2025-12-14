@@ -36,6 +36,7 @@ REMOTE="${VAST_USER}@${VAST_HOST}"
 SSH_OPTS=(-i "$KEY_PATH" -p "$VAST_PORT" -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=4)
 copy_with_rsync=0
 rsync_path=""
+COPIED_ANY=0
 if command -v rsync >/dev/null 2>&1; then
   rsync_path="$(command -v rsync)"
   if [[ -x "$rsync_path" ]] && rsync --version >/dev/null 2>&1; then
@@ -93,6 +94,7 @@ sync_remote_dir() {
 
   if (( copy_with_rsync )); then
     if "${RSYNC[@]}" "$REMOTE:${remote_dir%/}/" "$local_dir/" >/dev/null 2>&1; then
+      COPIED_ANY=1
       return 0
     fi
     echo "[ci][warn] ${label}: rsync failed for ${remote_dir}; attempting scp" >&2
@@ -102,6 +104,7 @@ sync_remote_dir() {
 
   if command -v scp >/dev/null 2>&1; then
     if "${SCP[@]}" -r "$REMOTE:${remote_dir%/}/." "$local_dir/" >/dev/null 2>&1; then
+      COPIED_ANY=1
       return 0
     fi
     echo "[ci][warn] ${label}: scp failed for ${remote_dir}; attempting tar stream" >&2
@@ -110,6 +113,7 @@ sync_remote_dir() {
   local parent="${remote_dir%/*}" basename="${remote_dir##*/}"
   [[ -z "$parent" || "$parent" == "$remote_dir" ]] && parent="/"
   if ssh "${SSH_OPTS[@]}" "$REMOTE" "cd '${parent}' && tar -cf - '${basename}'" | tar -xf - -C "$local_dir" --strip-components=1; then
+    COPIED_ANY=1
     return 0
   fi
 
@@ -134,6 +138,7 @@ sync_remote_file() {
 
   if (( copy_with_rsync )); then
     if "${RSYNC[@]}" "$REMOTE:${remote_file}" "$local_dir/" >/dev/null 2>&1; then
+      COPIED_ANY=1
       return 0
     fi
     echo "[ci][warn] ${label}: rsync failed for ${remote_file}; attempting scp" >&2
@@ -141,6 +146,7 @@ sync_remote_file() {
 
   if command -v scp >/dev/null 2>&1; then
     if "${SCP[@]}" "$REMOTE:${remote_file}" "$local_dir/" >/dev/null 2>&1; then
+      COPIED_ANY=1
       return 0
     fi
     echo "[ci][warn] ${label}: scp failed for ${remote_file}; attempting ssh stream" >&2
@@ -154,6 +160,7 @@ sync_remote_file() {
       touch -d "$mtime" "$dest_path" 2>/dev/null || true
     fi
     echo "[ci] copied ${label} via ssh stream from ${remote_file}" >&2
+    COPIED_ANY=1
     return 0
   fi
 
@@ -228,15 +235,149 @@ PY
   fi
 }
 
-remote_lineage_id="${GRID_EXP_ID:-${EXP_ID}}"
-remote_current_id="${EXP_ID}"
-
 if [[ -z "${GRID_DIR:-}" ]]; then
   discover_remote_phase1_lineage
 fi
 
+remote_lineage_id="${GRID_EXP_ID:-${EXP_ID}}"
+remote_current_id="${EXP_ID:-${GRID_EXP_ID:-}}"
+
 remote_lineage_grid="${GRID_DIR:-${EXPERIMENTS_ROOT%/}/${remote_lineage_id}/grid}"
 remote_current_grid="${EXPERIMENTS_ROOT%/}/${remote_current_id}/grid"
+
+resolve_remote_grid_root() {
+  local primary="$1" grid_id="$2"
+  local -a candidates=()
+  local -a markers=(
+    "phase1_export"
+    "phase1"
+    "phase1_export/stage-outputs"
+    "phase1_export/stage-outputs/phase1_runs.csv"
+    "grid_sweep_phase2.yaml"
+    "phase1_sweep_id.txt"
+  )
+  local experiments_root="${EXPERIMENTS_ROOT:-}"
+  local inferred_cache_root=""
+  if [[ -n "$experiments_root" ]]; then
+    experiments_root="${experiments_root%/}"
+    inferred_cache_root="${experiments_root%/}/../cache"
+  fi
+
+  add_candidate() {
+    local path="$1"
+    [[ -z "$path" ]] && return
+    local normalized="${path%/}"
+    local existing
+    for existing in "${candidates[@]}"; do
+      if [[ "$existing" == "$normalized" ]]; then
+        return
+      fi
+    done
+    candidates+=("$normalized")
+  }
+
+  add_candidate_with_grid_variant() {
+    local base="$1"
+    [[ -z "$base" ]] && return
+    add_candidate "$base"
+    add_candidate "${base%/}/grid"
+  }
+
+  add_candidate_with_grid_variant "$primary"
+  add_candidate_with_grid_variant "${GRID_DIR:-}"
+  add_candidate_with_grid_variant "${SWEEP_CACHE_DIR:-}/grid"
+  add_candidate_with_grid_variant "${SWEEP_CACHE_DIR:-}/grid/${grid_id}"
+  add_candidate_with_grid_variant "${GRID_CACHE_DIR:-}"
+  add_candidate_with_grid_variant "${GRID_CACHE_DIR:-}/${grid_id}"
+  add_candidate_with_grid_variant "${CACHE_DIR:-}/grid"
+  add_candidate_with_grid_variant "${CACHE_DIR:-}/grid/${grid_id}"
+  add_candidate_with_grid_variant "${inferred_cache_root%/}/grid"
+  add_candidate_with_grid_variant "${inferred_cache_root%/}/grid/${grid_id}"
+  if [[ -n "${RUNNER_TEMP:-}" && -n "$grid_id" ]]; then
+    add_candidate_with_grid_variant "${RUNNER_TEMP%/}/mjepa/fallback/grid/${grid_id}"
+  fi
+
+  local first_existing=""
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if ! ssh "${SSH_OPTS[@]}" "$REMOTE" "test -d '${candidate}'" >/dev/null 2>&1; then
+      continue
+    fi
+
+    if [[ -z "$first_existing" ]]; then
+      first_existing="$candidate"
+    fi
+
+    local marker
+    for marker in "${markers[@]}"; do
+      if ssh "${SSH_OPTS[@]}" "$REMOTE" "test -e '${candidate%/}/${marker}'" >/dev/null 2>&1; then
+        if [[ "$candidate" != "$primary" ]]; then
+          echo "[ci][warn] using fallback grid root for ${grid_id:-unknown}: ${candidate}" >&2
+        fi
+        printf '%s' "$candidate"
+        return 0
+      fi
+    done
+  done
+
+  if [[ -n "$first_existing" ]]; then
+    if [[ "$first_existing" != "$primary" ]]; then
+      echo "[ci][warn] using fallback grid root for ${grid_id:-unknown}: ${first_existing}" >&2
+    fi
+    printf '%s' "$first_existing"
+    return 0
+  fi
+
+  if [[ -n "$grid_id" ]]; then
+    local probe=""
+    if ! probe=$(ssh "${SSH_OPTS[@]}" "$REMOTE" bash -s -- "$grid_id" "${EXPERIMENTS_ROOT:-}" "${GRID_CACHE_DIR:-}" "${SWEEP_CACHE_DIR:-}" "${CACHE_DIR:-}" 2>/dev/null <<'EOS'
+set -euo pipefail
+gid="$1"
+shift
+roots=("$@")
+for root in "${roots[@]}"; do
+  [[ -d "$root" ]] || continue
+  if path=$(find "$root" -maxdepth 6 \( -type d -path "*/${gid}/grid" -o -type d -path "*/${gid}/*/grid" -o -type f -path "*/${gid}/phase1_export/stage-outputs/phase1_runs.csv" -o -type d -path "*/${gid}/phase1_export" \) -print -quit 2>/dev/null); then
+    if [[ -f "$path" ]]; then
+      path="$(dirname "${path%/*}")"
+    fi
+    printf '%s' "${path%/}" | sed 's#/phase1_export/stage-outputs##; s#/phase1_export##'
+    exit 0
+  fi
+done
+EOS
+    ); then
+      probe=""
+    fi
+
+    if [[ -n "$probe" ]]; then
+      echo "[ci][warn] using discovered grid root for ${grid_id}: ${probe}" >&2
+      printf '%s' "$probe"
+      return 0
+    fi
+  fi
+
+  printf '%s' "$primary"
+}
+
+resolve_and_set_grid() {
+  local label="$1" grid_path="$2" grid_id="$3"
+  local resolved
+  resolved="$(resolve_remote_grid_root "$grid_path" "$grid_id")"
+  if [[ -n "$resolved" && "$resolved" != "$grid_path" ]]; then
+    echo "[ci][warn] ${label}: resolved grid path to ${resolved}" >&2
+  fi
+  printf '%s' "${resolved:-$grid_path}"
+}
+
+remote_lineage_grid="$(resolve_and_set_grid lineage "$remote_lineage_grid" "$remote_lineage_id")"
+remote_current_grid="$(resolve_and_set_grid current "$remote_current_grid" "$remote_current_id")"
+if [[ -z "$remote_lineage_id" && -n "$remote_lineage_grid" ]]; then
+  remote_lineage_id="$(basename "$(dirname "${remote_lineage_grid%/}")")"
+fi
+if [[ -z "$remote_current_id" && -n "$remote_current_grid" ]]; then
+  remote_current_id="$(basename "$(dirname "${remote_current_grid%/}")")"
+fi
 
 collect_tree() {
   local remote_grid="$1" local_root="$2" label="$3" grid_id="$4"
@@ -289,9 +430,17 @@ collect_tree "$remote_lineage_grid" "${DEST_ROOT}/lineage" "lineage" "${remote_l
 collect_tree "$remote_current_grid" "${DEST_ROOT}/current" "current" "${remote_current_id}" || true
 collect_logs "${DEST_ROOT}/logs"
 
+mkdir -p "${DEST_ROOT}/logs"
+
 if [[ -d "${DEST_ROOT}/current/phase1_export" ]]; then
   mkdir -p "${DEST_ROOT}/phase1_export"
   rsync -a "${DEST_ROOT}/current/phase1_export/" "${DEST_ROOT}/phase1_export/" >/dev/null 2>&1 || true
+fi
+
+if (( COPIED_ANY == 0 )); then
+  echo "[ci][fatal] no phase1 artifacts were copied from ${REMOTE} (lineage grid: ${remote_lineage_grid}, current grid: ${remote_current_grid})." >&2
+  echo "[ci][hint] verify EXP_ID/GRID_EXP_ID and that phase1 artifacts exist under ${EXPERIMENTS_ROOT}" >&2
+  exit 1
 fi
 
 echo "[ci] phase1 artifacts collected into ${DEST_ROOT}" >&2
