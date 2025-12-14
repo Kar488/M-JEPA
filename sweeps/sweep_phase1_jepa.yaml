@@ -16,8 +16,8 @@ parameters:
   training_method: {value: jepa}
 
   # model + hparams - JEPA specific
-  mask_ratio:           {values: [0.15, 0.25]}
-  ema_decay:            {values: [0.95, 0.98]}
+  mask_ratio:           {values: [0.10,0.15,0.20,0.25]}
+  ema_decay:            {values: [0.95, 0.98,0.99]}
   
    #shared parameters with JEPA
   hidden_dim:           {value: 256}
