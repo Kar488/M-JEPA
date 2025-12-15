@@ -203,6 +203,10 @@ collect_files_matching "$remote_tox21" "$dest_root" '*.json' '*.csv' '*.tsv'
 # Copy logs directory within tox21_dir if present (e.g., calibrator or sweep traces).
 collect_dir "${remote_tox21}/logs" "$dest_root/logs" "tox21-logs"
 
+# Explicitly copy aggregated metrics CSVs when present.
+copy_file "${remote_tox21}/tox21_pretrain_frozen_metrics.csv" "${dest_root}/tox21_pretrain_frozen_metrics.csv" "tox21-baseline-csv"
+copy_file "${remote_tox21}/tox21_fine_tuned_metrics.csv" "${dest_root}/tox21_fine_tuned_metrics.csv" "tox21-eval-csv"
+
 # Copy the tox21 gate env file for downstream steps.
 copy_file "$remote_gate" "$dest_root/tox21_gate.env" "tox21-gate"
 
