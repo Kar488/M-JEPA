@@ -102,6 +102,8 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         from utils.checkpoint import load_state_dict_forgiving as _load_state_dict_forgiving        # type: ignore[import-not-found]
         from utils.checkpoint import resolve_ckpt_path  # type: ignore[import-not-found]
 
+    from pathlib import Path
+
     # --- paths / report ---
     args.report_dir = getattr(args, "report_dir", "reports")
     os.makedirs(args.report_dir, exist_ok=True)
@@ -157,6 +159,65 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     )
     device = resolve_device(args.device)
 
+    def _resolve_ft_checkpoint(raw: str) -> str:
+        def _sanitize(label: str) -> str:
+            return label.replace("/", "_").replace(" ", "_")
+
+        base = Path(raw)
+
+        def _find_in_dir(directory: Path) -> Optional[Path]:
+            for fname in ("ft_best.pt", "head.pt"):
+                candidate = directory / fname
+                if candidate.is_file():
+                    return candidate
+            return None
+
+        if base.is_file():
+            logger.info("Resolved finetune head at %s", base)
+            return str(base)
+
+        label_candidates: List[str] = []
+        arg_label = getattr(args, "label_col", None)
+        if arg_label:
+            label_candidates.append(str(arg_label))
+
+        search_dirs = [base]
+        for label in label_candidates:
+            search_dirs.append(base / label)
+            search_dirs.append(base / _sanitize(label))
+
+        for candidate_dir in search_dirs:
+            resolved = _find_in_dir(candidate_dir)
+            if resolved:
+                logger.info("Resolved finetune head at %s", resolved)
+                return str(resolved)
+
+            try:
+                for subdir in sorted(p for p in candidate_dir.iterdir() if p.is_dir()):
+                    resolved = _find_in_dir(subdir)
+                    if resolved:
+                        logger.info("Resolved finetune head at %s", resolved)
+                        return str(resolved)
+            except FileNotFoundError:
+                continue
+
+        logger.error(
+            "Checkpoint path '%s' not found on disk (labels tried: %s)",
+            raw,
+            ", ".join(label_candidates) if label_candidates else "<none>",
+        )
+        raise FileNotFoundError(raw)
+
+    resolved_ft_ckpt: Optional[str] = None
+    if getattr(args, "ft_ckpt", None):
+        try:
+            resolved_ft_ckpt = _resolve_ft_checkpoint(args.ft_ckpt)
+        except FileNotFoundError:
+            _wb_log({"phase": "benchmark", "status": "error", "error": "missing_ft_ckpt"})
+            _wb_finish()
+            logger.exception("Fine-tuned checkpoint not found")
+            sys.exit(1)
+
     # Prepare results dict
     all_results: Dict[str, Dict[str, float]] = {}
     from typing import Any, Dict
@@ -169,7 +230,14 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         _wb_log(start_payload)
         # Don’t resolve here—tests monkey-patch evaluate_finetuned_head().
         # Pass through what the CLI provided.
-        agg_ft = evaluate_finetuned_head(args.ft_ckpt, labeled, args, device)
+        ft_target = resolved_ft_ckpt or args.ft_ckpt
+        try:
+            agg_ft = evaluate_finetuned_head(ft_target, labeled, args, device)
+        except FileNotFoundError:
+            _wb_log({"phase": "benchmark", "status": "error", "error": "missing_ft_ckpt"})
+            _wb_finish()
+            logger.exception("Failed to resolve fine-tuned checkpoint")
+            raise SystemExit(1)
         if agg_ft:
             all_results["finetuned"] = agg_ft
             for k, v in agg_ft.items():
@@ -295,7 +363,9 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             state = load_checkpoint(ft_ckpt_path)
         except Exception:
             logger.exception("Failed to load fine-tuned checkpoint: %s", ft_ckpt_path)
-            return {}
+            _wb_log({"phase": "benchmark", "status": "error", "error": "missing_ft_ckpt"})
+            _wb_finish()
+            raise SystemExit(1)
         return evaluate_state(state, "finetuned")
 
     main_start_payload = {"phase": "benchmark", "status": "start"}
@@ -313,8 +383,8 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
     # Optional: evaluate a fine-tuned checkpoint that already has a head
     agg_ft: Dict[str, float] = {}
-    if getattr(args, "ft_ckpt", None):
-        agg_ft = evaluate_finetuned(args.ft_ckpt)
+    if resolved_ft_ckpt:
+        agg_ft = evaluate_finetuned(resolved_ft_ckpt)
         if agg_ft:
             all_results["finetuned"] = agg_ft
 

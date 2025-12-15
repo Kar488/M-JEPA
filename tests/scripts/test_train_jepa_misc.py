@@ -158,6 +158,9 @@ def test_cmd_benchmark_eval_only_uses_test_dir(tmp_path, monkeypatch):
 
     monkeypatch.setattr(tj, "train_linear_head", train_head_stub)
 
+    ft_path = tmp_path / "ft.pt"
+    ft_path.write_text("ckpt")
+
     args = argparse.Namespace(
         labeled_dir=str(tmp_path / "train"),
         test_dir=str(tmp_path / "test"),
@@ -180,11 +183,100 @@ def test_cmd_benchmark_eval_only_uses_test_dir(tmp_path, monkeypatch):
         wandb_project="test",
         wandb_tags=[],
         add_3d=False,
-        ft_ckpt="ft.pt",
+        ft_ckpt=str(ft_path),
     )
 
     tj.cmd_benchmark(args)
     assert calls["train_linear_head"] == 0
+
+
+def test_cmd_benchmark_resolves_labelled_finetune_head(tmp_path, monkeypatch):
+    dataset = DummyDataset()
+
+    def load_dataset_stub(path, label_col=None, add_3d=False, **kwargs):
+        assert path == str(tmp_path / "test")
+        return dataset
+
+    monkeypatch.setattr(tj, "load_directory_dataset", load_dataset_stub)
+
+    captured = {}
+
+    def eval_stub(ckpt_path, dataset, args, device):
+        captured["ckpt"] = ckpt_path
+        return {"roc_auc": 0.9}
+
+    monkeypatch.setattr(tj, "evaluate_finetuned_head", eval_stub)
+    monkeypatch.setattr(tj, "train_linear_head", lambda **kwargs: {"roc_auc": 0.5})
+
+    ft_root = tmp_path / "finetuned"
+    target = ft_root / "assay_1" / "seed0"
+    target.mkdir(parents=True)
+    (target / "head.pt").write_text("head")
+
+    args = argparse.Namespace(
+        labeled_dir=str(tmp_path / "train"),
+        test_dir=str(tmp_path / "test"),
+        label_col="assay_1",
+        task_type="classification",
+        epochs=1,
+        batch_size=1,
+        lr=0.01,
+        patience=1,
+        devices=1,
+        seeds=[0],
+        jepa_encoder="jepa.pt",
+        contrastive_encoder=None,
+        dataset="esol",
+        gnn_type="gcn",
+        hidden_dim=16,
+        num_layers=2,
+        device="cpu",
+        use_wandb=False,
+        wandb_project="test",
+        wandb_tags=[],
+        add_3d=False,
+        ft_ckpt=str(ft_root),
+    )
+
+    tj.cmd_benchmark(args)
+    assert captured["ckpt"] == str(target / "head.pt")
+
+
+def test_cmd_benchmark_exits_on_missing_finetune_ckpt(tmp_path, monkeypatch):
+    dataset = DummyDataset()
+
+    monkeypatch.setattr(tj, "load_directory_dataset", lambda *a, **k: dataset)
+    monkeypatch.setattr(tj, "train_linear_head", lambda **kwargs: {"roc_auc": 0.5})
+    monkeypatch.setattr(tj, "build_encoder", lambda **kwargs: object())
+    monkeypatch.setattr(tj.torch, "load", lambda *a, **k: {"encoder": {}})
+
+    args = argparse.Namespace(
+        labeled_dir=str(tmp_path / "train"),
+        test_dir=str(tmp_path / "test"),
+        label_col="assay_1",
+        task_type="classification",
+        epochs=1,
+        batch_size=1,
+        lr=0.01,
+        patience=1,
+        devices=1,
+        seeds=[0],
+        jepa_encoder="jepa.pt",
+        contrastive_encoder=None,
+        dataset="esol",
+        gnn_type="gcn",
+        hidden_dim=16,
+        num_layers=2,
+        device="cpu",
+        use_wandb=False,
+        wandb_project="test",
+        wandb_tags=[],
+        add_3d=False,
+        ft_ckpt=str(tmp_path / "missing"),
+    )
+
+    with pytest.raises(SystemExit):
+        tj.cmd_benchmark(args)
 
 
 def test_cmd_benchmark_passes_loader_knobs(tmp_path, monkeypatch):
