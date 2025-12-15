@@ -56,6 +56,50 @@ def test_resolve_augmentation_profile_draws_single_corruption():
     assert not aug["perturb_dihedral"]
 
 
+def test_sweep_run_prefers_cli_augmentation_profile(monkeypatch, capsys, tmp_path):
+    from scripts import train_jepa as tj
+    from scripts.commands import sweep_run
+
+    monkeypatch.setenv("SWEEP_DUMP", "1")
+    monkeypatch.setattr(sweep_run, "load_wandb_config", lambda: {})
+
+    args = argparse.Namespace(
+        add_3d=0,
+        contiguity=0,
+        mask_ratio=0.1,
+        hidden_dim=32,
+        num_layers=2,
+        gnn_type="gcn",
+        ema_decay=0.99,
+        pretrain_batch_size=1,
+        finetune_batch_size=1,
+        pretrain_epochs=1,
+        finetune_epochs=1,
+        learning_rate=0.001,
+        temperature=0.1,
+        training_method="jepa",
+        labeled_dir=str(tmp_path),
+        unlabeled_dir=str(tmp_path),
+        label_col="y",
+        sample_unlabeled=0,
+        sample_labeled=0,
+        task_type="classification",
+        seed=0,
+        max_pretrain_batches=1,
+        max_finetune_batches=1,
+        num_workers=0,
+        cache_dir=None,
+        use_wandb=0,
+        cache_datasets=0,
+        augmentation_profile="geom_only",
+    )
+
+    tj.cmd_sweep_run(args)
+
+    output = capsys.readouterr().out
+    assert "augmentation_profile=geom_only" in output
+
+
 def test_cmd_sweep_run_invokes_run_one(monkeypatch, tmp_path):
     def fake_loader(dirpath, **kwargs):
         return f"ds:{dirpath}"

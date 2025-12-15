@@ -1595,6 +1595,14 @@ def build_parser() -> argparse.ArgumentParser:
     # hparams unique to sweep-run
     sweep.add_argument("--learning-rate", "--learning_rate", dest="learning_rate", type=float, default=1e-3)
     sweep.add_argument("--seed", dest="seed", type=int, default=0)
+    sweep.add_argument(
+        "--augmentation-profile",
+        "--augmentation_profile",
+        dest="augmentation_profile",
+        type=str,
+        default=None,
+        help="Optional augmentation profile name supplied by sweep seeds",
+    )
 
     # training lengths / caps
     sweep.add_argument("--pretrain-batch-size", "--pretrain_batch_size", dest="pretrain_batch_size", type=int, default=64)
