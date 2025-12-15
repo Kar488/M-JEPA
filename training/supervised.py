@@ -593,6 +593,45 @@ def _extract_batch_indices(batch_meta) -> Optional[List[int]]:
     return [int(x) for x in raw]
 
 
+def _normalise_explain_mode(mode: Optional[str]) -> str:
+    """Canonicalise explanation modes and accept common aliases."""
+
+    mode_norm = (mode or "").strip().lower()
+    if mode_norm == "motif_ig":
+        return "ig_motif"
+    return mode_norm
+
+
+def _normalise_explain_modes(mode: Optional[Union[str, Iterable[str]]]) -> List[str]:
+    """Return a de-duplicated list of canonical explanation modes.
+
+    Accepts comma/whitespace-delimited strings or any iterable of modes and
+    normalises motif aliases to ``ig_motif``.
+    """
+
+    if mode is None:
+        return []
+
+    raw_modes: List[str] = []
+    if isinstance(mode, str):
+        raw_modes = [part for part in re.split(r"[\s,]+", mode) if part]
+    else:
+        for entry in mode:
+            if entry is None:
+                continue
+            if isinstance(entry, str):
+                raw_modes.extend(part for part in re.split(r"[\s,]+", entry) if part)
+            else:
+                raw_modes.append(str(entry))
+
+    normalised: List[str] = []
+    for token in raw_modes:
+        token_norm = _normalise_explain_mode(token)
+        if token_norm and token_norm not in normalised:
+            normalised.append(token_norm)
+    return normalised
+
+
 def _move_batch_to_device(batch, device: torch.device, non_blocking: bool):
     """Move a batched graph tuple returned by ``get_batch`` to ``device``."""
 
@@ -782,7 +821,7 @@ class _IGArtifactLogger:
         explain_config: Optional[Dict[str, Any]],
         stage_config: Optional[Dict[str, Any]],
     ) -> None:
-        mode = (explain_mode or "").strip().lower()
+        mode = _normalise_explain_mode(explain_mode)
         self.enabled = mode == "ig"
         if not self.enabled:
             return
@@ -988,7 +1027,7 @@ class _MotifIGArtifactLogger:
         explain_config: Optional[Dict[str, Any]],
         stage_config: Optional[Dict[str, Any]],
     ) -> None:
-        mode = (explain_mode or "").strip().lower()
+        mode = _normalise_explain_mode(explain_mode)
         self.enabled = mode == "ig_motif"
         if not self.enabled:
             return
@@ -1205,6 +1244,43 @@ class _MotifIGArtifactLogger:
         metrics["ig_motif_artifact_root"] = self.output_dir
         metrics["ig_motif_artifacts"] = [dict(entry) for entry in self.records]
 
+
+def _build_explain_loggers(
+    *,
+    modes: Iterable[str],
+    dataset: GraphDataset,
+    encoder: nn.Module,
+    head_module: nn.Module,
+    task_type: str,
+    device: torch.device,
+    explain_config: Optional[Dict[str, Any]],
+    stage_config: Optional[Dict[str, Any]],
+) -> List[Union[_IGArtifactLogger, _MotifIGArtifactLogger]]:
+    """Instantiate the requested explanation loggers."""
+
+    loggers: List[Union[_IGArtifactLogger, _MotifIGArtifactLogger]] = []
+    for mode in modes:
+        logger_cls: Optional[Union[type[_IGArtifactLogger], type[_MotifIGArtifactLogger]]] = None
+        if mode == "ig":
+            logger_cls = _IGArtifactLogger
+        elif mode == "ig_motif":
+            logger_cls = _MotifIGArtifactLogger
+        if logger_cls is None:
+            continue
+        logger = logger_cls(
+            dataset=dataset,
+            encoder=encoder,
+            head_module=head_module,
+            task_type=task_type,
+            device=device,
+            explain_mode=mode,
+            explain_config=explain_config,
+            stage_config=stage_config,
+        )
+        if getattr(logger, "enabled", False):
+            loggers.append(logger)
+    return loggers
+
 def stratified_split(
     indices: List[int], labels: np.ndarray, train_frac: float, val_frac: float
 ) -> Tuple[List[int], List[int], List[int]]:
@@ -1330,7 +1406,7 @@ def _train_linear_head_impl(
     calibrate_probabilities: bool = False,
     calibration_method: str = "temperature",
     threshold_metric: str = "f1",
-    explain_mode: Optional[str] = None,
+    explain_mode: Optional[Union[str, Iterable[str]]] = None,
     explain_config: Optional[Dict[str, Any]] = None,
     **unused,
 ) -> Dict[str, Any]:
@@ -2619,19 +2695,16 @@ def _train_linear_head_impl(
         if isinstance(head_module, nn.parallel.DistributedDataParallel)
         else head_module
     )
-    ig_logger: Optional[Union[_IGArtifactLogger, _MotifIGArtifactLogger]] = None
-    explain_mode_normalised = (explain_mode or "").strip().lower()
-    if explain_mode_normalised in {"ig", "ig_motif"} and (is_main_process() or not distributed):
-        logger_cls: Union[type[_IGArtifactLogger], type[_MotifIGArtifactLogger]] = (
-            _MotifIGArtifactLogger if explain_mode_normalised == "ig_motif" else _IGArtifactLogger
-        )
-        ig_logger = logger_cls(
+    ig_loggers: List[Union[_IGArtifactLogger, _MotifIGArtifactLogger]] = []
+    explain_modes_normalised = _normalise_explain_modes(explain_mode)
+    if explain_modes_normalised and (is_main_process() or not distributed):
+        ig_loggers = _build_explain_loggers(
+            modes=explain_modes_normalised,
             dataset=dataset,
             encoder=base_encoder_for_ig,
             head_module=base_head_for_ig,
             task_type=task_type,
             device=device_t,
-            explain_mode=explain_mode,
             explain_config=explain_config,
             stage_config=stage_config_local,
         )
@@ -2683,8 +2756,9 @@ def _train_linear_head_impl(
 
                 preds_list.append(preds.detach().to(torch.float32).cpu().numpy())
                 targets_list.append(targets.detach().to(torch.float32).cpu().numpy())
-                if log_meta and ig_logger is not None:
-                    ig_logger.process_batch(batch_meta)
+                if log_meta and ig_loggers:
+                    for ig_logger in ig_loggers:
+                        ig_logger.process_batch(batch_meta)
 
             if preds_list and targets_list:
                 return (
@@ -2749,7 +2823,7 @@ def _train_linear_head_impl(
         metrics["train/batches"] = float(total_batches_done)
         metrics["train/loader_batches"] = float(planned_train_batches)
         metrics["train/epoch_batches"] = float(last_epoch_batches)
-        if ig_logger is not None:
+        for ig_logger in ig_loggers:
             ig_logger.finalize(metrics)
 
     if _effective_budget_secs is not None:
@@ -2820,7 +2894,7 @@ def train_linear_head(
     calibrate_probabilities: bool = False,
     calibration_method: str = "temperature",
     threshold_metric: str = "f1",
-    explain_mode: Optional[str] = None,
+    explain_mode: Optional[Union[str, Iterable[str]]] = None,
     explain_config: Optional[Dict[str, Any]] = None,
     **unused,
 ) -> Dict[str, Any]:

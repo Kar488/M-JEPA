@@ -155,8 +155,8 @@ tox21:
   allow_equal_hash: false
   verify_match_threshold: 0.98
   use_wandb: true
-  explain_mode: ${TOX21_EXPLAIN_MODE:-}
-  explain_steps: ${TOX21_EXPLAIN_STEPS:-}
+  explain_mode: ${TOX21_EXPLAIN_MODE:-ig,ig_motif}
+  explain_steps: ${TOX21_EXPLAIN_STEPS:-50}
 
 report:
   project: ${WANDB_PROJECT:-m-jepa}

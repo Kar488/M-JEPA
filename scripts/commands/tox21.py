@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import os
 import sys
 import traceback
@@ -764,6 +765,37 @@ def _run_tox21_single_task(
     auto_pos_weights: Dict[str, float],
     calibration_warn_threshold: float,
 ) -> Dict[str, Any]:
+    def _normalise_explain_modes(mode: Optional[Union[str, Iterable[str]]]) -> List[str]:
+        def _canonicalise(token: Optional[str]) -> str:
+            if token is None:
+                return ""
+            value = str(token).strip()
+            if value.lower() == "motif_ig":
+                return "ig_motif"
+            return value
+
+        if mode is None:
+            return []
+
+        raw_modes: List[str] = []
+        if isinstance(mode, str):
+            raw_modes = [part for part in re.split(r"[\s,]+", mode) if part]
+        else:
+            for entry in mode:
+                if entry is None:
+                    continue
+                if isinstance(entry, str):
+                    raw_modes.extend(part for part in re.split(r"[\s,]+", entry) if part)
+                else:
+                    raw_modes.append(str(entry))
+
+        normalised: List[str] = []
+        for token in raw_modes:
+            token_norm = _canonicalise(token)
+            if token_norm and token_norm not in normalised:
+                normalised.append(token_norm)
+        return normalised
+
     task_name = getattr(args, "task", None)
     if not task_name:
         raise ValueError("Tox21 task name must be provided")
@@ -799,11 +831,11 @@ def _run_tox21_single_task(
 
     allow_shape_flag = getattr(args, "allow_shape_coercion", None)
 
-    explain_mode = getattr(args, "explain_mode", None)
+    explain_mode = _normalise_explain_modes(getattr(args, "explain_mode", None))
     if not explain_mode:
         env_mode = os.environ.get("TOX21_EXPLAIN_MODE")
         if env_mode:
-            explain_mode = env_mode
+            explain_mode = _normalise_explain_modes(env_mode)
     explain_steps = getattr(args, "explain_steps", None)
     if explain_steps is None:
         env_steps = os.environ.get("TOX21_EXPLAIN_STEPS")
