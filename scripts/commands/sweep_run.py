@@ -495,6 +495,8 @@ def cmd_sweep_run(args: argparse.Namespace) -> None:
     profile_choice = sweep_cfg.get("augmentation_profile")
     if isinstance(profile_choice, dict) and "value" in profile_choice:
         profile_choice = profile_choice.get("value")
+    if profile_choice is None:
+        profile_choice = getattr(args, "augmentation_profile", None)
     if profile_choice is not None:
         setattr(args, "augmentation_profile", profile_choice)
 

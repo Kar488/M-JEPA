@@ -2609,6 +2609,8 @@ PY
 
     local log_has_no_runs=0
     local log_has_api_instability=0
+    local log_has_rapid_failures=0
+    local log_has_fatal_rapid_failures=0
     if [[ -f "$LOG" ]]; then
       if grep -qi "No runs found" "$LOG"; then
         log_has_no_runs=1
@@ -2616,11 +2618,24 @@ PY
       if grep -qiE "Error while calling W&B API: An internal error occurred|Response \[500\]|Network error \(HTTPError\)" "$LOG"; then
         log_has_api_instability=1
       fi
+      if grep -qiE "failed runs in the first [0-9]+ seconds" "$LOG"; then
+        log_has_rapid_failures=1
+      fi
+    fi
+
+    if (( log_has_rapid_failures )); then
+      log_has_fatal_rapid_failures=1
+      echo "[wandb_agent][error] agent aborted after repeated early failures; see ${LOG}" >&2
+      if [[ $rc -eq 0 ]]; then
+        rc=1
+      fi
     fi
 
       if [[ $rc -ne 0 ]]; then
         local exhaustion_reason=""
         if (( timeout_rc )); then
+          :
+        elif (( log_has_fatal_rapid_failures )); then
           :
         elif (( log_has_no_runs )); then
           echo "[wandb_agent][debug] sweep_state=${sweep_state:-unknown} runs_started=${agent_runs_started} (rc=$rc)" >&2
@@ -2629,7 +2644,7 @@ PY
           elif [[ "$sweep_state" =~ ^(FINISHED|CANCELED|CANCELLED)$ ]]; then
             exhaustion_reason="sweep_state_${sweep_state}"
           else
-            echo "[wandb_agent][error] agent saw 'No runs found' before starting any runs (sweep_state=${sweep_state:-unknown}); failing"
+            echo "[wandb_agent][error] agent saw 'No runs found' before starting any runs (sweep_state=${sweep_state:-unknown}); failing" 
           fi
         elif [[ $agent_runs_started -gt 0 ]] && (( log_has_api_instability )); then
           exhaustion_reason="wandb_api_instability"
