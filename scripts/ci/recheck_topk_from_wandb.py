@@ -1064,12 +1064,62 @@ def _flatten_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     return flat
 
 
+def _metric_prefix(metric_name: Optional[str]) -> str:
+    if not metric_name:
+        return "metric"
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "_", str(metric_name)).strip("_")
+    return cleaned or "metric"
+
+
 def _write_runs_csv(
     results: Sequence[Mapping[str, Any]],
     path: Optional[str],
     index_to_run_id: Mapping[int, Optional[str]],
+    primary_metric: str,
+    secondary_metric: Optional[str] = None,
 ) -> int:
+    primary_prefix = _metric_prefix(primary_metric)
+    secondary_prefix = _metric_prefix(secondary_metric) if secondary_metric else None
+
+    base_fields: List[str] = ["index", "run_id"]
+    base_fields.extend(
+        [
+            f"{primary_prefix}_mean",
+            f"{primary_prefix}_se",
+            f"{primary_prefix}_ci95_low",
+            f"{primary_prefix}_ci95_high",
+            f"{primary_prefix}_n",
+        ]
+    )
+    if secondary_prefix:
+        base_fields.extend(
+            [
+                f"{secondary_prefix}_mean",
+                f"{secondary_prefix}_se",
+                f"{secondary_prefix}_ci95_low",
+                f"{secondary_prefix}_ci95_high",
+                f"{secondary_prefix}_n",
+            ]
+        )
+    base_fields.extend(
+        [
+            "is_winner",
+            "training_method",
+            "phase2_winner_method",
+            "is_phase2_winner_method",
+        ]
+    )
+
     if not path or not results:
+        try:
+            out_path = pathlib.Path(path) if path else None
+            if out_path:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                with out_path.open("w", newline="", encoding="utf-8") as handle:
+                    csv.DictWriter(handle, fieldnames=base_fields).writeheader()
+                print(f"[recheck] wrote runs CSV header → {out_path}", flush=True)
+        except Exception:
+            return 0
         return 0
 
     try:
@@ -1109,18 +1159,27 @@ def _write_runs_csv(
         row: Dict[str, Any] = {
             "index": idx,
             "run_id": index_to_run_id.get(idx) if isinstance(idx, int) else None,
-            "rmse_mean": entry.get("mean") if isinstance(entry, Mapping) else None,
-            "rmse_se": entry.get("rmse_se") if isinstance(entry, Mapping) else None,
-            "rmse_ci95_low": ci_low,
-            "rmse_ci95_high": ci_high,
-            "rmse_n": entry.get("n") if isinstance(entry, Mapping) else None,
-            "r2_mean": entry.get("r2_mean") if isinstance(entry, Mapping) else None,
-            "r2_se": entry.get("r2_se") if isinstance(entry, Mapping) else None,
-            "r2_ci95_low": ci_r2_low,
-            "r2_ci95_high": ci_r2_high,
-            "r2_n": entry.get("r2_n") if isinstance(entry, Mapping) else None,
             "is_winner": bool(idx is not None and winner_index is not None and idx == winner_index),
         }
+        row.update(
+            {
+                f"{primary_prefix}_mean": entry.get("mean") if isinstance(entry, Mapping) else None,
+                f"{primary_prefix}_se": entry.get("metric_se") if isinstance(entry, Mapping) else None,
+                f"{primary_prefix}_ci95_low": ci_low,
+                f"{primary_prefix}_ci95_high": ci_high,
+                f"{primary_prefix}_n": entry.get("n") if isinstance(entry, Mapping) else None,
+            }
+        )
+        if secondary_prefix:
+            row.update(
+                {
+                    f"{secondary_prefix}_mean": entry.get("r2_mean") if isinstance(entry, Mapping) else None,
+                    f"{secondary_prefix}_se": entry.get("r2_se") if isinstance(entry, Mapping) else None,
+                    f"{secondary_prefix}_ci95_low": ci_r2_low,
+                    f"{secondary_prefix}_ci95_high": ci_r2_high,
+                    f"{secondary_prefix}_n": entry.get("r2_n") if isinstance(entry, Mapping) else None,
+                }
+            )
         if isinstance(cfg, Mapping):
             row["training_method"] = cfg.get("training_method")
         if winner_method:
@@ -1134,12 +1193,25 @@ def _write_runs_csv(
     if not rows:
         return 0
 
-    fieldnames: List[str] = sorted({key for row in rows for key in row.keys()})
+    config_fields = sorted({key for row in rows for key in row.keys() if key.startswith("config.")})
+    other_fields = sorted(
+        {key for row in rows for key in row.keys()} - set(base_fields) - set(config_fields)
+    )
+
+    fieldnames: List[str] = []
+    fieldnames.extend(base_fields)
+    fieldnames.extend(config_fields)
+    fieldnames.extend(other_fields)
     with out_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+    print(
+        f"[recheck] wrote runs CSV → {out_path} (rows={len(rows)}, hyperparams={len(config_fields)})",
+        flush=True,
+    )
 
     return len(rows)
 
@@ -1193,6 +1265,11 @@ def main() -> None:
     args.override_devices = override_devices
     if override_devices is not None:
         print(f"[recheck] forcing devices={override_devices} for all seeds", flush=True)
+
+    r2_metric_env = os.environ.get("PHASE2_R2_METRIC", "val_r2")
+    r2_metric_name = r2_metric_env.strip() if isinstance(r2_metric_env, str) else None
+    if r2_metric_name == "":
+        r2_metric_name = None
 
     print("[recheck] args parsed:", flush=True)
     for field in (
@@ -1801,19 +1878,21 @@ def main() -> None:
                 collect_attempts,
                 collect_delay,
             )
-            r2_metric_name = os.environ.get("PHASE2_R2_METRIC", "val_r2")
-            seed_to_r2 = _collect_seed_metrics(
-                api,
-                project_path,
-                cfg,
-                seeds,
-                r2_metric_name,
-                index,
-                exp_id,
-                collect_attempts,
-                collect_delay,
-                warn_missing=False,
-            )
+            if r2_metric_name:
+                seed_to_r2 = _collect_seed_metrics(
+                    api,
+                    project_path,
+                    cfg,
+                    seeds,
+                    r2_metric_name,
+                    index,
+                    exp_id,
+                    collect_attempts,
+                    collect_delay,
+                    warn_missing=False,
+                )
+            else:
+                seed_to_r2 = {}
 
             missing_seeds = [s for s in seeds if s not in seed_to_val]
             for missing_seed in missing_seeds:
@@ -1833,7 +1912,7 @@ def main() -> None:
                     "mean": mean_value,
                     "ci95": [low, high],
                     "n": len(values),
-                    "rmse_se": _std_error(values),
+                    "metric_se": _std_error(values),
                     "r2_mean": r2_mean,
                     "ci95_r2": [r2_low, r2_high],
                     "r2_n": len(r2_values),
@@ -1846,7 +1925,7 @@ def main() -> None:
                     "mean": None,
                     "ci95": [None, None],
                     "n": 0,
-                    "rmse_se": None,
+                    "metric_se": None,
                     "r2_mean": r2_mean,
                     "ci95_r2": [r2_low, r2_high],
                     "r2_n": len(r2_values),
@@ -1901,7 +1980,6 @@ def main() -> None:
                 )
         else:
             print(f"[recheck] final Phase-2 winner saved → {best_path}", flush=True)
-        _write_runs_csv(results, args.runs_csv, index_to_run_id)
         success = True
     except KeyboardInterrupt:
         produced_partial = True
@@ -1909,6 +1987,10 @@ def main() -> None:
         raise
     finally:
         heartbeat.stop()
+        try:
+            _write_runs_csv(results, args.runs_csv, index_to_run_id, args.metric, r2_metric_name)
+        except Exception as exc:
+            print(f"[recheck][warn] unable to write runs CSV {args.runs_csv}: {exc}", flush=True)
         if success and sentinel_path:
             try:
                 sentinel = pathlib.Path(sentinel_path)
