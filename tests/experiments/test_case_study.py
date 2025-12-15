@@ -75,7 +75,7 @@ def test_tox21_case_study_passes_explain_kwargs(monkeypatch, tmp_path):
         explain_config={"output_dir": str(tmp_path)},
     )
     assert result.evaluations, "Expected an evaluation payload"
-    assert captured.get("mode") == "ig"
+    assert captured.get("mode") == ["ig"]
     assert captured.get("config", {}).get("output_dir") == str(tmp_path)
     assert captured.get("config", {}).get("task_name") == "NR-AR"
 

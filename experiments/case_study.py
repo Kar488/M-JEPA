@@ -17,6 +17,7 @@ import math
 import os
 import pickle
 import random
+import re
 import sys
 import types
 from collections.abc import Mapping, Sequence
@@ -2635,7 +2636,38 @@ def run_tox21_case_study(
             elif "class_weight" in inspect.signature(linear_train_fn).parameters:
                 extra_args["class_weight"] = {0: 1.0, 1: float(n_neg / max(1, n_pos))}
 
-    explain_mode_norm = str(explain_mode).strip() if explain_mode else None
+    def _normalise_explain_modes(mode: Optional[Union[str, Iterable[str]]]) -> List[str]:
+        def _canonicalise(token: Optional[str]) -> str:
+            if token is None:
+                return ""
+            value = str(token).strip()
+            if value.lower() == "motif_ig":
+                return "ig_motif"
+            return value
+
+        if mode is None:
+            return []
+
+        raw_modes: List[str] = []
+        if isinstance(mode, str):
+            raw_modes = [part for part in re.split(r"[\s,]+", mode) if part]
+        else:
+            for entry in mode:
+                if entry is None:
+                    continue
+                if isinstance(entry, str):
+                    raw_modes.extend(part for part in re.split(r"[\s,]+", entry) if part)
+                else:
+                    raw_modes.append(str(entry))
+
+        normalised: List[str] = []
+        for token in raw_modes:
+            token_norm = _canonicalise(token)
+            if token_norm and token_norm not in normalised:
+                normalised.append(token_norm)
+        return normalised
+
+    explain_mode_norm = _normalise_explain_modes(explain_mode)
     explain_cfg_payload: Optional[Dict[str, Any]] = None
     if explain_config:
         explain_cfg_payload = dict(explain_config)
