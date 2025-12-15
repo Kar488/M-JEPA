@@ -116,6 +116,48 @@ This is where models learn and where much of the rewritten logic lives.
   Consumes saved embeddings and trains quick probes (logistic regression,
   random forests, etc.) without rerunning the GNN backbone.
 
+JEPA training flow (student + EMA teacher)
+------------------------------------------
+
+The unsupervised trainer coordinates two parallel branches so the student can
+predict the teacher’s target embedding:
+
+#. **Build paired graph views.** ``training/unsupervised.py`` calls
+   ``data/augment.generate_views`` to sample a context/target pair using
+   rotations, dihedral noise, atom/bond masking or subgraph removal. The
+   context view is masked so the student must infer the missing structure.
+#. **Batch and split inputs.** ``utils/dataloader.py`` packs the paired graphs
+   into a batch. The student branch receives the masked context, while the EMA
+   teacher sees the clean target view.
+#. **Student encode + pool.** ``models/factory.build_encoder`` constructs the
+   chosen GNN (GINE, DMPNN, SchNet3D, etc.) to embed the context graph. Node
+   embeddings are reduced to a graph-level vector via mean pooling in
+   ``utils/pooling.py``.
+#. **Predict masked content.** The pooled context embedding flows through the
+   two-layer predictor MLP to produce a predicted target embedding.
+#. **Teacher encode + pool (in parallel).** An exponential-moving-average copy
+   of the encoder runs on the target graph without gradients to yield a stable
+   target embedding for the loss.
+#. **Align embeddings.** The JEPA objective computes MSE between the predictor
+   output and the teacher embedding, plus a small L2 penalty on the predictor
+   weights. Both branches update together, but only the student’s parameters
+   receive gradients.
+#. **Refresh the EMA teacher.** After each step, the teacher parameters are
+   updated with the configured momentum so it tracks but smooths the student’s
+   weights over time.
+
+How this maps to the diagram
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The flow above mirrors the dual-branch picture: the student branch masks
+subgraphs, encodes the context view and uses the two-layer predictor to match
+the EMA teacher’s pooled target embedding, while the teacher branch runs the
+same encoder in no-grad mode and is refreshed every step via EMA updates. The
+main difference from a traditional masked-token readout is that M-JEPA aligns
+graph-level embeddings (not property heads) using MSE plus predictor L2
+regularisation, exactly as implemented in ``training/unsupervised.py`` and
+``models/predictor.py``.
+
 Helpful Tools: ``utils/``
 -------------------------
 
