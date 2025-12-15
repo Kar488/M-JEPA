@@ -1323,9 +1323,16 @@ def main() -> None:
 
         try:
             candidate.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            candidate = pathlib.Path(tempfile.gettempdir()) / (candidate.name or "phase2_runs.csv")
-            candidate.parent.mkdir(parents=True, exist_ok=True)
+            probe = candidate.parent / ".runs_csv.writetest"
+            with open(probe, "w", encoding="utf-8") as handle:
+                handle.write("ok")
+            probe.unlink(missing_ok=True)
+        except Exception as exc:
+            print(
+                f"[recheck][fatal] unable to create runs CSV at {candidate} (parent={candidate.parent}): {exc}",
+                flush=True,
+            )
+            sys.exit(4)
         return str(candidate)
 
     args.runs_csv = _resolve_runs_csv(args.runs_csv)
