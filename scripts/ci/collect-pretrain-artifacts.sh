@@ -365,6 +365,13 @@ if [[ -z "$tox21_remote" && -n "$PRETRAIN_EXPERIMENT_ROOT" ]]; then
 fi
 sync_optional_file "$tox21_remote" "tox21_gate.env" "$DEST_DIR"
 
+tox21_dir="${PRETRAIN_EXPERIMENT_ROOT%/}/tox21"
+if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+  tox21_dest="$DEST_DIR/tox21"
+  copy_remote_path "${tox21_dir}/tox21_pretrain_frozen_metrics.csv" "$tox21_dest" "tox21 baseline metrics" 0
+  copy_remote_path "${tox21_dir}/tox21_summary.json" "$tox21_dest" "tox21 summary" 0
+fi
+
 if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
   graphs_remote="${PRETRAIN_EXPERIMENT_ROOT%/}/graphs"
   reports_remote="${PRETRAIN_EXPERIMENT_ROOT%/}/reports"
