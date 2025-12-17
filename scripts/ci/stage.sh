@@ -1132,6 +1132,12 @@ run_phase2_recheck_stage() {
 
   phase2_try_recheck_fallback "$step" "${GRID_DIR:-${dir%/}}" || true
 
+  local runs_csv_expected="${GRID_DIR}/phase2_export/stage-outputs/phase2_runs.csv"
+  if [[ -f "$sentinel" && ! -f "$runs_csv_expected" ]]; then
+    echo "[$step][warn] sentinel present but missing ${runs_csv_expected}; rerunning recheck" >&2
+    rm -f "$sentinel"
+  fi
+
   if [[ -f "$sentinel" ]]; then
     echo "[$step] sentinel present; skipping" >&2
     phase2_promote_local_grid "$step"
