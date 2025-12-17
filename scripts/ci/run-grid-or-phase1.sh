@@ -175,49 +175,25 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   CONTRAST_IDS=()
   SWEEP_BACKBONES=()
 
-  # Launch sweeps. If PHASE1_BACKBONES is provided, enforce one backbone per
-  # sweep; otherwise, keep the full backbone grid from the specs so W&B shows
-  # every option explicitly.
-  if [[ "$BACKBONE_SOURCE" == "env" ]]; then
-    for backbone in "${BACKBONES[@]}"; do
-      TMP_JEPA="$(mktemp)"; cp "$TMP_BASE_JEPA" "$TMP_JEPA"
-      TMP_CONTRAST="$(mktemp)"; cp "$TMP_BASE_CONTRAST" "$TMP_CONTRAST"
+  echo "[phase1] using backbones from ${BACKBONE_SOURCE}: ${BACKBONES[*]}"
 
-      for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
-        yq -y -i --arg seeds "$SEEDS_CSV" '.parameters.seed.values = ($seeds
-          | split(",")
-          | map(gsub("^\\s+|\\s+$"; ""))
-          | map(select(length > 0))
-          | map(tonumber))' "$spec"
-        yq -y -i --arg backbone "$backbone" '.parameters.gnn_type.values = [$backbone]' "$spec"
-      done
+  TMP_SEEDED_JEPA="$(mktemp)"; cp "$TMP_BASE_JEPA" "$TMP_SEEDED_JEPA"
+  TMP_SEEDED_CONTRAST="$(mktemp)"; cp "$TMP_BASE_CONTRAST" "$TMP_SEEDED_CONTRAST"
 
-      check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
+  for spec in "$TMP_SEEDED_JEPA" "$TMP_SEEDED_CONTRAST"; do
+    yq -y -i --arg seeds "$SEEDS_CSV" '.parameters.seed.values = ($seeds
+      | split(",")
+      | map(gsub("^\\s+|\\s+$"; ""))
+      | map(select(length > 0))
+      | map(tonumber))' "$spec"
+  done
 
-      JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
-      CONTRAST_ID="$(wandb_sweep_create "$TMP_CONTRAST")"
-      if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
-        echo "[phase1][fatal] bad sweep ids for backbone ${backbone}: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
-        exit 1
-      fi
-      echo "[phase1] (${backbone}) JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
-
-      TMP_JEPA_SPECS+=("$TMP_JEPA")
-      TMP_CONTRAST_SPECS+=("$TMP_CONTRAST")
-      JEPA_IDS+=("$JEPA_ID")
-      CONTRAST_IDS+=("$CONTRAST_ID")
-      SWEEP_BACKBONES+=("$backbone")
-    done
-  else
-    TMP_JEPA="$(mktemp)"; cp "$TMP_BASE_JEPA" "$TMP_JEPA"
-    TMP_CONTRAST="$(mktemp)"; cp "$TMP_BASE_CONTRAST" "$TMP_CONTRAST"
+  for backbone in "${BACKBONES[@]}"; do
+    TMP_JEPA="$(mktemp)"; cp "$TMP_SEEDED_JEPA" "$TMP_JEPA"
+    TMP_CONTRAST="$(mktemp)"; cp "$TMP_SEEDED_CONTRAST" "$TMP_CONTRAST"
 
     for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
-      yq -y -i --arg seeds "$SEEDS_CSV" '.parameters.seed.values = ($seeds
-        | split(",")
-        | map(gsub("^\\s+|\\s+$"; ""))
-        | map(select(length > 0))
-        | map(tonumber))' "$spec"
+      yq -y -i --arg backbone "$backbone" '.parameters.gnn_type.values = [$backbone]' "$spec"
     done
 
     check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
@@ -225,17 +201,17 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
     CONTRAST_ID="$(wandb_sweep_create "$TMP_CONTRAST")"
     if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
-      echo "[phase1][fatal] bad sweep ids: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
+      echo "[phase1][fatal] bad sweep ids for backbone ${backbone}: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
       exit 1
     fi
-    echo "[phase1] JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID (backbones from spec)"
+    echo "[phase1] (${backbone}) JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
 
     TMP_JEPA_SPECS+=("$TMP_JEPA")
     TMP_CONTRAST_SPECS+=("$TMP_CONTRAST")
     JEPA_IDS+=("$JEPA_ID")
     CONTRAST_IDS+=("$CONTRAST_ID")
-    SWEEP_BACKBONES+=("$(IFS=","; echo "${BACKBONES[*]}")")
-  fi
+    SWEEP_BACKBONES+=("$backbone")
+  done
 
   cd "$APP_DIR"
   BASE_LOG_DIR="${LOG_DIR:-$APP_DIR/logs}"
