@@ -1995,9 +1995,16 @@ def main() -> None:
     finally:
         heartbeat.stop()
         try:
-            _write_runs_csv(results, args.runs_csv, index_to_run_id, args.metric, r2_metric_name)
+            rows_written = _write_runs_csv(
+                results, args.runs_csv, index_to_run_id, args.metric, r2_metric_name
+            )
+            if results and rows_written <= 0:
+                raise RuntimeError(
+                    f"expected runs CSV rows for {len(results)} configs but wrote {rows_written}"
+                )
         except Exception as exc:
-            print(f"[recheck][warn] unable to write runs CSV {args.runs_csv}: {exc}", flush=True)
+            print(f"[recheck][fatal] unable to write runs CSV {args.runs_csv}: {exc}", flush=True)
+            sys.exit(5)
         if success and sentinel_path:
             try:
                 sentinel = pathlib.Path(sentinel_path)
