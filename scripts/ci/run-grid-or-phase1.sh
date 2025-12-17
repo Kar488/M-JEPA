@@ -173,6 +173,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   TMP_CONTRAST_SPECS=()
   JEPA_IDS=()
   CONTRAST_IDS=()
+  SWEEP_BACKBONES=()
 
   # Launch sweeps. If PHASE1_BACKBONES is provided, enforce one backbone per
   # sweep; otherwise, keep the full backbone grid from the specs so W&B shows
@@ -205,6 +206,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
       TMP_CONTRAST_SPECS+=("$TMP_CONTRAST")
       JEPA_IDS+=("$JEPA_ID")
       CONTRAST_IDS+=("$CONTRAST_ID")
+      SWEEP_BACKBONES+=("$backbone")
     done
   else
     TMP_JEPA="$(mktemp)"; cp "$TMP_BASE_JEPA" "$TMP_JEPA"
@@ -232,6 +234,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     TMP_CONTRAST_SPECS+=("$TMP_CONTRAST")
     JEPA_IDS+=("$JEPA_ID")
     CONTRAST_IDS+=("$CONTRAST_ID")
+    SWEEP_BACKBONES+=("$(IFS=","; echo "${BACKBONES[*]}")")
   fi
 
   cd "$APP_DIR"
@@ -346,8 +349,8 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     fi
   }
 
-  for idx in "${!BACKBONES[@]}"; do
-    run_backbone_agents "${JEPA_IDS[$idx]}" "${CONTRAST_IDS[$idx]}" "${BACKBONES[$idx]}"
+  for idx in "${!JEPA_IDS[@]}"; do
+    run_backbone_agents "${JEPA_IDS[$idx]}" "${CONTRAST_IDS[$idx]}" "${SWEEP_BACKBONES[$idx]}"
   done
 
   # Require that paired-effect analysis only considers runs that have reached
