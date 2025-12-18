@@ -88,6 +88,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   require_cmd sed
   require_cmd dos2unix
   require_cmd yq
+  require_cmd jq
 
   unset WANDB_NAME WANDB_RUN_ID
 
@@ -171,8 +172,6 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
   TMP_JEPA_SPECS=()
   TMP_CONTRAST_SPECS=()
-  JEPA_IDS=()
-  CONTRAST_IDS=()
   SWEEP_BACKBONES=()
 
   echo "[phase1] using backbones from ${BACKBONE_SOURCE}: ${BACKBONES[*]}"
@@ -188,10 +187,18 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
       | map(tonumber))' "$spec"
   done
 
-  # When callers explicitly set PHASE1_BACKBONES, continue to split sweeps by
-  # backbone. Otherwise, preserve the multi-value gnn_type sweep knobs from the
-  # base specs so W&B agents can explore every candidate in a single sweep.
-  if [[ "$BACKBONE_SOURCE" == "env" ]]; then
+  # When callers explicitly pin PHASE1_BACKBONES to a single backbone, split
+  # sweeps so each agent sticks to that architecture. If multiple backbones are
+  # provided, keep them in a shared sweep so W&B can sample all candidates
+  # instead of silently clamping to the first entry.
+  if [[ "$BACKBONE_SOURCE" == "env" && ${#BACKBONES[@]} -gt 1 ]]; then
+    for spec in "$TMP_SEEDED_JEPA" "$TMP_SEEDED_CONTRAST"; do
+      yq -y -i --argjson backbones "$(printf '%s\n' "${BACKBONES[@]}" | jq -R . | jq -s .)" \
+        '.parameters.gnn_type.values = $backbones' "$spec"
+    done
+  fi
+
+  if [[ "$BACKBONE_SOURCE" == "env" && ${#BACKBONES[@]} -eq 1 ]]; then
     for backbone in "${BACKBONES[@]}"; do
       TMP_JEPA="$(mktemp)"; cp "$TMP_SEEDED_JEPA" "$TMP_JEPA"
       TMP_CONTRAST="$(mktemp)"; cp "$TMP_SEEDED_CONTRAST" "$TMP_CONTRAST"
@@ -202,38 +209,54 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
       check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
 
-      JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
-      CONTRAST_ID="$(wandb_sweep_create "$TMP_CONTRAST")"
-      if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
-        echo "[phase1][fatal] bad sweep ids for backbone ${backbone}: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
-        exit 1
-      fi
-      echo "[phase1] (${backbone}) JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
-
       TMP_JEPA_SPECS+=("$TMP_JEPA")
       TMP_CONTRAST_SPECS+=("$TMP_CONTRAST")
-      JEPA_IDS+=("$JEPA_ID")
-      CONTRAST_IDS+=("$CONTRAST_ID")
       SWEEP_BACKBONES+=("$backbone")
     done
   else
-    # Preserve the full backbone sweep defined in the YAML spec.
+    # Preserve the full backbone sweep defined in the YAML spec (or the env
+    # filtered list above).
     check_shared_equal "$TMP_SEEDED_JEPA" "$TMP_SEEDED_CONTRAST"
-
-    JEPA_ID="$(wandb_sweep_create "$TMP_SEEDED_JEPA")"
-    CONTRAST_ID="$(wandb_sweep_create "$TMP_SEEDED_CONTRAST")"
-    if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
-      echo "[phase1][fatal] bad sweep ids for backbones ${BACKBONES[*]}: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
-      exit 1
-    fi
-    echo "[phase1] (multi-backbone) JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
 
     TMP_JEPA_SPECS+=("$TMP_SEEDED_JEPA")
     TMP_CONTRAST_SPECS+=("$TMP_SEEDED_CONTRAST")
-    JEPA_IDS+=("$JEPA_ID")
-    CONTRAST_IDS+=("$CONTRAST_ID")
     SWEEP_BACKBONES+=("multi")
   fi
+
+  if [[ "${PHASE1_DRYRUN_SPEC_ONLY:-0}" == "1" ]]; then
+    DRYRUN_OUT_ROOT="${PHASE1_DRYRUN_OUTPUT_DIR:-${APP_DIR}/logs/phase1_spec_dryrun}"
+    mkdir -p "$DRYRUN_OUT_ROOT"
+
+    for idx in "${!TMP_JEPA_SPECS[@]}"; do
+      backbone="${SWEEP_BACKBONES[$idx]}"
+      backbone_slug="${backbone//[^a-zA-Z0-9_-]/}"
+      if [[ -z "$backbone_slug" ]]; then
+        backbone_slug="b${idx}"
+      fi
+
+      cp "${TMP_JEPA_SPECS[$idx]}" "${DRYRUN_OUT_ROOT}/jepa_${backbone_slug}.yaml"
+      cp "${TMP_CONTRAST_SPECS[$idx]}" "${DRYRUN_OUT_ROOT}/contrastive_${backbone_slug}.yaml"
+      echo "[phase1][dryrun] captured specs for backbone=${backbone} into ${DRYRUN_OUT_ROOT}" >&2
+    done
+
+    exit 0
+  fi
+
+  JEPA_IDS=()
+  CONTRAST_IDS=()
+
+  for idx in "${!TMP_JEPA_SPECS[@]}"; do
+    JEPA_ID="$(wandb_sweep_create "${TMP_JEPA_SPECS[$idx]}")"
+    CONTRAST_ID="$(wandb_sweep_create "${TMP_CONTRAST_SPECS[$idx]}")"
+    if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
+      echo "[phase1][fatal] bad sweep ids for backbones ${SWEEP_BACKBONES[*]}: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
+      exit 1
+    fi
+    echo "[phase1] (${SWEEP_BACKBONES[$idx]}) JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
+
+    JEPA_IDS+=("$JEPA_ID")
+    CONTRAST_IDS+=("$CONTRAST_ID")
+  done
 
   cd "$APP_DIR"
   BASE_LOG_DIR="${LOG_DIR:-$APP_DIR/logs}"

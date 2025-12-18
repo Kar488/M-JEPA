@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 import re
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -545,6 +546,40 @@ esac
 
     assert exp_value == "424242"
     assert grid_value == "424242"
+
+
+def test_phase1_env_backbones_preserved_in_wandb_mode(tmp_path):
+    output_dir = tmp_path / "specs"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    (bin_dir / "dos2unix").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    (bin_dir / "dos2unix").chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "GRID_MODE": "wandb",
+            "WANDB_API_KEY": "dummy",
+            "WANDB_PROJECT": "dummy",
+            "WANDB_ENTITY": "dummy",
+            "PHASE1_BACKBONES": "gin, gcn",
+            "PHASE1_SEEDS": "1,2",
+            "PHASE1_DRYRUN_SPEC_ONLY": "1",
+            "PHASE1_DRYRUN_OUTPUT_DIR": str(output_dir),
+        }
+    )
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    _run(["bash", "scripts/ci/run-grid-or-phase1.sh"], env)
+
+    jepa_spec = yaml.safe_load((output_dir / "jepa_multi.yaml").read_text(encoding="utf-8"))
+    contrast_spec = yaml.safe_load((output_dir / "contrastive_multi.yaml").read_text(encoding="utf-8"))
+
+    expected_backbones = ["gin", "gcn"]
+
+    assert jepa_spec["parameters"]["gnn_type"]["values"] == expected_backbones
+    assert contrast_spec["parameters"]["gnn_type"]["values"] == expected_backbones
 
 
 def test_artifact_collection_script_contains_mkdir_and_warnings():
