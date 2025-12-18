@@ -4,6 +4,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import textwrap
 import traceback
 from pathlib import Path
 
@@ -555,6 +556,81 @@ def test_phase1_env_backbones_preserved_in_wandb_mode(tmp_path):
 
     (bin_dir / "dos2unix").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     (bin_dir / "dos2unix").chmod(0o755)
+
+    yq_stub = textwrap.dedent(
+        """\
+        #!/usr/bin/env python3
+        import argparse
+        import json
+        import sys
+
+        import yaml
+
+
+        def format_yaml(value):
+            return yaml.safe_dump(value, sort_keys=False, default_flow_style=False)
+
+
+        def main():
+            parser = argparse.ArgumentParser()
+            parser.add_argument("expression")
+            parser.add_argument("path")
+            parser.add_argument("-i", dest="inplace", action="store_true")
+            parser.add_argument("-y", dest="force_yaml", action="store_true")
+            parser.add_argument("--arg", nargs=2, action="append", default=[])
+            parser.add_argument("--argjson", nargs=2, action="append", default=[])
+
+            args, unknown = parser.parse_known_args()
+            args.expression = args.expression.strip()
+
+            with open(args.path, "r", encoding="utf-8") as handle:
+                doc = yaml.safe_load(handle)
+
+            arg_map = {k: v for k, v in args.arg}
+            argjson_map = {k: json.loads(v) for k, v in args.argjson}
+
+            if args.expression.startswith(".method"):
+                doc["method"] = "random"
+                output = format_yaml(doc)
+            elif args.expression == ".parameters.gnn_type.values[]":
+                values = doc["parameters"]["gnn_type"]["values"]
+                output = "\\n".join(str(v) for v in values)
+            elif args.expression.startswith(".parameters.seed.values"):
+                seeds = []
+                for raw_token in arg_map.get("seeds", "").split(","):
+                    token = raw_token.strip()
+                    if token:
+                        seeds.append(int(token))
+                doc.setdefault("parameters", {}).setdefault("seed", {})["values"] = seeds
+                output = format_yaml(doc)
+            elif args.expression.startswith(".parameters.gnn_type.values = $backbones"):
+                backbones = argjson_map.get("backbones", [])
+                doc.setdefault("parameters", {}).setdefault("gnn_type", {})["values"] = backbones
+                output = format_yaml(doc)
+            elif args.expression.startswith(".parameters.gnn_type.values = [$backbone]"):
+                backbone = arg_map.get("backbone", "")
+                doc.setdefault("parameters", {}).setdefault("gnn_type", {})["values"] = [backbone]
+                output = format_yaml(doc)
+            elif args.expression.startswith(".parameters."):
+                key = args.expression.replace(".parameters.", "", 1)
+                output = format_yaml(doc["parameters"].get(key, {})).rstrip()
+            else:
+                raise SystemExit(f"unsupported expression: {args.expression}")
+
+            if args.inplace:
+                with open(args.path, "w", encoding="utf-8") as handle:
+                    handle.write(output)
+            else:
+                sys.stdout.write(output)
+
+
+        if __name__ == "__main__":
+            main()
+        """
+    ).strip()
+
+    (bin_dir / "yq").write_text(yq_stub + "\n", encoding="utf-8")
+    (bin_dir / "yq").chmod(0o755)
 
     env = os.environ.copy()
     env.update(
