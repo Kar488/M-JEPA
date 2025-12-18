@@ -188,30 +188,52 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
       | map(tonumber))' "$spec"
   done
 
-  for backbone in "${BACKBONES[@]}"; do
-    TMP_JEPA="$(mktemp)"; cp "$TMP_SEEDED_JEPA" "$TMP_JEPA"
-    TMP_CONTRAST="$(mktemp)"; cp "$TMP_SEEDED_CONTRAST" "$TMP_CONTRAST"
+  # When callers explicitly set PHASE1_BACKBONES, continue to split sweeps by
+  # backbone. Otherwise, preserve the multi-value gnn_type sweep knobs from the
+  # base specs so W&B agents can explore every candidate in a single sweep.
+  if [[ "$BACKBONE_SOURCE" == "env" ]]; then
+    for backbone in "${BACKBONES[@]}"; do
+      TMP_JEPA="$(mktemp)"; cp "$TMP_SEEDED_JEPA" "$TMP_JEPA"
+      TMP_CONTRAST="$(mktemp)"; cp "$TMP_SEEDED_CONTRAST" "$TMP_CONTRAST"
 
-    for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
-      yq -y -i --arg backbone "$backbone" '.parameters.gnn_type.values = [$backbone]' "$spec"
+      for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
+        yq -y -i --arg backbone "$backbone" '.parameters.gnn_type.values = [$backbone]' "$spec"
+      done
+
+      check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
+
+      JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
+      CONTRAST_ID="$(wandb_sweep_create "$TMP_CONTRAST")"
+      if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
+        echo "[phase1][fatal] bad sweep ids for backbone ${backbone}: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
+        exit 1
+      fi
+      echo "[phase1] (${backbone}) JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
+
+      TMP_JEPA_SPECS+=("$TMP_JEPA")
+      TMP_CONTRAST_SPECS+=("$TMP_CONTRAST")
+      JEPA_IDS+=("$JEPA_ID")
+      CONTRAST_IDS+=("$CONTRAST_ID")
+      SWEEP_BACKBONES+=("$backbone")
     done
+  else
+    # Preserve the full backbone sweep defined in the YAML spec.
+    check_shared_equal "$TMP_SEEDED_JEPA" "$TMP_SEEDED_CONTRAST"
 
-    check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
-
-    JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
-    CONTRAST_ID="$(wandb_sweep_create "$TMP_CONTRAST")"
+    JEPA_ID="$(wandb_sweep_create "$TMP_SEEDED_JEPA")"
+    CONTRAST_ID="$(wandb_sweep_create "$TMP_SEEDED_CONTRAST")"
     if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
-      echo "[phase1][fatal] bad sweep ids for backbone ${backbone}: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
+      echo "[phase1][fatal] bad sweep ids for backbones ${BACKBONES[*]}: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
       exit 1
     fi
-    echo "[phase1] (${backbone}) JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
+    echo "[phase1] (multi-backbone) JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
 
-    TMP_JEPA_SPECS+=("$TMP_JEPA")
-    TMP_CONTRAST_SPECS+=("$TMP_CONTRAST")
+    TMP_JEPA_SPECS+=("$TMP_SEEDED_JEPA")
+    TMP_CONTRAST_SPECS+=("$TMP_SEEDED_CONTRAST")
     JEPA_IDS+=("$JEPA_ID")
     CONTRAST_IDS+=("$CONTRAST_ID")
-    SWEEP_BACKBONES+=("$backbone")
-  done
+    SWEEP_BACKBONES+=("multi")
+  fi
 
   cd "$APP_DIR"
   BASE_LOG_DIR="${LOG_DIR:-$APP_DIR/logs}"
