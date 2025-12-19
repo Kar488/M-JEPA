@@ -48,9 +48,11 @@ export WANDB_JOB_TYPE="grid"
 
 # Enforce paired seeds/backbones for Phase-1 so paired-effect analysis sees
 # enough overlapping (pair_id, seed) combinations without changing core
-# training hyperparameters.
-PHASE1_MIN_SEED_PAIRS=${PHASE1_MIN_SEED_PAIRS:-3}
-PHASE1_BACKBONES=${PHASE1_BACKBONES:-gine,dmpnn,schnet3d}
+# training hyperparameters. When PHASE1_BACKBONES is unset, default to the
+# values already encoded in the sweep specs so the resulting sweeps visibly
+# enumerate every backbone.
+PHASE1_MIN_SEED_PAIRS=${PHASE1_MIN_SEED_PAIRS:-2}
+PHASE1_BACKBONES=${PHASE1_BACKBONES-}
 
 # Decide which mode to use
 : "${GRID_MODE:?GRID_MODE must be set to 'wandb' or 'custom'}"
@@ -86,6 +88,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   require_cmd sed
   require_cmd dos2unix
   require_cmd yq
+  require_cmd jq
 
   unset WANDB_NAME WANDB_RUN_ID
 
@@ -111,16 +114,23 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   TMP_BASE_JEPA="$(mktemp)";      yq ".method = \"random\"" "$JEPA_SPEC" > "$TMP_BASE_JEPA"
   TMP_BASE_CONTRAST="$(mktemp)";  yq ".method = \"random\"" "$CONTRAST_SPEC" > "$TMP_BASE_CONTRAST"
 
-  IFS="," read -ra RAW_BACKBONES <<< "$PHASE1_BACKBONES"
   BACKBONES=()
-  for raw in "${RAW_BACKBONES[@]}"; do
-    candidate="${raw//[[:space:]]/}"
-    if [[ -n "$candidate" ]]; then
-      BACKBONES+=("$candidate")
-    fi
-  done
+  BACKBONE_SOURCE="spec"
+  if [[ -n "${PHASE1_BACKBONES}" ]]; then
+    BACKBONE_SOURCE="env"
+    IFS="," read -ra RAW_BACKBONES <<< "$PHASE1_BACKBONES"
+    for raw in "${RAW_BACKBONES[@]}"; do
+      candidate="${raw//[[:space:]]/}"
+      if [[ -n "$candidate" ]]; then
+        BACKBONES+=("$candidate")
+      fi
+    done
+  else
+    mapfile -t BACKBONES < <(yq '.parameters.gnn_type.values[]' "$TMP_BASE_JEPA")
+  fi
+
   if (( ${#BACKBONES[@]} == 0 )); then
-    echo "[phase1][fatal] no backbones resolved from PHASE1_BACKBONES='$PHASE1_BACKBONES'" >&2
+    echo "[phase1][fatal] no backbones resolved (PHASE1_BACKBONES='${PHASE1_BACKBONES:-<unset>}' spec=${JEPA_SPEC})" >&2
     exit 1
   fi
 
@@ -162,36 +172,88 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
 
   TMP_JEPA_SPECS=()
   TMP_CONTRAST_SPECS=()
+  SWEEP_BACKBONES=()
+
+  echo "[phase1] using backbones from ${BACKBONE_SOURCE}: ${BACKBONES[*]}"
+
+  TMP_SEEDED_JEPA="$(mktemp)"; cp "$TMP_BASE_JEPA" "$TMP_SEEDED_JEPA"
+  TMP_SEEDED_CONTRAST="$(mktemp)"; cp "$TMP_BASE_CONTRAST" "$TMP_SEEDED_CONTRAST"
+
+  for spec in "$TMP_SEEDED_JEPA" "$TMP_SEEDED_CONTRAST"; do
+    yq -y -i --arg seeds "$SEEDS_CSV" '.parameters.seed.values = ($seeds
+      | split(",")
+      | map(gsub("^\\s+|\\s+$"; ""))
+      | map(select(length > 0))
+      | map(tonumber))' "$spec"
+  done
+
+  # When callers explicitly pin PHASE1_BACKBONES to a single backbone, split
+  # sweeps so each agent sticks to that architecture. If multiple backbones are
+  # provided, keep them in a shared sweep so W&B can sample all candidates
+  # instead of silently clamping to the first entry.
+  if [[ "$BACKBONE_SOURCE" == "env" && ${#BACKBONES[@]} -gt 1 ]]; then
+    for spec in "$TMP_SEEDED_JEPA" "$TMP_SEEDED_CONTRAST"; do
+      yq -y -i --argjson backbones "$(printf '%s\n' "${BACKBONES[@]}" | jq -R . | jq -s .)" \
+        '.parameters.gnn_type.values = $backbones' "$spec"
+    done
+  fi
+
+  if [[ "$BACKBONE_SOURCE" == "env" && ${#BACKBONES[@]} -eq 1 ]]; then
+    for backbone in "${BACKBONES[@]}"; do
+      TMP_JEPA="$(mktemp)"; cp "$TMP_SEEDED_JEPA" "$TMP_JEPA"
+      TMP_CONTRAST="$(mktemp)"; cp "$TMP_SEEDED_CONTRAST" "$TMP_CONTRAST"
+
+      for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
+        yq -y -i --arg backbone "$backbone" '.parameters.gnn_type.values = [$backbone]' "$spec"
+      done
+
+      check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
+
+      TMP_JEPA_SPECS+=("$TMP_JEPA")
+      TMP_CONTRAST_SPECS+=("$TMP_CONTRAST")
+      SWEEP_BACKBONES+=("$backbone")
+    done
+  else
+    # Preserve the full backbone sweep defined in the YAML spec (or the env
+    # filtered list above).
+    check_shared_equal "$TMP_SEEDED_JEPA" "$TMP_SEEDED_CONTRAST"
+
+    TMP_JEPA_SPECS+=("$TMP_SEEDED_JEPA")
+    TMP_CONTRAST_SPECS+=("$TMP_SEEDED_CONTRAST")
+    SWEEP_BACKBONES+=("multi")
+  fi
+
+  if [[ "${PHASE1_DRYRUN_SPEC_ONLY:-0}" == "1" ]]; then
+    DRYRUN_OUT_ROOT="${PHASE1_DRYRUN_OUTPUT_DIR:-${APP_DIR}/logs/phase1_spec_dryrun}"
+    mkdir -p "$DRYRUN_OUT_ROOT"
+
+    for idx in "${!TMP_JEPA_SPECS[@]}"; do
+      backbone="${SWEEP_BACKBONES[$idx]}"
+      backbone_slug="${backbone//[^a-zA-Z0-9_-]/}"
+      if [[ -z "$backbone_slug" ]]; then
+        backbone_slug="b${idx}"
+      fi
+
+      cp "${TMP_JEPA_SPECS[$idx]}" "${DRYRUN_OUT_ROOT}/jepa_${backbone_slug}.yaml"
+      cp "${TMP_CONTRAST_SPECS[$idx]}" "${DRYRUN_OUT_ROOT}/contrastive_${backbone_slug}.yaml"
+      echo "[phase1][dryrun] captured specs for backbone=${backbone} into ${DRYRUN_OUT_ROOT}" >&2
+    done
+
+    exit 0
+  fi
+
   JEPA_IDS=()
   CONTRAST_IDS=()
 
-  # Launch independent sweeps per backbone so pair_id semantics stay stable
-  # while avoiding cross-backbone confounding during paired-effect analysis.
-  for backbone in "${BACKBONES[@]}"; do
-    TMP_JEPA="$(mktemp)"; cp "$TMP_BASE_JEPA" "$TMP_JEPA"
-    TMP_CONTRAST="$(mktemp)"; cp "$TMP_BASE_CONTRAST" "$TMP_CONTRAST"
-
-    for spec in "$TMP_JEPA" "$TMP_CONTRAST"; do
-      yq -y -i --arg seeds "$SEEDS_CSV" '.parameters.seed.values = ($seeds
-        | split(",")
-        | map(gsub("^\\s+|\\s+$"; ""))
-        | map(select(length > 0))
-        | map(tonumber))' "$spec"
-      yq -y -i --arg backbone "$backbone" '.parameters.gnn_type.values = [$backbone]' "$spec"
-    done
-
-    check_shared_equal "$TMP_JEPA" "$TMP_CONTRAST"
-
-    JEPA_ID="$(wandb_sweep_create "$TMP_JEPA")"
-    CONTRAST_ID="$(wandb_sweep_create "$TMP_CONTRAST")"
+  for idx in "${!TMP_JEPA_SPECS[@]}"; do
+    JEPA_ID="$(wandb_sweep_create "${TMP_JEPA_SPECS[$idx]}")"
+    CONTRAST_ID="$(wandb_sweep_create "${TMP_CONTRAST_SPECS[$idx]}")"
     if [[ ! "$JEPA_ID" =~ ^[a-z0-9]{8}$ ]] || [[ ! "$CONTRAST_ID" =~ ^[a-z0-9]{8}$ ]]; then
-      echo "[phase1][fatal] bad sweep ids for backbone ${backbone}: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
+      echo "[phase1][fatal] bad sweep ids for backbones ${SWEEP_BACKBONES[*]}: JEPA_ID='$JEPA_ID' CONTRAST_ID='$CONTRAST_ID'" >&2
       exit 1
     fi
-    echo "[phase1] (${backbone}) JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
+    echo "[phase1] (${SWEEP_BACKBONES[$idx]}) JEPA sweep id=$JEPA_ID  contrastive sweep id=$CONTRAST_ID"
 
-    TMP_JEPA_SPECS+=("$TMP_JEPA")
-    TMP_CONTRAST_SPECS+=("$TMP_CONTRAST")
     JEPA_IDS+=("$JEPA_ID")
     CONTRAST_IDS+=("$CONTRAST_ID")
   done
@@ -308,8 +370,8 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
     fi
   }
 
-  for idx in "${!BACKBONES[@]}"; do
-    run_backbone_agents "${JEPA_IDS[$idx]}" "${CONTRAST_IDS[$idx]}" "${BACKBONES[$idx]}"
+  for idx in "${!JEPA_IDS[@]}"; do
+    run_backbone_agents "${JEPA_IDS[$idx]}" "${CONTRAST_IDS[$idx]}" "${SWEEP_BACKBONES[$idx]}"
   done
 
   # Require that paired-effect analysis only considers runs that have reached
