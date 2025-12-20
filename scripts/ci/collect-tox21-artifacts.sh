@@ -197,6 +197,9 @@ collect_dir "${remote_tox21}/stage-outputs" "$dest_root/stage-outputs" "stage-ou
 # Integrated Gradients explanations live under tox21_dir/ig_explanations/<task>/.
 collect_dir "${remote_tox21}/ig_explanations" "$dest_root/ig_explanations" "ig-explanations"
 
+# Motif-level Integrated Gradients explanations live under tox21_dir/ig_motif_explanations/<task>/.
+collect_dir "${remote_tox21}/ig_motif_explanations" "$dest_root/ig_motif_explanations" "ig-motif-explanations"
+
 # Per-task CSV/JSON manifests and summary files at the root of tox21_dir.
 collect_files_matching "$remote_tox21" "$dest_root" '*.json' '*.csv' '*.tsv'
 
@@ -218,4 +221,3 @@ if command -v find >/dev/null 2>&1; then
   echo "[collect] contents of $dest_root:" >&2
   find "$dest_root" -maxdepth 2 -mindepth 1 -print >&2 || true
 fi
-
