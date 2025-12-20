@@ -442,7 +442,7 @@ src_grid="$1"
 dst_grid="$2"
 if [[ -f "${src_grid}/phase2_sweep_id.txt" ]] && [[ ! -f "${dst_grid}/phase2_sweep_id.txt" ]]; then
   mkdir -p "${dst_grid}"
-  for f in phase2_sweep_id.txt best_grid_config.json recheck_summary.json grid_state.json; do
+  for f in phase2_sweep_id.txt best_grid_config.json recheck_summary.json grid_state.json phase2_runs.csv; do
     if [[ -f "${src_grid}/${f}" ]]; then
       cp -f "${src_grid}/${f}" "${dst_grid}/${f}"
     fi
@@ -509,6 +509,18 @@ copy_if_missing \
   phase2_export/stage-outputs/grid_state.json \
   phase2_recheck/stage-outputs/grid_state.json \
   phase2_export/grid_state.json
+
+copy_if_missing \
+  phase2_sweep_id.txt \
+  phase2_export/stage-outputs/phase2_sweep_id.txt \
+  phase2_recheck/stage-outputs/phase2_sweep_id.txt \
+  phase2_export/phase2_sweep_id.txt
+
+copy_if_missing \
+  phase2_runs.csv \
+  phase2_export/stage-outputs/phase2_runs.csv \
+  phase2_recheck/stage-outputs/phase2_runs.csv \
+  phase2_export/phase2_runs.csv
 EOS
 }
 
@@ -636,7 +648,7 @@ collect_tree() {
   done
 
   mkdir -p "${dest_root}/grid"
-  for name in best_grid_config.json recheck_summary.json grid_state.json; do
+  for name in best_grid_config.json recheck_summary.json grid_state.json phase2_sweep_id.txt phase2_runs.csv; do
     sync_remote_file "${remote_grid}/${name}" "${dest_root}/grid" "${label} ${name}" && continue
 
     local fallback=""
@@ -670,4 +682,3 @@ collect_tree() {
 
 collect_tree "$remote_lineage_grid" "${DEST_ROOT}/lineage" "lineage" "${remote_lineage_id:-}"
 collect_tree "$remote_current_grid" "${DEST_ROOT}/current" "current" "${remote_current_id:-}"
-
