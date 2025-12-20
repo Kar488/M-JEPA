@@ -38,6 +38,9 @@ concurrency:
   group: vast-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   APP_DIR: /srv/mjepa
   VENV_DIR: /srv/mjepa/.venv
@@ -103,6 +106,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT_RO || github.token }}
       - name: Remove stale micromamba binary
         run: |
           rm -f "$HOME/micromamba-bin/micromamba"
@@ -173,6 +178,7 @@ jobs:
         with:
           lfs: true
           fetch-depth: 1
+          token: ${{ secrets.GH_PAT_RO || github.token }}
       - name: Bootstrap environment
         uses: appleboy/ssh-action@v1
         with:
@@ -517,6 +523,7 @@ jobs:
           sparse-checkout: |
             scripts/ci
           sparse-checkout-cone-mode: false
+          token: ${{ secrets.GH_PAT_RO || github.token }}
       # Capture lineage ids after Phase-1 so subsequent jobs reuse the correct slots.
       - name: Resolve Phase-1 lineage identifiers
         id: phase1_ids
@@ -611,6 +618,8 @@ jobs:
       - name: Checkout repository for artifact collection
         if: always()
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT_RO || github.token }}
 
       - name: Collect Phase-2 artifacts
         if: always()
@@ -701,6 +710,8 @@ jobs:
           bash scripts/ci/ensure_experiments_root.sh
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT_RO || github.token }}
 
       - name: Pretrain on Vast
         env:
@@ -797,6 +808,8 @@ jobs:
       - name: Checkout repository for tox21 baseline artifacts
         if: always()
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT_RO || github.token }}
 
       - name: Collect tox21 baseline outputs
         if: always()
@@ -971,6 +984,8 @@ jobs:
       - name: Checkout repository for tox21 artifacts
         if: always()
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT_RO || github.token }}
 
       - name: Collect tox21 evaluation outputs
         if: always()
