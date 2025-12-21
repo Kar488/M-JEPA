@@ -801,10 +801,6 @@ def _run_tox21_single_task(
         filtered = [mode for mode in modes if mode in allowed]
         if not filtered:
             return ["ig", "ig_motif"]
-        if "ig" not in filtered:
-            filtered.append("ig")
-        if "ig_motif" not in filtered:
-            filtered.append("ig_motif")
         return filtered
 
     task_name = getattr(args, "task", None)
