@@ -164,6 +164,9 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             return label.replace("/", "_").replace(" ", "_")
 
         base = Path(raw)
+        search_root = base
+        if base.name in ("ft_best.pt", "head.pt") and not base.exists():
+            search_root = base.parent
 
         def _find_in_dir(directory: Path) -> Optional[Path]:
             for fname in ("ft_best.pt", "head.pt"):
@@ -181,10 +184,10 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         if arg_label:
             label_candidates.append(str(arg_label))
 
-        search_dirs = [base]
+        search_dirs = [search_root]
         for label in label_candidates:
-            search_dirs.append(base / label)
-            search_dirs.append(base / _sanitize(label))
+            search_dirs.append(search_root / label)
+            search_dirs.append(search_root / _sanitize(label))
 
         for candidate_dir in search_dirs:
             resolved = _find_in_dir(candidate_dir)
@@ -518,4 +521,3 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         logger.warning("Failed to write reports", exc_info=True)
     finally:
         _wb_finish()
-
