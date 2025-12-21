@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from data.mdataset import GraphData, GraphDataset
-from explain.motif_ig import aggregate_motif_ig, compute_motif_deltas
+from explain.motif_ig import aggregate_motif_ig, compute_motif_deltas, draw_motif_heatmap
 from training.supervised import _MotifIGArtifactLogger
 
 
@@ -86,3 +86,13 @@ def test_motif_logger_writes_artifacts(tmp_path):
     with open(record["deltas_json"], "r", encoding="utf-8") as handle:
         payload = json.load(handle)
     assert payload
+
+
+def test_draw_motif_heatmap_handles_empty_motifs(tmp_path):
+    output_path = tmp_path / "heatmap.png"
+    motif_map = {"if_motif": []}
+
+    result = draw_motif_heatmap("CO", {"if_motif": 0.1}, motif_map, str(output_path))
+
+    assert Path(result).is_file()
+    assert output_path.stat().st_size > 0
