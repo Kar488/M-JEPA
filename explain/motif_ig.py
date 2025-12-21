@@ -48,6 +48,21 @@ def _ensure_motif_map(motif_map: Optional[Mapping[str, Iterable[int]]], num_atom
     return {_DEF_MOTIF_NAME: list(range(num_atoms))}
 
 
+def _infer_num_atoms(motif_map: Mapping[str, Iterable[int]]) -> int:
+    max_atom = -1
+    for atoms in motif_map.values():
+        if atoms is None:
+            continue
+        for atom in atoms:
+            try:
+                idx = int(atom)
+            except (TypeError, ValueError):
+                continue
+            if idx > max_atom:
+                max_atom = idx
+    return max_atom + 1 if max_atom >= 0 else 0
+
+
 def find_motifs(graph_or_smiles: GraphData | str) -> Dict[str, List[int]]:
     """Derive a mapping from motif names to atom indices.
 
@@ -231,7 +246,8 @@ def draw_motif_heatmap(
 ) -> str:
     """Render motif contributions onto a molecular heatmap."""
 
-    motifs = _ensure_motif_map(motif_map, max((max(atoms) for atoms in motif_map.values()), default=-1) + 1 if motif_map else 0)
+    num_atoms = _infer_num_atoms(motif_map) if motif_map else 0
+    motifs = _ensure_motif_map(motif_map, num_atoms)
     if not motif_scores:
         motif_scores = {_DEF_MOTIF_NAME: 0.0}
 
