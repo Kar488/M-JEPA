@@ -796,6 +796,17 @@ def _run_tox21_single_task(
                 normalised.append(token_norm)
         return normalised
 
+    def _filter_explain_modes(modes: List[str]) -> List[str]:
+        allowed = {"ig", "ig_motif"}
+        filtered = [mode for mode in modes if mode in allowed]
+        if not filtered:
+            return ["ig", "ig_motif"]
+        if "ig" not in filtered:
+            filtered.append("ig")
+        if "ig_motif" not in filtered:
+            filtered.append("ig_motif")
+        return filtered
+
     task_name = getattr(args, "task", None)
     if not task_name:
         raise ValueError("Tox21 task name must be provided")
@@ -836,6 +847,7 @@ def _run_tox21_single_task(
         env_mode = os.environ.get("TOX21_EXPLAIN_MODE")
         if env_mode:
             explain_mode = _normalise_explain_modes(env_mode)
+    explain_mode = _filter_explain_modes(explain_mode)
     explain_steps = getattr(args, "explain_steps", None)
     if explain_steps is None:
         env_steps = os.environ.get("TOX21_EXPLAIN_STEPS")
@@ -1420,7 +1432,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         if bool(getattr(args, "add_3d", desired)) != desired:
             inherited.append(f"add_3d={desired}")
         setattr(args, "add_3d", desired)
-    if "hidden_dim" in best_overrides and not getattr(args, "_hidden_dim_provided", False):
+    if "hidden_dim" in best_overrides:
         desired_hidden = int(best_overrides["hidden_dim"])
         if getattr(args, "hidden_dim", desired_hidden) != desired_hidden:
             inherited.append(f"hidden_dim={desired_hidden}")
@@ -2141,4 +2153,3 @@ def main(argv: Optional[List[str]] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
