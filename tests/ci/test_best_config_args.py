@@ -348,6 +348,21 @@ def test_bestcfg_bool_false_emits_zero():
     assert tokens[add3d_index + 1] == "0"
 
 
+def test_bestcfg_pretrain_infers_add3d_from_add3d_options():
+    cfg = {
+        "gnn_type": "gine",
+        "hidden_dim": 128,
+        "num_layers": 2,
+        "learning_rate": 1e-4,
+        "add_3d_options": [1],
+    }
+    stdout, _ = run_bestcfg("pretrain", cfg)
+    tokens = stdout.split()
+    assert "--add-3d" in tokens
+    add3d_index = tokens.index("--add-3d")
+    assert tokens[add3d_index + 1] == "1"
+
+
 def test_bestcfg_skip_reflected_in_summary():
     cfg = {
         "gnn_type": "gine",
@@ -425,4 +440,3 @@ def test_bestcfg_uses_data_cache_grid_when_env_missing(tmp_path):
     tokens = stdout.split()
     assert "--hidden-dim" in tokens
     assert tokens[tokens.index("--hidden-dim") + 1] == "73"
-

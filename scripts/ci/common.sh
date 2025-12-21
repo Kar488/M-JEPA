@@ -2312,6 +2312,7 @@ _ALIASES = {
     "finetune_batch_size": ("batch_size",),
     "learning_rate": ("lr",),
     "lr": ("learning_rate",),
+    "contiguity": ("contiguous",),
 }
 
 
@@ -2341,6 +2342,26 @@ def _lookup_with_aliases(key):
         if value is not _MISSING:
             return value
     return _MISSING
+
+
+def _maybe_singleton(value):
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        return value[0]
+    return value
+
+
+def _coerce_boolish(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(int(value))
+    if isinstance(value, str):
+        norm = value.strip().lower()
+        if norm in {"1", "true", "yes", "on"}:
+            return True
+        if norm in {"0", "false", "no", "off"}:
+            return False
+    return None
 
 
 def _simple_yaml_load(text):
@@ -2608,6 +2629,13 @@ for key in legacy_keys:
     if value is _MISSING or value is None:
         continue
     cfg[key] = value
+
+if "add_3d" not in cfg:
+    add_3d_options = cfg.get("add_3d_options")
+    add_3d_candidate = _maybe_singleton(add_3d_options)
+    if add_3d_candidate is not None:
+        coerced = _coerce_boolish(add_3d_candidate)
+        cfg["add_3d"] = coerced if coerced is not None else add_3d_candidate
 
 # normalise: learning_rate → lr (benchmark/help only exposes --lr)
 if "lr" not in cfg and "learning_rate" in cfg:

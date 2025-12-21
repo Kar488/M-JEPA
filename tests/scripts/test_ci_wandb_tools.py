@@ -285,6 +285,53 @@ def test_export_best_nonempty_json(monkeypatch, tmp_path):
     assert "config.training_method" in header
 
 
+def test_export_best_infers_add3d_from_options(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DIR", str(tmp_path))
+    grid_dir = tmp_path / "grid"
+    grid_dir.mkdir()
+    monkeypatch.setenv("GRID_DIR", str(grid_dir))
+    monkeypatch.setenv("WANDB_ENTITY", "ent")
+    monkeypatch.setenv("WANDB_PROJECT", "proj")
+
+    best_run = FakeRun(
+        "best",
+        config={
+            "training_method": {"value": "jepa"},
+            "gnn_type": {"value": "gine"},
+            "hidden_dim": {"value": "384"},
+            "num_layers": {"value": 4},
+            "add_3d_options": {"value": [1]},
+        },
+        summary={"val_rmse": 0.42},
+    )
+    other_run = FakeRun(
+        "worse",
+        config={"training_method": "jepa"},
+        summary={"val_rmse": 0.9},
+    )
+
+    monkeypatch.setattr(eb, "wandb", types.SimpleNamespace(Api=lambda: _build_fake_api([best_run, other_run])))
+    monkeypatch.setattr(eb, "maybe_init_wandb", lambda *a, **k: None)
+
+    out_path = grid_dir / "best_grid_config.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export",
+            "--sweep-id",
+            "ent/proj/sw",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    eb.main()
+
+    payload = json.loads(out_path.read_text())
+    assert payload["add_3d"] == 1
+
+
 def test_phase2_yaml_and_best_paths(monkeypatch, tmp_path):
     app_dir = tmp_path
     grid_dir = tmp_path / "grid"
