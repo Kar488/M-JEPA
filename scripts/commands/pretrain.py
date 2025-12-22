@@ -654,34 +654,50 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             "probe_dataset",
             CONFIG.get("pretrain", {}).get("probe_dataset"),
         )
+        probe_label_col = getattr(
+            args,
+            "probe_label_col",
+            CONFIG.get("pretrain", {}).get("probe_label_col", "label"),
+        )
         if probe_interval > 0:
             if not probe_dataset_path:
-                logger.error("[pretrain] probe_interval>0 but no probe_dataset provided")
-                _wb_log(wb, {"phase": "probe_load", "status": "error"})
-                sys.exit(1)
-            try:
-                from data.mdataset import GraphDataset
-
-                probe_dataset = GraphDataset.from_parquet(
+                logger.warning(
+                    "[pretrain] probe_interval>0 but no probe_dataset provided; disabling probe"
+                )
+                _wb_log(wb, {"phase": "probe_load", "status": "skipped"})
+                probe_interval = 0
+            elif not os.path.exists(probe_dataset_path):
+                logger.warning(
+                    "[pretrain] probe_dataset not found at %s; disabling probe",
                     probe_dataset_path,
-                    label_col="label",
-                    cache_dir=getattr(args, "cache_dir", None),
-                    add_3d=getattr(args, "add_3d", False),
-                    num_workers=max(0, int(getattr(args, "num_workers", 0) or 0)),
                 )
-                _wb_log(
-                    wb,
-                    {
-                        "phase": "probe_load",
-                        "probe_graphs": len(probe_dataset),
-                    },
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to load probe dataset from %s", probe_dataset_path
-                )
-                _wb_log(wb, {"phase": "probe_load", "status": "error"})
-                sys.exit(1)
+                _wb_log(wb, {"phase": "probe_load", "status": "skipped"})
+                probe_interval = 0
+            if probe_interval > 0:
+                try:
+                    from data.mdataset import GraphDataset
+
+                    probe_dataset = GraphDataset.from_csv(
+                        probe_dataset_path,
+                        label_col=probe_label_col,
+                        cache_dir=getattr(args, "cache_dir", None),
+                        add_3d=getattr(args, "add_3d", False),
+                        num_workers=max(0, int(getattr(args, "num_workers", 0) or 0)),
+                    )
+                    _wb_log(
+                        wb,
+                        {
+                            "phase": "probe_load",
+                            "probe_graphs": len(probe_dataset),
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to load probe dataset from %s", probe_dataset_path
+                    )
+                    _wb_log(wb, {"phase": "probe_load", "status": "error"})
+                    probe_interval = 0
+                    probe_dataset = None
 
         graphs = getattr(unlabeled, "graphs", None)
         if not graphs:
