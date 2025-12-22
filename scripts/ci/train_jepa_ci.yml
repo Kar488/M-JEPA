@@ -98,8 +98,7 @@ finetune:
 
 bench:
   <<: *common
-  labeled_dir: ${APP_DIR}/data/katielinkmoleculenet_benchmark/test
-  test_dir:   ${BENCH_DATA_DIR}
+  labeled_dir: "${BENCH_DATA_DIR:-${APP_DIR}/data/katielinkmoleculenet_benchmark/test}"
   label_col: "measured log solubility in mols per litre"
   dataset: esol
   task_type: regression
