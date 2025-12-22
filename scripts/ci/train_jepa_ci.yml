@@ -104,7 +104,6 @@ bench:
   dataset: esol
   task_type: regression
   jepa_encoder: ${PRETRAIN_DIR}/encoder.pt
-  ft_ckpt: ${FINETUNE_DIR}/head.pt
   report_dir: ${BENCH_DIR}/reports
   report_stem: ${REPORT_STEM}
   use_wandb: true
