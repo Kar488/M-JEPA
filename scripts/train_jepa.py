@@ -1092,8 +1092,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--probe-dataset",
         dest="probe_dataset",
         type=str,
-        default=CONFIG.get("pretrain", {}).get("probe_dataset", "data/probe_esol.parquet"),
+        default=CONFIG.get("pretrain", {}).get("probe_dataset"),
         help="Labelled dataset for periodic linear probing (pretraining only).",
+    )
+    pre.add_argument(
+        "--probe-label-col",
+        dest="probe_label_col",
+        type=str,
+        default=CONFIG.get("pretrain", {}).get("probe_label_col", "label"),
+        help="Label column to use when loading the probe CSV dataset.",
     )
     pre.add_argument(
         "--probe-interval",
