@@ -104,6 +104,8 @@ def test_cmd_pretrain_missing_ema(monkeypatch, tmp_path):
         wandb_tags=[],
         add_3d=False,
         plot_dir=str(tmp_path),
+        probe_dataset=None,
+        probe_interval=0,
     )
 
     with pytest.raises(TypeError) as exc:

@@ -20,6 +20,8 @@ pretrain:
   batch_size: 256       # Batch size during pretraining
   lr: 1.0e-4            # Learning rate for Adam during pretraining
   mask_ratio: 0.15      # Fraction of nodes to mask for JEPA
+  probe_dataset: data/probe_esol.parquet  # Labelled subset for monitoring
+  probe_interval: 5     # Run the probe every N epochs (0 disables)
   augmentations:
     rotate: false       # Randomly rotate atomic coordinates
     mask_angle: false   # Mask bond angles

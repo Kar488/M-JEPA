@@ -1,6 +1,8 @@
 import argparse
 import json
 import os
+import types
+import sys
 
 import pytest
 import torch.nn as torch_nn  # noqa: F401
@@ -20,6 +22,8 @@ def make_args(
     aug_mask_angle=False,
     aug_dihedral=False,
     devices=1,
+    probe_dataset=None,
+    probe_interval=0,
 ):
     return argparse.Namespace(
         unlabeled_dir=str(tmp_path),
@@ -47,6 +51,8 @@ def make_args(
         wandb_tags=[],
         add_3d=False,
         plot_dir=str(tmp_path),
+        probe_dataset=probe_dataset,
+        probe_interval=probe_interval,
     )
 
 
@@ -148,6 +154,20 @@ def setup_stubs(monkeypatch, calls, datasets=None):
 
     monkeypatch.setattr(tj, "maybe_init_wandb", maybe_init_wandb_stub)
 
+    dummy_dataset_module = types.ModuleType("data.mdataset")
+
+    class DummyGraphDataset:
+        @staticmethod
+        def from_parquet(path, **kwargs):
+            dataset = DummyDataset()
+            calls["probe_dataset_path"] = path
+            calls["probe_dataset_kwargs"] = kwargs
+            calls["probe_dataset_instance"] = dataset
+            return dataset
+
+    dummy_dataset_module.GraphDataset = DummyGraphDataset
+    monkeypatch.setitem(sys.modules, "data.mdataset", dummy_dataset_module)
+
 
 def test_cmd_pretrain_creates_checkpoint_and_calls_training(tmp_path, monkeypatch):
     calls = {
@@ -162,6 +182,8 @@ def test_cmd_pretrain_creates_checkpoint_and_calls_training(tmp_path, monkeypatc
         "train_contrastive_kwargs": {},
         "plot_training_curves": 0,
         "saved_plot": None,
+        "probe_dataset_path": None,
+        "probe_dataset_instance": None,
     }
     setup_stubs(monkeypatch, calls)
 
@@ -177,6 +199,70 @@ def test_cmd_pretrain_creates_checkpoint_and_calls_training(tmp_path, monkeypatc
     assert "perturb_dihedral" not in calls["train_jepa_kwargs"]
     assert calls["plot_training_curves"] == 1
     assert os.path.exists(os.path.join(args.plot_dir, "pretrain_loss.png"))
+
+
+def test_cmd_pretrain_loads_probe_dataset(tmp_path, monkeypatch):
+    calls = {
+        "load_directory_dataset": 0,
+        "build_encoder": 0,
+        "EMA": 0,
+        "MLPPredictor": 0,
+        "train_jepa": 0,
+        "train_contrastive": 0,
+        "maybe_init_wandb": 0,
+        "train_jepa_kwargs": {},
+        "train_contrastive_kwargs": {},
+        "plot_training_curves": 0,
+        "saved_plot": None,
+        "probe_dataset_path": None,
+        "probe_dataset_instance": None,
+    }
+    setup_stubs(monkeypatch, calls)
+
+    args = make_args(
+        tmp_path,
+        contrastive=False,
+        probe_dataset=str(tmp_path / "probe.parquet"),
+        probe_interval=1,
+    )
+    tj.cmd_pretrain(args)
+
+    assert calls["probe_dataset_path"] == args.probe_dataset
+    assert calls["train_jepa_kwargs"].get("probe_interval") == 1
+    assert (
+        calls["train_jepa_kwargs"].get("probe_dataset")
+        is calls["probe_dataset_instance"]
+    )
+
+
+def test_cmd_pretrain_skips_probe_when_disabled(tmp_path, monkeypatch):
+    calls = {
+        "load_directory_dataset": 0,
+        "build_encoder": 0,
+        "EMA": 0,
+        "MLPPredictor": 0,
+        "train_jepa": 0,
+        "train_contrastive": 0,
+        "maybe_init_wandb": 0,
+        "train_jepa_kwargs": {},
+        "train_contrastive_kwargs": {},
+        "plot_training_curves": 0,
+        "saved_plot": None,
+        "probe_dataset_path": None,
+        "probe_dataset_instance": None,
+    }
+    setup_stubs(monkeypatch, calls)
+
+    args = make_args(
+        tmp_path,
+        contrastive=False,
+        probe_dataset=str(tmp_path / "probe.parquet"),
+        probe_interval=0,
+    )
+    tj.cmd_pretrain(args)
+
+    assert calls["probe_dataset_path"] is None
+    assert calls["train_jepa_kwargs"].get("probe_interval") == 0
 
 
 def test_cmd_pretrain_streams_unlabeled_chunks(tmp_path, monkeypatch):
@@ -196,6 +282,8 @@ def test_cmd_pretrain_streams_unlabeled_chunks(tmp_path, monkeypatch):
         "plot_training_curves": 0,
         "saved_plot": None,
         "dataset_closed": 0,
+        "probe_dataset_path": None,
+        "probe_dataset_instance": None,
     }
 
     def _on_close():
@@ -228,6 +316,8 @@ def test_cmd_pretrain_forwards_devices_to_contrastive(tmp_path, monkeypatch):
         "train_contrastive_kwargs": {},
         "plot_training_curves": 0,
         "saved_plot": None,
+        "probe_dataset_path": None,
+        "probe_dataset_instance": None,
     }
     setup_stubs(monkeypatch, calls)
 
