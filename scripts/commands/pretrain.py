@@ -647,6 +647,42 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             _wb_log(wb, {"phase": "data_load", "status": "error"})
             sys.exit(1)
 
+        probe_dataset = None
+        probe_interval = int(getattr(args, "probe_interval", 0) or 0)
+        probe_dataset_path = getattr(
+            args,
+            "probe_dataset",
+            CONFIG.get("pretrain", {}).get("probe_dataset"),
+        )
+        if probe_interval > 0:
+            if not probe_dataset_path:
+                logger.error("[pretrain] probe_interval>0 but no probe_dataset provided")
+                _wb_log(wb, {"phase": "probe_load", "status": "error"})
+                sys.exit(1)
+            try:
+                from data.mdataset import GraphDataset
+
+                probe_dataset = GraphDataset.from_parquet(
+                    probe_dataset_path,
+                    label_col="label",
+                    cache_dir=getattr(args, "cache_dir", None),
+                    add_3d=getattr(args, "add_3d", False),
+                    num_workers=max(0, int(getattr(args, "num_workers", 0) or 0)),
+                )
+                _wb_log(
+                    wb,
+                    {
+                        "phase": "probe_load",
+                        "probe_graphs": len(probe_dataset),
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to load probe dataset from %s", probe_dataset_path
+                )
+                _wb_log(wb, {"phase": "probe_load", "status": "error"})
+                sys.exit(1)
+
         graphs = getattr(unlabeled, "graphs", None)
         if not graphs:
             logger.error(
@@ -817,6 +853,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                             prefetch_factor=getattr(args, "prefetch_factor", 4),
                             bf16=getattr(args, "bf16", False),
                             compile_models=not getattr(args, "no_compile", False),
+                            probe_dataset=probe_dataset,
+                            probe_interval=probe_interval,
                             # forward augmentation flags only when enabled
                             **kwargs,
                         )
@@ -858,6 +896,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                         prefetch_factor=getattr(args, "prefetch_factor", 4),
                         bf16=getattr(args, "bf16", False),
                         compile_models=not getattr(args, "no_compile", False),
+                        probe_dataset=probe_dataset,
+                        probe_interval=probe_interval,
                         # forward augmentation flags only when enabled
                         **kwargs,
                     )
@@ -1286,4 +1326,3 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         raise
     finally:
         _wb_finish(wb)
-
