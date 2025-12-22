@@ -73,7 +73,7 @@ finetune:
   patience: ${FINETUNE_PATIENCE:-5}
   batch_size: ${FINETUNE_BATCH_SIZE:-128}
   max_finetune_batches: 0
-  freeze_encoder: true
+  freeze_encoder: false
   use_scaffold: ${FINETUNE_USE_SCAFFOLD:-false}
   hidden_dim: ${FINETUNE_HIDDEN_DIM:-256}
   num_layers: ${FINETUNE_NUM_LAYERS:-3}

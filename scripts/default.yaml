@@ -33,7 +33,7 @@ finetune:
   lr: 1.0e-4            # Learning rate for fine‑tuning the probe (override with FINETUNE_LR/FINETUNE_ENCODER_LR/FINETUNE_HEAD_LR)
   batch_size: 128       # Batch size for downstream training (override with FINETUNE_BATCH_SIZE)
   seeds: [0]            # Random seed for downstream runs (can be overridden with FINETUNE_SEED_*)
-  unfreeze: none        # Encoder update policy during fine‑tuning (none|partial|full)
+  unfreeze: full        # Encoder update policy during fine‑tuning (none|partial|full)
 
 evaluate:
   epochs: 50            # Training epochs for evaluation probe
