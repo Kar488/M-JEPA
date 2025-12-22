@@ -159,7 +159,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     )
     device = resolve_device(args.device)
 
-    if getattr(args, "ft_ckpt", None):
+    if getattr(args, "ft_ckpt", None) and not getattr(args, "test_dir", None):
         logger.warning(
             "Fine-tuned checkpoint provided (%s) but benchmark compares encoders only; ignoring.",
             args.ft_ckpt,
@@ -175,11 +175,8 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         start_payload = {"phase": "benchmark", "status": "start"}
         start_payload.update(threshold_payload)
         _wb_log(start_payload)
-        # Don’t resolve here—tests monkey-patch evaluate_finetuned_head().
-        # Pass through what the CLI provided.
-        ft_target = args.ft_ckpt
         try:
-            agg_ft = evaluate_finetuned_head(ft_target, labeled, args, device)
+            agg_ft = evaluate_finetuned_head(args.ft_ckpt, labeled, args, device)
         except FileNotFoundError:
             _wb_log({"phase": "benchmark", "status": "error", "error": "missing_ft_ckpt"})
             _wb_finish()
