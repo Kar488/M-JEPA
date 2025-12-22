@@ -159,67 +159,11 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     )
     device = resolve_device(args.device)
 
-    def _resolve_ft_checkpoint(raw: str) -> str:
-        def _sanitize(label: str) -> str:
-            return label.replace("/", "_").replace(" ", "_")
-
-        base = Path(raw)
-        search_root = base
-        if base.name in ("ft_best.pt", "head.pt") and not base.exists():
-            search_root = base.parent
-
-        def _find_in_dir(directory: Path) -> Optional[Path]:
-            for fname in ("ft_best.pt", "head.pt"):
-                candidate = directory / fname
-                if candidate.is_file():
-                    return candidate
-            return None
-
-        if base.is_file():
-            logger.info("Resolved finetune head at %s", base)
-            return str(base)
-
-        label_candidates: List[str] = []
-        arg_label = getattr(args, "label_col", None)
-        if arg_label:
-            label_candidates.append(str(arg_label))
-
-        search_dirs = [search_root]
-        for label in label_candidates:
-            search_dirs.append(search_root / label)
-            search_dirs.append(search_root / _sanitize(label))
-
-        for candidate_dir in search_dirs:
-            resolved = _find_in_dir(candidate_dir)
-            if resolved:
-                logger.info("Resolved finetune head at %s", resolved)
-                return str(resolved)
-
-            try:
-                for subdir in sorted(p for p in candidate_dir.iterdir() if p.is_dir()):
-                    resolved = _find_in_dir(subdir)
-                    if resolved:
-                        logger.info("Resolved finetune head at %s", resolved)
-                        return str(resolved)
-            except FileNotFoundError:
-                continue
-
-        logger.error(
-            "Checkpoint path '%s' not found on disk (labels tried: %s)",
-            raw,
-            ", ".join(label_candidates) if label_candidates else "<none>",
-        )
-        raise FileNotFoundError(raw)
-
-    resolved_ft_ckpt: Optional[str] = None
     if getattr(args, "ft_ckpt", None):
-        try:
-            resolved_ft_ckpt = _resolve_ft_checkpoint(args.ft_ckpt)
-        except FileNotFoundError:
-            _wb_log({"phase": "benchmark", "status": "error", "error": "missing_ft_ckpt"})
-            _wb_finish()
-            logger.exception("Fine-tuned checkpoint not found")
-            sys.exit(1)
+        logger.warning(
+            "Fine-tuned checkpoint provided (%s) but benchmark compares encoders only; ignoring.",
+            args.ft_ckpt,
+        )
 
     # Prepare results dict
     all_results: Dict[str, Dict[str, float]] = {}
@@ -233,7 +177,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         _wb_log(start_payload)
         # Don’t resolve here—tests monkey-patch evaluate_finetuned_head().
         # Pass through what the CLI provided.
-        ft_target = resolved_ft_ckpt or args.ft_ckpt
+        ft_target = args.ft_ckpt
         try:
             agg_ft = evaluate_finetuned_head(ft_target, labeled, args, device)
         except FileNotFoundError:
@@ -361,16 +305,6 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             
         return evaluate_state(state, method_name)
 
-    def evaluate_finetuned(ft_ckpt_path: str) -> Dict[str, float]:
-        try:
-            state = load_checkpoint(ft_ckpt_path)
-        except Exception:
-            logger.exception("Failed to load fine-tuned checkpoint: %s", ft_ckpt_path)
-            _wb_log({"phase": "benchmark", "status": "error", "error": "missing_ft_ckpt"})
-            _wb_finish()
-            raise SystemExit(1)
-        return evaluate_state(state, "finetuned")
-
     main_start_payload = {"phase": "benchmark", "status": "start"}
     main_start_payload.update(threshold_payload)
     _wb_log(main_start_payload)
@@ -383,13 +317,6 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     if args.contrastive_encoder:
         agg_cont = evaluate_encoder(args.contrastive_encoder, "contrastive")
         all_results["contrastive"] = agg_cont
-
-    # Optional: evaluate a fine-tuned checkpoint that already has a head
-    agg_ft: Dict[str, float] = {}
-    if resolved_ft_ckpt:
-        agg_ft = evaluate_finetuned(resolved_ft_ckpt)
-        if agg_ft:
-            all_results["finetuned"] = agg_ft
 
     # Decide which is better
     verdict = "jepa"
@@ -417,29 +344,6 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
                 key, float("inf")
             ):
                 verdict = "contrastive"
-
-    # If finetuned was evaluated, compare it too
-    if "finetuned" in all_results:
-        if args.task_type == "classification":
-            key = (
-                "roc_auc_mean"
-                if "roc_auc_mean" in agg_jepa
-                else ("acc_mean" if "acc_mean" in agg_jepa else None)
-            )
-            if key and all_results["finetuned"].get(
-                key, float("-inf")
-            ) > all_results.get(verdict, {}).get(key, float("-inf")):
-                verdict = "finetuned"
-        else:
-            key = (
-                "rmse_mean"
-                if "rmse_mean" in agg_jepa
-                else ("mae_mean" if "mae_mean" in agg_jepa else None)
-            )
-            if key and all_results["finetuned"].get(
-                key, float("inf")
-            ) < all_results.get(verdict, {}).get(key, float("inf")):
-                verdict = "finetuned"
 
     metric_value_key: Optional[str] = None
     threshold_report: Optional[Dict[str, Any]] = None
