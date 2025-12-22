@@ -666,24 +666,24 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 )
                 _wb_log(wb, {"phase": "probe_load", "status": "skipped"})
                 probe_interval = 0
-            elif not os.path.exists(probe_dataset_path):
-                logger.warning(
-                    "[pretrain] probe_dataset not found at %s; disabling probe",
-                    probe_dataset_path,
-                )
-                _wb_log(wb, {"phase": "probe_load", "status": "skipped"})
-                probe_interval = 0
             if probe_interval > 0:
                 try:
                     from data.mdataset import GraphDataset
 
-                    probe_dataset = GraphDataset.from_csv(
-                        probe_dataset_path,
+                    loader_kwargs = dict(
                         label_col=probe_label_col,
                         cache_dir=getattr(args, "cache_dir", None),
                         add_3d=getattr(args, "add_3d", False),
                         num_workers=max(0, int(getattr(args, "num_workers", 0) or 0)),
                     )
+                    if str(probe_dataset_path).endswith(".parquet"):
+                        probe_dataset = GraphDataset.from_parquet(
+                            probe_dataset_path, **loader_kwargs
+                        )
+                    else:
+                        probe_dataset = GraphDataset.from_csv(
+                            probe_dataset_path, **loader_kwargs
+                        )
                     _wb_log(
                         wb,
                         {
