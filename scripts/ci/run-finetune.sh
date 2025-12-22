@@ -271,6 +271,7 @@ if [[ "$baseline_status" == "false" ]]; then
   FINETUNE_LABEL_COL="${tasks[0]}"
   : "${FINETUNE_TASK_TYPE:=classification}"
   : "${FINETUNE_METRIC:=val_auc}"
+  : "${FINETUNE_PER_TASK_HPARAMS:=${APP_DIR}/scripts/ci/per_task_hparams/tox21_hparams.yaml}"
   : "${FINETUNE_USE_SCAFFOLD:=true}"
   : "${FINETUNE_SEED_0:=0}"
   if [[ -z ${FINETUNE_SEED_1+x} ]]; then
