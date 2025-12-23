@@ -321,16 +321,14 @@ def render_molecule_heatmap(
     norm_weights = (weights / abs_max).tolist()
 
     # --- 2. Style Configuration ---
-    # Nuclear Receptor = Coherent, Stress = Diffuse, Damage = Fragmented
-    if assay_type == "NR":
-        cmap = "RdYlGn"
-        sig, contours = 0.5, 10
-    elif assay_type == "SR":
-        cmap = "YlOrRd"
-        sig, contours = 0.3, 15
-    else: # Damage Mechanism (DM)
-        cmap = "Reds"
-        sig, contours = 0.15, 20
+    # Use a diverging palette with a white midpoint so zero attributions stay neutral.
+    cmap = "RdBu"
+    background = (1.0, 1.0, 1.0)
+    assay_style = {
+        "NR": (0.5, 10, 0.35),
+        "SR": (0.3, 15, 0.4),
+    }
+    sig, contours, alpha = assay_style.get(assay_type, (0.15, 20, 0.45))
 
     # --- 3. High-Resolution Drawing ---
     drawer = rdMolDraw2D.MolDraw2DCairo(1000, 1000)
@@ -340,6 +338,15 @@ def render_molecule_heatmap(
         options.addAtomIndices = True        # CRITICAL: Enables diagnostic mapping
         options.annotationFontScale = 0.8    # Large enough to read
         options.prepareMolsBeforeDrawing = True
+        try:
+            options.clearBackground = True
+        except Exception:
+            pass
+        options.backgroundColour = background
+    try:
+        drawer.SetBackgroundColor(background)
+    except Exception:
+        pass
 
     rendered = False
     if SimilarityMaps is not None:
@@ -351,7 +358,7 @@ def render_molecule_heatmap(
                 colorMap=cmap,
                 sigma=sig,
                 contourLines=contours,
-                alpha=0.5,  # Darker, more saturated patches
+                alpha=alpha,  # Darker, more saturated patches
             )
             rendered = True
         except TypeError:
@@ -363,7 +370,7 @@ def render_molecule_heatmap(
                     colorMap=cmap,
                     sigma=sig,
                     contourLines=contours,
-                    alpha=0.5,  # Darker, more saturated patches
+                    alpha=alpha,  # Darker, more saturated patches
                 )
                 rendered = True
             except Exception:
