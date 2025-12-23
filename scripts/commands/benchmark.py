@@ -219,6 +219,17 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             _wb_finish()
         return
 
+    def _ensure_cublas_determinism() -> None:
+        if not torch.cuda.is_available():
+            return
+        if os.environ.get("CUBLAS_WORKSPACE_CONFIG"):
+            return
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+        logger.warning(
+            "Set CUBLAS_WORKSPACE_CONFIG=:4096:8 to satisfy deterministic "
+            "algorithms. For full reproducibility, export this before launch."
+        )
+
     def evaluate_state(
         state_obj: Dict[str, Any] | Any, method_name: str
     ) -> Dict[str, float]:
@@ -229,6 +240,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         metrics_runs: List[Dict[str, float]] = []
         prev_det = None
         try:
+            _ensure_cublas_determinism()
             prev_det = torch.are_deterministic_algorithms_enabled()
             torch.use_deterministic_algorithms(True)
         except Exception:
@@ -244,6 +256,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
                 pass
             try:
                 if prev_det is not None:
+                    _ensure_cublas_determinism()
                     torch.use_deterministic_algorithms(True)
             except Exception:
                 pass
