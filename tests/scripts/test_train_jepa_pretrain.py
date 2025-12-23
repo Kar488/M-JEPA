@@ -141,9 +141,17 @@ def setup_stubs(monkeypatch, calls, datasets=None):
 
     monkeypatch.setattr(tj, "plot_training_curves", plot_training_curves_stub)
 
+    class DummyRun:
+        def log(self, payload):
+            calls.setdefault("wandb_logs", []).append(dict(payload))
+
     class DummyWB:
-        def log(self, *args, **kwargs):
-            pass
+        def __init__(self):
+            self.run = DummyRun()
+            self.summary = {}
+
+        def log(self, payload):
+            self.run.log(payload)
 
         def finish(self):
             pass
@@ -232,6 +240,39 @@ def test_cmd_pretrain_loads_probe_dataset(tmp_path, monkeypatch):
     assert (
         calls["train_jepa_kwargs"].get("probe_dataset")
         is calls["probe_dataset_instance"]
+    )
+
+
+def test_cmd_pretrain_logs_probe_detection(tmp_path, monkeypatch):
+    calls = {
+        "load_directory_dataset": 0,
+        "build_encoder": 0,
+        "EMA": 0,
+        "MLPPredictor": 0,
+        "train_jepa": 0,
+        "train_contrastive": 0,
+        "maybe_init_wandb": 0,
+        "train_jepa_kwargs": {},
+        "train_contrastive_kwargs": {},
+        "plot_training_curves": 0,
+        "saved_plot": None,
+        "probe_dataset_path": None,
+        "probe_dataset_instance": None,
+        "wandb_logs": [],
+    }
+    setup_stubs(monkeypatch, calls)
+
+    args = make_args(
+        tmp_path,
+        contrastive=False,
+        probe_dataset=str(tmp_path / "probe.parquet"),
+        probe_interval=1,
+    )
+    tj.cmd_pretrain(args)
+
+    assert any(
+        log.get("phase") == "probe_load" and log.get("probe_graphs") == 1
+        for log in calls["wandb_logs"]
     )
 
 
