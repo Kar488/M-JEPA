@@ -647,6 +647,15 @@ def _enforce_required_keys(
     if not best_cfg:
         raise RuntimeError("Best run config resolved to an empty payload")
 
+    if "add_3d" not in best_cfg:
+        add_3d_option = _config_lookup(raw_config, "add_3d_options")
+        if add_3d_option is None:
+            add_3d_option = _config_lookup(sanitized, "add_3d_options")
+        if isinstance(add_3d_option, (list, tuple)) and len(add_3d_option) == 1:
+            add_3d_option = add_3d_option[0]
+        if add_3d_option is not None:
+            best_cfg["add_3d"] = _normalize_config_value(add_3d_option)
+
     return best_cfg
 
 
