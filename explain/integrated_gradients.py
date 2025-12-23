@@ -304,9 +304,16 @@ def render_molecule_heatmap(
         weights[i] = atom_scores[i]
     
     for (i, j), score in bond_scores.items():
-        if i < num_atoms and j < num_atoms:
-            weights[i] += score * 0.5
-            weights[j] += score * 0.5
+        if i < 0 or j < 0 or i >= num_atoms or j >= num_atoms:
+            continue
+        try:  # pragma: no cover - depends on rdkit
+            bond = mol.GetBondBetweenAtoms(int(i), int(j))
+        except Exception:
+            bond = None
+        if bond is None:
+            continue
+        weights[i] += score * 0.5
+        weights[j] += score * 0.5
 
     # NORMALIZATION: Scale weights so the max absolute value is 1.0.
     # This ensures "dark patches" appear at the most important atoms (e.g. 2, 11, 21).

@@ -22,8 +22,6 @@ from itertools import cycle, islice
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from explain.integrated_gradients import render_molecule_heatmap
-
 import math
 import numbers
 import importlib.util
@@ -43,6 +41,8 @@ except Exception:  # pragma: no cover - degrade gracefully when networkx missing
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from explain.integrated_gradients import render_molecule_heatmap
 
 try:
     from utils import gym_compat
@@ -1111,6 +1111,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         graph_x = graph_x.detach().cpu().numpy()
                     if np is not None:
                         atom_scores = np.asarray(graph_x)
+                        if atom_scores.ndim > 1:
+                            atom_scores = atom_scores.sum(axis=1)
                 except Exception:
                     atom_scores = None
             if atom_scores is None or getattr(atom_scores, "size", 0) == 0:
