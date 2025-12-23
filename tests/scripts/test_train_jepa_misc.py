@@ -190,6 +190,67 @@ def test_cmd_benchmark_eval_only_uses_test_dir(tmp_path, monkeypatch):
     assert calls["train_linear_head"] == 0
 
 
+def test_cmd_benchmark_eval_only_writes_reports(tmp_path, monkeypatch):
+    dataset = DummyDataset()
+
+    def load_dataset_stub(path, label_col=None, add_3d=False, **kwargs):
+        assert path == str(tmp_path / "test")
+        return dataset
+
+    monkeypatch.setattr(tj, "load_directory_dataset", load_dataset_stub)
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: None)
+    monkeypatch.setattr(tj, "train_linear_head", lambda **kwargs: {"roc_auc": 0.5})
+
+    def eval_stub(ckpt_path, dataset, args, device):  # pragma: no cover - stub
+        return {"roc_auc": 0.75, "loss": 0.2}
+
+    monkeypatch.setattr(tj, "evaluate_finetuned_head", eval_stub)
+
+    ft_path = tmp_path / "ft.pt"
+    ft_path.write_text("ckpt")
+
+    report_dir = tmp_path / "reports"
+    report_stem = "bench_eval"
+
+    args = argparse.Namespace(
+        labeled_dir=str(tmp_path / "train"),
+        test_dir=str(tmp_path / "test"),
+        label_col="y",
+        task_type="classification",
+        epochs=1,
+        batch_size=1,
+        lr=0.01,
+        patience=1,
+        devices=1,
+        seeds=[0],
+        jepa_encoder="jepa.pt",
+        contrastive_encoder=None,
+        dataset=None,
+        gnn_type="gcn",
+        hidden_dim=16,
+        num_layers=2,
+        device="cpu",
+        use_wandb=False,
+        wandb_project="test",
+        wandb_tags=[],
+        add_3d=False,
+        ft_ckpt=str(ft_path),
+        report_dir=str(report_dir),
+        report_stem=report_stem,
+    )
+
+    tj.cmd_benchmark(args)
+
+    report_json = report_dir / f"{report_stem}.json"
+    report_csv = report_dir / f"{report_stem}.csv"
+    assert report_json.is_file()
+    assert report_csv.is_file()
+
+    payload = json.loads(report_json.read_text())
+    assert payload["best_method"] == "finetuned"
+    assert payload["results"]["finetuned"]["roc_auc"] == 0.75
+
+
 def test_cmd_benchmark_passes_loader_knobs(tmp_path, monkeypatch):
     dataset = DummyDataset()
 
