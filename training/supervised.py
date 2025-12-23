@@ -1182,7 +1182,16 @@ class _MotifIGArtifactLogger:
         self._seen.add(idx)
         smiles = self.smiles[idx] if self.smiles and idx < len(self.smiles) else None
         molecule_id = self._format_identifier(idx, smiles)
-        motif_map = find_motifs(graph)
+
+        # FIX A: Prefer explicit SMILES for motif extraction
+        motif_map = find_motifs(smiles) if smiles else find_motifs(graph)
+
+        # Optional: attach SMILES to graph for downstream explainability
+        if smiles and not getattr(graph, "smiles", None):
+            try:
+                graph.smiles = smiles
+            except Exception:
+                pass
         motif_scores = aggregate_motif_ig(
             node_scores,
             edge_scores,
