@@ -159,6 +159,241 @@ def test_ensure_dataset_has_pos_skips_empty_graphs():
 
     # Should not raise because the first non-empty graph has coordinates.
     finetune._ensure_dataset_has_pos(DummyDataset(graphs))
+
+
+def test_cmd_finetune_aggregates_metrics(monkeypatch, tmp_path):
+    graph = GraphData(
+        x=np.ones((2, 1), dtype=np.float32),
+        edge_index=np.array([[0, 1], [1, 0]], dtype=np.int64),
+    )
+    dataset = GraphDataset([graph] * 4, labels=[1.0, 0.0, 1.0, 0.0])
+
+    monkeypatch.setattr(
+        finetune,
+        "load_directory_dataset",
+        lambda *a, **k: dataset,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        finetune,
+        "_resolve_labeled_dataset_source",
+        lambda *a, **k: str(tmp_path),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        finetune,
+        "_sanitize_dataset_labels",
+        lambda ds: (ds, {}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        finetune,
+        "resolve_device",
+        lambda device: "cpu",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        finetune,
+        "_maybe_to",
+        lambda model, device: model,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        finetune,
+        "_maybe_labels",
+        lambda ds: getattr(ds, "labels", None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        finetune,
+        "_infer_num_classes",
+        lambda ds: 2,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        finetune,
+        "_maybe_state_dict",
+        lambda obj: obj.state_dict() if hasattr(obj, "state_dict") else None,
+        raising=False,
+    )
+
+    class DummyEncoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.hidden_dim = 2
+            self.layer = torch.nn.Linear(1, 2)
+
+    monkeypatch.setattr(
+        finetune,
+        "build_encoder",
+        lambda **k: DummyEncoder(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        finetune,
+        "build_linear_head",
+        lambda in_dim, num_classes, task_type: torch.nn.Linear(
+            int(in_dim), int(num_classes)
+        ),
+        raising=False,
+    )
+
+    metric_values = [0.6, 0.8]
+    calls = {"i": 0}
+
+    def train_linear_head_stub(**kwargs):
+        val = metric_values[calls["i"]]
+        calls["i"] += 1
+        return {
+            "acc": val,
+            "train/batches": 1.0,
+            "train/epoch_batches": 1.0,
+        }
+
+    monkeypatch.setattr(
+        finetune,
+        "train_linear_head",
+        train_linear_head_stub,
+        raising=False,
+    )
+
+    captured = {}
+
+    def aggregate_metrics_stub(metrics_list):
+        captured["list"] = metrics_list
+        return {"acc_mean": float(np.mean([m["acc"] for m in metrics_list]))}
+
+    monkeypatch.setattr(
+        finetune,
+        "aggregate_metrics",
+        aggregate_metrics_stub,
+        raising=False,
+    )
+
+    wb_holder = {}
+
+    class DummyWB:
+        def __init__(self):
+            self.logs = []
+            self.config = {}
+
+        def log(self, data):
+            self.logs.append(data)
+
+        def finish(self):
+            pass
+
+    def maybe_init_wandb_stub(*args, **kwargs):
+        wb_holder["wb"] = DummyWB()
+        return wb_holder["wb"]
+
+    monkeypatch.setattr(
+        finetune,
+        "maybe_init_wandb",
+        maybe_init_wandb_stub,
+        raising=False,
+    )
+
+    import utils.checkpoint as ckpt_mod
+
+    monkeypatch.setattr(
+        ckpt_mod,
+        "compute_state_dict_hash",
+        lambda state: "hash",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ckpt_mod,
+        "load_checkpoint",
+        lambda *a, **k: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ckpt_mod,
+        "save_checkpoint",
+        lambda *a, **k: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ckpt_mod,
+        "safe_load_checkpoint",
+        lambda *a, **k: ({}, None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ckpt_mod,
+        "load_state_dict_forgiving",
+        lambda *a, **k: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ckpt_mod,
+        "safe_link_or_copy",
+        lambda *a, **k: "copy",
+        raising=False,
+    )
+
+    args = Namespace(
+        labeled_dir=str(tmp_path),
+        labeled_csv=None,
+        gnn_type="mpnn",
+        hidden_dim=2,
+        num_layers=1,
+        dropout=None,
+        task_type="classification",
+        epochs=1,
+        batch_size=2,
+        lr=1e-3,
+        encoder_lr=None,
+        head_lr=None,
+        ema_decay=0.0,
+        seeds=[0, 1],
+        add_3d=False,
+        freeze_encoder=True,
+        unfreeze_top_layers=0,
+        max_finetune_batches=0,
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        bf16=False,
+        use_scaffold=False,
+        use_focal_loss=False,
+        dynamic_pos_weight=False,
+        oversample_minority=False,
+        pos_weight=None,
+        layerwise_decay=None,
+        calibrate_probabilities=False,
+        threshold_metric=None,
+        use_wandb=True,
+        wandb_project="proj",
+        wandb_tags=[],
+        device="cpu",
+        label_col="label",
+        patience=1,
+        devices=1,
+        encoder=None,
+        load_encoder_checkpoint=None,
+        unfreeze_mode="none",
+        save_every=1,
+        time_budget_mins=0,
+        cache_dir=None,
+        max_pretrain_batches=0,
+        class_weight=None,
+        focal_gamma=2.0,
+        calibration_method="temperature",
+        per_task_hparams=None,
+        resume_ckpt=None,
+        metric="acc",
+    )
+
+    finetune._cmd_finetune_single(args)
+
+    assert [m["acc"] for m in captured["list"]] == metric_values
+    wb_logs = wb_holder["wb"].logs
+    assert any("metric/acc_mean" in entry for entry in wb_logs)
+
+
 class TinyEncoder(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -206,4 +441,3 @@ def test_iter_trainable_params_and_configure_encoder():
         unfreeze_top_layers=0,
     )
     assert all(p.requires_grad for p in all_params)
-
