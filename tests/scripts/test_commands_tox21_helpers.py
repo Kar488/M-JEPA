@@ -138,7 +138,6 @@ def test_run_single_task_passes_explain_kwargs(tmp_path, monkeypatch):
         pretrain_time_budget_mins=0,
         finetune_time_budget_mins=0,
         cache_dir=None,
-        encoder_manifest=None,
         strict_encoder_config=False,
         encoder_source="pretrain_frozen",
         evaluation_mode="pretrain_frozen",
@@ -237,7 +236,6 @@ def test_run_single_task_normalises_motif_alias(tmp_path, monkeypatch):
         pretrain_time_budget_mins=0,
         finetune_time_budget_mins=0,
         cache_dir=None,
-        encoder_manifest=None,
         strict_encoder_config=False,
         encoder_source="pretrain_frozen",
         evaluation_mode="pretrain_frozen",
@@ -332,7 +330,6 @@ def test_run_single_task_handles_multiple_explain_modes(tmp_path, monkeypatch):
         pretrain_time_budget_mins=0,
         finetune_time_budget_mins=0,
         cache_dir=None,
-        encoder_manifest=None,
         strict_encoder_config=False,
         encoder_source="pretrain_frozen",
         evaluation_mode="pretrain_frozen",
@@ -365,4 +362,3 @@ def test_run_single_task_handles_multiple_explain_modes(tmp_path, monkeypatch):
     )
 
     assert captured.get("mode") == ["ig", "ig_motif"]
-

@@ -1520,13 +1520,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional pretrained encoder checkpoint to evaluate without additional pretraining",
     )
     tox.add_argument(
-        "--encoder-manifest",
-        dest="encoder_manifest",
-        type=str,
-        default=None,
-        help="Optional manifest JSON describing the encoder checkpoint",
-    )
-    tox.add_argument(
         "--encoder-source",
         dest="encoder_source",
         type=str,
