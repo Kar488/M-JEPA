@@ -618,17 +618,27 @@ except Exception:
 # ---------------------------------------------------------------------------
 
 
-def aggregate_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, float]:
-    """Compute mean and std for each metric across runs.
+def aggregate_metrics(metrics_list: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Compute mean and std for each numeric metric across runs.
 
-    Excludes the key 'head' if present.
+    Excludes the key 'head' if present and skips non-numeric values.
     """
     if not metrics_list:
         return {}
     out: Dict[str, float] = {}
     keys = sorted({k for d in metrics_list for k in d.keys() if k != "head"})
     for k in keys:
-        vals = np.array([d[k] for d in metrics_list if k in d], dtype=np.float64)
+        raw_vals: List[float] = []
+        for d in metrics_list:
+            if k not in d:
+                continue
+            try:
+                raw_vals.append(float(d[k]))
+            except Exception:
+                continue
+        if not raw_vals:
+            continue
+        vals = np.array(raw_vals, dtype=np.float64)
         out[f"{k}_mean"] = float(np.mean(vals))
         out[f"{k}_std"] = float(np.std(vals))
     return out
