@@ -16,12 +16,17 @@ logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - optional dependency
     from rdkit import Chem
+except Exception as e:  # pragma: no cover - optional dependency
+    Chem = None  # type: ignore[assignment]
+    print("[RDKit Chem import failed]", repr(e))
+
+try:  # pragma: no cover - optional dependency
     from rdkit.Chem import Draw
     from rdkit.Chem.Draw import rdMolDraw2D
-except Exception:  # pragma: no cover - gracefully handle missing rdkit
-    Chem = None  # type: ignore[assignment]
+except Exception as e:  # pragma: no cover - optional dependency
     Draw = None  # type: ignore[assignment]
     rdMolDraw2D = None  # type: ignore[assignment]
+    print("[RDKit Draw import failed]", repr(e))
 
 
 _PLACEHOLDER_PNG = base64.b64decode(

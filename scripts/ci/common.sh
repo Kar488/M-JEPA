@@ -2705,6 +2705,15 @@ _raw = os.environ.get("BESTCFG_SKIP", "")
 # accept comma- or space-separated values and normalize
 skip = {s.strip() for s in _raw.replace(",", " ").split() if s.strip()}
 
+# Stage-specific guardrails: preserve critical winner knobs even if defaults
+# or environment skip lists would drop them.
+force_keep = set()
+if stage == "pretrain":
+    force_keep.add("add_3d")
+if force_keep:
+    keep.update(force_keep)
+    skip.difference_update(force_keep)
+
 sorted_skip = sorted(skip)
 joined_skip = ", ".join(sorted_skip)
 print(f"[bestcfg] skip=[{joined_skip}]" if joined_skip else "[bestcfg] skip=[]", file=sys.stderr)
