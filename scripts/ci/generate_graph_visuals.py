@@ -1062,8 +1062,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     
     # Search dataset for the indices of our target SMILES to prevent regression
     hero_indices = []
-    if dataset.smiles:
-        for i, s in enumerate(dataset.smiles):
+    dataset_smiles = getattr(dataset, "smiles", None)
+    if dataset_smiles:
+        for i, s in enumerate(dataset_smiles):
             if s in TARGET_SMILES:
                 hero_indices.append(i)
     
@@ -1083,7 +1084,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _ensure_dir(record_dir)
         
         graph = dataset.graphs[dataset_idx]
-        smiles = dataset.smiles[dataset_idx] if dataset.smiles else None
+        smiles = None
+        if dataset_smiles:
+            try:
+                smiles = dataset_smiles[dataset_idx]
+            except Exception:
+                smiles = None
         label = _coerce_label(dataset.labels, dataset_idx)
 
         # Detect Biological Grouping
@@ -1097,7 +1103,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if smiles and RDKit_AVAILABLE:
             diag_path = str(record_dir / "2d_diagnostic.png")
             # Pull IG scores from graph node features if available
-            atom_scores = graph.x[:, 0].detach().cpu().numpy() if hasattr(graph, 'x') else np.zeros(1)
+            atom_scores = None
+            graph_x = getattr(graph, "x", None)
+            if graph_x is not None:
+                try:
+                    if hasattr(graph_x, "detach"):
+                        graph_x = graph_x.detach().cpu().numpy()
+                    if np is not None:
+                        atom_scores = np.asarray(graph_x)
+                except Exception:
+                    atom_scores = None
+            if atom_scores is None or getattr(atom_scores, "size", 0) == 0:
+                fallback_size = max(int(graph.num_nodes()), 1)
+                if np is not None:
+                    atom_scores = np.zeros(fallback_size, dtype=np.float32)
+                else:
+                    atom_scores = [0.0 for _ in range(fallback_size)]
             
             render_molecule_heatmap(smiles, atom_scores, {}, diag_path, assay_type)
             png_stats["rdkit"] += 1
@@ -1107,8 +1128,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # 4. Save Summary
     summary = {
-        "dataset": dataset_label,
+        "dataset_path": dataset_label,
         "num_rendered": len(final_indices),
+        "num_graphs": _graph_count(dataset),
+        "loader": loader_label,
+        "fallback_forced": bool(_FORCE_FALLBACK_LOADER),
+        "fallback_reason": fallback_reason,
         "heroes_found": len(hero_indices),
         "rdkit_available": bool(RDKit_AVAILABLE),
         "png_renderers": png_stats,

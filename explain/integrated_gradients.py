@@ -327,20 +327,51 @@ def render_molecule_heatmap(
 
     # --- 3. High-Resolution Drawing ---
     drawer = rdMolDraw2D.MolDraw2DCairo(1000, 1000)
-    opts = drawer.drawOptions()
-    opts.addAtomIndices = True        # CRITICAL: Enables diagnostic mapping
-    opts.annotationFontScale = 0.8    # Large enough to read
-    opts.prepareMolsBeforeDrawing = True
+    opts = getattr(drawer, "drawOptions", None)
+    if callable(opts):
+        options = opts()
+        options.addAtomIndices = True        # CRITICAL: Enables diagnostic mapping
+        options.annotationFontScale = 0.8    # Large enough to read
+        options.prepareMolsBeforeDrawing = True
 
-    SimilarityMaps.GetSimilarityMapFromWeights(
-        mol, 
-        norm_weights, 
-        drawer, 
-        colorMap=cmap, 
-        sigma=sig, 
-        contourLines=contours,
-        alpha=0.5 # Darker, more saturated patches
-    )
+    rendered = False
+    if SimilarityMaps is not None:
+        try:
+            SimilarityMaps.GetSimilarityMapFromWeights(
+                mol,
+                norm_weights,
+                draw2d=drawer,
+                colorMap=cmap,
+                sigma=sig,
+                contourLines=contours,
+                alpha=0.5,  # Darker, more saturated patches
+            )
+            rendered = True
+        except TypeError:
+            try:
+                SimilarityMaps.GetSimilarityMapFromWeights(
+                    mol,
+                    norm_weights,
+                    drawer,
+                    colorMap=cmap,
+                    sigma=sig,
+                    contourLines=contours,
+                    alpha=0.5,  # Darker, more saturated patches
+                )
+                rendered = True
+            except Exception:
+                rendered = False
+        except Exception:
+            rendered = False
+
+    if not rendered:
+        prepare = getattr(rdMolDraw2D, "PrepareAndDrawMolecule", None)
+        if callable(prepare):
+            prepare(drawer, mol)
+        else:
+            draw_molecule = getattr(drawer, "DrawMolecule", None)
+            if callable(draw_molecule):
+                draw_molecule(mol)
     
     drawer.FinishDrawing()
     with open(output_path, "wb") as handle:
