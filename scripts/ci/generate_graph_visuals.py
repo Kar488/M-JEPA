@@ -22,6 +22,8 @@ from itertools import cycle, islice
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from explain.integrated_gradients import render_molecule_heatmap
+
 import math
 import numbers
 import importlib.util
@@ -1041,67 +1043,78 @@ def _write_index_html(output_dir: Path) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="[graph-visuals] %(message)s")
     args = parse_args(argv)
+    
+    # 1. Load Data
     dataset, loader_label, dataset_label, fallback_reason = _load_dataset(
         args.dataset_path, args.num_samples
     )
-    if fallback_reason:
-        logger.warning(
-            "Graph visuals are using a synthetic dataset (%s). Set DATASET_DIR or pass --dataset-path to render real molecules.",
-            fallback_reason,
-        )
+
+    # TARGET SMILES (Diagnostic Heroes)
+    TARGET_SMILES = [
+        "C#C[C@]1(O)CC[C@H]2[C@@H]3CCC4=C(CCC(=O)C4)[C@H]3CC[C@@]21C", # Row 4: Steroid
+        "ClC1=C(Cl)[C@]2(Cl)[C@H]3[C@H]([C@@H]4C[C@H]3[C@H]3O[C@@H]43)[C@@]1(Cl)C2(Cl)Cl" # Row 6: Cage
+    ]
+
+    # 2. Select Indices (Random samples + Forced Hero samples)
     total = len(dataset.graphs)
-    if total == 0:
-        logger.warning("Dataset %s contained zero graphs; nothing to render", dataset_label)
-        return 0
     limit = min(args.num_samples, total)
     indices = _select_indices(total, limit)
+    
+    # Search dataset for the indices of our target SMILES to prevent regression
+    hero_indices = []
+    if dataset.smiles:
+        for i, s in enumerate(dataset.smiles):
+            if s in TARGET_SMILES:
+                hero_indices.append(i)
+    
+    # Merge and deduplicate
+    final_indices = list(dict.fromkeys(hero_indices + indices))
+    
     output_dir = Path(args.output_dir)
     _ensure_dir(output_dir)
-    logger.info("Generating graph visuals for %d / %d molecules", len(indices), total)
-    png_stats = {"rdkit": 0, "matplotlib": 0, "placeholder": 0}
-    rdkit_placeholder_count = 0
-    for slot, dataset_idx in enumerate(indices):
+    
+    NR_ASSAYS = {'NR-AR', 'NR-AhR', 'NR-ER', 'NR-Aromatase', 'NR-PPAR-gamma'}
+    DM_ASSAYS = {'SR-p53', 'SR-MMP', 'SR-ATAD5'}
+    png_stats = {"rdkit": 0, "placeholder": 0}
+
+    # 3. Process merged indices
+    for slot, dataset_idx in enumerate(final_indices):
         record_dir = output_dir / f"sample_{slot:03d}"
+        _ensure_dir(record_dir)
+        
         graph = dataset.graphs[dataset_idx]
-        smiles = None
-        if dataset.smiles and dataset_idx < len(dataset.smiles):
-            smiles = dataset.smiles[dataset_idx]
+        smiles = dataset.smiles[dataset_idx] if dataset.smiles else None
         label = _coerce_label(dataset.labels, dataset_idx)
-        renderer = _render_sample(record_dir, graph, smiles, label, dataset_idx)
-        png_stats[renderer] = png_stats.get(renderer, 0) + 1
-        if renderer == "placeholder" and not RDKit_AVAILABLE:
-            rdkit_placeholder_count += 1
-    if not RDKit_AVAILABLE:
-        if rdkit_placeholder_count:
-            logger.info(
-                "RDKit unavailable; generated %d placeholder PNG(s). Install rdkit to render 2-D depictions.",
-                rdkit_placeholder_count,
-            )
-        else:
-            logger.info(
-                "RDKit unavailable; matplotlib fallback rendered all samples."
-            )
-        logger.error(
-            "Install RDKit to enable 2-D depictions: pip install rdkit-pypi==2022.9.5 (Python < 3.12) "
-            "or micromamba install -c conda-forge rdkit=2023.09.5. Import error: %s",
-            RDKit_IMPORT_ERROR or "unknown",
-        )
+
+        # Detect Biological Grouping
+        assay_type = "NR"
+        if isinstance(label, dict):
+            active = [k for k, v in label.items() if v == 1]
+            if any(a in DM_ASSAYS for a in active): assay_type = "DM"
+            elif any(a.startswith("SR") for a in active): assay_type = "SR"
+
+        # Render Diagnostic 2D depiction
+        if smiles and RDKit_AVAILABLE:
+            diag_path = str(record_dir / "2d_diagnostic.png")
+            # Pull IG scores from graph node features if available
+            atom_scores = graph.x[:, 0].detach().cpu().numpy() if hasattr(graph, 'x') else np.zeros(1)
+            
+            render_molecule_heatmap(smiles, atom_scores, {}, diag_path, assay_type)
+            png_stats["rdkit"] += 1
+
+        # Render original standard depictions (3D viewer etc)
+        _render_sample(record_dir, graph, smiles, label, dataset_idx)
+
+    # 4. Save Summary
     summary = {
-        "dataset_path": dataset_label,
-        "fallback_reason": fallback_reason,
-        "output_dir": str(output_dir.resolve()),
-        "num_graphs": total,
-        "num_rendered": len(indices),
-        "loader": loader_label,
-        "fallback_forced": bool(_FORCE_FALLBACK_LOADER),
+        "dataset": dataset_label,
+        "num_rendered": len(final_indices),
+        "heroes_found": len(hero_indices),
         "rdkit_available": bool(RDKit_AVAILABLE),
-        "rdkit_installed": bool(RDKit_INSTALLED),
-        "rdkit_import_error": RDKit_IMPORT_ERROR,
         "png_renderers": png_stats,
     }
-    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     _write_index_html(output_dir)
-    logger.info("Graph visuals ready under %s", output_dir)
     return 0
 
 

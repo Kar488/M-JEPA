@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 from types import SimpleNamespace
+from explain.integrated_gradients import render_molecule_heatmap
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -240,32 +241,28 @@ def compute_motif_deltas(
 
 
 def draw_motif_heatmap(
-    smiles: Optional[str],
+    smiles: str,
     motif_scores: Mapping[str, float],
-    motif_map: Mapping[str, Iterable[int]],
+    motif_map: Mapping[str, List[int]],
     output_path: str,
-) -> str:
-    """Render motif contributions onto a molecular heatmap."""
+    assay_type: str = "NR"
+):
+    """Maps motif scores back to atoms to generate the 'pretty' diagnostic heatmap."""
+    from rdkit import Chem
+    mol = Chem.MolFromSmiles(smiles)
+    if not mol: return
 
-    num_atoms = _infer_num_atoms(motif_map) if motif_map else 0
-    motifs = _ensure_motif_map(motif_map, num_atoms)
-    if not motif_scores:
-        motif_scores = {_DEF_MOTIF_NAME: 0.0}
+    num_atoms = mol.GetNumAtoms()
+    atom_weights = np.zeros(num_atoms)
 
-    atom_scores: Dict[int, float] = {}
-    for name, atoms in motifs.items():
-        score = float(motif_scores.get(name, 0.0))
-        for atom_idx in atoms:
-            atom_scores[atom_idx] = atom_scores.get(atom_idx, 0.0) + score
+    for motif_name, score in motif_scores.items():
+        atom_indices = motif_map.get(motif_name, [])
+        for idx in atom_indices:
+            if idx < num_atoms:
+                atom_weights[idx] += score
 
-    max_atom = max(atom_scores.keys()) + 1 if atom_scores else 0
-    atom_array = [0.0] * max_atom
-    for idx, score in atom_scores.items():
-        if 0 <= idx < max_atom:
-            atom_array[idx] = score
-
-    return render_molecule_heatmap(smiles, atom_array, {}, output_path)
-
+    # Delegate to the main renderer to get Gaussian patches and Indices
+    render_molecule_heatmap(smiles, atom_weights, {}, output_path, assay_type=assay_type)
 
 def plot_motif_deltas(
     task_names: Sequence[str],

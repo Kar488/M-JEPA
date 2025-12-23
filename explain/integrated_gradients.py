@@ -22,10 +22,11 @@ except Exception as e:  # pragma: no cover - optional dependency
 
 try:  # pragma: no cover - optional dependency
     from rdkit.Chem import Draw
-    from rdkit.Chem.Draw import rdMolDraw2D
+    from rdkit.Chem.Draw import rdMolDraw2D, SimilarityMaps
 except Exception as e:  # pragma: no cover - optional dependency
     Draw = None  # type: ignore[assignment]
     rdMolDraw2D = None  # type: ignore[assignment]
+    SimilarityMaps = None
     print("[RDKit Draw import failed]", repr(e))
 
 
@@ -277,56 +278,70 @@ def _score_to_color(score: float, positive: bool) -> Tuple[float, float, float]:
 
 
 def render_molecule_heatmap(
-    smiles: Optional[str],
-    atom_scores: Sequence[float],
-    bond_scores: Mapping[Tuple[int, int], float],
+    smiles: str,
+    atom_scores: np.ndarray,
+    bond_scores: Dict[Tuple[int, int], float],
     output_path: str,
+    assay_type: str = "NR"
 ) -> str:
-    """Render a RDKit heatmap or fallback placeholder for the molecule."""
-
-    directory = os.path.dirname(output_path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    if Chem is None or Draw is None or rdMolDraw2D is None or not smiles:
+    """Renders a Gaussian heatmap with normalized dark patches and atom indices."""
+    if Chem is None or rdMolDraw2D is None:
         with open(output_path, "wb") as handle:
             handle.write(_PLACEHOLDER_PNG)
         return output_path
 
-    try:  # pragma: no cover - relies on rdkit availability
-        mol = Chem.MolFromSmiles(smiles)
-    except Exception:
-        mol = None
+    mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         with open(output_path, "wb") as handle:
             handle.write(_PLACEHOLDER_PNG)
         return output_path
 
-    try:  # pragma: no cover - depends on rdkit
-        max_atoms = int(mol.GetNumAtoms())
-    except Exception:
-        max_atoms = len(atom_scores)
-    highlight_atoms = {idx: _score_to_color(score, score >= 0) for idx, score in enumerate(atom_scores[:max_atoms])}
-    bond_colors = {}
+    # --- 1. Weight Processing ---
+    # Combine atom and bond scores for a unified Gaussian surface
+    num_atoms = mol.GetNumAtoms()
+    weights = np.zeros(num_atoms)
+    for i in range(min(len(atom_scores), num_atoms)):
+        weights[i] = atom_scores[i]
+    
     for (i, j), score in bond_scores.items():
-        if i < 0 or j < 0 or i >= max_atoms or j >= max_atoms:
-            continue
-        try:  # pragma: no cover - depends on rdkit
-            bond = mol.GetBondBetweenAtoms(i, j)
-        except Exception:
-            bond = None
-        if bond is None:
-            continue
-        bond_colors[bond.GetIdx()] = _score_to_color(score, score >= 0)
+        if i < num_atoms and j < num_atoms:
+            weights[i] += score * 0.5
+            weights[j] += score * 0.5
 
-    drawer = rdMolDraw2D.MolDraw2DCairo(400, 300)
-    rdMolDraw2D.PrepareAndDrawMolecule(
-        drawer,
-        mol,
-        highlightAtoms=list(highlight_atoms.keys()),
-        highlightAtomColors=highlight_atoms,
-        highlightBonds=list(bond_colors.keys()),
-        highlightBondColors=bond_colors,
+    # NORMALIZATION: Scale weights so the max absolute value is 1.0.
+    # This ensures "dark patches" appear at the most important atoms (e.g. 2, 11, 21).
+    abs_max = np.max(np.abs(weights)) + 1e-9
+    norm_weights = (weights / abs_max).tolist()
+
+    # --- 2. Style Configuration ---
+    # Nuclear Receptor = Coherent, Stress = Diffuse, Damage = Fragmented
+    if assay_type == "NR":
+        cmap = "RdYlGn"
+        sig, contours = 0.5, 10
+    elif assay_type == "SR":
+        cmap = "YlOrRd"
+        sig, contours = 0.3, 15
+    else: # Damage Mechanism (DM)
+        cmap = "Reds"
+        sig, contours = 0.15, 20
+
+    # --- 3. High-Resolution Drawing ---
+    drawer = rdMolDraw2D.MolDraw2DCairo(1000, 1000)
+    opts = drawer.drawOptions()
+    opts.addAtomIndices = True        # CRITICAL: Enables diagnostic mapping
+    opts.annotationFontScale = 0.8    # Large enough to read
+    opts.prepareMolsBeforeDrawing = True
+
+    SimilarityMaps.GetSimilarityMapFromWeights(
+        mol, 
+        norm_weights, 
+        drawer, 
+        colorMap=cmap, 
+        sigma=sig, 
+        contourLines=contours,
+        alpha=0.5 # Darker, more saturated patches
     )
+    
     drawer.FinishDrawing()
     with open(output_path, "wb") as handle:
         handle.write(drawer.GetDrawingText())
