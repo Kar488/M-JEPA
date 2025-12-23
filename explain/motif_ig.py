@@ -306,6 +306,16 @@ def save_motif_artifacts(
 
     # FIX B: Clean and align motif map before using it
     num_atoms = _infer_num_atoms(motif_map) if motif_map else 0
+    if num_atoms == 0 and smiles and _has_rdkit:
+        try:  # pragma: no cover - depends on rdkit
+            mol = Chem.MolFromSmiles(smiles)
+        except Exception:
+            mol = None
+        if mol is not None:
+            try:  # pragma: no cover - depends on rdkit
+                num_atoms = int(mol.GetNumAtoms())
+            except Exception:
+                num_atoms = 0
     motifs_clean = _ensure_motif_map(motif_map, num_atoms)
 
     # Ensure motif_scores contains all motif keys
