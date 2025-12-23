@@ -22,7 +22,7 @@ pretrain:
   mask_ratio: 0.15      # Fraction of nodes to mask for JEPA
   probe_dataset: data/tox21/data.csv  # Labelled subset for monitoring
   probe_label_col: NR-AR  # Label column for CSV probe datasets
-  probe_interval: 5     # Run the probe every N epochs (0 disables)
+  probe_interval: 1     # Run the probe every N epochs (0 disables)
   augmentations:
     rotate: false       # Randomly rotate atomic coordinates
     mask_angle: false   # Mask bond angles
