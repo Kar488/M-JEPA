@@ -248,12 +248,22 @@ def draw_motif_heatmap(
     assay_type: str = "NR"
 ):
     """Maps motif scores back to atoms to generate the 'pretty' diagnostic heatmap."""
-    from rdkit import Chem
-    mol = Chem.MolFromSmiles(smiles)
-    if not mol: return
+    num_atoms = 0
+    mol = None
+    if _has_rdkit and smiles:
+        try:  # pragma: no cover - depends on rdkit
+            mol = Chem.MolFromSmiles(smiles)
+        except Exception:
+            mol = None
+    if mol is not None:
+        try:  # pragma: no cover - depends on rdkit
+            num_atoms = int(mol.GetNumAtoms())
+        except Exception:
+            num_atoms = 0
+    if num_atoms <= 0:
+        num_atoms = _infer_num_atoms(motif_map)
 
-    num_atoms = mol.GetNumAtoms()
-    atom_weights = np.zeros(num_atoms)
+    atom_weights = np.zeros(num_atoms, dtype=np.float32)
 
     for motif_name, score in motif_scores.items():
         atom_indices = motif_map.get(motif_name, [])
@@ -263,6 +273,7 @@ def draw_motif_heatmap(
 
     # Delegate to the main renderer to get Gaussian patches and Indices
     render_molecule_heatmap(smiles, atom_weights, {}, output_path, assay_type=assay_type)
+    return output_path
 
 def plot_motif_deltas(
     task_names: Sequence[str],
