@@ -2705,14 +2705,8 @@ _raw = os.environ.get("BESTCFG_SKIP", "")
 # accept comma- or space-separated values and normalize
 skip = {s.strip() for s in _raw.replace(",", " ").split() if s.strip()}
 
-# Stage-specific guardrails: preserve critical winner knobs even if defaults
-# or environment skip lists would drop them.
-force_keep = set()
-if stage == "pretrain":
-    force_keep.add("add_3d")
-if force_keep:
-    keep.update(force_keep)
-    skip.difference_update(force_keep)
+# Stage-specific guardrails: capture critical winner knobs for later restoration.
+winner_add_3d = cfg.get("add_3d") if stage == "pretrain" else None
 
 sorted_skip = sorted(skip)
 joined_skip = ", ".join(sorted_skip)
@@ -2754,6 +2748,12 @@ for key in list(cfg.keys()):
         continue
     if key in keep:
         forced_keep.append(key)
+
+# If pretrain's winner config specified add_3d, reapply it even if filtering
+# removed it, so the pretrain stage preserves the sweep winner setting.
+if stage == "pretrain" and winner_add_3d is not None and "add_3d" not in cfg:
+    cfg["add_3d"] = winner_add_3d
+    forced_keep.append("add_3d")
 
 _app_dir = os.environ.get("APP_DIR")
 if _app_dir and _app_dir not in sys.path:
