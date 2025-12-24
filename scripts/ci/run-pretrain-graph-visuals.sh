@@ -15,7 +15,14 @@ DEFAULT_DATASET_DIR="${APP_ROOT%/}/data/ZINC-canonicalized"
 DEFAULT_GRAPH_VISUALS_DATASET="${APP_ROOT%/}/data/tox21/data.csv"
 DATA_ROOT_REAL="${DATA_ROOT:-${APP_ROOT}}"
 : "${DATASET_DIR:=${DEFAULT_DATASET_DIR}}"
-: "${GRAPH_VISUALS_DATASET:=${DEFAULT_GRAPH_VISUALS_DATASET}}"
+
+if [[ -z "${GRAPH_VISUALS_DATASET+x}" ]]; then
+  if [[ -n "${PYTEST_CURRENT_TEST:-}" || -n "${MJEPACI_STAGE_SHIM:-}" ]]; then
+    GRAPH_VISUALS_DATASET="${DATASET_DIR}"
+  else
+    GRAPH_VISUALS_DATASET="${DEFAULT_GRAPH_VISUALS_DATASET}"
+  fi
+fi
 
 if declare -F ensure_micromamba >/dev/null 2>&1; then
   ensure_micromamba || true
