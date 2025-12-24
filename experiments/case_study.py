@@ -24,10 +24,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import torch
+from torch.utils.data import DataLoader
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 
@@ -79,6 +81,8 @@ except Exception:  # pragma: no cover - fallback when factory is unavailable
     _IMPORTED_BUILD_ENCODER = None  # type: ignore[assignment]
 from utils.seed import set_seed
 from utils.metrics import expected_calibration_error
+from utils.dataloader import normalize_prefetch_factor
+from training.supervised import _GraphBatchCollator
 
 import inspect
 
@@ -787,6 +791,10 @@ def _predict_logits_probs_in_chunks(
     edge_dim: int,
     batch_size: int = 256,
     diag_hook: Optional[Callable[[int, int], None]] = None,
+    num_workers: Optional[int] = None,
+    pin_memory: bool = True,
+    persistent_workers: bool = True,
+    prefetch_factor: Optional[int] = 4,
 ):
     _maybe_set_eval(encoder)
     _maybe_set_eval(head)
@@ -795,16 +803,95 @@ def _predict_logits_probs_in_chunks(
     probs_list: List[torch.Tensor] = []
     batch_count = 0
     molecule_count = 0
+
+    def _resolve_worker_count(value: Optional[int]) -> int:
+        if value is None:
+            return 0
+        if value <= 0:
+            cpu_budget = max(1, (os.cpu_count() or 2) - 1)
+            return max(1, cpu_budget)
+        return int(value)
+
+    def _batch_to_graph(
+        batch_x: torch.Tensor,
+        batch_adj: torch.Tensor,
+        batch_ptr: torch.Tensor,
+        extras: Dict[str, Any],
+    ) -> SimpleNamespace:
+        batch_x = batch_x.to(device_t)
+        batch_adj = batch_adj.to(device_t)
+        batch_ptr = batch_ptr.to(device_t)
+
+        def _to_device_tensor(value: Any, dtype: Optional[torch.dtype] = None):
+            if value is None:
+                return None
+            if torch.is_tensor(value):
+                tensor = value.to(device_t)
+                return tensor.to(dtype) if dtype is not None else tensor
+            return torch.as_tensor(value, device=device_t, dtype=dtype)
+
+        edge_index = _to_device_tensor(extras.get("edge_index"), dtype=torch.long)
+        edge_attr = _to_device_tensor(extras.get("edge_attr"), dtype=torch.float32)
+        pos = _to_device_tensor(extras.get("pos"), dtype=torch.float32)
+
+        if batch_ptr.numel() >= 2:
+            sizes = (batch_ptr[1:] - batch_ptr[:-1]).to(torch.long)
+            batch = torch.repeat_interleave(
+                torch.arange(sizes.numel(), device=device_t), sizes
+            )
+        else:
+            batch = torch.empty((0,), device=device_t, dtype=torch.long)
+
+        return SimpleNamespace(
+            x=batch_x,
+            adj=batch_adj,
+            edge_index=edge_index,
+            edge_attr=edge_attr,
+            pos=pos,
+            batch=batch,
+            ptr=batch_ptr,
+        )
+
+    def _emit_diag(batch_total: int, molecule_total: int) -> None:
+        if diag_hook is not None:
+            try:
+                diag_hook(batch_total, molecule_total)
+            except Exception:
+                logger.debug("Diagnostics hook failed", exc_info=True)
+
     with torch.no_grad():
-        for start in range(0, len(indices), batch_size):
-            chunk = indices[start : start + batch_size]
-            if not chunk:
-                continue
-            graph_embs: List[torch.Tensor] = []
-            for idx in chunk:
-                graph = dataset.graphs[idx]
-                graph = ensure_edge_attr(graph, edge_dim, device=device)
-                node_emb = _encode_graph_flex(encoder, graph, device_t)
+        use_loader = bool(indices)
+        if use_loader:
+            worker_count = _resolve_worker_count(num_workers)
+            pin_memory_enabled = bool(pin_memory) and device_t.type == "cuda"
+            persistent_enabled = bool(persistent_workers) and worker_count > 0
+            prefetch_value, bad_prefetch = normalize_prefetch_factor(prefetch_factor)
+            if bad_prefetch is not None:
+                logger.debug(
+                    "Adjusted prefetch_factor from %s to %s for tox21 eval",
+                    bad_prefetch,
+                    prefetch_value,
+                )
+            loader_kwargs = {
+                "batch_size": max(1, int(batch_size)),
+                "shuffle": False,
+                "collate_fn": _GraphBatchCollator(dataset, "classification"),
+                "num_workers": worker_count,
+                "pin_memory": pin_memory_enabled,
+                "persistent_workers": persistent_enabled,
+            }
+            if worker_count > 0 and prefetch_value is not None:
+                loader_kwargs["prefetch_factor"] = prefetch_value
+
+            loader = DataLoader(list(indices), **loader_kwargs)
+            for batch in loader:
+                batch_x, batch_adj, batch_ptr, _, extras = batch
+                extras_dict = dict(extras) if isinstance(extras, Mapping) else {}
+                batch_graph = _batch_to_graph(
+                    batch_x, batch_adj, batch_ptr, extras_dict
+                )
+
+                node_emb = _encode_graph_flex(encoder, batch_graph, device_t)
                 if isinstance(node_emb, tuple):
                     node_emb = node_emb[0]
                 if not isinstance(node_emb, torch.Tensor):
@@ -812,36 +899,72 @@ def _predict_logits_probs_in_chunks(
                 else:
                     node_emb = node_emb.to(device_t)
                 node_emb = torch.nan_to_num(node_emb, nan=0.0, posinf=0.0, neginf=0.0)
-                graph_emb = _pool_graph_emb(node_emb, graph)
+                graph_emb = _pool_graph_emb(node_emb, batch_graph)
                 if not isinstance(graph_emb, torch.Tensor):
                     graph_emb = torch.as_tensor(graph_emb, dtype=torch.float32, device=device_t)
                 else:
                     graph_emb = graph_emb.to(device_t)
-                if graph_emb.ndim == 0:
-                    graph_emb = graph_emb.reshape(1, 1)
-                elif graph_emb.ndim == 1:
+                if graph_emb.ndim == 1:
                     graph_emb = graph_emb.unsqueeze(0)
-                graph_embs.append(graph_emb)
-            if not graph_embs:
-                continue
-            batch = torch.cat(graph_embs, dim=0).to(device_t)
-            logits = _forward_head(head, batch)
-            logits = torch.nan_to_num(logits, nan=0.0, posinf=1e6, neginf=-1e6)
-            if logits.ndim == 1 or logits.shape[-1] == 1:
-                probs = torch.sigmoid(logits)
-            else:
-                probs = torch.softmax(logits, dim=-1)
-            probs = torch.clamp(probs, 1e-6, 1.0 - 1e-6)
-            probs = torch.nan_to_num(probs, nan=0.5, posinf=1.0, neginf=0.0)
-            logits_list.append(logits.detach().cpu())
-            probs_list.append(probs.detach().cpu())
-            batch_count += 1
-            molecule_count += len(chunk)
-    if diag_hook is not None:
-        try:
-            diag_hook(batch_count, molecule_count)
-        except Exception:
-            logger.debug("Diagnostics hook failed", exc_info=True)
+
+                logits = _forward_head(head, graph_emb)
+                logits = torch.nan_to_num(logits, nan=0.0, posinf=1e6, neginf=-1e6)
+                if logits.ndim == 1 or logits.shape[-1] == 1:
+                    probs = torch.sigmoid(logits)
+                else:
+                    probs = torch.softmax(logits, dim=-1)
+                probs = torch.clamp(probs, 1e-6, 1.0 - 1e-6)
+                probs = torch.nan_to_num(probs, nan=0.5, posinf=1.0, neginf=0.0)
+                logits_list.append(logits.detach().cpu())
+                probs_list.append(probs.detach().cpu())
+                batch_count += 1
+                batch_size_value = int(graph_emb.shape[0]) if graph_emb.ndim > 0 else 0
+                molecule_count += batch_size_value
+            _emit_diag(batch_count, molecule_count)
+        else:
+            _emit_diag(batch_count, molecule_count)
+            for start in range(0, len(indices), batch_size):
+                chunk = indices[start : start + batch_size]
+                if not chunk:
+                    continue
+                graph_embs: List[torch.Tensor] = []
+                for idx in chunk:
+                    graph = dataset.graphs[idx]
+                    graph = ensure_edge_attr(graph, edge_dim, device=device)
+                    node_emb = _encode_graph_flex(encoder, graph, device_t)
+                    if isinstance(node_emb, tuple):
+                        node_emb = node_emb[0]
+                    if not isinstance(node_emb, torch.Tensor):
+                        node_emb = torch.as_tensor(node_emb, dtype=torch.float32, device=device_t)
+                    else:
+                        node_emb = node_emb.to(device_t)
+                    node_emb = torch.nan_to_num(node_emb, nan=0.0, posinf=0.0, neginf=0.0)
+                    graph_emb = _pool_graph_emb(node_emb, graph)
+                    if not isinstance(graph_emb, torch.Tensor):
+                        graph_emb = torch.as_tensor(graph_emb, dtype=torch.float32, device=device_t)
+                    else:
+                        graph_emb = graph_emb.to(device_t)
+                    if graph_emb.ndim == 0:
+                        graph_emb = graph_emb.reshape(1, 1)
+                    elif graph_emb.ndim == 1:
+                        graph_emb = graph_emb.unsqueeze(0)
+                    graph_embs.append(graph_emb)
+                if not graph_embs:
+                    continue
+                batch = torch.cat(graph_embs, dim=0).to(device_t)
+                logits = _forward_head(head, batch)
+                logits = torch.nan_to_num(logits, nan=0.0, posinf=1e6, neginf=-1e6)
+                if logits.ndim == 1 or logits.shape[-1] == 1:
+                    probs = torch.sigmoid(logits)
+                else:
+                    probs = torch.softmax(logits, dim=-1)
+                probs = torch.clamp(probs, 1e-6, 1.0 - 1e-6)
+                probs = torch.nan_to_num(probs, nan=0.5, posinf=1.0, neginf=0.0)
+                logits_list.append(logits.detach().cpu())
+                probs_list.append(probs.detach().cpu())
+                batch_count += 1
+                molecule_count += len(chunk)
+            _emit_diag(batch_count, molecule_count)
     if not logits_list:
         return torch.empty((0, 1)), torch.empty((0, 1))
     return torch.cat(logits_list, dim=0), torch.cat(probs_list, dim=0)
@@ -862,6 +985,10 @@ def _evaluate_case_study(
     seed: int,
     baseline_embeddings: Optional[dict[str, str]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
+    num_workers: Optional[int] = None,
+    pin_memory: bool = True,
+    persistent_workers: bool = True,
+    prefetch_factor: Optional[int] = 4,
 ):
     val_idx_arr = np.asarray(val_idx, dtype=int)
     test_idx_arr = np.asarray(test_idx, dtype=int)
@@ -942,6 +1069,10 @@ def _evaluate_case_study(
                 device,
                 edge_dim,
                 diag_hook=hook,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+                persistent_workers=persistent_workers,
+                prefetch_factor=prefetch_factor,
             )
             logits_members.append(logits)
             probs_members.append(probs)
@@ -2841,6 +2972,10 @@ def run_tox21_case_study(
         seed=seed,
         baseline_embeddings=baseline_embeddings,
         diagnostics=diagnostics if ci_diag else None,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
     )
 
     diagnostics["calibrator"] = calibrator_info
@@ -2941,4 +3076,3 @@ if __name__ == "__main__":
             logger.info("Mean toxicity after %s exclusion: %s", name, val)
     else:
         logger.error("Tox21 sample CSV not found: %s", csv)
-
