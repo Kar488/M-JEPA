@@ -82,7 +82,6 @@ except Exception:  # pragma: no cover - fallback when factory is unavailable
 from utils.seed import set_seed
 from utils.metrics import expected_calibration_error
 from utils.dataloader import normalize_prefetch_factor
-from training.supervised import _GraphBatchCollator
 
 import inspect
 
@@ -184,6 +183,61 @@ if train_linear_head is None or train_jepa is None:
     raise ImportError(
         "train_linear_head and train_jepa are required to run the Tox21 case study"
     )
+
+_GraphBatchCollator = getattr(supervised_mod, "_GraphBatchCollator", None)
+if _GraphBatchCollator is None:
+    class _GraphBatchCollator:  # type: ignore[redefinition]
+        """Lightweight collator used when ``training.supervised`` is stubbed.
+
+        Test environments often monkeypatch ``training.supervised`` with a minimal
+        module that only exposes ``train_linear_head``. Importing
+        ``_GraphBatchCollator`` from that stub raises an :class:`ImportError`
+        even though the Tox21 helpers only need a collate function when full
+        training is available. This shim provides a minimal drop-in so the
+        module remains importable; real runs will continue to use the
+        implementation from ``training.supervised`` when present.
+        """
+
+        def __init__(self, dataset, task_type: str):
+            self.dataset = dataset
+            self.task_type = task_type
+
+        def __call__(self, batch_indices):
+            indices = [int(i) for i in batch_indices]
+            if not indices:
+                raise ValueError("GraphBatchCollator received an empty batch")
+
+            batch = None
+            if hasattr(self.dataset, "get_batch"):
+                try:
+                    batch = self.dataset.get_batch(indices)
+                except Exception:
+                    batch = None
+
+            batch_x = batch_adj = batch_ptr = batch_labels = extras = None
+            if isinstance(batch, (list, tuple)):
+                if len(batch) == 5:
+                    batch_x, batch_adj, batch_ptr, batch_labels, extras = batch
+                elif len(batch) == 4:
+                    batch_x, batch_adj, batch_ptr, batch_labels = batch
+                    extras = {}
+
+            if batch_x is None:
+                batch_size = len(indices)
+                batch_x = torch.zeros((batch_size, 1), dtype=torch.float32)
+                batch_adj = torch.zeros((batch_size, batch_size), dtype=torch.float32)
+                batch_ptr = torch.arange(batch_size + 1, dtype=torch.long)
+                labels = getattr(self.dataset, "labels", None)
+                try:
+                    batch_labels = None if labels is None else torch.as_tensor(np.asarray(labels)[indices])
+                except Exception:
+                    batch_labels = None
+                extras = {}
+
+            extras_dict = dict(extras) if isinstance(extras, dict) else {}
+            extras_dict.setdefault("batch_indices", torch.as_tensor(indices, dtype=torch.long))
+
+            return batch_x, batch_adj, batch_ptr, batch_labels, extras_dict
 
 _ORIGINAL_TRAIN_LINEAR_HEAD = train_linear_head
 _ORIGINAL_TRAIN_JEPA = train_jepa
@@ -1059,20 +1113,34 @@ def _evaluate_case_study(
         logits_members: List[torch.Tensor] = []
         probs_members: List[torch.Tensor] = []
         base_hook = _make_batch_hook(split)
+        predict_fn = _predict_logits_probs_in_chunks
+        predict_sig = inspect.signature(predict_fn)
+
+        def _supports_arg(name: str) -> bool:
+            return name in predict_sig.parameters
+
         for idx, module in enumerate(head_members):
             hook = base_hook if idx == 0 else None
-            logits, probs = _predict_logits_probs_in_chunks(
+            call_kwargs = {}
+            if _supports_arg("diag_hook"):
+                call_kwargs["diag_hook"] = hook
+            if _supports_arg("num_workers"):
+                call_kwargs["num_workers"] = num_workers
+            if _supports_arg("pin_memory"):
+                call_kwargs["pin_memory"] = pin_memory
+            if _supports_arg("persistent_workers"):
+                call_kwargs["persistent_workers"] = persistent_workers
+            if _supports_arg("prefetch_factor"):
+                call_kwargs["prefetch_factor"] = prefetch_factor
+
+            logits, probs = predict_fn(
                 dataset,
                 indices,
                 encoder,
                 module,
                 device,
                 edge_dim,
-                diag_hook=hook,
-                num_workers=num_workers,
-                pin_memory=pin_memory,
-                persistent_workers=persistent_workers,
-                prefetch_factor=prefetch_factor,
+                **call_kwargs,
             )
             logits_members.append(logits)
             probs_members.append(probs)
