@@ -12,8 +12,10 @@ fi
 
 APP_ROOT="${APP_DIR:-/srv/mjepa}"
 DEFAULT_DATASET_DIR="${APP_ROOT%/}/data/ZINC-canonicalized"
+DEFAULT_GRAPH_VISUALS_DATASET="${APP_ROOT%/}/data/tox21/data.csv"
 DATA_ROOT_REAL="${DATA_ROOT:-${APP_ROOT}}"
 : "${DATASET_DIR:=${DEFAULT_DATASET_DIR}}"
+: "${GRAPH_VISUALS_DATASET:=${DEFAULT_GRAPH_VISUALS_DATASET}}"
 
 if declare -F ensure_micromamba >/dev/null 2>&1; then
   ensure_micromamba || true
@@ -59,18 +61,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "${DATASET_ARG}" ]]; then
-  DATASET_ARG="${DATASET_DIR:-}"
+  DATASET_ARG="${GRAPH_VISUALS_DATASET:-${DATASET_DIR:-}}"
   for cache_hint in "${DATA_ROOT_REAL%/}/cache/graphs_10m" "${DATA_ROOT_REAL%/}/cache/graphs_250k"; do
     if [[ -n "${cache_hint}" && "${DATASET_ARG}" == "${cache_hint}" ]]; then
-      echo "[graph-visuals] info: DATASET_DIR points to a cache (${DATASET_ARG}); defaulting to dataset corpus ${DEFAULT_DATASET_DIR}" >&2
-      DATASET_ARG="${DEFAULT_DATASET_DIR}"
+      echo "[graph-visuals] info: graph visuals dataset points to a cache (${DATASET_ARG}); defaulting to dataset corpus ${DEFAULT_GRAPH_VISUALS_DATASET}" >&2
+      DATASET_ARG="${DEFAULT_GRAPH_VISUALS_DATASET}"
       break
     fi
   done
 fi
 
 if [[ -z "${DATASET_ARG}" ]]; then
-  DATASET_ARG="${DEFAULT_DATASET_DIR}"
+  DATASET_ARG="${DEFAULT_GRAPH_VISUALS_DATASET}"
 fi
 
 if [[ -z "${OUTPUT_ARG}" && -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
