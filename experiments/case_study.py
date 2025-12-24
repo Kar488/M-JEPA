@@ -152,30 +152,32 @@ def _sanitize_binary_labels(df: pd.DataFrame, label_col: str) -> tuple[pd.DataFr
     return filtered, drop_stats
 
 
-# ``training.supervised`` and ``training.unsupervised`` are heavy modules that are
-# frequently monkeypatched in tests.  ``run_tox21_case_study`` only needs
+# ``training.supervised`` and ``training.unsupervised`` are heavy modules that
+# are frequently monkeypatched in tests.  ``run_tox21_case_study`` only needs
 # ``train_linear_head`` and ``train_jepa`` so import them defensively to honour
-# test stubs.
+# test stubs and environments without optional plotting dependencies.
+def _make_training_stub(reason: str) -> tuple[types.SimpleNamespace, types.SimpleNamespace]:
+    def _missing_train_linear_head(*_, **__):
+        raise ImportError(f"train_linear_head unavailable: {reason}")
+
+    def _missing_train_jepa(*_, **__):
+        raise ImportError(f"train_jepa unavailable: {reason}")
+
+    supervised_stub = types.SimpleNamespace(train_linear_head=_missing_train_linear_head)
+    unsupervised_stub = types.SimpleNamespace(train_jepa=_missing_train_jepa)
+    return supervised_stub, unsupervised_stub
+
+
 try:  # pragma: no cover - exercised mainly in tests
-    try:
-        supervised_mod = importlib.import_module("training.supervised")
-        unsupervised_mod = importlib.import_module("training.unsupervised")
-    except ModuleNotFoundError as exc:
-        # When the real ``training`` package is unavailable (for instance, when
-        # tests register lightweight stubs directly in ``sys.modules``) we fall
-        # back to a minimal namespace package so ``importlib`` can resolve the
-        # dotted module path.  Creating the stub pre-emptively would shadow the
-        # real package, so only install it after the initial import fails.
-        if exc.name and not exc.name.startswith("training"):
-            raise
-        if "training" not in sys.modules:
-            sys.modules["training"] = types.ModuleType("training")
-        supervised_mod = importlib.import_module("training.supervised")
-        unsupervised_mod = importlib.import_module("training.unsupervised")
+    supervised_mod = sys.modules.get("training.supervised") or importlib.import_module("training.supervised")
+    unsupervised_mod = sys.modules.get("training.unsupervised") or importlib.import_module("training.unsupervised")
+except ModuleNotFoundError as exc:
+    reason = exc.name or "missing dependency"
+    logger.debug("Falling back to training stubs due to missing dependency: %s", reason)
+    supervised_mod, unsupervised_mod = _make_training_stub(reason)
 except Exception as exc:  # pragma: no cover - fail fast if even the stub is missing
-    raise ImportError(
-        "train_linear_head and train_jepa are required to run the Tox21 case study"
-    ) from exc
+    logger.debug("Falling back to training stubs after import error: %s", exc, exc_info=True)
+    supervised_mod, unsupervised_mod = _make_training_stub(str(exc))
 
 train_linear_head = getattr(supervised_mod, "train_linear_head", None)
 train_jepa = getattr(unsupervised_mod, "train_jepa", None)
@@ -215,12 +217,40 @@ if _GraphBatchCollator is None:
                     batch = None
 
             batch_x = batch_adj = batch_ptr = batch_labels = extras = None
+            graphs = getattr(self.dataset, "graphs", None)
             if isinstance(batch, (list, tuple)):
                 if len(batch) == 5:
                     batch_x, batch_adj, batch_ptr, batch_labels, extras = batch
                 elif len(batch) == 4:
                     batch_x, batch_adj, batch_ptr, batch_labels = batch
                     extras = {}
+            elif graphs is not None:
+                xs = []
+                ptr = [0]
+                total_nodes = 0
+                for idx in indices:
+                    try:
+                        g = graphs[idx]
+                    except Exception:
+                        g = None
+                    if g is None or getattr(g, "x", None) is None:
+                        xs.append(torch.zeros((1, 1), dtype=torch.float32))
+                        total_nodes += 1
+                        ptr.append(total_nodes)
+                        continue
+                    x_t = torch.as_tensor(getattr(g, "x"), dtype=torch.float32)
+                    xs.append(x_t)
+                    total_nodes += int(x_t.shape[0])
+                    ptr.append(total_nodes)
+                batch_x = torch.cat(xs, dim=0) if xs else torch.zeros((0, 1), dtype=torch.float32)
+                batch_ptr = torch.as_tensor(ptr, dtype=torch.long)
+                batch_adj = torch.eye(int(batch_x.shape[0]), dtype=torch.float32) if batch_x.numel() else torch.zeros((0, 0), dtype=torch.float32)
+                labels = getattr(self.dataset, "labels", None)
+                try:
+                    batch_labels = None if labels is None else torch.as_tensor(np.asarray(labels)[indices])
+                except Exception:
+                    batch_labels = None
+                extras = {}
 
             if batch_x is None:
                 batch_size = len(indices)
