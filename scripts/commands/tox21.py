@@ -15,6 +15,8 @@ from random import Random
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Mapping
 
+import torch
+
 from . import log_effective_gnn
 
 try:  # pragma: no cover - optional relative import depending on entry point
@@ -75,6 +77,23 @@ _TOX21_FALLBACK_ACTIVE = False
 _FALLBACK_WARNED = False
 
 _CALIBRATION_ECE_WARN = float(os.getenv("TOX21_CALIBRATION_WARN_ECE", "0.12"))
+
+
+def _detect_cuda_devices() -> int:
+    try:
+        if torch.cuda.is_available():
+            return int(torch.cuda.device_count())
+    except Exception:
+        return 0
+    return 0
+
+
+def _resolve_auto_device(device: Optional[str | os.PathLike[str]]) -> str:
+    if device:
+        return resolve_device(device)
+    if _detect_cuda_devices() > 0:
+        return "cuda"
+    return "cpu"
 
 
 def _estimate_class_balance(csv_path: str, tasks: Iterable[str]) -> Dict[str, Dict[str, float]]:
@@ -847,6 +866,9 @@ def _run_tox21_single_task(
 
     freeze_encoder_flag = bool(getattr(args, "freeze_encoder", False))
 
+    device_value = _resolve_auto_device(getattr(args, "device", None))
+    setattr(args, "device", device_value)
+
     devices_val = _coerce_int_like(getattr(args, "devices", None))
     if devices_val is None:
         raw_devices = getattr(args, "devices", None)
@@ -854,8 +876,12 @@ def _run_tox21_single_task(
             devices_val = int(raw_devices) if raw_devices is not None else None
         except Exception:
             devices_val = None
-    if devices_val is None:
-        devices_val = 1
+    if devices_val is None or devices_val <= 0:
+        if str(device_value).lower().startswith("cuda"):
+            detected = _detect_cuda_devices()
+            devices_val = detected if detected > 0 else 1
+        else:
+            devices_val = 1
     setattr(args, "devices", devices_val)
 
     allow_shape_flag = getattr(args, "allow_shape_coercion", None)
@@ -965,7 +991,7 @@ def _run_tox21_single_task(
         "contrastive": getattr(args, "contrastive", False),
         "triage_pct": triage_pct,
         "calibrate": calibrate,
-        "device": resolve_device(getattr(args, "device", "cpu")),
+        "device": device_value,
         "devices": devices_val,
         "num_workers": getattr(args, "num_workers", -1),
         "pin_memory": getattr(args, "pin_memory", True),

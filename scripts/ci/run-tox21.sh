@@ -29,6 +29,16 @@ ci_print_env_diag "$STAGE_BIN"
 
 export EXP_ID EXPERIMENTS_ROOT EXPERIMENT_DIR PRETRAIN_DIR ARTIFACTS_DIR PRETRAIN_ARTIFACTS_DIR
 
+if [[ -z "${TOX21_DEVICES:-}" ]]; then
+  detected_gpus="$(gpu_count)"
+  if [[ -n "$detected_gpus" && "$detected_gpus" =~ ^[0-9]+$ ]] && (( detected_gpus > 0 )); then
+    TOX21_DEVICES="$detected_gpus"
+  else
+    TOX21_DEVICES="1"
+  fi
+  export TOX21_DEVICES
+fi
+
 : "${FINETUNE_PER_TASK_HPARAMS:=${APP_DIR}/scripts/ci/per_task_hparams/tox21_hparams.yaml}"
 export FINETUNE_PER_TASK_HPARAMS
 
