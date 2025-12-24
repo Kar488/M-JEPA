@@ -267,6 +267,157 @@ def test_train_jepa_respects_max_batches(stub_data_modules):
     assert len(losses) == 1
 
 
+def test_train_jepa_runs_probe_interval(stub_data_modules, monkeypatch):
+    from training.unsupervised import train_jepa
+
+    graphs = [make_graph(), make_graph()]
+    dataset = GraphDataset(graphs, labels=[0, 1])
+
+    class DummyEncoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.eye(2))
+            self.bias = torch.nn.Parameter(torch.zeros(2))
+
+        def forward(self, x, adj, edge_attr=None):
+            return x @ self.weight + self.bias
+
+    class DummyPredictor(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.eye(2))
+            self.bias = torch.nn.Parameter(torch.zeros(2))
+
+        def forward(self, h):
+            return h @ self.weight + self.bias
+
+    class DummyEMA:
+        def update(self, model):
+            pass
+
+    calls = {"compute_embeddings": 0, "linear_probe_classification": 0}
+
+    probing = types.ModuleType("experiments.probing")
+
+    def compute_embeddings_stub(*args, **kwargs):
+        calls["compute_embeddings"] += 1
+        return np.ones((len(dataset.graphs), 2), dtype=np.float32)
+
+    def linear_probe_stub(*args, **kwargs):
+        calls["linear_probe_classification"] += 1
+        return {
+            "probe_roc_auc": 0.5,
+            "probe_pr_auc": 0.4,
+            "probe_acc": 0.6,
+            "probe_brier": 0.3,
+        }
+
+    probing.compute_embeddings = compute_embeddings_stub
+    probing.linear_probe_classification = linear_probe_stub
+    monkeypatch.setitem(sys.modules, "experiments.probing", probing)
+
+    losses = train_jepa(
+        dataset=dataset,
+        encoder=DummyEncoder(),
+        ema_encoder=DummyEncoder(),
+        predictor=DummyPredictor(),
+        ema=DummyEMA(),
+        epochs=1,
+        batch_size=1,
+        lr=0.0,
+        reg_lambda=0.0,
+        mask_ratio=0.5,
+        device="cpu",
+        use_scheduler=False,
+        use_amp=False,
+        probe_dataset=dataset,
+        probe_interval=1,
+    )
+
+    assert losses == [pytest.approx(1.0)]
+    assert calls["compute_embeddings"] == 1
+    assert calls["linear_probe_classification"] == 1
+
+
+def test_train_jepa_probe_disabled_matches_default(stub_data_modules, monkeypatch):
+    from training.unsupervised import train_jepa
+
+    graphs = [make_graph(), make_graph()]
+    dataset = GraphDataset(graphs, labels=[0, 1])
+
+    class DummyEncoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.eye(2))
+            self.bias = torch.nn.Parameter(torch.zeros(2))
+
+        def forward(self, x, adj, edge_attr=None):
+            return x @ self.weight + self.bias
+
+    class DummyPredictor(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.eye(2))
+            self.bias = torch.nn.Parameter(torch.zeros(2))
+
+        def forward(self, h):
+            return h @ self.weight + self.bias
+
+    class DummyEMA:
+        def update(self, model):
+            pass
+
+    probing = types.ModuleType("experiments.probing")
+
+    def compute_embeddings_stub(*args, **kwargs):
+        raise AssertionError("Probe should not run when disabled.")
+
+    def linear_probe_stub(*args, **kwargs):
+        raise AssertionError("Probe should not run when disabled.")
+
+    probing.compute_embeddings = compute_embeddings_stub
+    probing.linear_probe_classification = linear_probe_stub
+    monkeypatch.setitem(sys.modules, "experiments.probing", probing)
+
+    torch.manual_seed(0)
+    losses_with_disabled_probe = train_jepa(
+        dataset=dataset,
+        encoder=DummyEncoder(),
+        ema_encoder=DummyEncoder(),
+        predictor=DummyPredictor(),
+        ema=DummyEMA(),
+        epochs=1,
+        batch_size=1,
+        lr=0.0,
+        reg_lambda=0.0,
+        mask_ratio=0.5,
+        device="cpu",
+        use_scheduler=False,
+        use_amp=False,
+        probe_dataset=dataset,
+        probe_interval=0,
+    )
+
+    torch.manual_seed(0)
+    losses_default = train_jepa(
+        dataset=dataset,
+        encoder=DummyEncoder(),
+        ema_encoder=DummyEncoder(),
+        predictor=DummyPredictor(),
+        ema=DummyEMA(),
+        epochs=1,
+        batch_size=1,
+        lr=0.0,
+        reg_lambda=0.0,
+        mask_ratio=0.5,
+        device="cpu",
+        use_scheduler=False,
+        use_amp=False,
+    )
+
+    assert losses_with_disabled_probe == losses_default
+
+
 def test_train_jepa_falls_back_to_cpu(stub_data_modules, monkeypatch, caplog):
     torch = pytest.importorskip("torch")
 

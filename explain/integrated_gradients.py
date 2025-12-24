@@ -16,12 +16,18 @@ logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - optional dependency
     from rdkit import Chem
-    from rdkit.Chem import Draw
-    from rdkit.Chem.Draw import rdMolDraw2D
-except Exception:  # pragma: no cover - gracefully handle missing rdkit
+except Exception as e:  # pragma: no cover - optional dependency
     Chem = None  # type: ignore[assignment]
+    print("[RDKit Chem import failed]", repr(e))
+
+try:  # pragma: no cover - optional dependency
+    from rdkit.Chem import Draw
+    from rdkit.Chem.Draw import rdMolDraw2D, SimilarityMaps
+except Exception as e:  # pragma: no cover - optional dependency
     Draw = None  # type: ignore[assignment]
     rdMolDraw2D = None  # type: ignore[assignment]
+    SimilarityMaps = None
+    print("[RDKit Draw import failed]", repr(e))
 
 
 _PLACEHOLDER_PNG = base64.b64decode(
@@ -272,56 +278,115 @@ def _score_to_color(score: float, positive: bool) -> Tuple[float, float, float]:
 
 
 def render_molecule_heatmap(
-    smiles: Optional[str],
-    atom_scores: Sequence[float],
-    bond_scores: Mapping[Tuple[int, int], float],
+    smiles: str,
+    atom_scores: np.ndarray,
+    bond_scores: Dict[Tuple[int, int], float],
     output_path: str,
+    assay_type: str = "NR"
 ) -> str:
-    """Render a RDKit heatmap or fallback placeholder for the molecule."""
-
-    directory = os.path.dirname(output_path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    if Chem is None or Draw is None or rdMolDraw2D is None or not smiles:
+    """Renders a Gaussian heatmap with normalized dark patches and atom indices."""
+    if Chem is None or rdMolDraw2D is None:
         with open(output_path, "wb") as handle:
             handle.write(_PLACEHOLDER_PNG)
         return output_path
 
-    try:  # pragma: no cover - relies on rdkit availability
-        mol = Chem.MolFromSmiles(smiles)
-    except Exception:
-        mol = None
+    mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         with open(output_path, "wb") as handle:
             handle.write(_PLACEHOLDER_PNG)
         return output_path
 
-    try:  # pragma: no cover - depends on rdkit
-        max_atoms = int(mol.GetNumAtoms())
-    except Exception:
-        max_atoms = len(atom_scores)
-    highlight_atoms = {idx: _score_to_color(score, score >= 0) for idx, score in enumerate(atom_scores[:max_atoms])}
-    bond_colors = {}
+    # --- 1. Weight Processing ---
+    # Combine atom and bond scores for a unified Gaussian surface
+    num_atoms = mol.GetNumAtoms()
+    weights = np.zeros(num_atoms)
+    for i in range(min(len(atom_scores), num_atoms)):
+        weights[i] = atom_scores[i]
+    
     for (i, j), score in bond_scores.items():
-        if i < 0 or j < 0 or i >= max_atoms or j >= max_atoms:
+        if i < 0 or j < 0 or i >= num_atoms or j >= num_atoms:
             continue
         try:  # pragma: no cover - depends on rdkit
-            bond = mol.GetBondBetweenAtoms(i, j)
+            bond = mol.GetBondBetweenAtoms(int(i), int(j))
         except Exception:
             bond = None
         if bond is None:
             continue
-        bond_colors[bond.GetIdx()] = _score_to_color(score, score >= 0)
+        weights[i] += score * 0.5
+        weights[j] += score * 0.5
 
-    drawer = rdMolDraw2D.MolDraw2DCairo(400, 300)
-    rdMolDraw2D.PrepareAndDrawMolecule(
-        drawer,
-        mol,
-        highlightAtoms=list(highlight_atoms.keys()),
-        highlightAtomColors=highlight_atoms,
-        highlightBonds=list(bond_colors.keys()),
-        highlightBondColors=bond_colors,
-    )
+    # NORMALIZATION: Scale weights so the max absolute value is 1.0.
+    # This ensures "dark patches" appear at the most important atoms (e.g. 2, 11, 21).
+    abs_max = np.max(np.abs(weights)) + 1e-9
+    norm_weights = (weights / abs_max).tolist()
+
+    # --- 2. Style Configuration ---
+    # Use a diverging palette with a white midpoint so zero attributions stay neutral.
+    cmap = "RdBu"
+    background = (1.0, 1.0, 1.0)
+    assay_style = {
+        "NR": (0.5, 10, 0.35),
+        "SR": (0.3, 15, 0.4),
+    }
+    sig, contours, alpha = assay_style.get(assay_type, (0.15, 20, 0.45))
+
+    # --- 3. High-Resolution Drawing ---
+    drawer = rdMolDraw2D.MolDraw2DCairo(1000, 1000)
+    opts = getattr(drawer, "drawOptions", None)
+    if callable(opts):
+        options = opts()
+        options.addAtomIndices = True        # CRITICAL: Enables diagnostic mapping
+        options.annotationFontScale = 0.8    # Large enough to read
+        options.prepareMolsBeforeDrawing = True
+        try:
+            options.clearBackground = True
+        except Exception:
+            pass
+        options.backgroundColour = background
+    try:
+        drawer.SetBackgroundColor(background)
+    except Exception:
+        pass
+
+    rendered = False
+    if SimilarityMaps is not None:
+        try:
+            SimilarityMaps.GetSimilarityMapFromWeights(
+                mol,
+                norm_weights,
+                draw2d=drawer,
+                colorMap=cmap,
+                sigma=sig,
+                contourLines=contours,
+                alpha=alpha,  # Darker, more saturated patches
+            )
+            rendered = True
+        except TypeError:
+            try:
+                SimilarityMaps.GetSimilarityMapFromWeights(
+                    mol,
+                    norm_weights,
+                    drawer,
+                    colorMap=cmap,
+                    sigma=sig,
+                    contourLines=contours,
+                    alpha=alpha,  # Darker, more saturated patches
+                )
+                rendered = True
+            except Exception:
+                rendered = False
+        except Exception:
+            rendered = False
+
+    if not rendered:
+        prepare = getattr(rdMolDraw2D, "PrepareAndDrawMolecule", None)
+        if callable(prepare):
+            prepare(drawer, mol)
+        else:
+            draw_molecule = getattr(drawer, "DrawMolecule", None)
+            if callable(draw_molecule):
+                draw_molecule(mol)
+    
     drawer.FinishDrawing()
     with open(output_path, "wb") as handle:
         handle.write(drawer.GetDrawingText())

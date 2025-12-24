@@ -354,6 +354,28 @@ def _flag_was_provided(flags: Iterable[str]) -> bool:
     return False
 
 
+def _strip_encoder_manifest_args(args: List[str]) -> Tuple[List[str], List[str]]:
+    cleaned: List[str] = []
+    removed: List[str] = []
+    idx = 0
+    while idx < len(args):
+        token = args[idx]
+        if token == "--encoder-manifest":
+            if idx + 1 < len(args) and not str(args[idx + 1]).startswith("-"):
+                removed.append(str(args[idx + 1]))
+                idx += 2
+                continue
+            idx += 1
+            continue
+        if token.startswith("--encoder-manifest="):
+            removed.append(token.split("=", 1)[1])
+            idx += 1
+            continue
+        cleaned.append(token)
+        idx += 1
+    return cleaned, removed
+
+
 def _extract_bestcfg_value(raw: Dict[str, Any], key: str) -> Any:
     direct = raw.get(key)
     if isinstance(direct, dict) and "value" in direct:
@@ -796,6 +818,13 @@ def _run_tox21_single_task(
                 normalised.append(token_norm)
         return normalised
 
+    def _filter_explain_modes(modes: List[str]) -> List[str]:
+        allowed = {"ig", "ig_motif"}
+        filtered = [mode for mode in modes if mode in allowed]
+        if not filtered:
+            return ["ig", "ig_motif"]
+        return filtered
+
     task_name = getattr(args, "task", None)
     if not task_name:
         raise ValueError("Tox21 task name must be provided")
@@ -836,6 +865,7 @@ def _run_tox21_single_task(
         env_mode = os.environ.get("TOX21_EXPLAIN_MODE")
         if env_mode:
             explain_mode = _normalise_explain_modes(env_mode)
+    explain_mode = _filter_explain_modes(explain_mode)
     explain_steps = getattr(args, "explain_steps", None)
     if explain_steps is None:
         env_steps = os.environ.get("TOX21_EXPLAIN_STEPS")
@@ -947,7 +977,6 @@ def _run_tox21_single_task(
         "finetune_time_budget_mins": getattr(args, "finetune_time_budget_mins", 0),
         "cache_dir": cache_dir,
         "encoder_checkpoint": resolved_encoder_checkpoint,
-        "encoder_manifest": getattr(args, "encoder_manifest", None),
         "strict_encoder_config": getattr(args, "strict_encoder_config", False),
         "encoder_source_override": getattr(args, "encoder_source", None),
         "evaluation_mode": eval_mode,
@@ -1420,7 +1449,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         if bool(getattr(args, "add_3d", desired)) != desired:
             inherited.append(f"add_3d={desired}")
         setattr(args, "add_3d", desired)
-    if "hidden_dim" in best_overrides and not getattr(args, "_hidden_dim_provided", False):
+    if "hidden_dim" in best_overrides:
         desired_hidden = int(best_overrides["hidden_dim"])
         if getattr(args, "hidden_dim", desired_hidden) != desired_hidden:
             inherited.append(f"hidden_dim={desired_hidden}")
@@ -1976,7 +2005,6 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
         dest="finetune_time_budget_mins",
     )
     parser.add_argument("--encoder-checkpoint")
-    parser.add_argument("--encoder-manifest")
     parser.add_argument("--encoder-source")
     parser.add_argument("--evaluation-mode")
     parser.add_argument("--explain-mode", dest="explain_mode")
@@ -2102,6 +2130,12 @@ def main(argv: Optional[List[str]] | None = None) -> int:
     """Execute the Tox21 command directly when run as a module."""
 
     args = list(argv if argv is not None else sys.argv[1:])
+    args, removed = _strip_encoder_manifest_args(args)
+    if removed:
+        logger.warning(
+            "Ignoring legacy --encoder-manifest flag for Tox21 evaluation (values=%s).",
+            removed,
+        )
 
     if "--stage-shim" in args:
         logger.debug("stage shim requested; exiting early")
@@ -2141,4 +2175,3 @@ def main(argv: Optional[List[str]] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

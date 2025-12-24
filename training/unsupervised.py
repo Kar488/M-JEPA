@@ -1305,6 +1305,8 @@ def train_jepa(
     atom_masking: bool = False,
     subgraph_removal: bool = False,
     resume_from: Optional[str] = None,
+    probe_dataset: Optional[GraphDataset] = None,
+    probe_interval: int = 0,
     *,
     max_batches: int = 0,
     time_budget_mins: int = 0,
@@ -1528,6 +1530,7 @@ def train_jepa(
     wb_log, wb_finish = _make_wandb_handlers(
         wb, finish_on_exit=not bool(defer_wandb_finish)
     )
+    probe_interval = int(probe_interval or 0)
 
     start_epoch = 1
     ckpt: Optional[Dict[str, Any]] = None
@@ -1640,6 +1643,125 @@ def train_jepa(
             epochs,
             steps_per_epoch,
         )
+
+    def _log_probe_metrics(epoch: int, metrics: Mapping[str, float]) -> None:
+        payload = {
+            "probe/roc_auc": metrics.get("probe_roc_auc"),
+            "probe/pr_auc": metrics.get("probe_pr_auc"),
+            "probe/acc": metrics.get("probe_acc"),
+            "probe/brier": metrics.get("probe_brier"),
+            "epoch": epoch,
+        }
+        wb_log(payload)
+
+    def _run_probe(epoch: int) -> None:
+        if probe_dataset is None or probe_interval <= 0:
+            return
+        if epoch % probe_interval != 0:
+            return
+
+        if distributed:
+            import torch.distributed as dist
+
+            if is_main_process():
+                _run_probe_on_main(epoch)
+            if dist.is_available() and dist.is_initialized():
+                dist.barrier()
+            return
+
+        _run_probe_on_main(epoch)
+
+    def _run_probe_on_main(epoch: int) -> None:
+        from experiments.probing import compute_embeddings, linear_probe_classification
+
+        labels = getattr(probe_dataset, "labels", None)
+        if labels is None:
+            _log_probe_metrics(
+                epoch,
+                {
+                    "probe_roc_auc": float("nan"),
+                    "probe_pr_auc": float("nan"),
+                    "probe_acc": float("nan"),
+                    "probe_brier": float("nan"),
+                },
+            )
+            return
+
+        labels_arr = np.asarray(labels)
+        if labels_arr.ndim > 1:
+            labels_arr = labels_arr.reshape(-1)
+
+        if labels_arr.size == 0:
+            _log_probe_metrics(
+                epoch,
+                {
+                    "probe_roc_auc": float("nan"),
+                    "probe_pr_auc": float("nan"),
+                    "probe_acc": float("nan"),
+                    "probe_brier": float("nan"),
+                },
+            )
+            return
+
+        probe_model = _unwrap_encoder_module()
+        was_training = probe_model.training
+        probe_model.eval()
+        with torch.no_grad():
+            embeddings = compute_embeddings(
+                probe_dataset,
+                encoder=probe_model,
+                batch_size=batch_size,
+                device=device_t,
+            )
+        if was_training:
+            probe_model.train()
+            encoder.train()
+
+        if embeddings.shape[0] != labels_arr.shape[0]:
+            min_len = min(embeddings.shape[0], labels_arr.shape[0])
+            embeddings = embeddings[:min_len]
+            labels_arr = labels_arr[:min_len]
+
+        if embeddings.shape[0] == 0:
+            _log_probe_metrics(
+                epoch,
+                {
+                    "probe_roc_auc": float("nan"),
+                    "probe_pr_auc": float("nan"),
+                    "probe_acc": float("nan"),
+                    "probe_brier": float("nan"),
+                },
+            )
+            return
+
+        if labels_arr.dtype.kind in "fc":
+            label_mask = np.isfinite(labels_arr)
+        else:
+            label_mask = np.ones(labels_arr.shape[0], dtype=bool)
+
+        embeddings = embeddings[label_mask]
+        labels_arr = labels_arr[label_mask]
+
+        if labels_arr.size == 0 or np.unique(labels_arr).size < 2:
+            _log_probe_metrics(
+                epoch,
+                {
+                    "probe_roc_auc": float("nan"),
+                    "probe_pr_auc": float("nan"),
+                    "probe_acc": float("nan"),
+                    "probe_brier": float("nan"),
+                },
+            )
+            return
+
+        metrics = linear_probe_classification(
+            embeddings,
+            labels_arr,
+            smiles=getattr(probe_dataset, "smiles", None),
+            use_scaffold=False,
+        )
+        _log_probe_metrics(epoch, metrics)
+
     total_batches_done = 0
     for ep in range(start_epoch, epochs + 1):
         if max_batches > 0 and total_batches_done >= max_batches:
@@ -1871,6 +1993,8 @@ def train_jepa(
                     scaler=(scaler.state_dict() if _is_grad_scaler(scaler) else None),
                     epoch=ep,
                 )
+
+        _run_probe(ep)
 
         if hit_batch_cap and max_batches > 0 and total_batches_done >= max_batches:
             if is_main_process():

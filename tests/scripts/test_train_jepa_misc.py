@@ -190,7 +190,7 @@ def test_cmd_benchmark_eval_only_uses_test_dir(tmp_path, monkeypatch):
     assert calls["train_linear_head"] == 0
 
 
-def test_cmd_benchmark_resolves_labelled_finetune_head(tmp_path, monkeypatch):
+def test_cmd_benchmark_eval_only_writes_reports(tmp_path, monkeypatch):
     dataset = DummyDataset()
 
     def load_dataset_stub(path, label_col=None, add_3d=False, **kwargs):
@@ -198,25 +198,24 @@ def test_cmd_benchmark_resolves_labelled_finetune_head(tmp_path, monkeypatch):
         return dataset
 
     monkeypatch.setattr(tj, "load_directory_dataset", load_dataset_stub)
-
-    captured = {}
-
-    def eval_stub(ckpt_path, dataset, args, device):
-        captured["ckpt"] = ckpt_path
-        return {"roc_auc": 0.9}
-
-    monkeypatch.setattr(tj, "evaluate_finetuned_head", eval_stub)
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: None)
     monkeypatch.setattr(tj, "train_linear_head", lambda **kwargs: {"roc_auc": 0.5})
 
-    ft_root = tmp_path / "finetuned"
-    target = ft_root / "assay_1" / "seed0"
-    target.mkdir(parents=True)
-    (target / "head.pt").write_text("head")
+    def eval_stub(ckpt_path, dataset, args, device):  # pragma: no cover - stub
+        return {"roc_auc": 0.75, "loss": 0.2}
+
+    monkeypatch.setattr(tj, "evaluate_finetuned_head", eval_stub)
+
+    ft_path = tmp_path / "ft.pt"
+    ft_path.write_text("ckpt")
+
+    report_dir = tmp_path / "reports"
+    report_stem = "bench_eval"
 
     args = argparse.Namespace(
         labeled_dir=str(tmp_path / "train"),
         test_dir=str(tmp_path / "test"),
-        label_col="assay_1",
+        label_col="y",
         task_type="classification",
         epochs=1,
         batch_size=1,
@@ -226,7 +225,7 @@ def test_cmd_benchmark_resolves_labelled_finetune_head(tmp_path, monkeypatch):
         seeds=[0],
         jepa_encoder="jepa.pt",
         contrastive_encoder=None,
-        dataset="esol",
+        dataset=None,
         gnn_type="gcn",
         hidden_dim=16,
         num_layers=2,
@@ -235,48 +234,21 @@ def test_cmd_benchmark_resolves_labelled_finetune_head(tmp_path, monkeypatch):
         wandb_project="test",
         wandb_tags=[],
         add_3d=False,
-        ft_ckpt=str(ft_root),
+        ft_ckpt=str(ft_path),
+        report_dir=str(report_dir),
+        report_stem=report_stem,
     )
 
     tj.cmd_benchmark(args)
-    assert captured["ckpt"] == str(target / "head.pt")
 
+    report_json = report_dir / f"{report_stem}.json"
+    report_csv = report_dir / f"{report_stem}.csv"
+    assert report_json.is_file()
+    assert report_csv.is_file()
 
-def test_cmd_benchmark_exits_on_missing_finetune_ckpt(tmp_path, monkeypatch):
-    dataset = DummyDataset()
-
-    monkeypatch.setattr(tj, "load_directory_dataset", lambda *a, **k: dataset)
-    monkeypatch.setattr(tj, "train_linear_head", lambda **kwargs: {"roc_auc": 0.5})
-    monkeypatch.setattr(tj, "build_encoder", lambda **kwargs: object())
-    monkeypatch.setattr(tj.torch, "load", lambda *a, **k: {"encoder": {}})
-
-    args = argparse.Namespace(
-        labeled_dir=str(tmp_path / "train"),
-        test_dir=str(tmp_path / "test"),
-        label_col="assay_1",
-        task_type="classification",
-        epochs=1,
-        batch_size=1,
-        lr=0.01,
-        patience=1,
-        devices=1,
-        seeds=[0],
-        jepa_encoder="jepa.pt",
-        contrastive_encoder=None,
-        dataset="esol",
-        gnn_type="gcn",
-        hidden_dim=16,
-        num_layers=2,
-        device="cpu",
-        use_wandb=False,
-        wandb_project="test",
-        wandb_tags=[],
-        add_3d=False,
-        ft_ckpt=str(tmp_path / "missing"),
-    )
-
-    with pytest.raises(SystemExit):
-        tj.cmd_benchmark(args)
+    payload = json.loads(report_json.read_text())
+    assert payload["best_method"] == "finetuned"
+    assert payload["results"]["finetuned"]["roc_auc"] == 0.75
 
 
 def test_cmd_benchmark_passes_loader_knobs(tmp_path, monkeypatch):
@@ -563,6 +535,66 @@ def test_cmd_tox21_inherits_best_config_loader_flags(tmp_path, monkeypatch):
     assert args.bf16 is False
     assert args.bf16_head is True
     assert args.devices == 2
+
+
+def test_cmd_tox21_inherits_best_config_hidden_dim(tmp_path, monkeypatch):
+    best_payload = {"hidden_dim": {"value": 384}}
+    best_path = tmp_path / "best.json"
+    best_path.write_text(json.dumps(best_payload))
+
+    captures = {}
+
+    def tox_stub(
+        *,
+        csv_path,
+        task_name,
+        pretrain_epochs,
+        finetune_epochs,
+        triage_pct=0.0,
+        calibrate=True,
+        device="cpu",
+        **kwargs,
+    ):
+        captures["hidden_dim"] = kwargs["hidden_dim"]
+        return 0.2, 0.1, 0.3, {"baseline": 0.15}
+
+    monkeypatch.setattr(tj, "run_tox21_case_study", tox_stub)
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: None)
+    monkeypatch.setattr(tox_cmd.sys, "argv", ["train_jepa.py", "tox21"])
+
+    args = argparse.Namespace(
+        csv=str(tmp_path / "tox.csv"),
+        task="NR-AR",
+        dataset="tox21",
+        pretrain_epochs=1,
+        finetune_epochs=1,
+        pretrain_lr=1e-4,
+        triage_pct=0.0,
+        tox21_dir=str(tmp_path / "reports"),
+        device="cpu",
+        use_wandb=False,
+        wandb_project="test",
+        wandb_tags=[],
+        num_workers=8,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=4,
+        bf16=True,
+        bf16_head=False,
+        devices=1,
+        hidden_dim=128,
+        num_layers=3,
+        gnn_type="edge_mpnn",
+        add_3d=False,
+        best_config_path=str(best_path),
+        pretrain_time_budget_mins=0,
+        finetune_time_budget_mins=0,
+    )
+
+    tj.cmd_tox21(args)
+
+    assert captures["hidden_dim"] == 384
+    assert args.hidden_dim == 384
 
 
 def test_cmd_tox21_auto_retries_allow_shape(monkeypatch, tmp_path):

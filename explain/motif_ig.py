@@ -1,12 +1,12 @@
 """Motif-level Integrated Gradients utilities."""
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 import os
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 from types import SimpleNamespace
+from explain.integrated_gradients import render_molecule_heatmap
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -23,11 +23,13 @@ from explain.integrated_gradients import (
 
 logger = logging.getLogger(__name__)
 
-_has_rdkit = importlib.util.find_spec("rdkit") is not None
-if _has_rdkit:
+try:  # pragma: no cover - optional dependency
     from rdkit import Chem  # type: ignore
-else:  # pragma: no cover - optional dependency
+    _has_rdkit = True
+except Exception as e:  # pragma: no cover - optional dependency
     Chem = None  # type: ignore[assignment]
+    _has_rdkit = False
+    print("[RDKit import failed]", repr(e))
 
 
 _DEF_MOTIF_NAME = "molecule"
@@ -46,6 +48,21 @@ def _ensure_motif_map(motif_map: Optional[Mapping[str, Iterable[int]]], num_atom
         if cleaned:
             return cleaned
     return {_DEF_MOTIF_NAME: list(range(num_atoms))}
+
+
+def _infer_num_atoms(motif_map: Mapping[str, Iterable[int]]) -> int:
+    max_atom = -1
+    for atoms in motif_map.values():
+        if atoms is None:
+            continue
+        for atom in atoms:
+            try:
+                idx = int(atom)
+            except (TypeError, ValueError):
+                continue
+            if idx > max_atom:
+                max_atom = idx
+    return max_atom + 1 if max_atom >= 0 else 0
 
 
 def find_motifs(graph_or_smiles: GraphData | str) -> Dict[str, List[int]]:
@@ -224,31 +241,39 @@ def compute_motif_deltas(
 
 
 def draw_motif_heatmap(
-    smiles: Optional[str],
+    smiles: str,
     motif_scores: Mapping[str, float],
-    motif_map: Mapping[str, Iterable[int]],
+    motif_map: Mapping[str, List[int]],
     output_path: str,
-) -> str:
-    """Render motif contributions onto a molecular heatmap."""
+    assay_type: str = "NR"
+):
+    """Maps motif scores back to atoms to generate the 'pretty' diagnostic heatmap."""
+    num_atoms = 0
+    mol = None
+    if _has_rdkit and smiles:
+        try:  # pragma: no cover - depends on rdkit
+            mol = Chem.MolFromSmiles(smiles)
+        except Exception:
+            mol = None
+    if mol is not None:
+        try:  # pragma: no cover - depends on rdkit
+            num_atoms = int(mol.GetNumAtoms())
+        except Exception:
+            num_atoms = 0
+    if num_atoms <= 0:
+        num_atoms = _infer_num_atoms(motif_map)
 
-    motifs = _ensure_motif_map(motif_map, max((max(atoms) for atoms in motif_map.values()), default=-1) + 1 if motif_map else 0)
-    if not motif_scores:
-        motif_scores = {_DEF_MOTIF_NAME: 0.0}
+    atom_weights = np.zeros(num_atoms, dtype=np.float32)
 
-    atom_scores: Dict[int, float] = {}
-    for name, atoms in motifs.items():
-        score = float(motif_scores.get(name, 0.0))
-        for atom_idx in atoms:
-            atom_scores[atom_idx] = atom_scores.get(atom_idx, 0.0) + score
+    for motif_name, score in motif_scores.items():
+        atom_indices = motif_map.get(motif_name, [])
+        for idx in atom_indices:
+            if idx < num_atoms:
+                atom_weights[idx] += score
 
-    max_atom = max(atom_scores.keys()) + 1 if atom_scores else 0
-    atom_array = [0.0] * max_atom
-    for idx, score in atom_scores.items():
-        if 0 <= idx < max_atom:
-            atom_array[idx] = score
-
-    return render_molecule_heatmap(smiles, atom_array, {}, output_path)
-
+    # Delegate to the main renderer to get Gaussian patches and Indices
+    render_molecule_heatmap(smiles, atom_weights, {}, output_path, assay_type=assay_type)
+    return output_path
 
 def plot_motif_deltas(
     task_names: Sequence[str],
@@ -285,22 +310,54 @@ def save_motif_artifacts(
     os.makedirs(output_dir, exist_ok=True)
 
     summary_rows = []
-    norm_scores = normalise_attributions(list(motif_scores.values()), mode=normalise_mode)
-    norm_lookup = {name: float(value) for name, value in zip(motif_scores.keys(), norm_scores)}
     summary_path = os.path.join(output_dir, "motif_summary.csv")
+
+    # FIX B: Clean and align motif map before using it
+    num_atoms = _infer_num_atoms(motif_map) if motif_map else 0
+    if num_atoms == 0 and smiles and _has_rdkit:
+        try:  # pragma: no cover - depends on rdkit
+            mol = Chem.MolFromSmiles(smiles)
+        except Exception:
+            mol = None
+        if mol is not None:
+            try:  # pragma: no cover - depends on rdkit
+                num_atoms = int(mol.GetNumAtoms())
+            except Exception:
+                num_atoms = 0
+    motifs_clean = _ensure_motif_map(motif_map, num_atoms)
+
+    # Ensure motif_scores contains all motif keys
+    motif_scores = dict(motif_scores)
+    for name in motifs_clean:
+        motif_scores.setdefault(name, 0.0)
+
+    # Recompute normalization using aligned motif order
+    norm_scores = normalise_attributions(
+        [motif_scores[name] for name in motifs_clean],
+        mode=normalise_mode
+    )
+    norm_lookup = {
+        name: float(value)
+        for name, value in zip(motifs_clean.keys(), norm_scores)
+    }
     with open(summary_path, "w", encoding="utf-8") as handle:
         handle.write("motif,ig_score,norm_score,size\n")
-        for name, score in motif_scores.items():
-            size = len(list(motif_map.get(name, [])))
-            handle.write(f"{name},{float(score)},{norm_lookup.get(name, 0.0)},{size}\n")
-            summary_rows.append({"motif": name, "ig_score": float(score), "norm_score": norm_lookup.get(name, 0.0)})
+        for name, atoms in motifs_clean.items():
+            score = float(motif_scores.get(name, 0.0))
+            size = len(atoms)
+            handle.write(f"{name},{score},{norm_lookup.get(name, 0.0)},{size}\n")
+            summary_rows.append({
+                "motif": name,
+                "ig_score": score,
+                "norm_score": norm_lookup.get(name, 0.0)
+            })
 
     deltas_path = os.path.join(output_dir, "motif_deltas.json")
     with open(deltas_path, "w", encoding="utf-8") as handle:
         json.dump({name: list(delta) for name, delta in motif_deltas.items()}, handle, indent=2)
 
     heatmap_path = os.path.join(output_dir, "motif_heatmap.png")
-    draw_motif_heatmap(smiles, norm_lookup, motif_map, heatmap_path)
+    draw_motif_heatmap(smiles, norm_lookup, motifs_clean, heatmap_path)
 
     bar_paths: Dict[str, str] = {}
     for name, delta in motif_deltas.items():

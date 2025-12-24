@@ -20,8 +20,9 @@ def test_synthetic_graph_visuals_when_dataset_missing(tmp_path, monkeypatch):
     assert summary["num_rendered"] == 2
     assert summary["loader"] == "synthetic"
 
-    for idx in (0, 1):
-        sample_dir = output_dir / f"sample_{idx:03d}"
+    sample_dirs = sorted(path for path in output_dir.iterdir() if path.is_dir())
+    assert len(sample_dirs) >= 2
+    for sample_dir in sample_dirs[:2]:
         assert (sample_dir / "molecule.png").is_file()
         assert (sample_dir / "molecule.html").is_file()
         metadata = json.loads((sample_dir / "metadata.json").read_text())

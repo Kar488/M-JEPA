@@ -42,6 +42,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from explain.integrated_gradients import render_molecule_heatmap
+
 try:
     from utils import gym_compat
 except Exception:  # pragma: no cover - compatibility helper is optional
@@ -200,7 +202,7 @@ _MATPLOTLIB_AVAILABLE = bool(importlib.util.find_spec("matplotlib"))
 
 
 def _default_dataset_dir() -> Optional[str]:
-    return os.environ.get("DATASET_DIR")
+    return os.environ.get("GRAPH_VISUALS_DATASET") or os.environ.get("DATASET_DIR")
 
 
 def _default_output_dir() -> Optional[str]:
@@ -227,14 +229,24 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--num-samples",
         type=int,
-        default=8,
-        help="Number of molecules to visualise (default: 8)",
+        default=-1,
+        help="Number of molecules to visualise (default: -1, meaning all available)",
+    )
+    parser.add_argument(
+        "--label-column",
+        default=None,
+        help="Optional label column to load from CSV inputs",
+    )
+    parser.add_argument(
+        "--multi-assay-labels",
+        action="store_true",
+        help="Parse all assay columns from CSV inputs into per-sample label dicts",
     )
     args = parser.parse_args(argv)
     if not args.output_dir:
         parser.error("--output-dir not provided and PRETRAIN_EXPERIMENT_ROOT is unset")
-    if args.num_samples is not None and args.num_samples <= 0:
-        parser.error("--num-samples must be > 0")
+    if args.num_samples == 0:
+        parser.error("--num-samples must be either -1 (all) or > 0")
     if not args.dataset_path:
         logger.warning("DATASET_DIR is unset; generating synthetic graph visuals")
     return args
@@ -279,13 +291,81 @@ def _graph_count(dataset: Any) -> int:
         return 0
 
 
+def _parse_multi_assay_labels(
+    dataset_path: str, limit: Optional[int]
+) -> Tuple[List[str], List[Dict[str, float]]]:
+    with open(dataset_path, "r", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames:
+            raise ValueError("CSV must include headers when parsing assay labels")
+        smiles_col = None
+        for name in reader.fieldnames:
+            if name.lower() == "smiles":
+                smiles_col = name
+                break
+        if smiles_col is None:
+            raise ValueError("CSV must include a 'smiles' column when parsing assay labels")
+        assay_cols = [col for col in reader.fieldnames if col != smiles_col]
+        if not assay_cols:
+            raise ValueError("CSV provides no assay columns to parse into labels")
+        smiles: List[str] = []
+        labels: List[Dict[str, float]] = []
+        for row in reader:
+            raw_smiles = row.get(smiles_col)
+            if not raw_smiles:
+                continue
+            smiles.append(raw_smiles.strip())
+            label_entry: Dict[str, float] = {}
+            for col in assay_cols:
+                raw_value = row.get(col)
+                if raw_value is None:
+                    continue
+                value_str = str(raw_value).strip()
+                if not value_str:
+                    continue
+                try:
+                    numeric = float(value_str)
+                except Exception:
+                    continue
+                if math.isnan(numeric):
+                    continue
+                if float(numeric).is_integer():
+                    numeric = float(int(numeric))
+                label_entry[col] = numeric
+            labels.append(label_entry)
+            if limit is not None and len(smiles) >= limit:
+                break
+    if not smiles:
+        raise ValueError(f"No SMILES found in {dataset_path}")
+    while len(labels) < len(smiles):
+        labels.append({})
+    return smiles, labels
+
+
+def _resolve_csv_source(dataset_path: str) -> str:
+    if os.path.isfile(dataset_path):
+        return dataset_path
+    if os.path.isdir(dataset_path):
+        entries = sorted(
+            entry for entry in os.listdir(dataset_path) if entry.lower().endswith(".csv")
+        )
+        if not entries:
+            raise FileNotFoundError(f"No CSV files found under {dataset_path}")
+        return os.path.join(dataset_path, entries[0])
+    raise FileNotFoundError(f"dataset path {dataset_path} not found")
+
+
 def _load_dataset(
-    dataset_path: Optional[str], limit: Optional[int]
+    dataset_path: Optional[str],
+    limit: Optional[int],
+    label_column: Optional[str] = None,
+    multi_assay_labels: bool = False,
 ) -> Tuple[GraphDataset, str, str, Optional[str]]:
     if not dataset_path:
         return _synthetic_dataset(limit, "dataset path missing (DATASET_DIR unset)")
 
     dataset_path = os.path.abspath(dataset_path)
+    dataset_label = dataset_path
     try:
         ext = _guess_extension(dataset_path)
     except Exception as exc:
@@ -297,24 +377,36 @@ def _load_dataset(
         return _synthetic_dataset(limit, f"dataset unreachable: {exc}")
     limit = None if (limit is None or limit <= 0) else limit
     loader_label = "fallback"
+    dataset: Optional[GraphDataset] = None
     use_fallback = _FORCE_FALLBACK_LOADER or not GRAPH_DATASET_AVAILABLE
     if not use_fallback:
         try:
             loader_label = "graphdataset"
-            if os.path.isdir(dataset_path):
+            if ext == "csv" and multi_assay_labels:
+                csv_source = _resolve_csv_source(dataset_path)
+                dataset_label = csv_source
+                logger.info(
+                    "Loading dataset file %s (csv, multi-assay labels)", csv_source
+                )
+                smiles, label_dicts = _parse_multi_assay_labels(csv_source, limit)
+                dataset = GraphDataset.from_smiles_list(smiles, labels=label_dicts)
+            if dataset is None and os.path.isdir(dataset_path):
                 logger.info("Loading dataset directory %s (ext=%s)", dataset_path, ext)
                 dataset = GraphDataset.from_directory(
                     dataset_path,
                     ext=ext,
                     max_graphs=limit,
+                    label_col=label_column,
                 )
-            elif ext == "parquet":
+            elif dataset is None and ext == "parquet":
                 logger.info("Loading dataset file %s (parquet)", dataset_path)
-                dataset = GraphDataset.from_parquet(dataset_path, n_rows=limit)
-            elif ext == "csv":
+                dataset = GraphDataset.from_parquet(dataset_path, n_rows=limit, label_col=label_column)
+            elif dataset is None and ext == "csv" and not multi_assay_labels:
                 logger.info("Loading dataset file %s (csv)", dataset_path)
-                dataset = GraphDataset.from_csv(dataset_path, n_rows=limit)
-            else:
+                dataset = GraphDataset.from_csv(
+                    dataset_path, n_rows=limit, label_col=label_column
+                )
+            elif dataset is None and ext not in {"csv", "parquet"}:
                 raise ValueError(f"Unsupported dataset extension: {ext}")
 
             count = _graph_count(dataset)
@@ -325,7 +417,7 @@ def _load_dataset(
                 )
                 use_fallback = True
             else:
-                return dataset, loader_label, dataset_path, None
+                return dataset, loader_label, dataset_label, None
         except Exception as exc:
             logger.warning(
                 "GraphDataset loader failed for %s (%s); falling back to CSV-only parser",
@@ -353,7 +445,7 @@ def _load_dataset(
                 raise ValueError(
                     "Fallback graph loader only supports CSV inputs; set DATASET_DIR to a CSV file"
                 )
-            return dataset, "fallback", dataset_path, None
+            return dataset, "fallback", dataset_label, None
         except Exception as exc:
             logger.error(
                 "Fallback graph loader failed for %s (%s); using synthetic molecules",
@@ -382,6 +474,26 @@ def _select_indices(total: int, limit: int) -> List[int]:
 
 def _ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
+
+def _sanitise_smiles_for_dir(smiles: Optional[str], dataset_idx: int) -> str:
+    if not smiles:
+        return f"graph_{dataset_idx:05d}"
+    safe = []
+    last_sep = False
+    for ch in smiles:
+        if ch.isalnum():
+            safe.append(ch)
+            last_sep = False
+            continue
+        if not last_sep:
+            safe.append("_")
+            last_sep = True
+    cleaned = "".join(safe).strip("_")
+    if not cleaned:
+        cleaned = "graph"
+    cleaned = cleaned[:120]
+    return f"graph_{dataset_idx:05d}_{cleaned}"
 
 
 def _coerce_label(labels: Optional[Sequence[Any]], idx: int) -> Optional[float]:
@@ -968,8 +1080,8 @@ def _render_sample(
 
 def _write_index_html(output_dir: Path) -> None:
     rows = []
-    for sample_dir in sorted(output_dir.glob("sample_*")):
-        meta_path = sample_dir / "metadata.json"
+    for meta_path in sorted(output_dir.glob("*/metadata.json")):
+        sample_dir = meta_path.parent
         if not meta_path.exists():
             continue
         try:
@@ -1041,67 +1153,108 @@ def _write_index_html(output_dir: Path) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="[graph-visuals] %(message)s")
     args = parse_args(argv)
+    
+    # 1. Load Data
     dataset, loader_label, dataset_label, fallback_reason = _load_dataset(
-        args.dataset_path, args.num_samples
+        args.dataset_path,
+        args.num_samples,
+        label_column=args.label_column,
+        multi_assay_labels=args.multi_assay_labels,
     )
-    if fallback_reason:
-        logger.warning(
-            "Graph visuals are using a synthetic dataset (%s). Set DATASET_DIR or pass --dataset-path to render real molecules.",
-            fallback_reason,
-        )
+
+    # TARGET SMILES (Diagnostic Heroes)
+    TARGET_SMILES = [
+        "C#C[C@]1(O)CC[C@H]2[C@@H]3CCC4=C(CCC(=O)C4)[C@H]3CC[C@@]21C", # Row 4: Steroid
+        "ClC1=C(Cl)[C@]2(Cl)[C@H]3[C@H]([C@@H]4C[C@H]3[C@H]3O[C@@H]43)[C@@]1(Cl)C2(Cl)Cl" # Row 6: Cage
+    ]
+
+    # 2. Select Indices (Random samples + Forced Hero samples)
     total = len(dataset.graphs)
-    if total == 0:
-        logger.warning("Dataset %s contained zero graphs; nothing to render", dataset_label)
-        return 0
-    limit = min(args.num_samples, total)
+    limit = total if args.num_samples is None or args.num_samples < 0 else min(args.num_samples, total)
     indices = _select_indices(total, limit)
+    
+    # Search dataset for the indices of our target SMILES to prevent regression
+    hero_indices = []
+    dataset_smiles = getattr(dataset, "smiles", None)
+    if dataset_smiles:
+        for i, s in enumerate(dataset_smiles):
+            if s in TARGET_SMILES:
+                hero_indices.append(i)
+    
+    # Merge and deduplicate
+    final_indices = list(dict.fromkeys(hero_indices + indices))
+    
     output_dir = Path(args.output_dir)
     _ensure_dir(output_dir)
-    logger.info("Generating graph visuals for %d / %d molecules", len(indices), total)
-    png_stats = {"rdkit": 0, "matplotlib": 0, "placeholder": 0}
-    rdkit_placeholder_count = 0
-    for slot, dataset_idx in enumerate(indices):
-        record_dir = output_dir / f"sample_{slot:03d}"
-        graph = dataset.graphs[dataset_idx]
+    
+    NR_ASSAYS = {'NR-AR', 'NR-AhR', 'NR-ER', 'NR-Aromatase', 'NR-PPAR-gamma'}
+    DM_ASSAYS = {'SR-p53', 'SR-MMP', 'SR-ATAD5'}
+    png_stats = {"rdkit": 0, "placeholder": 0}
+
+    # 3. Process merged indices
+    for slot, dataset_idx in enumerate(final_indices):
         smiles = None
-        if dataset.smiles and dataset_idx < len(dataset.smiles):
-            smiles = dataset.smiles[dataset_idx]
+        if dataset_smiles:
+            try:
+                smiles = dataset_smiles[dataset_idx]
+            except Exception:
+                smiles = None
+        record_dir = output_dir / _sanitise_smiles_for_dir(smiles, dataset_idx)
+        _ensure_dir(record_dir)
+        
+        graph = dataset.graphs[dataset_idx]
         label = _coerce_label(dataset.labels, dataset_idx)
-        renderer = _render_sample(record_dir, graph, smiles, label, dataset_idx)
-        png_stats[renderer] = png_stats.get(renderer, 0) + 1
-        if renderer == "placeholder" and not RDKit_AVAILABLE:
-            rdkit_placeholder_count += 1
-    if not RDKit_AVAILABLE:
-        if rdkit_placeholder_count:
-            logger.info(
-                "RDKit unavailable; generated %d placeholder PNG(s). Install rdkit to render 2-D depictions.",
-                rdkit_placeholder_count,
-            )
-        else:
-            logger.info(
-                "RDKit unavailable; matplotlib fallback rendered all samples."
-            )
-        logger.error(
-            "Install RDKit to enable 2-D depictions: pip install rdkit-pypi==2022.9.5 (Python < 3.12) "
-            "or micromamba install -c conda-forge rdkit=2023.09.5. Import error: %s",
-            RDKit_IMPORT_ERROR or "unknown",
-        )
+
+        # Detect Biological Grouping
+        assay_type = "NR"
+        if isinstance(label, dict):
+            active = [k for k, v in label.items() if v == 1]
+            if any(a in DM_ASSAYS for a in active): assay_type = "DM"
+            elif any(a.startswith("SR") for a in active): assay_type = "SR"
+
+        # Render Diagnostic 2D depiction
+        if smiles and RDKit_AVAILABLE:
+            diag_path = str(record_dir / "2d_diagnostic.png")
+            # Pull IG scores from graph node features if available
+            atom_scores = None
+            graph_x = getattr(graph, "x", None)
+            if graph_x is not None:
+                try:
+                    if hasattr(graph_x, "detach"):
+                        graph_x = graph_x.detach().cpu().numpy()
+                    if np is not None:
+                        atom_scores = np.asarray(graph_x)
+                        if atom_scores.ndim > 1:
+                            atom_scores = atom_scores.sum(axis=1)
+                except Exception:
+                    atom_scores = None
+            if atom_scores is None or getattr(atom_scores, "size", 0) == 0:
+                fallback_size = max(int(graph.num_nodes()), 1)
+                if np is not None:
+                    atom_scores = np.zeros(fallback_size, dtype=np.float32)
+                else:
+                    atom_scores = [0.0 for _ in range(fallback_size)]
+            
+            render_molecule_heatmap(smiles, atom_scores, {}, diag_path, assay_type)
+            png_stats["rdkit"] += 1
+
+        # Render original standard depictions (3D viewer etc)
+        _render_sample(record_dir, graph, smiles, label, dataset_idx)
+
+    # 4. Save Summary
     summary = {
         "dataset_path": dataset_label,
-        "fallback_reason": fallback_reason,
-        "output_dir": str(output_dir.resolve()),
-        "num_graphs": total,
-        "num_rendered": len(indices),
+        "num_rendered": len(final_indices),
+        "num_graphs": _graph_count(dataset),
         "loader": loader_label,
         "fallback_forced": bool(_FORCE_FALLBACK_LOADER),
+        "fallback_reason": fallback_reason,
+        "heroes_found": len(hero_indices),
         "rdkit_available": bool(RDKit_AVAILABLE),
-        "rdkit_installed": bool(RDKit_INSTALLED),
-        "rdkit_import_error": RDKit_IMPORT_ERROR,
         "png_renderers": png_stats,
     }
-    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     _write_index_html(output_dir)
-    logger.info("Graph visuals ready under %s", output_dir)
     return 0
 
 

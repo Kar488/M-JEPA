@@ -647,6 +647,58 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             _wb_log(wb, {"phase": "data_load", "status": "error"})
             sys.exit(1)
 
+        probe_dataset = None
+        probe_interval = int(getattr(args, "probe_interval", 0) or 0)
+        probe_dataset_path = getattr(
+            args,
+            "probe_dataset",
+            CONFIG.get("pretrain", {}).get("probe_dataset"),
+        )
+        probe_label_col = getattr(
+            args,
+            "probe_label_col",
+            CONFIG.get("pretrain", {}).get("probe_label_col", "label"),
+        )
+        if probe_interval > 0:
+            if not probe_dataset_path:
+                logger.warning(
+                    "[pretrain] probe_interval>0 but no probe_dataset provided; disabling probe"
+                )
+                _wb_log(wb, {"phase": "probe_load", "status": "skipped"})
+                probe_interval = 0
+            if probe_interval > 0:
+                try:
+                    from data.mdataset import GraphDataset
+
+                    loader_kwargs = dict(
+                        label_col=probe_label_col,
+                        cache_dir=getattr(args, "cache_dir", None),
+                        add_3d=getattr(args, "add_3d", False),
+                        num_workers=max(0, int(getattr(args, "num_workers", 0) or 0)),
+                    )
+                    if str(probe_dataset_path).endswith(".parquet"):
+                        probe_dataset = GraphDataset.from_parquet(
+                            probe_dataset_path, **loader_kwargs
+                        )
+                    else:
+                        probe_dataset = GraphDataset.from_csv(
+                            probe_dataset_path, **loader_kwargs
+                        )
+                    _wb_log(
+                        wb,
+                        {
+                            "phase": "probe_load",
+                            "probe_graphs": len(probe_dataset),
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to load probe dataset from %s", probe_dataset_path
+                    )
+                    _wb_log(wb, {"phase": "probe_load", "status": "error"})
+                    probe_interval = 0
+                    probe_dataset = None
+
         graphs = getattr(unlabeled, "graphs", None)
         if not graphs:
             logger.error(
@@ -817,6 +869,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                             prefetch_factor=getattr(args, "prefetch_factor", 4),
                             bf16=getattr(args, "bf16", False),
                             compile_models=not getattr(args, "no_compile", False),
+                            probe_dataset=probe_dataset,
+                            probe_interval=probe_interval,
                             # forward augmentation flags only when enabled
                             **kwargs,
                         )
@@ -858,6 +912,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                         prefetch_factor=getattr(args, "prefetch_factor", 4),
                         bf16=getattr(args, "bf16", False),
                         compile_models=not getattr(args, "no_compile", False),
+                        probe_dataset=probe_dataset,
+                        probe_interval=probe_interval,
                         # forward augmentation flags only when enabled
                         **kwargs,
                     )
@@ -1286,4 +1342,3 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         raise
     finally:
         _wb_finish(wb)
-

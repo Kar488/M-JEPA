@@ -618,17 +618,27 @@ except Exception:
 # ---------------------------------------------------------------------------
 
 
-def aggregate_metrics(metrics_list: List[Dict[str, float]]) -> Dict[str, float]:
-    """Compute mean and std for each metric across runs.
+def aggregate_metrics(metrics_list: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Compute mean and std for each numeric metric across runs.
 
-    Excludes the key 'head' if present.
+    Excludes the key 'head' if present and skips non-numeric values.
     """
     if not metrics_list:
         return {}
     out: Dict[str, float] = {}
     keys = sorted({k for d in metrics_list for k in d.keys() if k != "head"})
     for k in keys:
-        vals = np.array([d[k] for d in metrics_list if k in d], dtype=np.float64)
+        raw_vals: List[float] = []
+        for d in metrics_list:
+            if k not in d:
+                continue
+            try:
+                raw_vals.append(float(d[k]))
+            except Exception:
+                continue
+        if not raw_vals:
+            continue
+        vals = np.array(raw_vals, dtype=np.float64)
         out[f"{k}_mean"] = float(np.mean(vals))
         out[f"{k}_std"] = float(np.std(vals))
     return out
@@ -1088,6 +1098,27 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--save-every", type=int, default=1, help="Save a pretrain checkpoint every N epochs")
     pre.add_argument("--plot-dir", type=str, default=CONFIG.get("plot_dir", "plots"), help="Directory to save training plots")
     pre.add_argument("--force-tqdm", action="store_true", help="Force-enable tqdm progress bars even when not attached to a TTY")
+    pre.add_argument(
+        "--probe-dataset",
+        dest="probe_dataset",
+        type=str,
+        default=CONFIG.get("pretrain", {}).get("probe_dataset"),
+        help="Labelled dataset for periodic linear probing (pretraining only).",
+    )
+    pre.add_argument(
+        "--probe-label-col",
+        dest="probe_label_col",
+        type=str,
+        default=CONFIG.get("pretrain", {}).get("probe_label_col", "label"),
+        help="Label column to use when loading the probe CSV dataset.",
+    )
+    pre.add_argument(
+        "--probe-interval",
+        dest="probe_interval",
+        type=int,
+        default=CONFIG.get("pretrain", {}).get("probe_interval", 0),
+        help="Run the probe every N epochs (0 disables).",
+    )
     pre.add_argument("--sample-unlabeled", type=int, default=0, help="If >0, load at most N graphs from the unlabeled dataset.")
     pre.add_argument("--n-rows-per-file", type=int, default=None, help="If set, limit rows read per file when loading datasets.")
     pre.add_argument(
@@ -1487,13 +1518,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Optional pretrained encoder checkpoint to evaluate without additional pretraining",
-    )
-    tox.add_argument(
-        "--encoder-manifest",
-        dest="encoder_manifest",
-        type=str,
-        default=None,
-        help="Optional manifest JSON describing the encoder checkpoint",
     )
     tox.add_argument(
         "--encoder-source",

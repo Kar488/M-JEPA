@@ -36,6 +36,8 @@ def test_pretrain_parser_defaults_and_handler(tmp_path):
     assert args.epochs == CONFIG["pretrain"]["epochs"]
     assert args.batch_size == CONFIG["pretrain"]["batch_size"]
     assert args.lr == CONFIG["pretrain"]["lr"]
+    assert args.probe_dataset == CONFIG["pretrain"]["probe_dataset"]
+    assert args.probe_interval == CONFIG["pretrain"]["probe_interval"]
     #assert args.gnn_type == CONFIG["model"]["gnn_type"]
     assert args.hidden_dim == CONFIG["model"]["hidden_dim"]
     assert args.dropout == CONFIG["model"]["dropout"]
