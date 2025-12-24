@@ -73,22 +73,31 @@ finetune:
   patience: ${FINETUNE_PATIENCE:-5}
   batch_size: ${FINETUNE_BATCH_SIZE:-128}
   max_finetune_batches: 0
+
   freeze_encoder: false
-  use_scaffold: ${FINETUNE_USE_SCAFFOLD:-false}
+  encoder_lr: ${FINETUNE_ENCODER_LR:-3.0e-6}   # IMPORTANT: smaller on scaffold split
+  head_lr: ${FINETUNE_HEAD_LR:-1.0e-4}
+
+  use_scaffold: ${FINETUNE_USE_SCAFFOLD:-true}
+  
   hidden_dim: ${FINETUNE_HIDDEN_DIM:-256}
   num_layers: ${FINETUNE_NUM_LAYERS:-3}
   dropout: ${FINETUNE_DROPOUT:-0.1}
-  encoder_lr: ${FINETUNE_ENCODER_LR:-1.0e-4}
-  head_lr: ${FINETUNE_HEAD_LR:-1.0e-4}
+  
   layerwise_decay: ${FINETUNE_LAYERWISE_DECAY:-}
+
   use_focal_loss: ${FINETUNE_USE_FOCAL_LOSS:-false}
-  focal_gamma: ${FINETUNE_FOCAL_GAMMA:-2.0}
-  dynamic_pos_weight: ${FINETUNE_DYNAMIC_POS_WEIGHT:-true}
   oversample_minority: ${FINETUNE_OVERSAMPLE_MINORITY:-false}
+  dynamic_pos_weight: ${FINETUNE_DYNAMIC_POS_WEIGHT:-true}
+
+  focal_gamma: ${FINETUNE_FOCAL_GAMMA:-2.0}
+  
   pos_weight:  # leave unset so per-task overrides remain effective
+
   calibrate_probabilities: ${FINETUNE_CALIBRATE_PROBABILITIES:-false}
   calibration_method: ${FINETUNE_CALIBRATION_METHOD:-temperature}
   threshold_metric: ${FINETUNE_THRESHOLD_METRIC:-roc_auc}
+  
   per_task_hparams: ${FINETUNE_PER_TASK_HPARAMS:-${APP_DIR}/scripts/ci/per_task_hparams/tox21_hparams.yaml}
   seeds:
     - ${FINETUNE_SEED_0:-0}
