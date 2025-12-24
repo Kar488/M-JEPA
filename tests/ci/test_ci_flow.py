@@ -2076,6 +2076,59 @@ printf '%s\\n' \"${{STAGE_ARGS[@]}}\" > \"$ARGS_CAPTURE\"
     assert "--no-calibrate" in args_calibrate_false
 
 
+def test_build_stage_args_keeps_add3d_from_bestcfg(tmp_path):
+    best_cfg = {
+        "add_3d": 1,
+        "gnn_type": "dmpnn",
+        "hidden_dim": 256,
+        "num_layers": 3,
+        "lr": 0.001,
+        "mask_ratio": 0.2,
+        "ema_decay": 0.98,
+        "training_method": "jepa",
+        "pretrain_batch_size": 256,
+        "pretrain_epochs": 5,
+        "sample_unlabeled": 10000000,
+        "contiguity": 1,
+    }
+    grid_dir = tmp_path / "grid"
+    grid_dir.mkdir(parents=True, exist_ok=True)
+    (grid_dir / "best_grid_config.json").write_text(json.dumps(best_cfg), encoding="utf-8")
+
+    pretrain_dir = tmp_path / "pretrain"
+    pretrain_dir.mkdir(parents=True, exist_ok=True)
+
+    capture_path = tmp_path / "args_capture.txt"
+    env = os.environ.copy()
+    env.update(
+        {
+            "APP_DIR": str(REPO_ROOT),
+            "PYTHONPATH": str(REPO_ROOT),
+            "GRID_DIR": str(grid_dir),
+            "GRID_SOURCE_DIR": str(grid_dir),
+            "EXPERIMENT_DIR": str(tmp_path),
+            "PRETRAIN_EXPERIMENT_ROOT": str(tmp_path),
+            "PRETRAIN_DIR": str(pretrain_dir),
+            "PRETRAIN_ARTIFACTS_DIR": str(pretrain_dir),
+            "MJEPA_ALLOW_DATA_FALLBACKS": "1",
+        }
+    )
+
+    script = f"""
+set -euo pipefail
+source \"{REPO_ROOT}/scripts/ci/common.sh\"
+source \"{REPO_ROOT}/scripts/ci/stage.sh\"
+build_stage_args pretrain
+printf '%s\\n' \"${{STAGE_ARGS[@]}}\" > \"{capture_path}\"
+"""
+    subprocess.run(["bash", "-lc", script], check=True, cwd=REPO_ROOT, env=env)
+
+    args = capture_path.read_text(encoding="utf-8").splitlines()
+    assert "--add-3d" in args
+    idx = args.index("--add-3d")
+    assert args[idx + 1] == "1"
+
+
 def test_build_stage_args_deduplicates_bestcfg_overrides(tmp_path):
     best_cfg = {
         "config": {

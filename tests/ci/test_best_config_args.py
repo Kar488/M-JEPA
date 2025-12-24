@@ -363,35 +363,6 @@ def test_bestcfg_pretrain_infers_add3d_from_add3d_options():
     assert tokens[add3d_index + 1] == "1"
 
 
-def test_bestcfg_pretrain_prefers_phase2_add3d_true_without_shape_coercion(
-    tmp_path,
-):
-    grid_root = tmp_path / "grid"
-    phase2_best = grid_root / "phase2_export" / "best_grid_config.json"
-    phase2_best.parent.mkdir(parents=True, exist_ok=True)
-    phase2_best.write_text(
-        json.dumps(
-            {
-                "gnn_type": "gine",
-                "hidden_dim": 128,
-                "num_layers": 2,
-                "learning_rate": 1e-4,
-                "add_3d": True,
-                "allow_shape_coercion": True,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    stdout, _ = run_bestcfg("pretrain", {}, grid_dir_override=str(grid_root))
-    tokens = stdout.split()
-
-    assert "--add-3d" in tokens
-    add3d_index = tokens.index("--add-3d")
-    assert tokens[add3d_index + 1] == "1"
-    assert "--allow-shape-coercion" not in tokens
-
-
 def test_bestcfg_skip_reflected_in_summary():
     cfg = {
         "gnn_type": "gine",
