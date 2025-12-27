@@ -159,6 +159,55 @@ def test_evaluate_case_study_handles_probability_mismatch(monkeypatch):
     assert baselines == {}
 
 
+def test_evaluate_case_study_records_test_predictions(monkeypatch):
+    import experiments.case_study as case_study
+
+    dataset = types.SimpleNamespace(
+        graphs=[types.SimpleNamespace(), types.SimpleNamespace()], smiles=["C", "CC"]
+    )
+    labels = np.array([0.0, 1.0])
+
+    def fake_predict(
+        dataset,
+        indices,
+        encoder,
+        head,
+        device,
+        edge_dim,
+        batch_size=256,
+        diag_hook=None,
+    ):
+        logits = torch.tensor([[0.2], [1.4]], dtype=torch.float32)
+        probs = torch.sigmoid(logits)
+        return logits, probs
+
+    monkeypatch.setattr(case_study, "_predict_logits_probs_in_chunks", fake_predict)
+
+    diagnostics: Dict[str, Any] = {}
+    case_study._evaluate_case_study(
+        dataset=dataset,
+        encoder=None,
+        head=None,
+        all_labels=labels,
+        train_idx=[0],
+        val_idx=[0, 1],
+        test_idx=[0, 1],
+        triage_pct=0.0,
+        calibrate=False,
+        device="cpu",
+        edge_dim=0,
+        seed=0,
+        baseline_embeddings=None,
+        diagnostics=diagnostics,
+    )
+
+    preds = diagnostics.get("test_predictions")
+    assert preds is not None
+    assert preds.get("indices") == [0, 1]
+    assert len(preds.get("probabilities", [])) == 2
+    assert preds.get("true_labels", [])[0] == pytest.approx(0.0)
+
+
 def test_evaluate_case_study_handles_resize_failure(monkeypatch):
     import experiments.case_study as case_study
 
