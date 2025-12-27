@@ -66,6 +66,27 @@ to selectively invalidate cached stages when experimenting.
 For policy details and override semantics, read :doc:`frozen_lineage_policy`.
 
 
+Configuration defaults and precedence
+-------------------------------------
+
+- **Local runs.** ``scripts/train_jepa.py`` loads defaults from
+  ``scripts/default.yaml`` (for example, ``pretrain.epochs=100``,
+  ``finetune.epochs=50``) and applies any explicit CLI flags on top.
+- **CI/Vast runs.** ``scripts/ci/stage.sh`` builds each stage's argument vector
+  from ``scripts/ci/train_jepa_ci.yml``. That YAML maps workflow environment
+  variables (such as ``PRETRAIN_EPOCHS``/``FINETUNE_EPOCHS``) to the appropriate
+  CLI flags, so values exported by ``.github/workflows/ci-vast.yml`` take
+  precedence over ``scripts/default.yaml`` during automation.
+- **Per-stage wrappers.** ``scripts/ci/run-*.sh`` invoke ``stage.sh`` and fill in
+  stage-specific defaults before the CLI is built. For example,
+  ``run-tox21.sh`` supplies its own ``FINETUNE_EPOCHS`` fallback when the
+  workflow leaves it blank, and the wrappers clear ``BESTCFG_NO_EPOCHS`` at the
+  start so stage-local defaults are applied deterministically.
+
+Precedence summary: ``ci-vast.yml`` env vars → ``train_jepa_ci.yml`` argument
+templates → CLI flags → ``scripts/default.yaml``. If a value is omitted at a
+higher layer, the next layer supplies the default.
+
 Sweep sizing recommendations
 ---------------------------
 
