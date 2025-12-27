@@ -104,6 +104,7 @@ esac
             "GITHUB_ENV": str(tmp_path / "github_env"),
             "WANDB_API_KEY": "",
             "DATASET_DIR": str(dataset_csv),
+            "PRETRAIN_GENERATE_GRAPH_VISUALS": "1",
         }
     )
 
@@ -137,6 +138,63 @@ esac
         payload = json.load(fh)
     assert payload["id"] == "1759795103"
     assert Path(payload["encoder_manifest"]).name == "encoder_manifest.json"
+
+
+def test_pretrain_graph_visuals_can_be_disabled(tmp_path):
+    experiments_root = tmp_path / "experiments"
+    dataset_csv = tmp_path / "toy_dataset.csv"
+    dataset_csv.write_text("smiles\nC\n", encoding="utf-8")
+    config_path = tmp_path / "train_jepa_ci.yml"
+    config_path.write_text("pretrain:\n  generate_graph_visuals: false\n", encoding="utf-8")
+
+    shim_path = tmp_path / "stage_shim.sh"
+    shim_path.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+stage="$1"
+case "$stage" in
+  pretrain)
+    mkdir -p "$PRETRAIN_DIR" "$PRETRAIN_DIR/stage-outputs" "$PRETRAIN_ARTIFACTS_DIR"
+    printf 'stub' > "$PRETRAIN_DIR/encoder.pt"
+    cat <<JSON > "$PRETRAIN_ARTIFACTS_DIR/encoder_manifest.json"
+{"paths":{"encoder":"$PRETRAIN_DIR/encoder.pt"}}
+JSON
+    cat <<JSON > "$PRETRAIN_DIR/stage-outputs/pretrain.json"
+{"manifest_path":"$PRETRAIN_ARTIFACTS_DIR/encoder_manifest.json","encoder_checkpoint":"$PRETRAIN_DIR/encoder.pt"}
+JSON
+    ;;
+  *)
+    ;;
+esac
+"""
+    )
+    shim_path.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "EXPERIMENTS_ROOT": str(experiments_root),
+            "EXP_ID": "2112",
+            "MJEPACI_STAGE_SHIM": str(shim_path),
+            "GITHUB_ENV": str(tmp_path / "github_env"),
+            "WANDB_API_KEY": "",
+            "DATASET_DIR": str(dataset_csv),
+            "TRAIN_JEPA_CI": str(config_path),
+        }
+    )
+
+    _run(["bash", "scripts/ci/run-pretrain.sh"], env)
+
+    graphs_dir = experiments_root / "2112" / "graphs"
+    summary_path = graphs_dir / "summary.json"
+    assert graphs_dir.is_dir(), graphs_dir
+    assert summary_path.is_file(), summary_path
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["fallback_reason"] == "graph visuals disabled via config"
+    assert summary["num_graphs"] == 0
+    assert summary["num_rendered"] == 0
+    assert summary["loader"] == "placeholder"
 
     all_paths = {str(p) for p in experiments_root.rglob("*")}
     assert all("18296078427" not in p for p in all_paths)
