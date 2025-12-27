@@ -72,6 +72,9 @@ if [[ "$SOURCE" == "pretrain_frozen" ]]; then
   fi
 fi
 
+export TOX21_ENCODER_SOURCE="$SOURCE"
+export TOX21_EVALUATION_MODE="$SOURCE"
+
 wandb_mode="${SOURCE//_/-}"
 if [[ "$SOURCE" == "pretrain_frozen" ]]; then
   wandb_mode="baseline"
