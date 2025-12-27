@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import math
+import random
 import sys
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import log_effective_gnn
 
@@ -112,8 +115,6 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     report_json = os.path.join(args.report_dir, report_stem + ".json")
     report_csv = os.path.join(args.report_dir, report_stem + ".csv")
 
-    data_dir = getattr(args, "test_dir", None) or args.labeled_dir
-
     # safe W&B helpers
     # safe W&B helpers: prefer wb.log / wb.finish if present; else try wb.run.*
     def _wb_log(payload):
@@ -137,19 +138,253 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         except Exception:
             pass
 
+    split_aliases = {
+        "train": ("train",),
+        "val": ("val", "valid", "validation"),
+        "test": ("test",),
+    }
+
+    def _canonical_split_name(name: str) -> Optional[str]:
+        lower = name.lower()
+        for canon, aliases in split_aliases.items():
+            if lower == canon or lower in aliases:
+                return canon
+            for sep in ("-", "_"):
+                if lower.endswith(f"{sep}{canon}") or any(
+                    lower.endswith(f"{sep}{alias}") for alias in aliases
+                ):
+                    return canon
+        return None
+
+    def _discover_sibling_splits(dirpath: Path) -> Tuple[Optional[str], Dict[str, Path]]:
+        split_hint = _canonical_split_name(dirpath.name)
+        found: Dict[str, Path] = {}
+        if split_hint is None:
+            return None, found
+        parent = dirpath.parent
+        try:
+            siblings = list(parent.iterdir())
+        except Exception:
+            siblings = []
+        for canon, aliases in split_aliases.items():
+            for name in aliases + (canon,):
+                candidate = parent / name
+                if candidate.is_dir():
+                    found.setdefault(canon, candidate)
+                    break
+        for sib in siblings:
+            if not sib.is_dir():
+                continue
+            canon = _canonical_split_name(sib.name)
+            if canon is not None and canon not in found:
+                found[canon] = sib
+        if dirpath.is_dir():
+            found.setdefault(split_hint, dirpath)
+        return split_hint, found
+
+    def _merge_split_datasets(split_map: Dict[str, Any]) -> Tuple[Any, Dict[str, List[int]]]:
+        graphs_all: List[Any] = []
+        labels_all: List[Any] = []
+        smiles_all: List[str] = []
+        labels_present = False
+        indices: Dict[str, List[int]] = {"train": [], "val": [], "test": []}
+        offset = 0
+        ordered: Sequence[Tuple[str, Any]] = [
+            (name, split_map[name])
+            for name in ("train", "val", "test")
+            if name in split_map and split_map[name] is not None
+        ]
+        for split_name, dataset in ordered:
+            size = len(dataset) if hasattr(dataset, "__len__") else 0
+            indices[split_name] = list(range(offset, offset + size))
+            offset += size
+            graphs_all.extend(getattr(dataset, "graphs", []))
+            smiles_all.extend(getattr(dataset, "smiles", []) or [])
+            labels_attr = getattr(dataset, "labels", None)
+            if labels_attr is not None:
+                labels_present = True
+                labels_all.extend(np.asarray(labels_attr).tolist())
+        labels_arr = np.asarray(labels_all) if labels_present else None
+
+        dataset_cls = ordered[0][1].__class__ if ordered else None
+
+        def _fallback_dataset(graphs, labels, smiles):
+            class _CombinedDataset:
+                def __init__(self, g, l, s):
+                    self.graphs = g
+                    self.labels = l
+                    self.smiles = s
+
+                def __len__(self):
+                    return len(self.graphs)
+
+            return _CombinedDataset(graphs, labels, smiles)
+
+        try:
+            combined = dataset_cls(graphs_all, labels_arr, smiles_all or None)  # type: ignore[operator]
+        except Exception:
+            combined = _fallback_dataset(graphs_all, labels_arr, smiles_all or None)
+        return combined, indices
+
+    def _estimate_split_sizes(
+        dataset: Any,
+        train_indices: Optional[Sequence[int]],
+        val_indices: Optional[Sequence[int]],
+        test_indices: Optional[Sequence[int]],
+    ) -> Dict[str, int]:
+        stats: Dict[str, int] = {}
+        total = None
+        try:
+            total = len(dataset)  # type: ignore[arg-type]
+        except Exception:
+            total = None
+        if total is None:
+            return stats
+        stats["n_total"] = int(total)
+        if any(idx is not None for idx in (train_indices, val_indices, test_indices)):
+            stats["n_train"] = len(train_indices or [])
+            stats["n_val"] = len(val_indices or [])
+            stats["n_test"] = len(test_indices or [])
+            return stats
+        if getattr(args, "task_type", None) == "classification":
+            labels_attr = getattr(dataset, "labels", None)
+            if labels_attr is not None:
+                labels_arr = np.asarray(labels_attr)
+                _, counts = np.unique(labels_arr, return_counts=True)
+                stats["n_train"] = int(sum(math.floor(0.8 * c) for c in counts))
+                stats["n_val"] = int(sum(math.floor(0.1 * c) for c in counts))
+                stats["n_test"] = max(0, int(total) - stats["n_train"] - stats["n_val"])
+                return stats
+        stats["n_train"] = int(math.floor(0.8 * total))
+        stats["n_val"] = int(math.floor(0.1 * total))
+        stats["n_test"] = max(0, int(total) - stats["n_train"] - stats["n_val"])
+        return stats
+
+    def _scaled_batch_size(requested: Any, dataset_size: int) -> int:
+        try:
+            req = int(requested)
+        except Exception:
+            req = 1
+        if req <= 0:
+            req = 1
+        target = max(8, dataset_size // 8)
+        scaled = min(req, max(1, target))
+        if scaled != req:
+            expected_batches = max(1, math.ceil(dataset_size / max(1, scaled)))
+            logger.warning(
+                "Detected split-only dataset at %s (N=%d); adjusting batch_size from %d to %d to target ~%d batches.",
+                args.labeled_dir,
+                dataset_size,
+                req,
+                scaled,
+                expected_batches,
+            )
+        return scaled
+
+    loader_kwargs = {
+        "label_col": args.label_col,
+        "add_3d": args.add_3d,
+        "num_workers": getattr(args, "num_workers", -1),
+        "cache_dir": getattr(args, "cache_dir", None),
+    }
+
+    train_indices: Optional[List[int]] = None
+    val_indices: Optional[List[int]] = None
+    test_indices: Optional[List[int]] = None
+    dataset_stats: Dict[str, int] = {}
+    effective_batch_size = args.batch_size
+    dataset_strategy = "single_dir"
+
+    split_hint, sibling_dirs = _discover_sibling_splits(Path(args.labeled_dir))
+
     try:
-        labeled = load_directory_dataset(
-            data_dir,
-            label_col=args.label_col,
-            add_3d=args.add_3d,
-            num_workers=getattr(args, "num_workers", -1),
-            cache_dir=getattr(args, "cache_dir", None),
-        )  # type: ignore[arg-type]
-        _wb_log({"phase": "data_load", "labeled_graphs": len(labeled)})
+        if getattr(args, "test_dir", None):
+            labeled = load_directory_dataset(
+                args.test_dir,
+                **loader_kwargs,  # type: ignore[arg-type]
+            )
+            dataset_strategy = "eval_only_test_dir"
+            dataset_stats = {
+                "n_total": len(labeled) if hasattr(labeled, "__len__") else 0,
+                "n_train": 0,
+                "n_val": 0,
+                "n_test": len(labeled) if hasattr(labeled, "__len__") else 0,
+            }
+            _wb_log({"phase": "data_load", "test_graphs": dataset_stats["n_test"]})
+        elif "train" in sibling_dirs:
+            split_datasets: Dict[str, Any] = {}
+            split_counts: Dict[str, int] = {}
+            for name in ("train", "val", "test"):
+                path = sibling_dirs.get(name)
+                if path is None:
+                    continue
+                ds = load_directory_dataset(str(path), **loader_kwargs)  # type: ignore[arg-type]
+                split_datasets[name] = ds
+                split_counts[name] = len(ds) if hasattr(ds, "__len__") else 0
+            labeled, indices = _merge_split_datasets(split_datasets)
+            train_indices = indices.get("train")
+            val_indices = indices.get("val")
+            test_indices = indices.get("test")
+            dataset_strategy = "explicit_splits"
+            logger.info(
+                "Detected split directory input under %s; using train=%s (N=%d) val=%s (N=%d) test=%s (N=%d)",
+                args.labeled_dir,
+                sibling_dirs.get("train"),
+                split_counts.get("train", 0),
+                sibling_dirs.get("val"),
+                split_counts.get("val", 0),
+                sibling_dirs.get("test"),
+                split_counts.get("test", 0),
+            )
+            _wb_log(
+                {
+                    "phase": "data_load",
+                    "train_graphs": split_counts.get("train", 0),
+                    "val_graphs": split_counts.get("val", 0),
+                    "test_graphs": split_counts.get("test", 0),
+                    "dataset/strategy": dataset_strategy,
+                }
+            )
+        else:
+            data_dir = getattr(args, "test_dir", None) or args.labeled_dir
+            labeled = load_directory_dataset(
+                data_dir,
+                **loader_kwargs,  # type: ignore[arg-type]
+            )
+            dataset_strategy = "single_split_dir" if split_hint is not None else "single_dir"
+            if split_hint is not None:
+                logger.info(
+                    "Input directory %s appears to be a '%s' split without sibling train data; reusing it for training/validation.",
+                    data_dir,
+                    split_hint,
+                )
+                dataset_len = len(labeled) if hasattr(labeled, "__len__") else 0
+                effective_batch_size = _scaled_batch_size(args.batch_size, dataset_len)
+                if effective_batch_size != args.batch_size:
+                    _wb_log(
+                        {
+                            "dataset/batch_size_requested": args.batch_size,
+                            "dataset/batch_size_effective": effective_batch_size,
+                            "dataset/strategy": "single_split_dir",
+                            "dataset/size": dataset_len,
+                        }
+                    )
+            _wb_log({"phase": "data_load", "labeled_graphs": len(labeled)})
     except Exception:
         logger.exception("Failed to load labelled dataset for benchmarking")
         _wb_log({"phase": "data_load", "status": "error"})
         sys.exit(1)
+
+    dataset_stats = _estimate_split_sizes(
+        labeled,
+        train_indices=train_indices,
+        val_indices=val_indices,
+        test_indices=test_indices,
+    )
+    if dataset_stats:
+        payload = {f"dataset/{k}": v for k, v in dataset_stats.items()}
+        payload["dataset/strategy"] = dataset_strategy
+        _wb_log(payload)
 
     input_dim = labeled.graphs[0].x.shape[1]
     edge_dim = (
@@ -194,6 +429,9 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
         try:
             payload = {"results": all_results, "best_method": verdict}
+            if dataset_stats:
+                payload["dataset_stats"] = dataset_stats
+                payload["dataset_strategy"] = dataset_strategy
             if threshold_rule is not None:
                 payload["threshold"] = {
                     "dataset": dataset_name,
@@ -212,6 +450,11 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
                 if threshold_rule is not None:
                     w.writerow(["threshold/metric", threshold_rule.metric])
                     w.writerow(["threshold/value", float(threshold_rule.threshold)])
+                if dataset_stats:
+                    for key in ("n_total", "n_train", "n_val", "n_test"):
+                        if key in dataset_stats:
+                            w.writerow(["dataset_stats", key, dataset_stats[key]])
+                    w.writerow(["dataset_stats", "strategy", dataset_strategy])
             logger.info("Wrote reports: %s , %s", report_json, report_csv)
         except Exception:
             logger.warning("Failed to write reports", exc_info=True)
@@ -248,6 +491,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
         for seed in seeds:
             # Repro
+            random.seed(seed)
             torch.manual_seed(seed)
             np.random.seed(seed)
             try:
@@ -282,7 +526,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
                 task_type=args.task_type,
                 epochs=args.epochs,
                 lr=args.lr,
-                batch_size=args.batch_size,
+                batch_size=effective_batch_size,
                 device=device,
                 patience=args.patience,
                 devices=args.devices,
@@ -291,6 +535,9 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
                 persistent_workers=getattr(args, "persistent_workers", True),
                 prefetch_factor=getattr(args, "prefetch_factor", 4),
                 bf16=getattr(args, "bf16", False),
+                train_indices=train_indices,
+                val_indices=val_indices,
+                test_indices=test_indices,
             )
             metrics_runs.append({k: v for k, v in mets.items() if k != "head"})
 
@@ -403,6 +650,9 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     # --- Write JSON/CSV report with all results + verdict ---
     try:
         payload = {"results": all_results, "best_method": verdict}
+        if dataset_stats:
+            payload["dataset_stats"] = dataset_stats
+            payload["dataset_strategy"] = dataset_strategy
         if threshold_report is not None:
             payload["threshold"] = threshold_report
         with open(report_json, "w", encoding="utf-8") as f:
@@ -430,6 +680,11 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
                     w.writerow(["threshold/best_method", metric_value_key or "value", float(best_metric_value)])
                     if metric_pass is not None:
                         w.writerow(["threshold/best_method", "passed", metric_pass])
+            if dataset_stats:
+                for key in ("n_total", "n_train", "n_val", "n_test"):
+                    if key in dataset_stats:
+                        w.writerow(["dataset_stats", key, dataset_stats[key]])
+                w.writerow(["dataset_stats", "strategy", dataset_strategy])
         logger.info("Wrote reports: %s , %s", report_json, report_csv)
     except Exception:
         logger.warning("Failed to write reports", exc_info=True)
