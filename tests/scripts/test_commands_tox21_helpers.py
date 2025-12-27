@@ -86,7 +86,15 @@ def test_run_single_task_passes_explain_kwargs(tmp_path, monkeypatch):
         )
         return DummyResult(
             evaluations=[eval_obj],
-            diagnostics={"allow_shape_coercion_effective": False},
+            diagnostics={
+                "allow_shape_coercion_effective": False,
+                "test_predictions": {
+                    "indices": [0, 1],
+                    "logits": [1.2, -0.3],
+                    "probabilities": [0.7, 0.4],
+                    "true_labels": [1, 0],
+                },
+            },
             gate_passed=True,
             threshold_payload={},
             target_payload={},
@@ -155,7 +163,7 @@ def test_run_single_task_passes_explain_kwargs(tmp_path, monkeypatch):
         _gnn_type_provided=True,
     )
 
-    tox._run_tox21_single_task(
+    result = tox._run_tox21_single_task(
         args,
         dataset_name="tox21",
         eval_mode="pretrain_frozen",
@@ -173,6 +181,11 @@ def test_run_single_task_passes_explain_kwargs(tmp_path, monkeypatch):
     assert captured.get("config", {}).get("output_dir") == str(report_dir)
     assert captured.get("config", {}).get("steps") == 11
     assert captured.get("config", {}).get("task_name") == "NR-AR"
+    pred_path = report_dir / "tox21_NR-AR_scores.csv"
+    assert pred_path.is_file()
+    assert result.get("prediction_csv_path") == str(pred_path)
+    assert pred_path.read_text().splitlines()[0] == "graph_id,assay,true_label,logit,probability"
+    assert result.get("stage_payload", {}).get("prediction_csv") == str(pred_path)
 
 
 def test_run_single_task_normalises_motif_alias(tmp_path, monkeypatch):
