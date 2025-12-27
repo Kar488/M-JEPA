@@ -79,7 +79,7 @@ finetune:
   head_lr: ${FINETUNE_HEAD_LR:-1.0e-4}
 
   use_scaffold: ${FINETUNE_USE_SCAFFOLD:-true}
-  
+
   hidden_dim: ${FINETUNE_HIDDEN_DIM:-256}
   num_layers: ${FINETUNE_NUM_LAYERS:-3}
   dropout: ${FINETUNE_DROPOUT:-0.1}
@@ -144,7 +144,7 @@ tox21:
   evaluation_mode: pretrain_frozen
   freeze_encoder: false
   batch_size: 256
-  epochs: ${TOX21_EPOCHS:-30}
+  epochs: 50
   patience: 12
   head_lr: ${TOX21_HEAD_LR:-0.00025}
   encoder_lr: ${TOX21_ENCODER_LR:-3.0e-6}
@@ -152,18 +152,17 @@ tox21:
   hidden_dim: ${TOX21_HIDDEN_DIM:-384}
   num_layers: ${TOX21_NUM_LAYERS:-4}
   dropout: ${TOX21_DROPOUT:-0.2}
-  head_ensemble_size: ${TOX21_HEAD_ENSEMBLE_SIZE:-5}
+  head_ensemble_size: ${TOX21_HEAD_ENSEMBLE_SIZE:-1}
   head_scheduler: ${TOX21_HEAD_SCHEDULER:-cosine}
   layerwise_decay: ${FINETUNE_LAYERWISE_DECAY:-}
   unfreeze_top_layers: ${UNFREEZE_TOP_LAYERS:-0}
-  triage_pct: ${TOX21_TRIAGE_PCT:-0.05}
+  triage_pct: ${TOX21_TRIAGE_PCT:-0.0}
   class_weights: "${TOX21_CLASS_WEIGHTS:-auto}"
   pos_class_weight: "${TOX21_POS_CLASS_WEIGHT:-}"
   seeds:
     - 0
     - 1
     - 2
-    - 3
   allow_shape_coercion: false
   allow_equal_hash: false
   verify_match_threshold: 0.98
