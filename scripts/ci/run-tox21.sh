@@ -91,10 +91,10 @@ MANIFEST_DEFAULT="${PRETRAIN_MANIFEST:-${PRETRAIN_ARTIFACTS_DIR}/encoder_manifes
 MANIFEST_PATH="${TOX21_ENCODER_MANIFEST:-$MANIFEST_DEFAULT}"
 
 if [[ "$SOURCE" == "fine_tuned" ]]; then
-  : "${FINETUNE_EPOCHS:=20}"
+  : "${FINETUNE_EPOCHS:=50}"
   : "${TOX21_HIDDEN_DIM:=512}"
   : "${TOX21_NUM_LAYERS:=6}"
-  : "${TOX21_HEAD_ENSEMBLE_SIZE:=3}"
+  : "${TOX21_HEAD_ENSEMBLE_SIZE:=1}"
   : "${FINETUNE_LAYERWISE_DECAY:=0.9}"
   : "${UNFREEZE_TOP_LAYERS:=1}"
   : "${TOX21_HEAD_SCHEDULER:=cosine}"
@@ -113,7 +113,7 @@ if [[ "$SOURCE" == "fine_tuned" ]]; then
   export TOX21_HEAD_SCHEDULER
 elif [[ "$SOURCE" == "end_to_end" ]]; then
   if [[ -z "${FINETUNE_EPOCHS:-}" ]]; then
-    FINETUNE_EPOCHS=10
+    FINETUNE_EPOCHS=50
   fi
   if [[ -z "${TOX21_FINETUNE_PATIENCE:-}" ]]; then
     TOX21_FINETUNE_PATIENCE=10
