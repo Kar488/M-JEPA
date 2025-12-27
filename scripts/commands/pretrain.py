@@ -1192,12 +1192,35 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             existing_manifest = _load_existing_manifest(manifest_path)
             existing_metric = _extract_metric_from_manifest(existing_manifest or {})
 
-            should_write = True
-            if existing_manifest is not None:
-                if manifest_metric is None:
-                    should_write = False
-                else:
-                    should_write = _metric_is_better(manifest_metric, existing_metric)
+            existing_paths: Dict[str, Any] = {}
+            existing_hashes: Dict[str, Any] = {}
+            if isinstance(existing_manifest, dict):
+                if isinstance(existing_manifest.get("paths"), dict):
+                    existing_paths = existing_manifest.get("paths", {})
+                if isinstance(existing_manifest.get("hashes"), dict):
+                    existing_hashes = existing_manifest.get("hashes", {})
+
+            new_encoder_path = os.path.abspath(ckpt_base)
+            existing_encoder_path = existing_paths.get("encoder")
+            path_changed = False
+            if existing_encoder_path:
+                try:
+                    path_changed = os.path.abspath(existing_encoder_path) != new_encoder_path
+                except Exception:
+                    path_changed = True
+
+            existing_encoder_hash = existing_hashes.get("encoder")
+            encoder_hash_changed = encoder_hash is not None and encoder_hash != existing_encoder_hash
+            missing_new_hash = encoder_hash is None and existing_encoder_hash is not None
+            new_hash_without_previous = encoder_hash is not None and existing_encoder_hash is None
+            encoder_changed = any(
+                [path_changed, encoder_hash_changed, missing_new_hash, new_hash_without_previous]
+            )
+
+            metric_improved = _metric_is_better(manifest_metric, existing_metric)
+            should_write = existing_manifest is None or encoder_changed or (
+                manifest_metric is not None and metric_improved
+            )
 
             manifest_payload: Dict[str, Any]
             if should_write:
@@ -1263,9 +1286,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 manifest_payload = existing_manifest or {}
                 if manifest_metric is None:
                     logger.info(
-                        "Skipping manifest update; no validation metric provided and existing manifest present",
+                        "Skipping manifest update; no validation metric provided, encoder unchanged",
                     )
-                else:
+                elif not metric_improved:
                     logger.info(
                         "Skipping manifest update; validation metric did not improve (current=%s, previous=%s)",
                         manifest_metric,
@@ -1295,8 +1318,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             elif manifest_payload:
                 manifest_payload.setdefault("metrics", {})
 
-            if should_write and hashes_block:
-                manifest_payload["hashes"] = hashes_block
+            if should_write:
+                if hashes_block:
+                    manifest_payload["hashes"] = hashes_block
                 if manifest_metric is not None:
                     manifest_payload["metrics"]["validation"] = manifest_metric
 
@@ -1304,13 +1328,6 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     json.dump(manifest_payload, fh, indent=2, sort_keys=True)
                     fh.write("\n")
                 logger.info("Wrote encoder manifest to %s", manifest_path)
-            elif should_write:
-                manifest_payload = existing_manifest or {}
-                logger.info(
-                    "Skipping manifest update; validation metric did not improve (current=%s, previous=%s)",
-                    manifest_metric,
-                    existing_metric,
-                )
 
             if manifest_path.exists():
                 manifest_str = str(manifest_path)

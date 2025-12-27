@@ -358,7 +358,12 @@ def _sanitise_dataframe_for_wandb(df: Any) -> Any:
 
     if df is None:
         return None
-    if not isinstance(df, pd.DataFrame):
+    DataFrame = getattr(pd, "DataFrame", None)
+    try:
+        is_dataframe = isinstance(df, DataFrame) if isinstance(DataFrame, type) else False
+    except Exception:
+        is_dataframe = False
+    if not is_dataframe:
         return df
     if df.empty:
         return df.copy()
