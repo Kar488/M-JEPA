@@ -838,8 +838,11 @@ def _run_tox21_single_task(
         return normalised
 
     def _filter_explain_modes(modes: List[str]) -> List[str]:
-        allowed = {"ig", "ig_motif"}
+        allowed = {"ig", "ig_motif", "off"}
         filtered = [mode for mode in modes if mode in allowed]
+        if "off" in filtered:
+            return []
+        filtered = [mode for mode in filtered if mode != "off"]
         if not filtered:
             return ["ig", "ig_motif"]
         return filtered
