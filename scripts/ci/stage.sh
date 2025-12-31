@@ -1693,6 +1693,21 @@ build_stage_args() {
         OUT+=("--no-calibrate")
       fi
     fi
+
+    local per_head_flag_present=0
+    for token in "${OUT[@]}"; do
+      if [[ "$token" == "--calibrate-per-head" ]]; then
+        per_head_flag_present=1
+        break
+      fi
+    done
+    if (( ! per_head_flag_present )); then
+      case "${TOX21_CALIBRATE_PER_HEAD,,}" in
+        1|true|yes|on)
+          OUT+=("--calibrate-per-head")
+          ;;
+      esac
+    fi
   fi
 
   if [ "$s" = "report" ]; then

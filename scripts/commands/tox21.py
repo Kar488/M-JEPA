@@ -214,6 +214,7 @@ if run_tox21_case_study is None:  # pragma: no cover - exercised in fallback tes
         dataset_name: str = "tox21",
         triage_pct: float = 0.10,
         calibrate: bool = True,
+        calibrate_per_head: bool = False,
         encoder_source_override: Optional[str] = None,
         evaluation_mode: Optional[str] = None,
         encoder_checkpoint: Optional[str] = None,
@@ -799,6 +800,7 @@ def _run_tox21_single_task(
     eval_mode: str,
     triage_pct: float,
     calibrate: bool,
+    calibrate_per_head: bool = False,
     cache_dir: Optional[str],
     report_dir: str,
     wb: Any,
@@ -994,6 +996,7 @@ def _run_tox21_single_task(
         "contrastive": getattr(args, "contrastive", False),
         "triage_pct": triage_pct,
         "calibrate": calibrate,
+        "calibrate_per_head": calibrate_per_head,
         "device": device_value,
         "devices": devices_val,
         "num_workers": getattr(args, "num_workers", -1),
@@ -1514,6 +1517,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
 
     triage_pct = getattr(args, "triage_pct", 0.10)
     calibrate = not getattr(args, "no_calibrate", False)
+    calibrate_per_head = bool(getattr(args, "calibrate_per_head", False))
 
     best_overrides, best_path = _load_best_config_overrides(args)
     inherited: List[str] = []
@@ -1778,6 +1782,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 eval_mode=eval_mode,
                 triage_pct=triage_pct,
                 calibrate=calibrate,
+                calibrate_per_head=calibrate_per_head,
                 cache_dir=cache_dir,
                 report_dir=report_dir,
                 wb=wb,
@@ -2129,6 +2134,11 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, dest="batch_size")
     parser.add_argument("--triage-pct", type=float, dest="triage_pct")
     parser.add_argument("--no-calibrate", action="store_true", dest="no_calibrate")
+    parser.add_argument(
+        "--calibrate-per-head",
+        action=_StandaloneBoolFlag,
+        dest="calibrate_per_head",
+    )
     parser.add_argument("--pos-class-weight", action="append", dest="pos_class_weight")
     parser.add_argument(
         "--allow-shape-coercion",
@@ -2186,6 +2196,8 @@ def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespa
         namespace.triage_pct = 0.0
     if not hasattr(namespace, "no_calibrate"):
         namespace.no_calibrate = False
+    if not hasattr(namespace, "calibrate_per_head") or namespace.calibrate_per_head is None:
+        namespace.calibrate_per_head = False
     if not hasattr(namespace, "pos_class_weight"):
         namespace.pos_class_weight = None
     if not hasattr(namespace, "freeze_encoder"):

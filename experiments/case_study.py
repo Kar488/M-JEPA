@@ -1067,6 +1067,7 @@ def _evaluate_case_study(
     device: str,
     edge_dim: int,
     seed: int,
+    calibrate_per_head: bool = False,
     baseline_embeddings: Optional[dict[str, str]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
     num_workers: Optional[int] = None,
@@ -1138,6 +1139,7 @@ def _evaluate_case_study(
         return stacked.mean(dim=0)
 
     per_head_probs: Dict[str, List[torch.Tensor]] = {}
+    per_head_logits: Dict[str, List[torch.Tensor]] = {}
 
     def _collect_predictions(split: str, indices: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
         logits_members: List[torch.Tensor] = []
@@ -1175,6 +1177,7 @@ def _evaluate_case_study(
             logits_members.append(logits)
             probs_members.append(probs)
         per_head_probs[split] = list(probs_members)
+        per_head_logits[split] = list(logits_members)
         return _mean_tensors(logits_members, split, "logits"), _mean_tensors(probs_members, split, "probabilities")
 
     val_logits, val_probs = _collect_predictions("val", val_indices)
@@ -1223,15 +1226,158 @@ def _evaluate_case_study(
     val_probs_np = _select_positive_probabilities(val_probs.cpu().numpy())
     test_probs_np = _select_positive_probabilities(test_probs.cpu().numpy())
 
+    expected_len = int(test_idx_arr.size)
+
+    def _resize_to_expected(arr: np.ndarray, label: str) -> np.ndarray:
+        arr = np.asarray(arr, dtype=float).reshape(-1)
+        if expected_len == 0:
+            return np.zeros((0,), dtype=float)
+        if arr.size == 0:
+            logger.warning(
+                "No %s were produced for %d test molecules; defaulting to zeros.",
+                label,
+                expected_len,
+            )
+            return np.zeros(expected_len, dtype=float)
+        if arr.size != expected_len:
+            logger.warning(
+                "Resizing %s from %d to match %d test molecules.",
+                label,
+                arr.size,
+                expected_len,
+            )
+            try:
+                arr = np.resize(arr, expected_len).reshape(-1)
+            except Exception:
+                logger.warning(
+                    "Resizing %s failed; padding with zeros instead.",
+                    label,
+                )
+                arr = np.zeros(expected_len, dtype=float)
+        if arr.size != expected_len:
+            logger.warning(
+                "%s still mismatched after resizing; padding with zeros.",
+                label,
+            )
+            arr = np.zeros(expected_len, dtype=float)
+        return arr
+
     calibrator_info: Dict[str, Any] = {
         "enabled": bool(calibrate),
         "fit_split": "val",
+        "per_head_enabled": bool(calibrate_per_head),
+        "mode": "aggregate",
     }
     feature_dim = int(val_logits_feat.shape[1]) if val_logits_feat.ndim == 2 else 1
     if calibrate or (val_logits_np.ndim >= 2 and val_logits_np.shape[-1] > 1):
         calibrator_info["feature_dim"] = feature_dim
     calibrated_probs = test_probs_np
-    if calibrate:
+    calibration_needed = bool(calibrate)
+    per_head_entries: List[Dict[str, Any]] = []
+    per_head_calibrated: List[np.ndarray] = []
+    per_head_variance_threshold = 1e-8
+    if calibration_needed and calibrate_per_head:
+        head_val_logits_seq = per_head_logits.get("val", [])
+        head_test_logits_seq = per_head_logits.get("test", [])
+        head_count = min(len(head_val_logits_seq), len(head_test_logits_seq))
+        if head_count > 0:
+            calibrator_info["mode"] = "per_head"
+            calibrator_info["per_head_total"] = head_count
+            val_y_full = all_labels[val_idx_arr].astype(float)
+            for head_idx in range(head_count):
+                entry: Dict[str, Any] = {"head_index": head_idx}
+                head_val_logits = head_val_logits_seq[head_idx]
+                head_test_logits = head_test_logits_seq[head_idx]
+                val_logits_np_head = (
+                    head_val_logits.detach().cpu().numpy()
+                    if isinstance(head_val_logits, torch.Tensor)
+                    else np.asarray(head_val_logits)
+                )
+                test_logits_np_head = (
+                    head_test_logits.detach().cpu().numpy()
+                    if isinstance(head_test_logits, torch.Tensor)
+                    else np.asarray(head_test_logits)
+                )
+                val_feat_head = _select_calibration_features(val_logits_np_head)
+                test_feat_head = _select_calibration_features(test_logits_np_head)
+                entry["feature_dim"] = int(val_feat_head.shape[1]) if val_feat_head.ndim == 2 else 1
+                mask = (~np.isnan(val_y_full)) & np.isfinite(val_feat_head[:, 0])
+                yv = val_y_full[mask].astype(int)
+                Xv = np.nan_to_num(val_feat_head[mask], nan=0.0, posinf=1e6, neginf=-1e6)
+                entry["n_candidates"] = int(mask.sum())
+                entry["n_samples"] = int(yv.size)
+                variance = float(np.nanvar(Xv)) if Xv.size else 0.0
+                entry["variance"] = variance
+                if variance < per_head_variance_threshold:
+                    entry["status"] = "low_variance"
+                    per_head_entries.append(entry)
+                    continue
+                if yv.size > 1 and np.unique(yv).size > 1:
+                    try:
+                        platt = LogisticRegression(
+                            solver="lbfgs",
+                            max_iter=1000,
+                            class_weight="balanced",
+                        )
+                        platt.fit(Xv, yv)
+                        Xt = np.nan_to_num(test_feat_head, nan=0.0, posinf=1e6, neginf=-1e6)
+                        calibrated_head = platt.predict_proba(Xt)[:, 1]
+                        calibrated_head = _resize_to_expected(
+                            calibrated_head,
+                            f"calibrated probabilities (head {head_idx})",
+                        )
+                        per_head_calibrated.append(calibrated_head)
+                        entry.update(
+                            {
+                                "status": "fitted",
+                                "type": "platt",
+                                "class_weight": "balanced",
+                                "n_samples": int(yv.size),
+                                "coef": platt.coef_.reshape(-1).astype(float).tolist(),
+                                "intercept": float(platt.intercept_.reshape(-1)[0]),
+                            }
+                        )
+                    except Exception as exc:  # pragma: no cover - calibration optional
+                        entry.update({"status": "error", "error": str(exc)})
+                    per_head_entries.append(entry)
+                else:
+                    entry.update(
+                        {
+                            "status": "insufficient_variance",
+                            "reason": "need_two_classes",
+                            "n_samples": int(yv.size),
+                        }
+                    )
+                    per_head_entries.append(entry)
+            calibrator_info["per_head"] = per_head_entries
+            calibrator_info["per_head_variance_threshold"] = per_head_variance_threshold
+            if per_head_calibrated:
+                calibrator_info["status"] = "fitted"
+                calibrator_info["n_samples"] = int(
+                    max(
+                        (
+                            entry.get("n_samples", entry.get("n_candidates", 0))
+                            for entry in per_head_entries
+                            if isinstance(entry, Mapping)
+                        ),
+                        default=0,
+                    )
+                )
+                calibrator_info["per_head_fitted"] = len(per_head_calibrated)
+                calibrator_info["n_candidates"] = calibrator_info["n_samples"]
+                calibrated_probs = np.stack(per_head_calibrated, axis=0).mean(axis=0)
+                calibrator_info["mode_used"] = "per_head"
+                calibration_needed = False
+            else:
+                calibrator_info["mode"] = "per_head_fallback"
+                if per_head_entries:
+                    if all(entry.get("status") == "low_variance" for entry in per_head_entries):
+                        calibrator_info["fallback_reason"] = "low_variance"
+                calibrator_info.setdefault("status", "skipped")
+    if calibration_needed:
+        if calibrator_info.get("mode") != "per_head_fallback":
+            calibrator_info["mode"] = "aggregate"
+        calibrator_info["mode_used"] = "aggregate"
         calibrator_info["status"] = "skipped"
         try:
             val_y = all_labels[val_idx_arr].astype(float)
@@ -1266,60 +1412,15 @@ def _evaluate_case_study(
             logger.warning("Calibration skipped due to error: %s", exc)
             calibrated_probs = test_probs_np
             calibrator_info.update({"status": "error", "error": str(exc)})
-    else:
+    elif not calibrate:
         calibrator_info["status"] = "disabled"
+        calibrator_info["mode"] = "disabled"
+        calibrator_info["mode_used"] = "disabled"
 
-    expected_len = int(test_idx_arr.size)
-    calibrated_probs = np.asarray(calibrated_probs, dtype=float).reshape(-1)
-    if expected_len == 0:
-        calibrated_probs = np.zeros((0,), dtype=float)
-    else:
-        if calibrated_probs.size == 0:
-            logger.warning(
-                "No calibrated probabilities were produced for %d test molecules; defaulting to zeros.",
-                expected_len,
-            )
-            calibrated_probs = np.zeros(expected_len, dtype=float)
-        elif calibrated_probs.size != expected_len:
-            logger.warning(
-                "Resizing calibrated probabilities from %d to match %d test molecules.",
-                calibrated_probs.size,
-                expected_len,
-            )
-            try:
-                calibrated_probs = np.resize(calibrated_probs, expected_len).reshape(-1)
-            except Exception as exc:
-                logger.warning(
-                    "Resizing calibrated probabilities failed (%s); padding with zeros instead.",
-                    exc,
-                )
-                calibrated_probs = np.zeros(expected_len, dtype=float)
-        if calibrated_probs.size != expected_len:
-            logger.warning(
-                "Calibrated probabilities still mismatched after resizing; padding with zeros.",
-            )
-            calibrated_probs = np.zeros(expected_len, dtype=float)
+    calibrated_probs = _resize_to_expected(calibrated_probs, "calibrated probabilities")
 
     positive_logits = _select_positive_probabilities(test_logits_np)
-    positive_logits = np.asarray(positive_logits, dtype=float).reshape(-1)
-    if expected_len == 0:
-        positive_logits = np.zeros((0,), dtype=float)
-    else:
-        if positive_logits.size == 0:
-            positive_logits = np.zeros(expected_len, dtype=float)
-        elif positive_logits.size != expected_len:
-            logger.warning(
-                "Resizing test logits from %d to match %d test molecules.",
-                positive_logits.size,
-                expected_len,
-            )
-            try:
-                positive_logits = np.resize(positive_logits, expected_len).reshape(-1)
-            except Exception:
-                logger.warning(
-                    "Resizing test logits failed; padding with zeros instead.",
-                )
-                positive_logits = np.zeros(expected_len, dtype=float)
+    positive_logits = _resize_to_expected(positive_logits, "test logits")
 
     if diagnostics is not None:
         labels_for_test = np.asarray(all_labels[test_idx_arr], dtype=float).reshape(-1)
@@ -1579,6 +1680,7 @@ def run_tox21_case_study(
     contrastive: bool = False,
     triage_pct: float = 0.0,
     calibrate: bool = True,
+    calibrate_per_head: bool = False,
     use_pos_weight: bool = True,
     device: str = "cpu",
     baseline_embeddings: dict[str, str] | None = None,
@@ -3110,6 +3212,7 @@ def run_tox21_case_study(
         test_idx=test_idx,
         triage_pct=triage_pct,
         calibrate=calibrate,
+        calibrate_per_head=calibrate_per_head,
         device=device,
         edge_dim=edge_dim,
         seed=seed,
