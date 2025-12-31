@@ -1611,6 +1611,13 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     calibrate = not getattr(args, "no_calibrate", False)
     calibrate_per_head = bool(getattr(args, "calibrate_per_head", False))
 
+    finetune_epochs_provided = getattr(args, "_finetune_epochs_provided", None)
+    if finetune_epochs_provided is None:
+        finetune_epochs_provided = _flag_was_provided(("--finetune-epochs", "--finetune_epochs"))
+    patience_provided = getattr(args, "_patience_provided", None)
+    if patience_provided is None:
+        patience_provided = _flag_was_provided(("--patience",))
+
     best_overrides, best_path = _load_best_config_overrides(args)
     inherited: List[str] = []
     if "add_3d" in best_overrides and not _flag_was_provided(("--add-3d", "--add_3d")):
@@ -1672,16 +1679,14 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         if bool(current_val) != desired_flag or current_val is None:
             inherited.append(f"{key}={'true' if desired_flag else 'false'}")
             setattr(args, attr, desired_flag)
-    finetune_epochs_flag = _flag_was_provided(("--finetune-epochs", "--finetune_epochs"))
-    if "finetune_epochs" in best_overrides and not finetune_epochs_flag:
+    if "finetune_epochs" in best_overrides and not finetune_epochs_provided:
         desired_epochs = _coerce_int_like(best_overrides.get("finetune_epochs"))
         if desired_epochs is not None:
             current_epochs = getattr(args, "finetune_epochs", None)
             if current_epochs != desired_epochs:
                 inherited.append(f"finetune_epochs={desired_epochs}")
             setattr(args, "finetune_epochs", desired_epochs)
-    patience_flag = _flag_was_provided(("--patience",))
-    if "patience" in best_overrides and not patience_flag:
+    if "patience" in best_overrides and not patience_provided:
         desired_patience = _coerce_int_like(best_overrides.get("patience"))
         if desired_patience is not None:
             current_patience = getattr(args, "patience", None)
@@ -1744,7 +1749,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         or "pretrain_frozen"
     ).lower()
     baseline_mode = eval_mode == "baseline"
-    finetune_epochs_provided = _flag_was_provided(("--finetune-epochs", "--finetune_epochs"))
+    finetune_epochs_provided = bool(finetune_epochs_provided)
     baseline_epochs_env = _coerce_int_like(os.getenv("TOX21_BASELINE_FINETUNE_EPOCHS"))
     baseline_finetune_default = (
         baseline_epochs_env
@@ -1765,7 +1770,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     if finetune_epochs_value is None:
         finetune_epochs_value = finetune_epochs_default
     setattr(args, "finetune_epochs", finetune_epochs_value)
-    patience_provided = _flag_was_provided(("--patience",))
+    patience_provided = bool(patience_provided)
     baseline_patience_env = _coerce_int_like(os.getenv("TOX21_BASELINE_PATIENCE"))
     baseline_patience_default = (
         baseline_patience_env
