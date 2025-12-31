@@ -111,6 +111,20 @@ def _ci_log(message: str, **payload: Any) -> None:
         logger.info("[ci][info] %s", message)
 
 
+def _split_summary_from_labels(all_labels: np.ndarray, indices: List[int]) -> Dict[str, int]:
+    if not indices:
+        return {"size": 0, "finite": 0, "positives": 0}
+    arr = all_labels[np.asarray(indices, dtype=int)]
+    mask = np.isfinite(arr)
+    finite = int(mask.sum())
+    positives = int(np.nansum(arr[mask]))
+    return {
+        "size": int(len(indices)),
+        "finite": finite,
+        "positives": positives,
+    }
+
+
 def _sanitize_binary_labels(df: pd.DataFrame, label_col: str) -> tuple[pd.DataFrame, Dict[str, int]]:
     """Coerce binary labels and drop sentinel values.
 
@@ -2284,50 +2298,8 @@ def run_tox21_case_study(
 
     threshold_rule = _resolve_threshold_rule(dataset_name, task_name)
 
-
-    def _split_summary(indices: List[int]) -> Dict[str, int]:
-        if not indices:
-            return {"size": 0, "finite": 0, "positives": 0}
-        arr = all_labels[np.asarray(indices, dtype=int)]
-        mask = np.isfinite(arr)
-        finite = int(mask.sum())
-        positives = int(np.nansum(arr[mask]))
-        return {
-            "size": int(len(indices)),
-            "finite": finite,
-            "positives": positives,
-        }
-
-    used_scaffold_split = bool(scaffold_split_indices and _HAS_RDKIT)
-    if used_scaffold_split:
-        train_split, val_split, test_split = scaffold_split_indices(
-            smiles_list,
-            train_frac=train_fraction,
-            val_frac=val_fraction,
-            seed=seed,
-        )
-        train_idx = _to_list(np.asarray(train_split, dtype=int))
-        val_idx = _to_list(np.asarray(val_split, dtype=int))
-        test_idx = _to_list(np.asarray(test_split, dtype=int))
-        logger.info(
-            "Scaffold split: train=%d val=%d test=%d",
-            len(train_idx),
-            len(val_idx),
-            len(test_idx),
-        )
-    else:
-        logger.warning("RDKit scaffold split unavailable; using stratified random split.")
-        indices = list(range(num_total))
-        rand_state = random.getstate()
-        np_state = np.random.get_state()
-        train_idx, val_idx, test_idx = stratified_split(
-            indices,
-            dataset.labels,
-            train_frac=train_fraction,
-            val_frac=val_fraction,
-        )
-        random.setstate(rand_state)
-        np.random.set_state(np_state)
+    positive_floor = 1
+    diagnostics["split_positive_floor"] = int(positive_floor)
 
     def _has_label_diversity(indices: List[int]) -> bool:
         if not indices:
@@ -2340,39 +2312,152 @@ def run_tox21_case_study(
         unique = np.unique(observed.astype(int, copy=False))
         return unique.size >= 2
 
+    def _meets_positive_floor(summary: Dict[str, Dict[str, int]]) -> bool:
+        val_pos = summary.get("val", {}).get("positives", 0)
+        test_pos = summary.get("test", {}).get("positives", 0)
+        return val_pos >= positive_floor and test_pos >= positive_floor
+
+    split_attempts: List[Dict[str, Any]] = []
+
+    def _record_attempt(strategy: str, seed_value: Optional[int], summary: Dict[str, Dict[str, int]], issues: List[str]) -> None:
+        payload: Dict[str, Any] = {
+            "strategy": strategy,
+            "seed": int(seed_value) if seed_value is not None else None,
+            "split_counts": summary,
+            "ok": not issues,
+        }
+        if issues:
+            payload["issues"] = issues
+        split_attempts.append(payload)
+
+    used_scaffold_split = bool(scaffold_split_indices and _HAS_RDKIT)
+    final_strategy = "stratified"
+    train_idx: List[int] = []
+    val_idx: List[int] = []
+    test_idx: List[int] = []
+    split_summary: Dict[str, Dict[str, int]] = {}
+
+    def _compute_split_summary(train: List[int], val: List[int], test: List[int]) -> Dict[str, Dict[str, int]]:
+        return {
+            "train": _split_summary_from_labels(all_labels, train),
+            "val": _split_summary_from_labels(all_labels, val),
+            "test": _split_summary_from_labels(all_labels, test),
+        }
+
+    original_random_state = random.getstate()
+    original_np_state = np.random.get_state()
+
+    scaffold_success = False
     if used_scaffold_split:
-        missing_diversity: List[str] = []
-        if not _has_label_diversity(val_idx):
-            missing_diversity.append("val")
-        if not _has_label_diversity(test_idx):
-            missing_diversity.append("test")
-        if missing_diversity:
-            logger.warning(
-                "Scaffold split produced %s split(s) without label diversity; falling back to stratified split.",
-                ",".join(missing_diversity),
+        max_scaffold_attempts = 5
+        for offset in range(max_scaffold_attempts):
+            attempt_seed = int(seed) + offset
+            random.seed(attempt_seed)
+            np.random.seed(attempt_seed)
+            train_split, val_split, test_split = scaffold_split_indices(
+                smiles_list,
+                train_frac=train_fraction,
+                val_frac=val_fraction,
+                seed=attempt_seed,
             )
+            candidate_train = _to_list(np.asarray(train_split, dtype=int))
+            candidate_val = _to_list(np.asarray(val_split, dtype=int))
+            candidate_test = _to_list(np.asarray(test_split, dtype=int))
+            summary = _compute_split_summary(candidate_train, candidate_val, candidate_test)
+            issues: List[str] = []
+            missing_diversity: List[str] = []
+            if not _has_label_diversity(candidate_val):
+                missing_diversity.append("val")
+            if not _has_label_diversity(candidate_test):
+                missing_diversity.append("test")
+            if missing_diversity:
+                issues.append(f"missing_diversity:{','.join(missing_diversity)}")
+            if not _meets_positive_floor(summary):
+                issues.append("insufficient_positives")
+            _record_attempt("scaffold", attempt_seed, summary, issues)
+            if not issues:
+                train_idx = candidate_train
+                val_idx = candidate_val
+                test_idx = candidate_test
+                split_summary = summary
+                scaffold_success = True
+                final_strategy = "scaffold" if offset == 0 else "scaffold_retry"
+                logger.info(
+                    "Scaffold split (seed=%d): train=%d val=%d test=%d",
+                    attempt_seed,
+                    len(train_idx),
+                    len(val_idx),
+                    len(test_idx),
+                )
+                break
+        if not scaffold_success:
+            logger.warning(
+                "Scaffold split could not meet diversity/positive constraints after %d attempt(s); falling back to stratified split.",
+                max_scaffold_attempts,
+            )
+
+    if not scaffold_success:
+        max_stratified_attempts = 5
+        best_attempt: Optional[Dict[str, Any]] = None
+        if not used_scaffold_split:
+            logger.warning("RDKit scaffold split unavailable; using stratified random split.")
+        for offset in range(max_stratified_attempts):
+            attempt_seed = int(seed) + offset
+            random.seed(attempt_seed)
+            np.random.seed(attempt_seed)
             indices = list(range(num_total))
-            rand_state = random.getstate()
-            np_state = np.random.get_state()
-            train_idx, val_idx, test_idx = stratified_split(
+            candidate_train, candidate_val, candidate_test = stratified_split(
                 indices,
                 dataset.labels,
                 train_frac=train_fraction,
                 val_frac=val_fraction,
             )
-            random.setstate(rand_state)
-            np.random.set_state(np_state)
-            diagnostics["split_strategy"] = "stratified_fallback"
-        else:
-            diagnostics["split_strategy"] = "scaffold"
-    else:
-        diagnostics["split_strategy"] = "stratified"
+            summary = _compute_split_summary(candidate_train, candidate_val, candidate_test)
+            issues: List[str] = []
+            if not _meets_positive_floor(summary):
+                issues.append("insufficient_positives")
+            _record_attempt("stratified", attempt_seed, summary, issues)
 
-    split_summary = {
-        "train": _split_summary(train_idx),
-        "val": _split_summary(val_idx),
-        "test": _split_summary(test_idx),
-    }
+            min_pos = min(summary.get("val", {}).get("positives", 0), summary.get("test", {}).get("positives", 0))
+            if best_attempt is None or min_pos > best_attempt.get("min_pos", -1):
+                best_attempt = {
+                    "train": candidate_train,
+                    "val": candidate_val,
+                    "test": candidate_test,
+                    "summary": summary,
+                    "min_pos": min_pos,
+                    "issues": list(issues),
+                    "seed": attempt_seed,
+                }
+            if not issues:
+                train_idx = candidate_train
+                val_idx = candidate_val
+                test_idx = candidate_test
+                split_summary = summary
+                final_strategy = "stratified" if offset == 0 and not used_scaffold_split else "stratified_retry"
+                break
+        else:
+            if best_attempt is not None:
+                train_idx = best_attempt["train"]
+                val_idx = best_attempt["val"]
+                test_idx = best_attempt["test"]
+                split_summary = best_attempt["summary"]
+                final_strategy = "stratified_warn"
+            logger.warning(
+                "Stratified split could not satisfy positive floor=%d after %d attempt(s); proceeding with best available split.",
+                positive_floor,
+                max_stratified_attempts,
+            )
+
+    random.setstate(original_random_state)
+    np.random.set_state(original_np_state)
+
+    diagnostics["split_strategy"] = final_strategy
+    if split_attempts:
+        diagnostics["split_attempts"] = split_attempts
+    if not split_summary:
+        split_summary = _compute_split_summary(train_idx, val_idx, test_idx)
+
     diagnostics["split_counts"] = split_summary
     for split_name, stats in split_summary.items():
         logger.info(
@@ -2867,10 +2952,10 @@ def run_tox21_case_study(
         automatic_class_weight = bool(use_pos_weight)
 
     if ci_diag:
-        diagnostics["split_counts"] = {
-            "train": _split_summary(train_idx),
-            "val": _split_summary(val_idx),
-            "test": _split_summary(test_idx),
+        diagnostics["split_counts"] = diagnostics.get("split_counts") or {
+            "train": _split_summary_from_labels(all_labels, train_idx),
+            "val": _split_summary_from_labels(all_labels, val_idx),
+            "test": _split_summary_from_labels(all_labels, test_idx),
         }
         _ci_log(
             "tox21 dataset split",
