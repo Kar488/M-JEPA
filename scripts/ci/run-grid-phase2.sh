@@ -150,6 +150,27 @@ ci_phase2_locate_phase1_spec() {
   [[ -n "$best_dir" ]]
 }
 
+ci_phase2_exports_exist() {
+  local grid_root="${1%/}"
+  [[ -n "$grid_root" ]] || return 1
+
+  local -a markers=(
+    "${grid_root}/phase2_export/best_grid_config.json"
+    "${grid_root}/phase2_export/stage-outputs/best_grid_config.json"
+    "${grid_root}/phase2_export/recheck_summary.json"
+    "${grid_root}/phase2_export/stage-outputs/recheck_summary.json"
+    "${grid_root}/phase2_export/stage-outputs/phase2_runs.csv"
+  )
+
+  local marker
+  for marker in "${markers[@]}"; do
+    if [[ -f "$marker" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 ci_phase2_ensure_sweep_id() {
   local grid_root="${1%/}"
   local prior_source="${2%/}"
@@ -242,6 +263,21 @@ if (( FROZEN )) && [[ "${CI_FORCE_UNFREEZE_GRID}" != "1" ]]; then
   freeze_active=1
 fi
 
+phase2_reuse_requested=0
+phase2_reuse_reason=""
+if (( freeze_active )); then
+  phase2_reuse_requested=1
+  phase2_reuse_reason="frozen lineage"
+fi
+if (( ci_phase2_force_reuse )); then
+  phase2_reuse_requested=1
+  if [[ -n "$phase2_reuse_reason" ]]; then
+    phase2_reuse_reason+=", CI_PHASE2_FORCE_REUSE_PHASE2_IDS=1"
+  else
+    phase2_reuse_reason="CI_PHASE2_FORCE_REUSE_PHASE2_IDS=1"
+  fi
+fi
+
 if (( freeze_active || ci_phase2_force_reuse )) && [[ -n "$ci_phase2_candidate_grid_dir" ]]; then
   new_grid_exp_id="$ci_phase2_candidate_grid_id"
   if [[ -z "$new_grid_exp_id" ]]; then
@@ -331,6 +367,25 @@ fi
 if [[ -z "${GRID_SOURCE_DIR:-}" && -n "$ci_phase2_candidate_grid_dir" ]]; then
   GRID_SOURCE_DIR="$ci_phase2_candidate_grid_dir"
   export GRID_SOURCE_DIR
+fi
+
+if (( phase2_reuse_requested )); then
+  resolved_grid_root="${GRID_SOURCE_DIR:-${GRID_DIR:-}}"
+  if [[ -z "$resolved_grid_root" && -n "${EXPERIMENTS_ROOT:-}" && -n "${GRID_EXP_ID:-}" ]]; then
+    resolved_grid_root="${EXPERIMENTS_ROOT%/}/${GRID_EXP_ID}/grid"
+  fi
+
+  if ci_phase2_exports_exist "$resolved_grid_root"; then
+    echo "[phase2] skipping Phase-2 steps (${phase2_reuse_reason}) using existing grid at ${resolved_grid_root}" >&2
+    exit 0
+  fi
+
+  if (( freeze_active )) && [[ "${CI_FORCE_UNFREEZE_GRID}" != "1" ]]; then
+    echo "[phase2][fatal] ${phase2_reuse_reason:-reuse requested} but no completed Phase-2 exports found under ${resolved_grid_root:-<unset>}" >&2
+    exit 1
+  fi
+
+  echo "[phase2][warn] ${phase2_reuse_reason:-reuse requested} but no prior Phase-2 exports detected; continuing with fresh Phase-2 run" >&2
 fi
 
 unset CI_PHASE2_INCOMING_GRID_EXP_ID_SET CI_PHASE2_INCOMING_GRID_EXP_ID

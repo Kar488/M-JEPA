@@ -75,6 +75,8 @@ GRID_MODE_CLEAN="${GRID_MODE//[[:space:]]/}"
 GRID_MODE_CLEAN="${GRID_MODE_CLEAN//\"/}"
 GRID_MODE_CLEAN="${GRID_MODE_CLEAN//\'/}"
 
+phase1_force_reuse="$(normalize_bool "${CI_PHASE1_FORCE_REUSE_GRID:-0}" 0)"
+
 # --- enforce pairing-friendly sweeps (identical shared knobs) ---
 check_shared_equal() {
   local jepa="$1" ctr="$2"; shift 2
@@ -92,6 +94,80 @@ check_shared_equal() {
   done
 
 }
+
+ci_phase1_locate_existing_grid() {
+  local out_id_var="$1" out_dir_var="$2"
+  local root="${EXPERIMENTS_ROOT%/}"
+  local -a candidates=()
+  candidates+=("${GRID_SOURCE_DIR:-}" "${GRID_DIR:-}")
+  if [[ -n "$root" ]]; then
+    if [[ -n "${GRID_EXP_ID:-}" ]]; then
+      candidates+=("${root}/${GRID_EXP_ID}/grid")
+    fi
+    if [[ -n "${EXP_ID:-}" ]]; then
+      candidates+=("${root}/${EXP_ID}/grid")
+    fi
+  fi
+
+  local candidate=""
+  local best_dir="" best_id=""
+  declare -A seen_candidates=()
+  for candidate in "${candidates[@]}"; do
+    [[ -n "$candidate" ]] || continue
+    candidate="${candidate%/}"
+    if [[ -n "${seen_candidates[$candidate]:-}" ]]; then
+      continue
+    fi
+    seen_candidates[$candidate]=1
+    if [[ -f "${candidate}/grid_sweep_phase2.yaml" || -f "${candidate}/phase2_sweep_id.txt" || -d "${candidate}/phase1_export" ]]; then
+      best_dir="$candidate"
+      best_id="$(basename "$(dirname "$candidate")")"
+      break
+    fi
+  done
+
+  printf -v "$out_id_var" '%s' "$best_id"
+  printf -v "$out_dir_var" '%s' "$best_dir"
+  [[ -n "$best_dir" ]]
+}
+
+phase1_reuse_requested=0
+phase1_reuse_reason=""
+if (( FROZEN )) && [[ "${CI_FORCE_UNFREEZE_GRID}" != "1" ]]; then
+  phase1_reuse_requested=1
+  phase1_reuse_reason="frozen lineage"
+fi
+if (( phase1_force_reuse )); then
+  phase1_reuse_requested=1
+  if [[ -n "$phase1_reuse_reason" ]]; then
+    phase1_reuse_reason+=", CI_PHASE1_FORCE_REUSE_GRID=1"
+  else
+    phase1_reuse_reason="CI_PHASE1_FORCE_REUSE_GRID=1"
+  fi
+fi
+
+if (( phase1_reuse_requested )); then
+  reuse_grid_id=""
+  reuse_grid_dir=""
+  if ci_phase1_locate_existing_grid reuse_grid_id reuse_grid_dir; then
+    GRID_DIR="$reuse_grid_dir"
+    GRID_SOURCE_DIR="$reuse_grid_dir"
+    export GRID_DIR GRID_SOURCE_DIR
+    if [[ -n "$reuse_grid_id" ]]; then
+      GRID_EXP_ID="$reuse_grid_id"
+      export GRID_EXP_ID
+    fi
+    echo "[phase1] skipping Phase-1 sweep (${phase1_reuse_reason}) using existing grid at ${reuse_grid_dir}" >&2
+    exit 0
+  fi
+
+  if (( FROZEN )) && [[ "${CI_FORCE_UNFREEZE_GRID}" != "1" ]]; then
+    echo "[phase1][fatal] ${phase1_reuse_reason:-reuse requested} but no completed Phase-1 grid found under ${GRID_SOURCE_DIR:-<unset>} or ${EXPERIMENTS_ROOT:-<unset>}" >&2
+    exit 1
+  fi
+
+  echo "[phase1][warn] ${phase1_reuse_reason:-reuse requested} but no prior Phase-1 grid detected; proceeding with fresh sweeps" >&2
+fi
 
 if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   echo "[grid] running wandb sweep agent"
@@ -552,7 +628,6 @@ PY
   BEST_ID="${WINNER_SWEEPS[0]}"
   BEST_SWEEP="${WANDB_ENTITY}/${WANDB_PROJECT}/${BEST_ID}"
 
-  phase1_force_reuse="$(normalize_bool "${CI_PHASE1_FORCE_REUSE_GRID:-0}" 0)"
   if [[ -n "${EXP_ID:-}" && "${GRID_EXP_ID:-}" != "${EXP_ID}" ]]; then
     local reuse_old=0
     if (( FROZEN )) && [[ "${CI_FORCE_UNFREEZE_GRID}" != "1" ]]; then
