@@ -93,8 +93,8 @@ env:
   REPORTS_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).reports || '/data/mjepa/cache/reports' }}
   FORCE_UNFREEZE_GRID: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags || '', 'force_unfreeze_grid') && '1' || '0' }}
   CI_FORCE_UNFREEZE_GRID: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags || '', 'force_unfreeze_grid') && '1' || '0' }}
-  CI_PHASE1_FORCE_REUSE_GRID: '0' # set to 1 for skipping phase1 grid runs
-  CI_PHASE2_FORCE_REUSE_PHASE2_IDS: '0' # set to 1 for skipping phase2 grid runs
+  CI_PHASE1_FORCE_REUSE_GRID: '1' # set to 1 for skipping phase1 grid runs
+  CI_PHASE2_FORCE_REUSE_PHASE2_IDS: '1' # set to 1 for skipping phase2 grid runs
   FORCE_RERUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rerun || '' }}
   GRID_MODE_VAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb' }}
   TOX21_CALIBRATE_PER_HEAD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tox21_calibrate_per_head || 'false' }}
