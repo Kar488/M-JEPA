@@ -1184,6 +1184,14 @@ def _run_tox21_single_task(
     gate_passed_flag = bool(gate_flag_attr) if gate_flag_attr is not None else False
     source_for_gate = getattr(primary, "encoder_source", getattr(args, "encoder_source", "unknown"))
 
+    split_counts_payload = {}
+    split_strategy = None
+    split_positive_floor = None
+    if isinstance(diagnostics, Mapping):
+        split_counts_payload = diagnostics.get("split_counts", {}) or {}
+        split_strategy = diagnostics.get("split_strategy")
+        split_positive_floor = diagnostics.get("split_positive_floor")
+
     summary_payload = {
         "phase": "tox21",
         "status": "success",
@@ -1205,6 +1213,22 @@ def _run_tox21_single_task(
         "selected_met_benchmark": selected_benchmark,
         "prediction_csv": None,
     }
+    if split_strategy is not None:
+        summary_payload["split_strategy"] = split_strategy
+    if split_positive_floor is not None:
+        try:
+            summary_payload["split_positive_floor"] = int(split_positive_floor)
+        except Exception:
+            pass
+    try:
+        val_pos = split_counts_payload.get("val", {}).get("positives")
+        test_pos = split_counts_payload.get("test", {}).get("positives")
+        if val_pos is not None:
+            summary_payload["split_val_positives"] = int(val_pos)
+        if test_pos is not None:
+            summary_payload["split_test_positives"] = int(test_pos)
+    except Exception:
+        pass
     summary_payload.update(threshold_payload)
     summary_payload.update(target_payload)
     _wandb_log_safe(wb, summary_payload)
@@ -1311,6 +1335,8 @@ def _run_tox21_single_task(
         "baseline_encoder_hash": baseline_hash,
         "encoder_load": encoder_load,
         "split_summary": split_summary,
+        "split_strategy": split_strategy,
+        "split_positive_floor": split_positive_floor,
         "calibrator": calibrator_state,
         "allow_shape_coercion": bool(allow_shape_effective_val),
         "allow_shape_coercion_requested": allow_shape_requested_marker,
