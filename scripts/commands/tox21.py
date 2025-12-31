@@ -1172,6 +1172,7 @@ def _run_tox21_single_task(
         "selected_auc": auc_summary.get(selected_source) if selected_source else None,
         "selected_path": selected_source,
         "selected_met_benchmark": selected_benchmark,
+        "prediction_csv": None,
     }
     summary_payload.update(threshold_payload)
     summary_payload.update(target_payload)
@@ -1249,6 +1250,7 @@ def _run_tox21_single_task(
     stem = f"tox21_{task_name}"
     json_path = os.path.join(report_dir, f"{stem}.json")
     csv_path = os.path.join(report_dir, f"{stem}.csv")
+    prediction_csv_path: Optional[str] = None
 
     json_payload: Dict[str, Any] = {
         "task": task_name,
@@ -1313,6 +1315,46 @@ def _run_tox21_single_task(
                 "encoder_manifest": getattr(eval_res, "manifest_path", None),
             }
         )
+
+    preds_block = diagnostics.get("test_predictions") if isinstance(diagnostics, dict) else None
+    if isinstance(preds_block, dict):
+        indices = list(preds_block.get("indices") or [])
+        logits = list(preds_block.get("logits") or [])
+        probabilities = list(preds_block.get("probabilities") or [])
+        labels = list(preds_block.get("true_labels") or [])
+        base_count = min(len(indices), len(logits), len(probabilities))
+
+        def _as_float(value: Any) -> float:
+            try:
+                return float(value)
+            except Exception:
+                return float("nan")
+
+        if base_count > 0:
+            prediction_csv_path = os.path.join(report_dir, f"{stem}_scores.csv")
+            with open(prediction_csv_path, "w", newline="", encoding="utf-8") as pred_handle:
+                writer = csv.writer(pred_handle)
+                writer.writerow(["graph_id", "assay", "true_label", "logit", "probability"])
+                for row_idx in range(base_count):
+                    idx_val = _coerce_int_like(indices[row_idx])
+                    graph_id = f"graph_{idx_val:05d}" if idx_val is not None else f"graph_{indices[row_idx]}"
+                    label_val = labels[row_idx] if row_idx < len(labels) else float("nan")
+                    writer.writerow(
+                        [
+                            graph_id,
+                            task_name,
+                            _as_float(label_val),
+                            _as_float(logits[row_idx]),
+                            _as_float(probabilities[row_idx]),
+                        ]
+                    )
+            json_payload["prediction_csv"] = prediction_csv_path
+            _wandb_save_safe(wb, prediction_csv_path)
+            _wandb_log_safe(
+                wb,
+                {"task": task_name, "prediction_csv": prediction_csv_path},
+            )
+            summary_payload["prediction_csv"] = prediction_csv_path
 
     with open(json_path, "w", encoding="utf-8") as fh:
         json.dump(json_payload, fh, indent=2, sort_keys=True)
@@ -1392,6 +1434,8 @@ def _run_tox21_single_task(
             "calibrator_json": calibrator_path,
         },
     }
+    if prediction_csv_path:
+        manifest_payload["reports"]["prediction_csv"] = prediction_csv_path
 
     manifest_path = os.path.join(report_dir, f"run_manifest_{task_name}.json")
     with open(manifest_path, "w", encoding="utf-8") as manifest_file:
@@ -1413,6 +1457,7 @@ def _run_tox21_single_task(
         "tox21_gate_passed": bool(gate_passed_flag),
         **target_payload,
         "auc_summary": auc_summary,
+        "prediction_csv": prediction_csv_path,
         "evaluations": [
             {
                 "encoder_source": getattr(ev, "encoder_source", getattr(ev, "name", "unknown")),
@@ -1451,6 +1496,7 @@ def _run_tox21_single_task(
         "json_path": json_path,
         "csv_path": csv_path,
         "calibrator_path": calibrator_path,
+        "prediction_csv_path": prediction_csv_path,
         "manifest_path": manifest_path,
         "stage_path": stage_path,
         "auc_summary": auc_summary,
@@ -1712,6 +1758,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     aggregated_csv_paths: Dict[str, str] = {}
     aggregated_calibrator_paths: Dict[str, str] = {}
     aggregated_manifest_paths: Dict[str, str] = {}
+    aggregated_prediction_paths: Dict[str, str] = {}
     aggregated_auc_summaries: Dict[str, Any] = {}
     per_task_diagnostics: Dict[str, Any] = {}
     diagnostics_template: Dict[str, Any] | None = None
@@ -1746,6 +1793,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             aggregated_csv_paths[task_name] = result.get("csv_path", "")
             aggregated_calibrator_paths[task_name] = result.get("calibrator_path", "")
             aggregated_manifest_paths[task_name] = result.get("manifest_path", "")
+            aggregated_prediction_paths[task_name] = result.get("prediction_csv_path", "")
             aggregated_auc_summaries[task_name] = result.get("auc_summary", {})
             diagnostics = result.get("diagnostics") or {}
             if isinstance(diagnostics, dict):
@@ -1903,6 +1951,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "csv": aggregated_csv_paths,
             "calibrator": aggregated_calibrator_paths,
             "manifest": aggregated_manifest_paths,
+            "predictions": aggregated_prediction_paths,
         }
         if aggregate_csv_path:
             aggregated_stage["summary_files"]["aggregate_csv"] = aggregate_csv_path
@@ -1936,6 +1985,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                     "summary_csv": aggregated_csv_paths.get(task),
                     "calibrator_json": aggregated_calibrator_paths.get(task),
                     "manifest_json": aggregated_manifest_paths.get(task),
+                    "prediction_csv": aggregated_prediction_paths.get(task),
                 }
                 for task in tasks_to_run
             },
@@ -1953,6 +2003,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 "status": "complete",
                 "task_count": len(tasks_to_run),
                 "tox21_gate_passed_all": bool(aggregated_gate),
+                "prediction_csv": aggregated_prediction_paths,
             },
         )
 
