@@ -115,6 +115,148 @@ from utils.graph_ops import _encode_graph, _pool_graph_emb
 from utils.logging import maybe_init_wandb
 logger = logging.getLogger(__name__)
 
+_RESUME_CONFIG_KEYS: Tuple[str, ...] = (
+    "gnn_type",
+    "hidden_dim",
+    "num_layers",
+    "lr",
+    "epochs",
+    "mask_ratio",
+    "contiguous",
+)
+
+
+def _coerce_mapping(obj: Any) -> Mapping[str, Any]:
+    if obj is None:
+        return {}
+    if isinstance(obj, Mapping):
+        return obj
+    if hasattr(obj, "__dict__"):
+        try:
+            return dict(vars(obj))
+        except Exception:
+            return {}
+    return {}
+
+
+def _config_subset(config: Any, keys: Sequence[str]) -> Dict[str, Any]:
+    subset: Dict[str, Any] = {}
+    mapping = _coerce_mapping(config)
+    for key in keys:
+        if key in mapping:
+            value = mapping[key]
+            if value is None:
+                continue
+            subset[key] = value
+    return subset
+
+
+def _normalize_for_compare(config: Mapping[str, Any]) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {}
+    for key, value in config.items():
+        if isinstance(value, str):
+            normalized[key] = value.strip().lower()
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def _extract_checkpoint_resume_config(
+    ckpt_state: Mapping[str, Any], keys: Sequence[str]
+) -> Dict[str, Any]:
+    buckets: List[Mapping[str, Any]] = []
+    if isinstance(ckpt_state, Mapping):
+        buckets.append(ckpt_state)
+        encoder_cfg = ckpt_state.get("encoder_cfg")
+        if isinstance(encoder_cfg, Mapping):
+            buckets.append(encoder_cfg)
+    for candidate in ("metadata", "meta", "config"):
+        meta = ckpt_state.get(candidate)
+        if isinstance(meta, Mapping):
+            buckets.append(meta)
+            nested = meta.get("pretrain_config")
+            if isinstance(nested, Mapping):
+                buckets.append(nested)
+
+    merged: Dict[str, Any] = {}
+    for bucket in buckets:
+        merged.update(_config_subset(bucket, keys))
+    return merged
+
+
+def validate_resume_config(
+    stage: str,
+    ckpt_state: Mapping[str, Any],
+    expected_config: Optional[Mapping[str, Any]],
+    *,
+    keys: Sequence[str] = _RESUME_CONFIG_KEYS,
+    path: Optional[str] = None,
+) -> None:
+    """
+    Compare expected resume metadata against what is stored in ``ckpt_state``.
+    Raises ``ValueError`` when any overlapping keys disagree.  Missing metadata
+    is tolerated but logged as a warning so future checkpoints can be annotated.
+    """
+
+    expected_subset = _config_subset(expected_config, keys)
+    if not expected_subset:
+        return
+
+    stored_subset = _extract_checkpoint_resume_config(ckpt_state, keys)
+    if not stored_subset:
+        logger.warning(
+            "[%s] resume checkpoint %s has no resume metadata for keys %s; cannot validate configuration.",
+            stage,
+            path or "<unknown>",
+            ", ".join(keys),
+        )
+        return
+
+    normalized_expected = _normalize_for_compare(expected_subset)
+    normalized_stored = _normalize_for_compare(stored_subset)
+    mismatched: List[str] = []
+    for key, expected_value in normalized_expected.items():
+        if key not in normalized_stored:
+            continue
+        if normalized_stored[key] != expected_value:
+            mismatched.append(
+                f"{key} (ckpt={stored_subset.get(key)!r}, expected={expected_subset.get(key)!r})"
+            )
+    if mismatched:
+        raise ValueError(
+            f"[{stage}] resume checkpoint {path or '<unknown>'} configuration mismatch: "
+            + "; ".join(mismatched)
+        )
+
+    logger.info(
+        "[%s] resume checkpoint %s matches resume metadata for keys: %s",
+        stage,
+        path or "<unknown>",
+        ", ".join(sorted(normalized_stored.keys())),
+    )
+
+
+def _prepare_checkpoint_metadata(
+    base_metadata: Optional[Mapping[str, Any]],
+    resume_config: Optional[Mapping[str, Any]],
+    resume_keys: Sequence[str],
+) -> Optional[Dict[str, Any]]:
+    metadata: Dict[str, Any] = {}
+    base = _coerce_mapping(base_metadata)
+    if base:
+        metadata.update(base)
+    resume_subset = _config_subset(resume_config, resume_keys)
+    if resume_subset:
+        existing = metadata.get("pretrain_config")
+        if isinstance(existing, Mapping):
+            merged = dict(existing)
+            merged.update(resume_subset)
+            metadata["pretrain_config"] = merged
+        else:
+            metadata["pretrain_config"] = resume_subset
+
+    return metadata or None
+
 
 def _resolve_ckpt_dir(ckpt_path: Optional[str]) -> Optional[str]:
     """Ensure a checkpoint directory exists, falling back on permission errors."""
@@ -1318,6 +1460,9 @@ def train_jepa(
     bf16=False,
     defer_wandb_finish: bool = False,
     compile_models: bool = True,
+    resume_expected_config: Optional[Mapping[str, Any]] = None,
+    resume_config_keys: Sequence[str] = _RESUME_CONFIG_KEYS,
+    checkpoint_metadata: Optional[Mapping[str, Any]] = None,
     **unused
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
@@ -1532,10 +1677,18 @@ def train_jepa(
     )
     probe_interval = int(probe_interval or 0)
 
+    resume_keys = tuple(resume_config_keys) if resume_config_keys else _RESUME_CONFIG_KEYS
     start_epoch = 1
     ckpt: Optional[Dict[str, Any]] = None
     if resume_from and os.path.exists(resume_from):
         ckpt = load_checkpoint(resume_from)
+        validate_resume_config(
+            "pretrain",
+            ckpt,
+            resume_expected_config,
+            keys=resume_keys,
+            path=resume_from,
+        )
         if "encoder" in ckpt:
             encoder.load_state_dict(ckpt["encoder"])
         if "ema_encoder" in ckpt:
@@ -1984,14 +2137,25 @@ def train_jepa(
                     ep_loss,
                 )
             if ckpt_path and (ep % ckpt_every == 0 or ep == epochs):
-                save_checkpoint(
-                    os.path.join(ckpt_path, f"jepa_ep{ep:04d}.pt"),
-                    encoder=(encoder.module.state_dict() if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder.state_dict()),
+                metadata = _prepare_checkpoint_metadata(
+                    checkpoint_metadata, resume_expected_config, resume_keys
+                )
+                checkpoint_payload: Dict[str, Any] = dict(
+                    encoder=(
+                        encoder.module.state_dict()
+                        if isinstance(encoder, nn.parallel.DistributedDataParallel)
+                        else encoder.state_dict()
+                    ),
                     ema_encoder=ema_encoder.state_dict(),
                     predictor=predictor.state_dict(),
                     optimizer=opt.state_dict(),
                     scaler=(scaler.state_dict() if _is_grad_scaler(scaler) else None),
                     epoch=ep,
+                )
+                if metadata:
+                    checkpoint_payload["metadata"] = metadata
+                save_checkpoint(
+                    os.path.join(ckpt_path, f"jepa_ep{ep:04d}.pt"), **checkpoint_payload
                 )
 
         _run_probe(ep)
@@ -2056,6 +2220,9 @@ def train_contrastive(
     prefetch_factor=4,
     bf16=False,
     defer_wandb_finish: bool = False,
+    resume_expected_config: Optional[Mapping[str, Any]] = None,
+    resume_config_keys: Sequence[str] = _RESUME_CONFIG_KEYS,
+    checkpoint_metadata: Optional[Mapping[str, Any]] = None,
     **unused
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
@@ -2226,8 +2393,16 @@ def train_contrastive(
         wb, finish_on_exit=not bool(defer_wandb_finish)
     )
 
+    resume_keys = tuple(resume_config_keys) if resume_config_keys else _RESUME_CONFIG_KEYS
     if resume_from and os.path.exists(resume_from):
         ckpt = load_checkpoint(resume_from)
+        validate_resume_config(
+            "contrastive",
+            ckpt,
+            resume_expected_config,
+            keys=resume_keys,
+            path=resume_from,
+        )
         if "encoder" in ckpt:
             encoder.load_state_dict(ckpt["encoder"])
         if "projector" in ckpt:
@@ -2495,13 +2670,25 @@ def train_contrastive(
                     ep_loss,
                 )
             if ckpt_path and (ep % ckpt_every == 0 or ep == epochs):
-                save_checkpoint(
-                    os.path.join(ckpt_path, f"contrastive_ep{ep:04d}.pt"),
-                    encoder=(encoder.module.state_dict() if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder.state_dict()),
+                metadata = _prepare_checkpoint_metadata(
+                    checkpoint_metadata, resume_expected_config, resume_keys
+                )
+                checkpoint_payload: Dict[str, Any] = dict(
+                    encoder=(
+                        encoder.module.state_dict()
+                        if isinstance(encoder, nn.parallel.DistributedDataParallel)
+                        else encoder.state_dict()
+                    ),
                     projector=proj.state_dict(),
                     optimizer=opt.state_dict(),
                     scaler=(scaler.state_dict() if _is_grad_scaler(scaler) else None),
                     epoch=ep,
+                )
+                if metadata:
+                    checkpoint_payload["metadata"] = metadata
+                save_checkpoint(
+                    os.path.join(ckpt_path, f"contrastive_ep{ep:04d}.pt"),
+                    **checkpoint_payload,
                 )
         if hit_batch_cap and max_batches > 0 and total_batches_done >= max_batches:
             if is_main_process():

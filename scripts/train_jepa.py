@@ -308,10 +308,12 @@ try:
     from training.unsupervised import (  # type: ignore[assignment]
         train_contrastive,
         train_jepa,
+        validate_resume_config,
     )
 except Exception:
     train_jepa = None  # type: ignore[assignment]
     train_contrastive = None  # type: ignore[assignment]
+    validate_resume_config = None  # type: ignore[assignment]
 
 try:
     from training.supervised import (  # type: ignore[assignment]
@@ -808,6 +810,7 @@ class CommandContext:
     EMA: Any
     train_jepa: Any
     train_contrastive: Any
+    validate_resume_config: Any
     train_linear_head: Any
     run_tox21_case_study: Any
     run_grid_search: Any
@@ -841,6 +844,7 @@ CMD_CONTEXT = CommandContext(
     EMA=EMA,
     train_jepa=train_jepa,
     train_contrastive=train_contrastive,
+    validate_resume_config=validate_resume_config,
     train_linear_head=train_linear_head,
     run_tox21_case_study=run_tox21_case_study,
     run_grid_search=run_grid_search,
