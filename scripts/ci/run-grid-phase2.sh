@@ -242,6 +242,17 @@ common_grid_exp_id="${GRID_EXP_ID:-}"
 common_pretrain_exp_id="${PRETRAIN_EXP_ID:-}"
 common_grid_source_dir="${GRID_SOURCE_DIR:-}"
 
+ci_phase2_export_bindings_to_github_env() {
+  if [[ -n "${GRID_EXP_ID:-}" && -n "${PRETRAIN_EXP_ID:-}" && -n "${GITHUB_ENV:-}" ]]; then
+    {
+      echo "GRID_EXP_ID=${GRID_EXP_ID}"
+      echo "EXP_ID=${GRID_EXP_ID}"
+      echo "PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID}"
+      echo "GRID_DIR=${GRID_DIR}"
+    } >> "$GITHUB_ENV"
+  fi
+}
+
 new_grid_exp_id=""
 new_pretrain_exp_id=""
 
@@ -376,6 +387,7 @@ if (( phase2_reuse_requested )); then
   fi
 
   if ci_phase2_exports_exist "$resolved_grid_root"; then
+    ci_phase2_export_bindings_to_github_env
     echo "[phase2] skipping Phase-2 steps (${phase2_reuse_reason}) using existing grid at ${resolved_grid_root}" >&2
     exit 0
   fi
@@ -415,14 +427,7 @@ fi
 # reusing an existing sweep or by creating a new one).  Persist them into
 # the GitHub Actions environment so that subsequent steps (collect artifacts,
 # pretrain, finetune) use the correct grid and pretrain experiment IDs.
-if [[ -n "${GRID_EXP_ID:-}" && -n "${PRETRAIN_EXP_ID:-}" && -n "${GITHUB_ENV:-}" ]]; then
-  {
-    echo "GRID_EXP_ID=${GRID_EXP_ID}"
-    echo "EXP_ID=${GRID_EXP_ID}"
-    echo "PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID}"
-    echo "GRID_DIR=${GRID_DIR}" 
-  } >> "$GITHUB_ENV"
-fi
+ci_phase2_export_bindings_to_github_env
 
 steps=(phase2_sweep phase2_recheck phase2_export)
 for step in "${steps[@]}"; do
