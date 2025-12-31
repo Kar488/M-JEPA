@@ -1497,6 +1497,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the positive class weight (float or TASK=weight). Repeatable.",
     )
     tox.add_argument(
+        "--baseline-finetune-epochs",
+        dest="baseline_finetune_epochs",
+        type=int,
+        default=case_cfg.get("baseline_finetune_epochs"),
+        help="Optional baseline-mode finetune epoch default; falls back to finetune-epochs when unset.",
+    )
+    tox.add_argument(
+        "--baseline-patience",
+        dest="baseline_patience",
+        type=int,
+        default=case_cfg.get("baseline_patience"),
+        help="Optional baseline-mode early stopping patience; falls back to standard patience when unset.",
+    )
+    tox.add_argument(
+        "--oversample-minority",
+        dest="oversample_minority",
+        action=argparse.BooleanOptionalAction,
+        default=case_cfg.get("oversample_minority", False),
+        help="Enable a WeightedRandomSampler on the training split to balance positives/negatives.",
+    )
+    tox.add_argument(
+        "--dynamic-pos-weight",
+        dest="dynamic_pos_weight",
+        action=argparse.BooleanOptionalAction,
+        default=case_cfg.get("dynamic_pos_weight", False),
+        help="Recompute BCE pos_weight from the training labels each run when no manual weight is supplied.",
+    )
+    tox.add_argument(
+        "--use-focal-loss",
+        dest="use_focal_loss",
+        action=argparse.BooleanOptionalAction,
+        default=case_cfg.get("use_focal_loss", False),
+        help="Switch BCE heads to focal loss to emphasise hard, minority examples.",
+    )
+    tox.add_argument(
+        "--focal-gamma",
+        dest="focal_gamma",
+        type=float,
+        default=case_cfg.get("focal_gamma", 2.0),
+        help="Gamma parameter for focal loss (only used when --use-focal-loss is set).",
+    )
+    tox.add_argument(
         "--triage-pct",
         type=float,
         default=case_cfg.get("triage_pct", 0.0),
@@ -1529,7 +1571,7 @@ def build_parser() -> argparse.ArgumentParser:
     tox.add_argument(
         "--evaluation-mode",
         dest="evaluation_mode",
-        choices=["pretrain_frozen", "frozen_finetuned", "fine_tuned", "end_to_end"],
+        choices=["pretrain_frozen", "frozen_finetuned", "fine_tuned", "end_to_end", "baseline"],
         default="pretrain_frozen",
         help="Tox21 evaluation policy: frozen pretrain baseline, frozen finetuned encoder, or end-to-end fine-tuned model",
     )

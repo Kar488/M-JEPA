@@ -1426,6 +1426,13 @@ def _train_linear_head_impl(
     synchronised across ranks. Validation loss for early stopping is
     averaged across all processes to ensure a consistent stopping epoch.
 
+    Imbalance-handling controls (``pos_weight``, ``class_weight``,
+    ``dynamic_pos_weight``, ``oversample_minority``, ``use_focal_loss`` and
+    ``focal_gamma``) apply only to BCE classification heads. For heavily
+    imbalanced tasks such as Tox21, enabling focal loss with ``focal_gamma=2.0``
+    alongside ``oversample_minority=True`` generally stabilises ROC-AUC without
+    overfitting the majority class.
+
     Args:
         dataset: A ``GraphDataset`` with labels.
         encoder: A pre‑trained GNN encoder.
@@ -1743,6 +1750,8 @@ def _train_linear_head_impl(
     encoder_initial_mode = encoder.training
     head_initial_mode = head_module.training
     if task_type == "classification":
+        # BCE-specific imbalance controls (pos_weight/class_weight, focal loss, sampling)
+        # are confined to this branch so regression heads remain unaffected.
         pos_weight_tensor: Optional[torch.Tensor] = None
 
         def _coerce_pos_weight(value: Any) -> Optional[torch.Tensor]:

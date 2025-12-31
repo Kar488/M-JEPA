@@ -1614,6 +1614,14 @@ def run_tox21_case_study(
     cache_dir: Optional[str] = None,
     explain_mode: Optional[str] = None,
     explain_config: Optional[Dict[str, Any]] = None,
+    oversample_minority: bool = False,
+    use_focal_loss: bool = False,
+    dynamic_pos_weight: bool = False,
+    focal_gamma: float = 2.0,
+    cli_finetune_epochs_provided: bool = False,
+    cli_patience_provided: bool = False,
+    baseline_finetune_epochs: Optional[int] = None,
+    baseline_patience: Optional[int] = None,
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
 
@@ -2426,10 +2434,25 @@ def run_tox21_case_study(
     normalized_mode = requested_mode.lower().replace("-", "_")
     requested_fine_tuned_alias = normalized_mode == "fine_tuned"
     display_mode = normalized_mode
+    baseline_mode = normalized_mode == "baseline"
+    try:
+        baseline_finetune_epochs_value = (
+            int(baseline_finetune_epochs)
+            if baseline_finetune_epochs is not None
+            else None
+        )
+    except Exception:
+        baseline_finetune_epochs_value = None
+    try:
+        baseline_patience_value = (
+            int(baseline_patience) if baseline_patience is not None else None
+        )
+    except Exception:
+        baseline_patience_value = None
     if requested_fine_tuned_alias:
         normalized_mode = "end_to_end"
         display_mode = "fine_tuned"
-    valid_modes = {"pretrain_frozen", "frozen_finetuned", "end_to_end"}
+    valid_modes = {"pretrain_frozen", "frozen_finetuned", "end_to_end", "baseline"}
     if normalized_mode not in valid_modes:
         logger.warning(
             "Unknown evaluation_mode '%s'; defaulting to pretrain_frozen.",
@@ -2437,6 +2460,9 @@ def run_tox21_case_study(
         )
         normalized_mode = "pretrain_frozen"
         display_mode = "pretrain_frozen"
+        baseline_mode = False
+    if baseline_mode:
+        normalized_mode = "pretrain_frozen"
     auto_full_finetune = False
     auto_pretrain = False
     if normalized_mode == "end_to_end" and full_finetune_requested is None:
@@ -2496,6 +2522,22 @@ def run_tox21_case_study(
                 patience_value = None
     if patience_value is None:
         patience_value = 12 if full_finetune_effective else 10
+    if baseline_mode and not cli_finetune_epochs_provided and finetune_epochs < (baseline_finetune_epochs_value or finetune_epochs):
+        if baseline_finetune_epochs_value is not None:
+            logger.info(
+                "Baseline evaluation mode active; increasing finetune_epochs from %d to %d.",
+                int(finetune_epochs),
+                baseline_finetune_epochs_value,
+            )
+            finetune_epochs = baseline_finetune_epochs_value
+    if baseline_mode and not cli_patience_provided and patience_value is not None:
+        if baseline_patience_value is not None and patience_value > baseline_patience_value:
+            logger.info(
+                "Baseline evaluation mode active; capping patience at %d (from %s).",
+                baseline_patience_value,
+                str(patience_value),
+            )
+            patience_value = baseline_patience_value
 
     logger.info(
         "Tox21 evaluation configuration: mode=%s head_from_checkpoint=%s train_head=%s full_finetune=%s epochs=%d patience=%s",
@@ -2506,6 +2548,7 @@ def run_tox21_case_study(
         int(finetune_epochs if train_probe else 0),
         str(patience_value if train_probe else "<skip>"),
     )
+    diagnostics["baseline_mode"] = bool(baseline_mode)
 
     head_trained = False
     head_training_steps = 0.0
@@ -2521,8 +2564,8 @@ def run_tox21_case_study(
             logger.info(
                 "No encoder checkpoint supplied for end_to_end evaluation; running JEPA pretraining before fine-tuning.",
             )
-    encoder_source = normalized_mode
-    eval_name = normalized_mode
+    encoder_source = display_mode if baseline_mode else normalized_mode
+    eval_name = encoder_source
 
     encoder_load_info: Dict[str, Any] = {}
     encoder_hash: Optional[str] = None
@@ -2745,6 +2788,17 @@ def run_tox21_case_study(
         float(head_lr_value),
         encoder_lr_display,
     )
+    try:
+        focal_gamma_value = float(focal_gamma)
+    except Exception:
+        logger.warning("Failed to parse focal_gamma=%s; defaulting to 2.0", focal_gamma, exc_info=True)
+        focal_gamma_value = 2.0
+    diagnostics["imbalance_controls"] = {
+        "oversample_minority": bool(oversample_minority),
+        "use_focal_loss": bool(use_focal_loss),
+        "dynamic_pos_weight": bool(dynamic_pos_weight),
+        "focal_gamma": float(focal_gamma_value),
+    }
 
     weight_decay_value: Optional[float] = None
     if weight_decay is not None:
@@ -2979,6 +3033,10 @@ def run_tox21_case_study(
             "unfreeze_top_layers": int(unfreeze_top_layers),
             "explain_mode": explain_mode_norm,
             "explain_config": explain_cfg_payload,
+            "oversample_minority": bool(oversample_minority),
+            "use_focal_loss": bool(use_focal_loss),
+            "dynamic_pos_weight": bool(dynamic_pos_weight),
+            "focal_gamma": float(focal_gamma_value),
             **extra_args,
         }
         if full_finetune_effective:

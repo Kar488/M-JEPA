@@ -90,6 +90,8 @@ case_study:
   head_scheduler: cosine
   triage_pct: 0.0
   freeze_encoder: false
+  baseline_finetune_epochs: 50  # Baseline evaluation defaults (override with TOX21_BASELINE_FINETUNE_EPOCHS)
+  baseline_patience: 8          # Early stopping patience for baseline runs (override with TOX21_BASELINE_PATIENCE)
 
 ###############################################################
 # Weights & Biases settings
