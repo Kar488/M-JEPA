@@ -412,6 +412,15 @@ def _serialise_config_value(value: Any) -> Any:
 
 def _build_run_record(run: Any, sweep_id: str, is_winner: bool = False) -> Dict[str, Any]:
     config = _sanitize_run_config(getattr(run, "config", {}) or {})
+
+    # Persist the resolved device count when the sweep config omitted it but
+    # the launcher exposed a CUDA mask. This keeps phase2_winner_config.csv in
+    # sync with the actual GPU allocation used for the winner.
+    if "devices" not in config:
+        inferred_devices = _visible_device_count_from_env()
+        if inferred_devices is not None:
+            config["devices"] = inferred_devices
+
     record: Dict[str, Any] = {
         "sweep_id": sweep_id,
         "run_id": getattr(run, "id", ""),
@@ -484,6 +493,17 @@ def _write_records_csv(path: str, records: Sequence[Dict[str, Any]]) -> int:
             writer.writerow(row)
 
     return len(records)
+
+
+def _visible_device_count_from_env() -> Optional[int]:
+    """Best-effort CUDA_VISIBLE_DEVICES length, ignoring empty tokens."""
+
+    mask = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
+    if not mask:
+        return None
+    tokens = [tok for tok in mask.split(",") if tok.strip()]
+    return len(tokens) if tokens else None
+
 
 def _has_any_metric(runs, names: Sequence[str]) -> bool:
     return any(metric(r, name) is not None for name in names for r in runs)
@@ -1017,7 +1037,7 @@ def main():
     ap.add_argument(
         "--winner-csv",
         dest="winner_csv",
-        default=os.path.join(GRID_DIR, "phase1_export", "stage-outputs", "phase2_winner_config.csv"),
+        default=os.path.join(GRID_DIR, "phase2_export", "stage-outputs", "phase2_winner_config.csv"),
         help="Export the selected Phase-2 seed configuration to this CSV",
     )
     ap.add_argument(
