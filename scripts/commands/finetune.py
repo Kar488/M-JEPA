@@ -379,6 +379,15 @@ def _apply_best_config_overrides(args: argparse.Namespace) -> None:
     if not best_overrides:
         return
 
+    finetune_cfg = CONFIG.get("finetune", {}) if isinstance(CONFIG, Mapping) else {}
+    default_epochs = _coerce_int_like(finetune_cfg.get("epochs"))
+    if (
+        default_epochs is not None
+        and not getattr(args, "_epochs_provided", False)
+        and _coerce_int_like(getattr(args, "epochs", None)) != default_epochs
+    ):
+        setattr(args, "epochs", default_epochs)
+
     inherited: List[str] = []
 
     def _apply(dest: str, value: Any, *, flags: Tuple[str, ...] = ()) -> None:
@@ -2140,6 +2149,13 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
 
 def cmd_finetune(args: argparse.Namespace) -> None:
     _apply_best_config_overrides(args)
+    # Ensure seeds default to the config when none were supplied explicitly
+    finetune_cfg = CONFIG.get("finetune", {}) if isinstance(CONFIG, Mapping) else {}
+    if (args.seeds is None or len(args.seeds) == 0) and finetune_cfg.get("seeds"):
+        try:
+            args.seeds = [int(s) for s in finetune_cfg.get("seeds", [])]
+        except Exception:
+            args.seeds = list(finetune_cfg.get("seeds", []))
     label_columns = _resolve_label_columns(args)
     _maybe_enforce_tox21_epoch_floor(args, label_columns)
     if len(label_columns) <= 1:
