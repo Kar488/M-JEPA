@@ -10,7 +10,7 @@ import time
 import random
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -458,6 +458,46 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 resolved,
             )
 
+    resume_config_keys: Tuple[str, ...] = (
+        "gnn_type",
+        "hidden_dim",
+        "num_layers",
+        "lr",
+        "epochs",
+        "pretrain_epochs",
+        "mask_ratio",
+        "contiguous",
+    )
+    def _extract_resume_metadata(source: Any, keys: Sequence[str]) -> Dict[str, Any]:
+        snapshot: Dict[str, Any] = {}
+
+        def _collect(mapping: Any) -> None:
+            if not isinstance(mapping, dict):
+                return
+            for key in keys:
+                if key in mapping and mapping[key] is not None and key not in snapshot:
+                    snapshot[key] = mapping[key]
+
+        _collect(source)
+        for nested_key in ("metadata", "meta", "config", "encoder_cfg"):
+            nested = source.get(nested_key) if isinstance(source, dict) else None
+            _collect(nested)
+            if isinstance(nested, dict):
+                _collect(nested.get("pretrain_config"))
+        return snapshot
+
+    def _apply_cli_override(
+        snapshot: Dict[str, Any], key: str, value: Any, provided_flag: Optional[str] = None
+    ) -> None:
+        if value is None:
+            return
+        if provided_flag is not None and not getattr(args, provided_flag, False):
+            return
+        snapshot[key] = value
+
+    resume_snapshot: Dict[str, Any] = {}
+    checkpoint_metadata: Dict[str, Any] = {}
+
     def _wb_run_ok(wb):
         return (wb is not None) and (getattr(wb, "run", None) is not None)
 
@@ -498,6 +538,47 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
         ckpt_state = load_checkpoint(args.resume_ckpt)
     else:
         ckpt_state = {}
+    # Seed resume snapshot from checkpoint metadata when resuming so default CLI
+    # values (e.g., gnn_type) do not overwrite the stored configuration.
+    if ckpt_state:
+        resume_snapshot.update(_extract_resume_metadata(ckpt_state, resume_config_keys))
+    # Apply explicit CLI overrides on top. When not resuming, CLI defaults should
+    # populate the snapshot so new checkpoints carry full metadata.
+    override_all = not bool(getattr(args, "resume_ckpt", None))
+    if override_all or getattr(args, "_gnn_type_provided", False):
+        _apply_cli_override(resume_snapshot, "gnn_type", getattr(args, "gnn_type", None))
+    if override_all or getattr(args, "_hidden_dim_provided", False):
+        _apply_cli_override(resume_snapshot, "hidden_dim", getattr(args, "hidden_dim", None))
+    if override_all or getattr(args, "_num_layers_provided", False):
+        _apply_cli_override(resume_snapshot, "num_layers", getattr(args, "num_layers", None))
+    if override_all or getattr(args, "_epochs_provided", False):
+        _apply_cli_override(resume_snapshot, "epochs", getattr(args, "epochs", None))
+        _apply_cli_override(resume_snapshot, "pretrain_epochs", getattr(args, "pretrain_epochs", None))
+    if override_all:
+        # Parameters without explicit "provided" flags should only be injected
+        # automatically for fresh runs; resuming relies on checkpoint metadata
+        # unless the user opts in via flags above.
+        _apply_cli_override(resume_snapshot, "lr", lr_value)
+        _apply_cli_override(resume_snapshot, "mask_ratio", getattr(args, "mask_ratio", None))
+        _apply_cli_override(
+            resume_snapshot, "contiguous", bool(getattr(args, "contiguity", False))
+        )
+    resume_snapshot = {k: v for k, v in resume_snapshot.items() if v is not None}
+    if resume_snapshot:
+        checkpoint_metadata["pretrain_config"] = resume_snapshot
+    resume_validator = globals().get("validate_resume_config")
+    if ckpt_state and callable(resume_validator):
+        try:
+            resume_validator(
+                "pretrain",
+                ckpt_state,
+                resume_snapshot,
+                keys=resume_config_keys,
+                path=getattr(args, "resume_ckpt", None),
+            )
+        except ValueError:
+            _wb_log(wb, {"phase": "pretrain", "status": "error", "reason": "resume_config_mismatch"})
+            raise
 
     try:
         # Load unlabeled dataset
@@ -868,6 +949,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                             persistent_workers=getattr(args, "persistent_workers", True),
                             prefetch_factor=getattr(args, "prefetch_factor", 4),
                             bf16=getattr(args, "bf16", False),
+                            resume_expected_config=resume_snapshot,
+                            resume_config_keys=resume_config_keys,
+                            checkpoint_metadata=checkpoint_metadata,
                             compile_models=not getattr(args, "no_compile", False),
                             probe_dataset=probe_dataset,
                             probe_interval=probe_interval,
@@ -911,6 +995,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                         persistent_workers=getattr(args, "persistent_workers", True),
                         prefetch_factor=getattr(args, "prefetch_factor", 4),
                         bf16=getattr(args, "bf16", False),
+                        resume_expected_config=resume_snapshot,
+                        resume_config_keys=resume_config_keys,
+                        checkpoint_metadata=checkpoint_metadata,
                         compile_models=not getattr(args, "no_compile", False),
                         probe_dataset=probe_dataset,
                         probe_interval=probe_interval,
@@ -923,6 +1010,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     save_checkpoint(
                         os.path.join(args.ckpt_dir, f"pt_epoch_{epoch+1}.pt"),
                         epoch=epoch,
+                        metadata=checkpoint_metadata,
                         encoder=encoder.state_dict(),
                         ema_encoder=ema_encoder.state_dict(),
                         predictor=(
@@ -992,6 +1080,9 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     persistent_workers=getattr(args, "persistent_workers", True),
                     prefetch_factor=getattr(args, "prefetch_factor", 4),
                     bf16=getattr(args, "bf16", False),
+                    resume_expected_config=resume_snapshot,
+                    resume_config_keys=resume_config_keys,
+                    checkpoint_metadata=checkpoint_metadata,
                 )
 
                 _wb_log(wb, {"phase": "pretrain_contrastive", "status": "success"})
@@ -1114,12 +1205,18 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             "edge_dim": int(edge_dim) if edge_dim is not None else None,
             "input_dim": int(input_dim),
         }
-        save_checkpoint(ckpt_base, encoder=enc_state, encoder_cfg=encoder_cfg)
+        save_checkpoint(
+            ckpt_base,
+            metadata=checkpoint_metadata,
+            encoder=enc_state,
+            encoder_cfg=encoder_cfg,
+        )
         _wb_log(wb, {"jepa_checkpoint": ckpt_base})
         if args.contrastive:
             cont_path = f"{os.path.splitext(ckpt_base)[0]}_contrastive.pt"
             save_checkpoint(
                 cont_path,
+                metadata=checkpoint_metadata,
                 encoder=cont_encoder.state_dict(),
                 encoder_cfg=encoder_cfg,
             )
