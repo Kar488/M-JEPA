@@ -44,7 +44,7 @@ parameters:
   
   max_finetune_batches:  {value: 0}
 
-  devices:              {value: 0} # auto-detect visible GPUs for DDP
+  devices:              {value: 4} # auto-detect visible GPUs for DDP
   num-workers:          {value: 8} #4*GPUs - keep data loading saturated
   persistent-workers:   {value: 1} # 0 false, keep workers alive between epochs
   prefetch-factor:      {value: 2} #each worker can prefetch 2 batches

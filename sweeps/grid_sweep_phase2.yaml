@@ -50,7 +50,7 @@ parameters:
 
   max_finetune_batches:  {value: 0}
 
-  devices:              {value: 0}
+  devices:              {value: 4}
   num-workers:          {value: 4}
   persistent-workers:   {value: 0} # 0 false
   prefetch-factor:      {value: 2}

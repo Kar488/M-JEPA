@@ -233,7 +233,7 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
       f) once done you SSH from local machine to login to Vast instance - change vast_deploy with location (office/home) as needed
 
       ```bash
-      ssh -o IdentitiesOnly=yes -i $env:USERPROFILE\.ssh\vast_deploy_office -p 56982 root@38.58.100.42 -vv
+      ssh -o IdentitiesOnly=yes -i $env:USERPROFILE\.ssh\vast_deploy_office -p 56982 root@47.186.29.91 -vv
       ```
 
       g) set up private key on GIT server repository secrets so it can connect to Vast - change vast_deploy with location (office/home) as needed
