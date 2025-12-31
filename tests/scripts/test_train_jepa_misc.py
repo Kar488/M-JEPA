@@ -3,6 +3,7 @@ import json
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from types import SimpleNamespace
@@ -28,11 +29,13 @@ class DummyGraph:
 
 
 class DummyDataset:
-    def __init__(self):
-        self.graphs = [DummyGraph()]
+    def __init__(self, n_graphs: int = 1):
+        self.graphs = [DummyGraph() for _ in range(int(n_graphs))]
+        self.labels = np.zeros(len(self.graphs))
+        self.smiles = [f"s{i}" for i in range(len(self.graphs))]
 
     def __len__(self):
-        return 1
+        return len(self.graphs)
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +314,230 @@ def test_cmd_benchmark_passes_loader_knobs(tmp_path, monkeypatch):
         "prefetch_factor": 6,
         "bf16": True,
     }
+
+
+def test_cmd_benchmark_upshifts_split_dirs(tmp_path, monkeypatch, caplog):
+    train_dir = tmp_path / "train"
+    val_dir = tmp_path / "val"
+    test_dir = tmp_path / "test"
+    for d in (train_dir, val_dir, test_dir):
+        d.mkdir()
+
+    datasets = {
+        "train": DummyDataset(24),
+        "val": DummyDataset(8),
+        "test": DummyDataset(5),
+    }
+
+    def load_dataset_stub(path, **kwargs):
+        return datasets[Path(path).name]
+
+    monkeypatch.setattr(tj, "load_directory_dataset", load_dataset_stub)
+
+    class DummyEncoder:
+        def load_state_dict(self, state):
+            pass
+
+    monkeypatch.setattr(tj, "build_encoder", lambda **kwargs: DummyEncoder())
+
+    captured = {}
+
+    def train_linear_head_stub(**kwargs):
+        captured["train_indices"] = kwargs.get("train_indices")
+        captured["val_indices"] = kwargs.get("val_indices")
+        captured["test_indices"] = kwargs.get("test_indices")
+        captured["batch_size"] = kwargs.get("batch_size")
+        return {"rmse": 0.1}
+
+    monkeypatch.setattr(tj, "train_linear_head", train_linear_head_stub)
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: None)
+
+    args = argparse.Namespace(
+        labeled_dir=str(val_dir),
+        test_dir=None,
+        label_col="y",
+        task_type="regression",
+        epochs=1,
+        batch_size=32,
+        lr=0.01,
+        patience=1,
+        devices=1,
+        seeds=[0],
+        jepa_encoder="jepa.pt",
+        contrastive_encoder=None,
+        dataset="esol",
+        gnn_type="gcn",
+        hidden_dim=16,
+        num_layers=2,
+        device="cpu",
+        use_wandb=False,
+        wandb_project="test",
+        wandb_tags=[],
+        add_3d=False,
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        report_dir=str(tmp_path / "reports"),
+        report_stem="split_use",
+    )
+
+    caplog.set_level(logging.INFO)
+    tj.cmd_benchmark(args)
+
+    assert captured["batch_size"] == 32
+    assert captured["train_indices"] == list(range(24))
+    assert captured["val_indices"] == list(range(24, 32))
+    assert captured["test_indices"] == list(range(32, 37))
+    assert any("Detected split directory input" in rec.message for rec in caplog.records)
+
+    report_json = tmp_path / "reports" / "split_use.json"
+    payload = json.loads(report_json.read_text())
+    assert payload["dataset_stats"] == {"n_total": 37, "n_train": 24, "n_val": 8, "n_test": 5}
+
+
+def test_cmd_benchmark_scales_single_split_batch_size(tmp_path, monkeypatch, caplog):
+    val_dir = tmp_path / "val"
+    val_dir.mkdir()
+    dataset = DummyDataset(50)
+
+    def load_dataset_stub(path, **kwargs):
+        assert path == str(val_dir)
+        return dataset
+
+    monkeypatch.setattr(tj, "load_directory_dataset", load_dataset_stub)
+
+    class DummyEncoder:
+        def load_state_dict(self, state):
+            pass
+
+    monkeypatch.setattr(tj, "build_encoder", lambda **kwargs: DummyEncoder())
+
+    captured = {}
+
+    def train_linear_head_stub(**kwargs):
+        captured["batch_size"] = kwargs.get("batch_size")
+        captured["train_indices"] = kwargs.get("train_indices")
+        captured["val_indices"] = kwargs.get("val_indices")
+        captured["test_indices"] = kwargs.get("test_indices")
+        return {"rmse": 0.2}
+
+    monkeypatch.setattr(tj, "train_linear_head", train_linear_head_stub)
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: None)
+
+    args = argparse.Namespace(
+        labeled_dir=str(val_dir),
+        test_dir=None,
+        label_col="y",
+        task_type="regression",
+        epochs=1,
+        batch_size=256,
+        lr=0.01,
+        patience=1,
+        devices=1,
+        seeds=[0],
+        jepa_encoder="jepa.pt",
+        contrastive_encoder=None,
+        dataset="esol",
+        gnn_type="gcn",
+        hidden_dim=16,
+        num_layers=2,
+        device="cpu",
+        use_wandb=False,
+        wandb_project="test",
+        wandb_tags=[],
+        add_3d=False,
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        report_dir=str(tmp_path / "reports"),
+        report_stem="single_split",
+    )
+
+    caplog.set_level(logging.WARNING)
+    tj.cmd_benchmark(args)
+
+    assert captured["batch_size"] == 8
+    assert captured["train_indices"] is None
+    assert captured["val_indices"] is None
+    assert captured["test_indices"] is None
+    assert any("adjusting batch_size" in rec.message for rec in caplog.records)
+
+    report_json = tmp_path / "reports" / "single_split.json"
+    payload = json.loads(report_json.read_text())
+    assert payload["dataset_stats"] == {"n_total": 50, "n_train": 40, "n_val": 5, "n_test": 5}
+
+
+def test_cmd_benchmark_full_dir_stays_default(tmp_path, monkeypatch):
+    data_dir = tmp_path / "dataset"
+    data_dir.mkdir()
+    dataset = DummyDataset(30)
+
+    def load_dataset_stub(path, **kwargs):
+        assert path == str(data_dir)
+        return dataset
+
+    monkeypatch.setattr(tj, "load_directory_dataset", load_dataset_stub)
+
+    class DummyEncoder:
+        def load_state_dict(self, state):
+            pass
+
+    monkeypatch.setattr(tj, "build_encoder", lambda **kwargs: DummyEncoder())
+
+    captured = {}
+
+    def train_linear_head_stub(**kwargs):
+        captured["batch_size"] = kwargs.get("batch_size")
+        captured["train_indices"] = kwargs.get("train_indices")
+        captured["val_indices"] = kwargs.get("val_indices")
+        captured["test_indices"] = kwargs.get("test_indices")
+        return {"rmse": 0.3}
+
+    monkeypatch.setattr(tj, "train_linear_head", train_linear_head_stub)
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: None)
+
+    args = argparse.Namespace(
+        labeled_dir=str(data_dir),
+        test_dir=None,
+        label_col="y",
+        task_type="regression",
+        epochs=1,
+        batch_size=20,
+        lr=0.01,
+        patience=1,
+        devices=1,
+        seeds=[0],
+        jepa_encoder="jepa.pt",
+        contrastive_encoder=None,
+        dataset="esol",
+        gnn_type="gcn",
+        hidden_dim=16,
+        num_layers=2,
+        device="cpu",
+        use_wandb=False,
+        wandb_project="test",
+        wandb_tags=[],
+        add_3d=False,
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        report_dir=str(tmp_path / "reports"),
+        report_stem="full_dataset",
+    )
+
+    tj.cmd_benchmark(args)
+
+    assert captured["batch_size"] == 20
+    assert captured["train_indices"] is None
+    assert captured["val_indices"] is None
+    assert captured["test_indices"] is None
+
+    report_json = tmp_path / "reports" / "full_dataset.json"
+    payload = json.loads(report_json.read_text())
+    assert payload["dataset_stats"] == {"n_total": 30, "n_train": 24, "n_val": 3, "n_test": 3}
 
 
 # ---------------------------------------------------------------------------

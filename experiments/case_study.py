@@ -1300,6 +1300,51 @@ def _evaluate_case_study(
             )
             calibrated_probs = np.zeros(expected_len, dtype=float)
 
+    positive_logits = _select_positive_probabilities(test_logits_np)
+    positive_logits = np.asarray(positive_logits, dtype=float).reshape(-1)
+    if expected_len == 0:
+        positive_logits = np.zeros((0,), dtype=float)
+    else:
+        if positive_logits.size == 0:
+            positive_logits = np.zeros(expected_len, dtype=float)
+        elif positive_logits.size != expected_len:
+            logger.warning(
+                "Resizing test logits from %d to match %d test molecules.",
+                positive_logits.size,
+                expected_len,
+            )
+            try:
+                positive_logits = np.resize(positive_logits, expected_len).reshape(-1)
+            except Exception:
+                logger.warning(
+                    "Resizing test logits failed; padding with zeros instead.",
+                )
+                positive_logits = np.zeros(expected_len, dtype=float)
+
+    if diagnostics is not None:
+        labels_for_test = np.asarray(all_labels[test_idx_arr], dtype=float).reshape(-1)
+        prediction_payload: Dict[str, Any] = {
+            "indices": _to_list(test_idx_arr),
+            "logits": _to_list(positive_logits),
+            "probabilities": _to_list(calibrated_probs),
+            "true_labels": _to_list(labels_for_test),
+        }
+        smiles_seq = getattr(dataset, "smiles", None)
+        if isinstance(smiles_seq, (list, tuple)):
+            smiles_for_test: List[str] = []
+            for idx in test_idx_arr:
+                try:
+                    idx_int = int(idx)
+                except Exception:
+                    smiles_for_test.append("")
+                    continue
+                if 0 <= idx_int < len(smiles_seq):
+                    smiles_for_test.append(str(smiles_seq[idx_int]))
+                else:
+                    smiles_for_test.append("")
+            prediction_payload["smiles"] = smiles_for_test
+        diagnostics["test_predictions"] = prediction_payload
+
     if triage_pct <= 0:
         k = 0
     else:
@@ -3069,7 +3114,7 @@ def run_tox21_case_study(
         edge_dim=edge_dim,
         seed=seed,
         baseline_embeddings=baseline_embeddings,
-        diagnostics=diagnostics if ci_diag else None,
+        diagnostics=diagnostics,
         num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=persistent_workers,

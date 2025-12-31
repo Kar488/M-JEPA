@@ -85,8 +85,8 @@ env:
   REPORTS_CACHE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).reports || '/data/mjepa/cache/reports' }}
   FORCE_UNFREEZE_GRID: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags || '', 'force_unfreeze_grid') && '1' || '0' }}
   CI_FORCE_UNFREEZE_GRID: ${{ github.event_name == 'workflow_dispatch' && contains(github.event.inputs.task_flags || '', 'force_unfreeze_grid') && '1' || '0' }}
-  CI_PHASE1_FORCE_REUSE_GRID: '0'
-  CI_PHASE2_FORCE_REUSE_PHASE2_IDS: '0'
+  CI_PHASE1_FORCE_REUSE_GRID: '0' # set to 1 for skipping phase1 grid runs
+  CI_PHASE2_FORCE_REUSE_PHASE2_IDS: '0' # set to 1 for skipping phase2 grid runs
   FORCE_RERUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rerun || '' }}
   GRID_MODE_VAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb' }}
 
@@ -268,6 +268,7 @@ jobs:
           
             # Fetch and checkout all LFS objects for this branch
             git -C "$APP_DIR" lfs pull origin "$BRANCH"
+  
   vast_prepare_environment:
     if: ${{ (github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs') }}
     name: Prepare environment on Vast runner
@@ -500,7 +501,7 @@ jobs:
           HARD_WALL_MINS: 3500
           KILL_AFTER_SECS: 120
           # Set matching backbone/seed combinations so JEPA & contrastive sweeps stay paired.
-          WANDB_COUNT: 2
+          WANDB_COUNT: 40
           GRID_MODE: "wandb"   # or "custom"
           EXPORT_OUT_PATH: ${{ env.GRID_DIR }}/best_grid_config.json
           EXPORT_PHASE2_PATH: ${{ env.GRID_DIR }}/grid_sweep_phase2.yaml
@@ -599,7 +600,7 @@ jobs:
           # agent knobs (already have these)
           HARD_WALL_MINS: ${{ env.PHASE2_SWEEP_WALL_MINS }}
           KILL_AFTER_SECS: 120
-          WANDB_COUNT: 2
+          WANDB_COUNT: 80
           # recheck knobs (separate budget)
           TOPK_RECHECK: 5
           EXTRA_SEEDS: 3
@@ -773,7 +774,7 @@ jobs:
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
-      TOX21_EXPLAIN_MODE: ig,ig_motif
+      TOX21_EXPLAIN_MODE: off
     steps:
       - name: Ensure experiments root available
         shell: bash
@@ -876,7 +877,7 @@ jobs:
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
-      TOX21_EXPLAIN_MODE: ig,ig_motif
+      TOX21_EXPLAIN_MODE: off
     steps:
       - name: Ensure experiments root available
         shell: bash
@@ -950,7 +951,7 @@ jobs:
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
-      TOX21_EXPLAIN_MODE: ig,ig_motif
+      TOX21_EXPLAIN_MODE: off
     steps:
       - name: Ensure experiments root available
         shell: bash
@@ -971,16 +972,19 @@ jobs:
           envs: APP_DIR,GRID_DIR,TOX21_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
-            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT,TOX21_EXPLAIN_MODE,TOX21_EXPLAIN_STEPS
+            BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,TOX21_EVALUATION_MODE,TOX21_ENCODER_LR,TOX21_EPOCHS,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT,TOX21_EXPLAIN_MODE,TOX21_EXPLAIN_STEPS
           script: |
             bash "$APP_DIR/scripts/ci/run-tox21.sh"
         env:
           HARD_WALL_MINS: 3500
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "70"
-          FINETUNE_EPOCHS: "18"
+          FINETUNE_EPOCHS: "30"
           BESTCFG_NO_EPOCHS: "1" # use best config without reloading any epochs
-          TOX21_ENCODER_SOURCE: fine_tuned
+          TOX21_ENCODER_SOURCE: pretrain_frozen
+          TOX21_EVALUATION_MODE: pretrain_frozen
+          TOX21_ENCODER_LR: 3e-06
+          TOX21_EPOCHS: "30"
 
       - name: Checkout repository for tox21 artifacts
         if: always()

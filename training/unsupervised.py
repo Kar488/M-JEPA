@@ -266,7 +266,7 @@ def _maybe_pin(
     if device is None:
         try:
             return tensor.pin_memory()
-        except NotImplementedError:  # pragma: no cover - backend dependent
+        except (RuntimeError, NotImplementedError):  # pragma: no cover - backend dependent
             return tensor
 
     try:
@@ -281,14 +281,14 @@ def _maybe_pin(
         # would on newer PyTorch builds.
         try:
             pinned = tensor.pin_memory()
-        except NotImplementedError:  # pragma: no cover - backend dependent
+        except (RuntimeError, NotImplementedError):  # pragma: no cover - backend dependent
             return tensor
 
         with contextlib.suppress(NotImplementedError):
             tensor.pin_memory()
 
         return pinned
-    except NotImplementedError:  # pragma: no cover - backend dependent
+    except (RuntimeError, NotImplementedError):  # pragma: no cover - backend dependent
         return tensor
 
 

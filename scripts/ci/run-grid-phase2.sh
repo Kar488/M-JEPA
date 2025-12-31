@@ -25,6 +25,18 @@ source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/stage.sh"
 source "$(dirname "$0")/wandb_utils.sh"
 
+# When callers forget to set CUDA_VISIBLE_DEVICES, expose all visible GPUs so
+# the splitter can divide them between phase2 agents.
+if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  mapfile -t _phase2_all_gpus < <(visible_gpu_ids)
+  if (( ${#_phase2_all_gpus[@]} > 0 )); then
+    export CUDA_VISIBLE_DEVICES
+    CUDA_VISIBLE_DEVICES="$(IFS=,; echo "${_phase2_all_gpus[*]}")"
+    echo "[phase2] exposing all visible GPUs via CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+  fi
+  unset _phase2_all_gpus
+fi
+
 ci_phase2_select_existing_grid() {
   local common_grid_id="$1"
   local common_pretrain_id="$2"
