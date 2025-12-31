@@ -3018,7 +3018,13 @@ run_stage() {
       return 1
     fi
   fi
-  : "${WANDB_NAME:=$stage}"; export WANDB_NAME
+  # Preserve sweep-assigned run names during phase2 sweeps instead of forcing
+  # the stage label (phase 1 clears WANDB_NAME similarly before launching).
+  if [[ "$stage" == "phase2_sweep" ]]; then
+    unset WANDB_NAME
+  else
+    : "${WANDB_NAME:=$stage}"; export WANDB_NAME
+  fi
   : "${WANDB_JOB_TYPE:=$stage}"; export WANDB_JOB_TYPE
   export WANDB_RUN_GROUP="${GITHUB_RUN_ID:-${WANDB_RUN_GROUP:-}}"
 
