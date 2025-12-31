@@ -1031,6 +1031,9 @@ def _run_tox21_single_task(
     except Exception:
         pass
 
+    bestcfg_epochs_override = bool(getattr(args, "_bestcfg_epochs_override", False))
+    bestcfg_patience_override = bool(getattr(args, "_bestcfg_patience_override", False))
+
     case_study_kwargs: Dict[str, Any] = {
         "csv_path": getattr(args, "csv"),
         "task_name": task_name,
@@ -1622,6 +1625,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
 
     best_overrides, best_path = _load_best_config_overrides(args)
     inherited: List[str] = []
+    setattr(args, "_bestcfg_epochs_override", "finetune_epochs" in best_overrides)
+    setattr(args, "_bestcfg_patience_override", "patience" in best_overrides)
     if "add_3d" in best_overrides and not _flag_was_provided(("--add-3d", "--add_3d")):
         desired = bool(best_overrides["add_3d"])
         if bool(getattr(args, "add_3d", desired)) != desired:
@@ -1751,6 +1756,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         or "pretrain_frozen"
     ).lower()
     baseline_mode = eval_mode == "baseline"
+    bestcfg_epochs_override = bool(getattr(args, "_bestcfg_epochs_override", False))
+    bestcfg_patience_override = bool(getattr(args, "_bestcfg_patience_override", False))
     finetune_epochs_provided = bool(finetune_epochs_provided)
     baseline_epochs_env = _coerce_int_like(os.getenv("TOX21_BASELINE_FINETUNE_EPOCHS"))
     baseline_finetune_default = (
@@ -1760,7 +1767,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     )
     finetune_epochs_default = 20
     finetune_epochs_value = getattr(args, "finetune_epochs", None)
-    bestcfg_epochs_override = "finetune_epochs" in best_overrides
+    bestcfg_epochs_override = bestcfg_epochs_override or ("finetune_epochs" in best_overrides)
     if baseline_mode and not finetune_epochs_provided and not bestcfg_epochs_override:
         resolved_baseline_epochs = baseline_finetune_default or finetune_epochs_value or finetune_epochs_default
         if resolved_baseline_epochs is not None:
@@ -1779,7 +1786,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         if baseline_patience_env is not None
         else _coerce_int_like(getattr(args, "baseline_patience", None))
     )
-    bestcfg_patience_override = "patience" in best_overrides
+    bestcfg_patience_override = bestcfg_patience_override or ("patience" in best_overrides)
     if baseline_mode and not patience_provided and not bestcfg_patience_override:
         patience_candidate = getattr(args, "patience", None)
         baseline_patience_value = baseline_patience_default
