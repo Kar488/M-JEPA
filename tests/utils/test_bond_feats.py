@@ -4,6 +4,9 @@ import numpy as np
 import pytest 
 import torch
 rdkit = pytest.importorskip("rdkit", reason="RDKit required")
+from rdkit import Chem  # type: ignore
+if not hasattr(Chem, "BondType"):
+    pytest.skip("RDKit missing bond enums", allow_module_level=True)
 import utils.bond_feats as bf
 attach_bond_features_from_smiles = bf.attach_bond_features_from_smiles
 

@@ -8,8 +8,10 @@ isn't installed.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional, Sequence
 import os
+import re
+import uuid
+from typing import Any, Dict, Optional, Sequence
 
 try:
     from .wandb_filters import silence_pydantic_field_warnings
@@ -53,6 +55,38 @@ class DummyWandb:
         This method exists so calls to ``wandb.finish`` won't fail.
         """
         pass
+
+
+def _normalise_resume_flag(value: Any) -> Any:
+    """Coerce resume flags into an explicit mode.
+
+    W&B defaults to resuming from ``latest-run`` when ``resume`` is unset and a
+    prior run directory exists.  That behaviour caused cross-stage metric
+    mixing, so we opt into a strict default of ``"never"`` unless the caller
+    explicitly asks to resume.
+    """
+
+    if value is None:
+        return "never"
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"", "0", "false", "never", "off", "none"}:
+            return "never"
+        return value
+    if value is False:
+        return "never"
+    return value
+
+
+def _safe_label(token: Optional[str]) -> str:
+    cleaned = re.sub(r"[^0-9A-Za-z_.:-]+", "-", token or "")
+    cleaned = cleaned.strip("-")
+    return cleaned or "run"
+
+
+def _derive_run_id(env: Dict[str, str], name: Optional[str], job_type: Optional[str]) -> str:
+    prefix = job_type or name or env.get("MJEPACI_STAGE") or env.get("WANDB_NAME") or "run"
+    return f"{_safe_label(prefix)}-{uuid.uuid4().hex[:8]}"
 
 
 
@@ -122,22 +156,58 @@ def maybe_init_wandb(
         run = getattr(wandb, "run", None)
         if not initialise_run:
             return wandb
+        resume_flag = _normalise_resume_flag(extra.pop("resume", env.get("WANDB_RESUME")))
+
+        name_kw = extra.pop("name", None)
+        group_kw = extra.pop("group", None)
+        job_kw = extra.pop("job_type", None)
+        id_kw = extra.pop("id", None)
+        settings_kw = settings or extra.pop("settings", None)
+
+        name_val = env.get("WANDB_NAME") or name_kw
+        job_type_val = env.get("WANDB_JOB_TYPE") or job_kw or job_type
+        group_val = env.get("WANDB_RUN_GROUP") or group_kw or group or env.get("EXP_ID") or env.get("RUN_ID")
+        allow_resume = True
+        if isinstance(resume_flag, str) and resume_flag.lower() in {"never", "false", "0", "off", "none"}:
+            allow_resume = False
+        if resume_flag is False:
+            allow_resume = False
+
+        existing_id = env.get("WANDB_RUN_ID")
+        run_id = (existing_id if (existing_id and allow_resume) else None) or id_kw or _derive_run_id(env, name_val, job_type_val)
+
+        # Keep the generated id visible to subprocesses that rely on env state
+        os.environ["WANDB_RUN_ID"] = run_id
+
+        # When a previous run is still attached to this process and the caller
+        # did *not* ask to resume, finish it to avoid cross-stage reuse.
+        reuse_existing = allow_resume
+        if run is not None and not reuse_existing:
+            try:
+                run.finish()
+            except Exception:
+                pass
+            run = None
+
         if run is None:
             entity_kw = entity if entity is not None else env.get("WANDB_ENTITY")
+            settings_final = settings_kw or getattr(wandb, "Settings", lambda **_: None)()  # type: ignore[misc]
             kw = dict(
-                id   = env.get("WANDB_RUN_ID"),         # same id reused across stages
-                resume   = env.get("WANDB_RESUME", "allow"),# allow/auto/never/… (allow is safe)
-                name     = env.get("WANDB_NAME"),           # "grid", "pretrain", "finetune", …
-                group    = env.get("WANDB_RUN_GROUP",group),       # optional
-                job_type = env.get("WANDB_JOB_TYPE",job_type),        # optional
-                dir  = env.get("WANDB_DIR"),             # e.g., /data/mjepa/wandb
-                mode     = env.get("WANDB_MODE"),            # online/offline/disabled
-                project  = env.get("WANDB_PROJECT", project),
-                entity   = entity_kw,
+                id=run_id,
+                resume=resume_flag,
+                name=name_val,
+                group=group_val,
+                job_type=job_type_val,
+                dir=env.get("WANDB_DIR"),
+                mode=env.get("WANDB_MODE"),
+                project=env.get("WANDB_PROJECT", project),
+                entity=entity_kw,
                 config=config or {},
                 tags=list(tags) if tags else None,
+                settings=settings_final,
                 reinit=True,
             )
+            kw.update(extra)
             kw = {k: v for k, v in kw.items() if v is not None}
             wandb.init(**kw)
         else:
@@ -145,10 +215,15 @@ def maybe_init_wandb(
             new_name = os.getenv("WANDB_NAME")
             if new_name and getattr(run, "name", None) != new_name:
                 run.name = new_name
-                run.save()
+                try:
+                    run.save()
+                except Exception:
+                    pass
             if config and getattr(wandb, "config", None) is not None:
-                try: wandb.config.update(config, allow_val_change=True)
-                except Exception: pass
+                try:
+                    wandb.config.update(config, allow_val_change=True)
+                except Exception:
+                    pass
         return wandb
 
     except Exception as exc:

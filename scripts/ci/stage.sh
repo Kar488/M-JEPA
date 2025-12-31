@@ -1544,6 +1544,16 @@ build_stage_args() {
   local -a BEST=()
   if (( ! skip_best )); then
     mapfile -t BEST < <(best_config_args "$section")
+    if (( ${#BEST[@]} )); then
+      local -a FILTERED_BEST=()
+      local __best_token
+      for __best_token in "${BEST[@]}"; do
+        # Drop noisy stdout from optional dependencies (e.g., RDKit warnings)
+        [[ "$__best_token" =~ ^\[ ]] && continue
+        FILTERED_BEST+=("$__best_token")
+      done
+      BEST=("${FILTERED_BEST[@]}")
+    fi
     expand_array_vars BEST
     prune_empty_args BEST
   fi
@@ -3020,6 +3030,7 @@ run_stage() {
   fi
   : "${WANDB_NAME:=$stage}"; export WANDB_NAME
   : "${WANDB_JOB_TYPE:=$stage}"; export WANDB_JOB_TYPE
+  : "${WANDB_RESUME:=never}"; export WANDB_RESUME
   export WANDB_RUN_GROUP="${GITHUB_RUN_ID:-${WANDB_RUN_GROUP:-}}"
 
   echo "[${stage}] starting"

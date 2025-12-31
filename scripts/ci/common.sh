@@ -1970,9 +1970,13 @@ expand_array_vars() {
       _had_u=1
       set +u
     fi
-    # shellcheck disable=SC2086 # intentional env/parameter expansion via eval
     local _expanded
-    _expanded=$(eval "echo ${_arr[$i]}")
+    if [[ "${_arr[$i]}" == *'$'* || "${_arr[$i]}" == *'`'* || "${_arr[$i]}" == *'\\'* ]]; then
+      # shellcheck disable=SC2086 # intentional env/parameter expansion via eval
+      _expanded=$(eval "echo ${_arr[$i]}")
+    else
+      _expanded="${_arr[$i]}"
+    fi
     if ((_had_u)); then
       set -u
     fi
@@ -2019,6 +2023,7 @@ best_config_args() {
   # Reads best_grid_config.json and prints CLI args for the given stage
   local stage="$1"
   local -a grid_roots=()
+   local has_explicit_grid=0
 
   if [[ "${BESTCFG_NO_EPOCHS:-}" == "1" ]]; then
     echo "[bestcfg] BESTCFG_NO_EPOCHS=1 → dropping pretrain_epochs/finetune_epochs from best config" >&2
@@ -2038,21 +2043,26 @@ best_config_args() {
   }
 
   add_grid_root "${GRID_SOURCE_DIR:-}"
+  [[ -n "${GRID_SOURCE_DIR:-}" ]] && has_explicit_grid=1
   add_grid_root "${GRID_DIR:-}"
+  [[ -n "${GRID_DIR:-}" ]] && has_explicit_grid=1
   add_grid_root "${GRID_CACHE_DIR:-}"
+  [[ -n "${GRID_CACHE_DIR:-}" ]] && has_explicit_grid=1
 
-  if [[ -z "${GRID_CACHE_DIR:-}" ]]; then
-    if [[ -n "${SWEEP_CACHE_DIR:-}" && -d "${SWEEP_CACHE_DIR%/}/grid" ]]; then
-      add_grid_root "${SWEEP_CACHE_DIR%/}/grid"
-    fi
-    if [[ -n "${CACHE_DIR:-}" && -d "${CACHE_DIR%/}/grid" ]]; then
-      add_grid_root "${CACHE_DIR%/}/grid"
-    fi
-    if [[ -d "/data/mjepa/cache/grid" ]]; then
-      add_grid_root "/data/mjepa/cache/grid"
-    fi
-    if [[ -d "/cache/grid" ]]; then
-      add_grid_root "/cache/grid"
+  if (( ! has_explicit_grid )); then
+    if [[ -z "${GRID_CACHE_DIR:-}" ]]; then
+      if [[ -n "${SWEEP_CACHE_DIR:-}" && -d "${SWEEP_CACHE_DIR%/}/grid" ]]; then
+        add_grid_root "${SWEEP_CACHE_DIR%/}/grid"
+      fi
+      if [[ -n "${CACHE_DIR:-}" && -d "${CACHE_DIR%/}/grid" ]]; then
+        add_grid_root "${CACHE_DIR%/}/grid"
+      fi
+      if [[ -d "/data/mjepa/cache/grid" ]]; then
+        add_grid_root "/data/mjepa/cache/grid"
+      fi
+      if [[ -d "/cache/grid" ]]; then
+        add_grid_root "/cache/grid"
+      fi
     fi
   fi
 
