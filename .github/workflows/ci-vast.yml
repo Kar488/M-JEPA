@@ -728,7 +728,7 @@ jobs:
           HARD_WALL_MINS: 3500
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "70"
-          FINETUNE_EPOCHS: "8"
+          FINETUNE_EPOCHS: "50"
           BESTCFG_NO_EPOCHS: "1"
         shell: bash
         run: |
@@ -811,7 +811,7 @@ jobs:
           HARD_WALL_MINS: 3500
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "70"
-          FINETUNE_EPOCHS: "18"
+          FINETUNE_EPOCHS: "50"
           BESTCFG_NO_EPOCHS: "1"
           TOX21_ENCODER_SOURCE: pretrain_frozen
 
@@ -988,7 +988,7 @@ jobs:
           HARD_WALL_MINS: 3500
           KILL_AFTER_SECS: 120
           PRETRAIN_EPOCHS: "70"
-          FINETUNE_EPOCHS: "30"
+          FINETUNE_EPOCHS: "50"
           BESTCFG_NO_EPOCHS: "1" # use best config without reloading any epochs
           TOX21_ENCODER_SOURCE: pretrain_frozen
           TOX21_EVALUATION_MODE: pretrain_frozen
