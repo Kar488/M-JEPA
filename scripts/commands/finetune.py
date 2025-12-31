@@ -55,6 +55,7 @@ _TOX21_TASKS = {
 }
 
 _TOX21_EPOCH_FLOOR_DEFAULT = 10
+CONFIG: Dict[str, Any] = {}
 
 
 def _flag_was_provided(flags: Iterable[str]) -> bool:
@@ -2151,11 +2152,15 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     _apply_best_config_overrides(args)
     # Ensure seeds default to the config when none were supplied explicitly
     finetune_cfg = CONFIG.get("finetune", {}) if isinstance(CONFIG, Mapping) else {}
-    if (args.seeds is None or len(args.seeds) == 0) and finetune_cfg.get("seeds"):
+    seeds_value = getattr(args, "seeds", None)
+    if seeds_value is None:
+        seeds_value = []
+    if (not seeds_value) and finetune_cfg.get("seeds"):
         try:
-            args.seeds = [int(s) for s in finetune_cfg.get("seeds", [])]
+            seeds_value = [int(s) for s in finetune_cfg.get("seeds", [])]
         except Exception:
-            args.seeds = list(finetune_cfg.get("seeds", []))
+            seeds_value = list(finetune_cfg.get("seeds", []))
+    setattr(args, "seeds", list(seeds_value or []))
     label_columns = _resolve_label_columns(args)
     _maybe_enforce_tox21_epoch_floor(args, label_columns)
     if len(label_columns) <= 1:

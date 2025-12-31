@@ -1000,6 +1000,13 @@ def _run_tox21_single_task(
             start_log["class_balance_pos_weight"] = balance_entry.get("pos_weight")
     _wandb_log_safe(wb, start_log)
 
+    finetune_epochs_value = getattr(args, "finetune_epochs", None)
+    try:
+        if finetune_epochs_value is not None:
+            finetune_epochs_value = int(finetune_epochs_value)
+    except Exception:
+        pass
+
     case_study_kwargs: Dict[str, Any] = {
         "csv_path": getattr(args, "csv"),
         "task_name": task_name,
