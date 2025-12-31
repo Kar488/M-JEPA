@@ -7,6 +7,9 @@ import pytest
 from data.mdataset import GraphData, GraphDataset
 from explain import motif_ig
 from explain.motif_ig import aggregate_motif_ig, compute_motif_deltas, draw_motif_heatmap, save_motif_artifacts
+
+if not motif_ig._has_rdkit:
+    pytest.skip("RDKit required for motif attribution tests", allow_module_level=True)
 from training.supervised import _MotifIGArtifactLogger
 
 

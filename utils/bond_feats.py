@@ -1,23 +1,39 @@
 # utils/bond_feats.py  (new helper)
-from rdkit import Chem
+try:
+    from rdkit import Chem  # type: ignore
+except Exception:  # pragma: no cover - rdkit unavailable on some platforms
+    Chem = None  # type: ignore
+
 import numpy as np
+
+_RDKit_AVAILABLE = Chem is not None and hasattr(Chem, "BondType") and hasattr(Chem, "BondStereo")
+
+
+def _ensure_rdkit() -> None:
+    if not _RDKit_AVAILABLE:  # pragma: no cover - depends on optional rdkit install
+        raise ImportError("rdkit with bond enums is required for bond feature helpers")
 
 try:  # Align padding layout with dataset expectations when available
     from data.mdataset import EDGE_BASE_DIM as _EDGE_BASE_DIM  # type: ignore
 except Exception:  # pragma: no cover - fallback when dataset module unavailable
     _EDGE_BASE_DIM = 7
 
-_BOND_TYPES = [
-    Chem.BondType.SINGLE, Chem.BondType.DOUBLE,
-    Chem.BondType.TRIPLE, Chem.BondType.AROMATIC,
-]
-_STEREO = [
-    Chem.BondStereo.STEREONONE, Chem.BondStereo.STEREOANY,
-    Chem.BondStereo.STEREOZ, Chem.BondStereo.STEREOE,
-    Chem.BondStereo.STEREOCIS, Chem.BondStereo.STEREOTRANS,
-]
+if _RDKit_AVAILABLE:
+    _BOND_TYPES = [
+        Chem.BondType.SINGLE, Chem.BondType.DOUBLE,  # type: ignore[attr-defined]
+        Chem.BondType.TRIPLE, Chem.BondType.AROMATIC,  # type: ignore[attr-defined]
+    ]
+    _STEREO = [
+        Chem.BondStereo.STEREONONE, Chem.BondStereo.STEREOANY,  # type: ignore[attr-defined]
+        Chem.BondStereo.STEREOZ, Chem.BondStereo.STEREOE,  # type: ignore[attr-defined]
+        Chem.BondStereo.STEREOCIS, Chem.BondStereo.STEREOTRANS,  # type: ignore[attr-defined]
+    ]
+else:  # pragma: no cover - exercised in environments without rdkit
+    _BOND_TYPES: list = []
+    _STEREO: list = []
 
 def _bond_vector(b: Chem.Bond) -> np.ndarray:
+    _ensure_rdkit()
     # One-hot bond type (4)
     bt = [int(b.GetBondType() == t) for t in _BOND_TYPES]
     # Flags: conjugated, in ring, aromatic (3)
@@ -106,6 +122,7 @@ def attach_bond_features_from_smiles(
     truncated) to that width and the column immediately after the base RDKit
     features is reserved for the 3-D availability flag.
     """
+    _ensure_rdkit()
     mol = Chem.MolFromSmiles(smiles)
     assert mol is not None, f"Bad SMILES: {smiles}"
 
