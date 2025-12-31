@@ -1550,6 +1550,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tox.add_argument("--no-calibrate", action="store_true", help="Disable Platt scaling on VAL")
     tox.add_argument(
+        "--calibrate-per-head",
+        dest="calibrate_per_head",
+        action=argparse.BooleanOptionalAction,
+        default=case_cfg.get("calibrate_per_head", False),
+        help="Fit separate calibrators for each head instead of a shared calibrator",
+    )
+    tox.add_argument(
         "--freeze-encoder",
         dest="freeze_encoder",
         action=argparse.BooleanOptionalAction,
