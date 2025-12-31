@@ -942,6 +942,30 @@ def _run_tox21_single_task(
     else:
         _cleanup_explain_artifacts(report_dir, task_name)
 
+    finetune_epochs_provided = getattr(args, "_finetune_epochs_provided", None)
+    if finetune_epochs_provided is None:
+        finetune_epochs_provided = _flag_was_provided(("--finetune-epochs", "--finetune_epochs"))
+    patience_provided = getattr(args, "_patience_provided", None)
+    if patience_provided is None:
+        patience_provided = _flag_was_provided(("--patience",))
+
+    baseline_finetune_default = getattr(args, "_baseline_finetune_default", None)
+    if baseline_finetune_default is None:
+        baseline_epochs_env = _coerce_int_like(os.getenv("TOX21_BASELINE_FINETUNE_EPOCHS"))
+        baseline_finetune_default = (
+            baseline_epochs_env
+            if baseline_epochs_env is not None
+            else _coerce_int_like(getattr(args, "baseline_finetune_epochs", None))
+        )
+    baseline_patience_default = getattr(args, "_baseline_patience_default", None)
+    if baseline_patience_default is None:
+        baseline_patience_env = _coerce_int_like(os.getenv("TOX21_BASELINE_PATIENCE"))
+        baseline_patience_default = (
+            baseline_patience_env
+            if baseline_patience_env is not None
+            else _coerce_int_like(getattr(args, "baseline_patience", None))
+        )
+
     base_encoder_checkpoint = getattr(args, "encoder_checkpoint", None)
     task_encoder_checkpoint, task_encoder_info = _resolve_task_encoder_checkpoint(
         base_encoder_checkpoint,
@@ -1762,6 +1786,10 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 "Baseline evaluation mode detected; setting default patience to %d",
                 int(getattr(args, "patience")),
             )
+    setattr(args, "_finetune_epochs_provided", bool(finetune_epochs_provided))
+    setattr(args, "_patience_provided", bool(patience_provided))
+    setattr(args, "_baseline_finetune_default", baseline_finetune_default)
+    setattr(args, "_baseline_patience_default", baseline_patience_default)
     if getattr(args, "encoder_source", None) is None:
         setattr(args, "encoder_source", eval_mode)
     cache_dir = getattr(args, "cache_dir", None)
