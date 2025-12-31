@@ -80,6 +80,55 @@ def test_tox21_case_study_passes_explain_kwargs(monkeypatch, tmp_path):
     assert captured.get("config", {}).get("task_name") == "NR-AR"
 
 
+def test_baseline_respects_bestcfg_overrides(monkeypatch):
+
+    unsup = types.ModuleType("training.unsupervised")
+    unsup.train_jepa = lambda *_, **__: {}
+    monkeypatch.setitem(sys.modules, "training.unsupervised", unsup)
+
+    captured: Dict[str, Any] = {}
+    sup = types.ModuleType("training.supervised")
+
+    def train_linear_head(*, encoder, epochs, patience, **kwargs):
+        captured["epochs"] = epochs
+        captured["patience"] = patience
+        head = torch.nn.Linear(encoder.hidden_dim, 1)
+        return {
+            "head": head,
+            "train/batches": 0,
+            "train/loader_batches": 0,
+            "train/epoch_batches": 0,
+        }
+
+    sup.train_linear_head = train_linear_head
+
+    monkeypatch.setitem(sys.modules, "training", types.ModuleType("training"))
+    monkeypatch.setitem(sys.modules, "training.supervised", sup)
+
+    import importlib
+    import experiments.case_study as case_study
+
+    importlib.reload(case_study)
+
+    result = case_study.run_tox21_case_study(
+        csv_path="samples/tox21_mini.csv",
+        task_name="NR-AR",
+        pretrain_epochs=1,
+        finetune_epochs=5,
+        finetune_patience=15,
+        triage_pct=0.0,
+        evaluation_mode="baseline",
+        baseline_finetune_epochs=25,
+        baseline_patience=8,
+        bestcfg_epochs_override=True,
+        bestcfg_patience_override=True,
+    )
+
+    assert result.diagnostics.get("baseline_mode") is True
+    assert captured.get("epochs") == 5
+    assert captured.get("patience") == 15
+
+
 def test_sanitize_binary_labels_filters_invalid_rows(monkeypatch):
     import sys
     import types
