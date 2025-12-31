@@ -571,6 +571,14 @@ def _load_best_config_overrides(args: argparse.Namespace) -> Tuple[Dict[str, Any
     bf16_head_val = _coerce_bool_like(bf16_head_raw)
     if bf16_head_val is not None:
         overrides["bf16_head"] = bf16_head_val
+    finetune_epochs_raw = _extract_bestcfg_value(raw, "finetune_epochs")
+    finetune_epochs_val = _coerce_int_like(finetune_epochs_raw)
+    if finetune_epochs_val is not None:
+        overrides["finetune_epochs"] = finetune_epochs_val
+    patience_raw = _extract_bestcfg_value(raw, "patience")
+    patience_val = _coerce_int_like(patience_raw)
+    if patience_val is not None:
+        overrides["patience"] = patience_val
     return overrides, path
 
 
@@ -1633,6 +1641,22 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         if bool(current_val) != desired_flag or current_val is None:
             inherited.append(f"{key}={'true' if desired_flag else 'false'}")
             setattr(args, attr, desired_flag)
+    finetune_epochs_flag = _flag_was_provided(("--finetune-epochs", "--finetune_epochs"))
+    if "finetune_epochs" in best_overrides and not finetune_epochs_flag:
+        desired_epochs = _coerce_int_like(best_overrides.get("finetune_epochs"))
+        if desired_epochs is not None:
+            current_epochs = getattr(args, "finetune_epochs", None)
+            if current_epochs != desired_epochs:
+                inherited.append(f"finetune_epochs={desired_epochs}")
+            setattr(args, "finetune_epochs", desired_epochs)
+    patience_flag = _flag_was_provided(("--patience",))
+    if "patience" in best_overrides and not patience_flag:
+        desired_patience = _coerce_int_like(best_overrides.get("patience"))
+        if desired_patience is not None:
+            current_patience = getattr(args, "patience", None)
+            if current_patience != desired_patience:
+                inherited.append(f"patience={desired_patience}")
+            setattr(args, "patience", desired_patience)
     if inherited and best_path is not None:
         logger.info(
             "Inheriting Phase-2 best_config overrides from %s: %s",
