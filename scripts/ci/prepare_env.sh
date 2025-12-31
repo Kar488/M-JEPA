@@ -194,8 +194,8 @@ micromamba_with_retry() {
 # Ensure bsdtar is installed on the system
 if ! command -v bsdtar >/dev/null 2>&1; then
   echo "Installing bsdtar…"
-  apt-get update -qq
-  apt-get install -y libarchive-tools
+  sudo apt-get update -qq
+  sudo apt-get install -y libarchive-tools
 fi
 
 ensure_rsync_available() {
