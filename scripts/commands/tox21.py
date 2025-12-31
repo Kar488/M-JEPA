@@ -1192,6 +1192,7 @@ def _run_tox21_single_task(
         "selected_auc": auc_summary.get(selected_source) if selected_source else None,
         "selected_path": selected_source,
         "selected_met_benchmark": selected_benchmark,
+        "prediction_csv": None,
     }
     summary_payload.update(threshold_payload)
     summary_payload.update(target_payload)
@@ -1373,6 +1374,7 @@ def _run_tox21_single_task(
                 wb,
                 {"task": task_name, "prediction_csv": prediction_csv_path},
             )
+            summary_payload["prediction_csv"] = prediction_csv_path
 
     with open(json_path, "w", encoding="utf-8") as fh:
         json.dump(json_payload, fh, indent=2, sort_keys=True)
@@ -2021,6 +2023,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 "status": "complete",
                 "task_count": len(tasks_to_run),
                 "tox21_gate_passed_all": bool(aggregated_gate),
+                "prediction_csv": aggregated_prediction_paths,
             },
         )
 
