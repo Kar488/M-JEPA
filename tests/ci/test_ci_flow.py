@@ -147,6 +147,11 @@ def test_pretrain_graph_visuals_can_be_disabled(tmp_path):
     config_path = tmp_path / "train_jepa_ci.yml"
     config_path.write_text("pretrain:\n  generate_graph_visuals: false\n", encoding="utf-8")
 
+    stale_dir = experiments_root / "2112" / "graphs"
+    stale_dir.mkdir(parents=True, exist_ok=True)
+    stale_file = stale_dir / "old.png"
+    stale_file.write_bytes(b"stale")
+
     shim_path = tmp_path / "stage_shim.sh"
     shim_path.write_text(
         """#!/usr/bin/env bash
@@ -189,6 +194,8 @@ esac
     summary_path = graphs_dir / "summary.json"
     assert graphs_dir.is_dir(), graphs_dir
     assert summary_path.is_file(), summary_path
+
+    assert not stale_file.exists(), "stale graphs should be cleared when visuals are disabled"
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["fallback_reason"] == "graph visuals disabled via config"

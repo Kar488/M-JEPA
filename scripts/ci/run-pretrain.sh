@@ -70,6 +70,9 @@ create_graph_visuals_placeholder() {
   fi
 
   output_dir="${output_dir%/}/graphs"
+  if [[ -n "$output_dir" && "$output_dir" != "/" ]]; then
+    rm -rf "$output_dir"
+  fi
   mkdir -p "$output_dir"
 
   local summary_path="${output_dir}/summary.json"
