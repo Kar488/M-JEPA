@@ -995,7 +995,7 @@ def _run_tox21_single_task(
         "task_name": task_name,
         "dataset_name": dataset_name,
         "pretrain_epochs": getattr(args, "pretrain_epochs", 5),
-        "finetune_epochs": getattr(args, "finetune_epochs", 20),
+        "finetune_epochs": getattr(args, "finetune_epochs", finetune_epochs_value),
         "lr": getattr(args, "lr", 1e-3),
         "pretrain_lr": getattr(args, "pretrain_lr", None),
         "head_lr": getattr(args, "head_lr", None),
@@ -1033,6 +1033,8 @@ def _run_tox21_single_task(
         "cli_hidden_dim_provided": getattr(args, "_hidden_dim_provided", True),
         "cli_num_layers_provided": getattr(args, "_num_layers_provided", True),
         "cli_gnn_type_provided": getattr(args, "_gnn_type_provided", True),
+        "cli_finetune_epochs_provided": bool(finetune_epochs_provided),
+        "cli_patience_provided": bool(patience_provided),
         "full_finetune": getattr(args, "full_finetune", None),
         "freeze_encoder": freeze_encoder_flag,
         "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
@@ -1041,6 +1043,12 @@ def _run_tox21_single_task(
         "head_scheduler": getattr(args, "head_scheduler", None),
         "explain_mode": explain_mode,
         "explain_config": explain_config_payload,
+        "oversample_minority": getattr(args, "oversample_minority", False),
+        "use_focal_loss": getattr(args, "use_focal_loss", False),
+        "dynamic_pos_weight": getattr(args, "dynamic_pos_weight", False),
+        "focal_gamma": getattr(args, "focal_gamma", 2.0),
+        "baseline_finetune_epochs": baseline_finetune_default,
+        "baseline_patience": baseline_patience_default,
     }
 
     def _invoke_case_study(allow_shape_value: Optional[bool]) -> Any:
@@ -1650,6 +1658,49 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         )
         or "pretrain_frozen"
     ).lower()
+    baseline_mode = eval_mode == "baseline"
+    finetune_epochs_provided = _flag_was_provided(("--finetune-epochs", "--finetune_epochs"))
+    baseline_epochs_env = _coerce_int_like(os.getenv("TOX21_BASELINE_FINETUNE_EPOCHS"))
+    baseline_finetune_default = (
+        baseline_epochs_env
+        if baseline_epochs_env is not None
+        else _coerce_int_like(getattr(args, "baseline_finetune_epochs", None))
+    )
+    finetune_epochs_default = 20
+    finetune_epochs_value = getattr(args, "finetune_epochs", None)
+    bestcfg_epochs_override = "finetune_epochs" in best_overrides
+    if baseline_mode and not finetune_epochs_provided and not bestcfg_epochs_override:
+        resolved_baseline_epochs = baseline_finetune_default or finetune_epochs_value or finetune_epochs_default
+        if resolved_baseline_epochs is not None:
+            finetune_epochs_value = int(resolved_baseline_epochs)
+            logger.info(
+                "Baseline evaluation mode detected; defaulting finetune_epochs to %d",
+                finetune_epochs_value,
+            )
+    if finetune_epochs_value is None:
+        finetune_epochs_value = finetune_epochs_default
+    setattr(args, "finetune_epochs", finetune_epochs_value)
+    patience_provided = _flag_was_provided(("--patience",))
+    baseline_patience_env = _coerce_int_like(os.getenv("TOX21_BASELINE_PATIENCE"))
+    baseline_patience_default = (
+        baseline_patience_env
+        if baseline_patience_env is not None
+        else _coerce_int_like(getattr(args, "baseline_patience", None))
+    )
+    bestcfg_patience_override = "patience" in best_overrides
+    if baseline_mode and not patience_provided and not bestcfg_patience_override:
+        patience_candidate = getattr(args, "patience", None)
+        baseline_patience_value = baseline_patience_default
+        if baseline_patience_value is None:
+            baseline_patience_value = patience_candidate
+        if baseline_patience_value is not None and (
+            patience_candidate is None or patience_candidate > baseline_patience_value
+        ):
+            setattr(args, "patience", int(baseline_patience_value))
+            logger.info(
+                "Baseline evaluation mode detected; setting default patience to %d",
+                int(getattr(args, "patience")),
+            )
     if getattr(args, "encoder_source", None) is None:
         setattr(args, "encoder_source", eval_mode)
     cache_dir = getattr(args, "cache_dir", None)
@@ -2119,6 +2170,22 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
         type=float,
         dest="verify_match_threshold",
     )
+    parser.add_argument(
+        "--oversample-minority",
+        action=_StandaloneBoolFlag,
+        dest="oversample_minority",
+    )
+    parser.add_argument(
+        "--dynamic-pos-weight",
+        action=_StandaloneBoolFlag,
+        dest="dynamic_pos_weight",
+    )
+    parser.add_argument(
+        "--use-focal-loss",
+        action=_StandaloneBoolFlag,
+        dest="use_focal_loss",
+    )
+    parser.add_argument("--focal-gamma", type=float, dest="focal_gamma")
     parser.add_argument("--use-wandb", action=_StandaloneBoolFlag, dest="use_wandb")
     parser.add_argument("--wandb-project")
     parser.add_argument("--wandb-tags", nargs="*")
@@ -2208,6 +2275,18 @@ def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespa
         namespace.no_calibrate = False
     if not hasattr(namespace, "pos_class_weight"):
         namespace.pos_class_weight = None
+    if getattr(namespace, "baseline_finetune_epochs", None) is None:
+        namespace.baseline_finetune_epochs = None
+    if getattr(namespace, "baseline_patience", None) is None:
+        namespace.baseline_patience = None
+    if getattr(namespace, "oversample_minority", None) is None:
+        namespace.oversample_minority = False
+    if getattr(namespace, "use_focal_loss", None) is None:
+        namespace.use_focal_loss = False
+    if getattr(namespace, "dynamic_pos_weight", None) is None:
+        namespace.dynamic_pos_weight = False
+    if getattr(namespace, "focal_gamma", None) is None:
+        namespace.focal_gamma = 2.0
     if not hasattr(namespace, "freeze_encoder"):
         namespace.freeze_encoder = False
     if getattr(namespace, "head_ensemble_size", None) is None:
