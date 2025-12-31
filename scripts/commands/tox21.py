@@ -1000,15 +1000,6 @@ def _run_tox21_single_task(
             start_log["class_balance_pos_weight"] = balance_entry.get("pos_weight")
     _wandb_log_safe(wb, start_log)
 
-    finetune_epochs_provided = getattr(args, "_finetune_epochs_provided", None)
-    if finetune_epochs_provided is None:
-        finetune_epochs_provided = _flag_was_provided(("--finetune-epochs", "--finetune_epochs"))
-    patience_provided = getattr(args, "_patience_provided", None)
-    if patience_provided is None:
-        patience_provided = _flag_was_provided(("--patience",))
-    baseline_finetune_default = getattr(args, "baseline_finetune_epochs", None)
-    baseline_patience_default = getattr(args, "baseline_patience", None)
-
     finetune_epochs_value = getattr(args, "finetune_epochs", None)
     try:
         if finetune_epochs_value is not None:
