@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import math
+import shutil
 import re
 import os
 import sys
@@ -838,11 +839,28 @@ def _run_tox21_single_task(
         return normalised
 
     def _filter_explain_modes(modes: List[str]) -> List[str]:
-        allowed = {"ig", "ig_motif"}
+        allowed = {"ig", "ig_motif", "off"}
         filtered = [mode for mode in modes if mode in allowed]
+        if "off" in filtered:
+            return []
+        filtered = [mode for mode in filtered if mode != "off"]
         if not filtered:
             return ["ig", "ig_motif"]
         return filtered
+
+    def _cleanup_explain_artifacts(report_root: str, task: str) -> None:
+        """Remove stale explanation artifacts when explanations are disabled."""
+
+        task_slug = str(task).strip().lower()
+        explain_dirs = [
+            Path(report_root) / "ig_explanations" / task_slug,
+            Path(report_root) / "ig_motif_explanations" / task_slug,
+        ]
+        for path in explain_dirs:
+            try:
+                shutil.rmtree(path, ignore_errors=True)
+            except Exception:
+                logger.debug("Failed to remove explain artifacts at %s", path, exc_info=True)
 
     task_name = getattr(args, "task", None)
     if not task_name:
@@ -911,6 +929,8 @@ def _run_tox21_single_task(
                 explain_config_payload["steps"] = int(explain_steps)
             except Exception:
                 pass
+    else:
+        _cleanup_explain_artifacts(report_dir, task_name)
 
     base_encoder_checkpoint = getattr(args, "encoder_checkpoint", None)
     task_encoder_checkpoint, task_encoder_info = _resolve_task_encoder_checkpoint(

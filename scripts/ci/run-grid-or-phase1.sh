@@ -54,6 +54,18 @@ export WANDB_JOB_TYPE="grid"
 PHASE1_MIN_SEED_PAIRS=${PHASE1_MIN_SEED_PAIRS:-2}
 PHASE1_BACKBONES=${PHASE1_BACKBONES-}
 
+# When callers forget to set CUDA_VISIBLE_DEVICES, expose all visible GPUs so
+# the splitter can divide them between JEPA and contrastive agents.
+if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  mapfile -t _phase1_all_gpus < <(visible_gpu_ids)
+  if (( ${#_phase1_all_gpus[@]} > 0 )); then
+    export CUDA_VISIBLE_DEVICES
+    CUDA_VISIBLE_DEVICES="$(IFS=,; echo "${_phase1_all_gpus[*]}")"
+    echo "[phase1] exposing all visible GPUs via CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+  fi
+  unset _phase1_all_gpus
+fi
+
 # Decide which mode to use
 : "${GRID_MODE:?GRID_MODE must be set to 'wandb' or 'custom'}"
 # allowed values: custom | wandb

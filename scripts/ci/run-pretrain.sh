@@ -5,6 +5,8 @@ trap 'echo "[ci] error at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 unset BESTCFG_NO_EPOCHS
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 if [[ -z "${PRETRAIN_SAMPLE_UNLABELED:-}" ]]; then
   BESTCFG_SKIP="sample_unlabeled ${BESTCFG_SKIP:-}"
 else
@@ -61,12 +63,16 @@ run_graph_visuals_helper() {
 }
 
 create_graph_visuals_placeholder() {
+  local reason="${1:-graph visuals helper failed}"
   local output_dir="${PRETRAIN_EXPERIMENT_ROOT:-}"
   if [[ -z "${output_dir}" ]]; then
     return 1
   fi
 
   output_dir="${output_dir%/}/graphs"
+  if [[ -n "$output_dir" && "$output_dir" != "/" ]]; then
+    rm -rf "$output_dir"
+  fi
   mkdir -p "$output_dir"
 
   local summary_path="${output_dir}/summary.json"
@@ -74,7 +80,7 @@ create_graph_visuals_placeholder() {
     cat >"$summary_path" <<EOF
 {
   "dataset_path": "${DATASET_DIR:-<unset>}",
-  "fallback_reason": "graph visuals helper failed",
+  "fallback_reason": "${reason}",
   "output_dir": "${output_dir}",
   "num_graphs": 0,
   "num_rendered": 0,
@@ -82,23 +88,120 @@ create_graph_visuals_placeholder() {
   "fallback_forced": false,
   "rdkit_available": false,
   "rdkit_installed": false,
-  "rdkit_import_error": "graph visuals helper failed",
+  "rdkit_import_error": "${reason}",
   "png_renderers": {"placeholder": 1}
 }
 EOF
   fi
 
   : >"${output_dir}/placeholder.png"
-  cat >"${output_dir}/index.html" <<'EOF'
+  cat >"${output_dir}/index.html" <<EOF
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Graph Visuals (placeholder)</title></head>
 <body>
-<p>Graph visualisation generation failed; placeholder assets materialised by run-pretrain.sh.</p>
+<p>Graph visualisation generation failed (${reason}); placeholder assets materialised by run-pretrain.sh.</p>
 </body>
 </html>
 EOF
 }
+
+pretrain_graph_visuals_enabled() {
+  local default="${1:-1}" path_sink="${2:-}"
+  local cfg_path="${TRAIN_JEPA_CI:-}"
+
+  if [[ -z "$cfg_path" && -n "${APP_DIR:-}" ]]; then
+    cfg_path="${APP_DIR%/}/scripts/ci/train_jepa_ci.yml"
+  fi
+  if [[ -z "$cfg_path" ]]; then
+    cfg_path="${SCRIPT_DIR}/train_jepa_ci.yml"
+  fi
+  if [[ -n "$path_sink" ]]; then
+    printf -v "$path_sink" '%s' "$cfg_path"
+  fi
+
+  local override="${PRETRAIN_GENERATE_GRAPH_VISUALS:-${GENERATE_GRAPH_VISUALS:-}}"
+  case "${override,,}" in
+    1|true|yes|on)
+      echo "1"
+      return 0
+      ;;
+    0|false|no|off)
+      echo "0"
+      return 0
+      ;;
+  esac
+
+  if [[ ! -f "$cfg_path" ]]; then
+    echo "$default"
+    return 0
+  fi
+
+  local py_bin=""
+  if command -v python >/dev/null 2>&1; then
+    py_bin="python"
+  elif command -v python3 >/dev/null 2>&1; then
+    py_bin="python3"
+  fi
+
+  if [[ -z "$py_bin" ]]; then
+    echo "$default"
+    return 0
+  fi
+
+  local parsed
+  parsed="$("$py_bin" - "$cfg_path" <<'PY'
+import os
+import sys
+
+import yaml
+
+path = sys.argv[1]
+
+with open(path, "r", encoding="utf-8") as handle:
+    data = yaml.safe_load(handle) or {}
+
+pretrain = data.get("pretrain") or {}
+value = pretrain.get("generate_graph_visuals", pretrain.get("generate_graphs"))
+
+if isinstance(value, str):
+    text = value.strip()
+    if text.startswith("${") and text.endswith("}"):
+        value = os.path.expandvars(text)
+
+
+def normalise(val):
+    if isinstance(val, bool):
+        return val
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return bool(val)
+    text = str(val).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
+result = normalise(value)
+if result is None:
+    sys.exit(1)
+
+print("1" if result else "0")
+PY
+)"
+  local status=$?
+  if [[ $status -eq 0 && "$parsed" =~ ^[01]$ ]]; then
+    echo "$parsed"
+  else
+    echo "$default"
+  fi
+}
+
+GRAPH_VISUALS_CONFIG_PATH=""
+GRAPH_VISUALS_ENABLED="$(pretrain_graph_visuals_enabled 0 GRAPH_VISUALS_CONFIG_PATH)"
 
 ci_pretrain_materialize_manifest() {
   local stage_outputs="$1"
@@ -337,7 +440,10 @@ PY
     echo "[ci] warn: unable to write pretrain_state.json because no python interpreter was resolved" >&2
   fi
 
-  if ! run_graph_visuals_helper; then
+  if [[ "$GRAPH_VISUALS_ENABLED" == "0" ]]; then
+    echo "[pretrain] graph visualisations disabled via config (${GRAPH_VISUALS_CONFIG_PATH:-<unset>}); seeding placeholders" >&2
+    create_graph_visuals_placeholder "graph visuals disabled via config" || true
+  elif ! run_graph_visuals_helper; then
     echo "::warning::graph visualisation generation failed" >&2
     create_graph_visuals_placeholder || true
   else
@@ -562,7 +668,10 @@ if legacy_path and os.path.abspath(legacy_path) != os.path.abspath(state_path):
     print(f"[pretrain] synced legacy state to {legacy_path}")
 PY
 
-if ! run_graph_visuals_helper; then
+if [[ "$GRAPH_VISUALS_ENABLED" == "0" ]]; then
+  echo "[pretrain] graph visualisations disabled via config (${GRAPH_VISUALS_CONFIG_PATH:-<unset>}); seeding placeholders" >&2
+  create_graph_visuals_placeholder "graph visuals disabled via config" || true
+elif ! run_graph_visuals_helper; then
   echo "::warning::graph visualisation generation failed" >&2
 fi
 
