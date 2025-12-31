@@ -1091,6 +1091,8 @@ def _run_tox21_single_task(
         "focal_gamma": getattr(args, "focal_gamma", 2.0),
         "baseline_finetune_epochs": baseline_finetune_default,
         "baseline_patience": baseline_patience_default,
+        "bestcfg_epochs_override": bool(bestcfg_epochs_override),
+        "bestcfg_patience_override": bool(bestcfg_patience_override),
     }
 
     def _invoke_case_study(allow_shape_value: Optional[bool]) -> Any:

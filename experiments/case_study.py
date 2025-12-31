@@ -1736,6 +1736,8 @@ def run_tox21_case_study(
     cli_patience_provided: bool = False,
     baseline_finetune_epochs: Optional[int] = None,
     baseline_patience: Optional[int] = None,
+    bestcfg_epochs_override: bool = False,
+    bestcfg_patience_override: bool = False,
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
 
@@ -2707,7 +2709,7 @@ def run_tox21_case_study(
                 patience_value = None
     if patience_value is None:
         patience_value = 12 if full_finetune_effective else 10
-    if baseline_mode and not cli_finetune_epochs_provided and finetune_epochs < (baseline_finetune_epochs_value or finetune_epochs):
+    if baseline_mode and not cli_finetune_epochs_provided and not bestcfg_epochs_override and finetune_epochs < (baseline_finetune_epochs_value or finetune_epochs):
         if baseline_finetune_epochs_value is not None:
             logger.info(
                 "Baseline evaluation mode active; increasing finetune_epochs from %d to %d.",
@@ -2715,7 +2717,12 @@ def run_tox21_case_study(
                 baseline_finetune_epochs_value,
             )
             finetune_epochs = baseline_finetune_epochs_value
-    if baseline_mode and not cli_patience_provided and patience_value is not None:
+    if (
+        baseline_mode
+        and not cli_patience_provided
+        and not bestcfg_patience_override
+        and patience_value is not None
+    ):
         if baseline_patience_value is not None and patience_value > baseline_patience_value:
             logger.info(
                 "Baseline evaluation mode active; capping patience at %d (from %s).",
