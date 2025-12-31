@@ -813,7 +813,8 @@ jobs:
           PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "50"
           BESTCFG_NO_EPOCHS: "1"
-          TOX21_ENCODER_SOURCE: pretrain_frozen
+          TOX21_ENCODER_SOURCE: baseline
+          TOX21_EVALUATION_MODE: baseline
 
       - name: Checkout repository for tox21 baseline artifacts
         if: always()
@@ -990,8 +991,8 @@ jobs:
           PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "50"
           BESTCFG_NO_EPOCHS: "1" # use best config without reloading any epochs
-          TOX21_ENCODER_SOURCE: pretrain_frozen
-          TOX21_EVALUATION_MODE: pretrain_frozen
+          TOX21_ENCODER_SOURCE: fine_tuned
+          TOX21_EVALUATION_MODE: fine_tuned
           TOX21_ENCODER_LR: 3e-06
           TOX21_EPOCHS: "30"
 

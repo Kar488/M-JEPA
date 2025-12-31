@@ -141,8 +141,8 @@ tox21:
   finetune_time_budget_mins: 60
   encoder_checkpoint: ${TOX21_ENCODER_CHECKPOINT}
   encoder_manifest: ${TOX21_ENCODER_MANIFEST:-${PRETRAIN_MANIFEST}}
-  encoder_source: ${TOX21_ENCODER_SOURCE:-pretrain_frozen}
-  evaluation_mode: ${TOX21_EVALUATION_MODE:-pretrain_frozen}
+  encoder_source: ${TOX21_ENCODER_SOURCE:-baseline}
+  evaluation_mode: ${TOX21_EVALUATION_MODE:-baseline}
   freeze_encoder: false
   batch_size: 256
   epochs: ${TOX21_EPOCHS:-30}
