@@ -1279,9 +1279,9 @@ def _evaluate_case_study(
     calibrator_info: Dict[str, Any] = {
         "enabled": bool(calibrate),
         "fit_split": "val",
-        "per_head_enabled": bool(calibrate_per_head),
-        "mode": "aggregate",
     }
+    if calibrate_per_head:
+        calibrator_info["per_head_enabled"] = True
     feature_dim = int(val_logits_feat.shape[1]) if val_logits_feat.ndim == 2 else 1
     if calibrate or (val_logits_np.ndim >= 2 and val_logits_np.shape[-1] > 1):
         calibrator_info["feature_dim"] = feature_dim
@@ -1428,8 +1428,6 @@ def _evaluate_case_study(
             calibrator_info.update({"status": "error", "error": str(exc)})
     elif not calibrate:
         calibrator_info["status"] = "disabled"
-        calibrator_info["mode"] = "disabled"
-        calibrator_info["mode_used"] = "disabled"
 
     calibrated_probs = _resize_to_expected(calibrated_probs, "calibrated probabilities")
 
