@@ -58,7 +58,7 @@ pretrain:
   output: ${PRETRAIN_DIR}/encoder.pt
   force_tqdm: true
   use_wandb: true
-  generate_graph_visuals: false
+  generate_graph_visuals: true
 
 finetune:
   <<: *common
