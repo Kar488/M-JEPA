@@ -53,14 +53,8 @@ from utils.early_stopping import EarlyStopping
 from utils.dataset import SupportsTeardown
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.graph_ops import _encode_graph
-from utils.ddp import (
-    cleanup,
-    get_rank,
-    get_world_size,
-    init_distributed,
-    is_main_process,
-    should_retry_with_gloo,
-)
+import utils.ddp as ddp
+from utils.ddp import cleanup, get_rank, get_world_size, is_main_process, should_retry_with_gloo
 from utils.dataloader import (
     autotune_worker_pool,
     check_fd_budget,
@@ -1488,7 +1482,7 @@ def _train_linear_head_impl(
     distributed = False
     if devices > 1:
         try:
-            distributed = init_distributed()
+            distributed = ddp.init_distributed()
         except RuntimeError as exc:
             if should_retry_with_gloo(exc):
                 cleanup()
