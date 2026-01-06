@@ -2136,20 +2136,22 @@ run_with_timeout() {
     local preflight_reason=""
     local preflight_marked=0
     local preflight_fallback_logged=0
-    local requested_devices_numeric=0
-    local fallback_devices_value=""
+      local requested_devices_numeric=0
+      local fallback_devices_value=""
 
-    if [[ -n "$ddp_stage" ]]; then
-      local devices_idx=-1
-      local devices_joined=0
-      local requested_devices=""
-      local i=0
-      local detected_cuda_devices=""
-      while (( i < ${#entrypoint_args[@]} )); do
-        local token="${entrypoint_args[$i]}"
-        if [[ "$token" == "--devices" ]]; then
-          devices_idx=$i
-          if (( i + 1 < ${#entrypoint_args[@]} )); then
+      if [[ -n "$ddp_stage" ]]; then
+        local devices_idx=-1
+        local devices_joined=0
+        local requested_devices=""
+        local i=0
+        local detected_cuda_devices=""
+        local available_devices=0
+        local ddp_supported=0
+        while (( i < ${#entrypoint_args[@]} )); do
+          local token="${entrypoint_args[$i]}"
+          if [[ "$token" == "--devices" ]]; then
+            devices_idx=$i
+            if (( i + 1 < ${#entrypoint_args[@]} )); then
             requested_devices="${entrypoint_args[$((i + 1))]}"
           fi
           break
@@ -2176,20 +2178,14 @@ run_with_timeout() {
         esac
       fi
 
-      if [[ "$requested_devices" =~ ^[0-9]+$ ]]; then
-        requested_devices_numeric=$(( requested_devices + 0 ))
-      fi
-
-      if (( requested_devices_numeric > 1 )); then
-        local probe_output=""
-        local ddp_supported=0
-        if probe_output=$("${python_runner_cmd[@]}" - <<'PY'
+      # Probe available GPUs regardless so we can auto-fill --devices and clamp requests.
+      local probe_output=""
+      if probe_output=$("${python_runner_cmd[@]}" - <<'PY'
 import os
 import sys
 
 try:
     import torch  # noqa: F401
-    import torch.distributed.run  # noqa: F401
 except Exception:
     print("bummed on torch error")
     sys.exit(1)
@@ -2217,14 +2213,56 @@ elif is_available:
         count = 0
 print(max(count, 0))
 PY
+      ); then
+        ddp_supported=1
+      fi
+      if (( ddp_supported )); then
+        available_devices="${probe_output:-0}"
+        available_devices="${available_devices//$'\r'/}"
+        available_devices="${available_devices//$'\n'/}"
+        available_devices="${available_devices//[[:space:]]/}"
+        if [[ -z "$available_devices" ]]; then
+          available_devices=0
+        elif [[ "$available_devices" =~ ^[0-9]+$ ]]; then
+          available_devices=$(( available_devices + 0 ))
+        else
+          available_devices=0
+        fi
+        detected_cuda_devices="$available_devices"
+        if [[ -z "$requested_devices" && $available_devices -gt 1 ]]; then
+          requested_devices_numeric=$available_devices
+          requested_devices="$available_devices"
+          echo "[stage:$s] auto-detected ${available_devices} CUDA devices; enabling DDP" >&2
+        fi
+      fi
+
+      if [[ "$requested_devices" =~ ^[0-9]+$ ]]; then
+        requested_devices_numeric=$(( requested_devices + 0 ))
+      fi
+
+      if (( requested_devices_numeric > 1 )); then
+        local probe_output=""
+        ddp_supported=0
+        # Prefer the earlier probe result; fall back to a lighter check for DDP support.
+        if [[ -n "$available_devices" && "$available_devices" =~ ^[0-9]+$ ]]; then
+          ddp_supported=1
+          probe_output="$available_devices"
+        elif probe_output=$("${python_runner_cmd[@]}" - <<'PY'
+import sys
+try:
+    import torch  # noqa: F401
+    import torch.distributed.run  # noqa: F401
+except Exception:
+    sys.exit(1)
+print(1)
+PY
         ); then
           ddp_supported=1
         fi
 
         local effective_devices=$requested_devices_numeric
-        local available_devices=0
         if (( ddp_supported )); then
-          available_devices="${probe_output:-0}"
+          available_devices="${available_devices:-${probe_output:-0}}"
           available_devices="${available_devices//$'\r'/}"
           available_devices="${available_devices//$'\n'/}"
           available_devices="${available_devices//[[:space:]]/}"
@@ -2272,7 +2310,11 @@ PY
           else
             echo "[stage:$s] WORLD_SIZE=${world}; assuming external launcher configured DDP" >&2
           fi
-          ddp_launcher=(-m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
+          if command -v torchrun >/dev/null 2>&1; then
+            ddp_launcher=(torchrun --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
+          else
+            ddp_launcher=(-m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
+          fi
           ddp_enabled=1
           preflight_forced_single=0
           preflight_reason=""
