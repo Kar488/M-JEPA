@@ -53,13 +53,21 @@ from utils.early_stopping import EarlyStopping
 from utils.dataset import SupportsTeardown
 from utils.metrics import compute_classification_metrics, compute_regression_metrics
 from utils.graph_ops import _encode_graph
-from utils.ddp import should_retry_with_gloo
+from utils.ddp import (
+    cleanup,
+    get_rank,
+    get_world_size,
+    init_distributed,
+    is_main_process,
+    should_retry_with_gloo,
+)
 from utils.dataloader import (
     autotune_worker_pool,
     check_fd_budget,
     ensure_file_system_sharing_strategy,
     ensure_open_file_limit,
 )
+from utils.threads import configure_omp_threads
 
 logger = logging.getLogger(__name__)
 
@@ -1470,12 +1478,11 @@ def _train_linear_head_impl(
     assert dataset.labels is not None, "Dataset must have labels."
     assert task_type in {"classification", "regression"}
 
-    from utils.ddp import (
-        cleanup,
-        get_rank,
-        get_world_size,
-        init_distributed,
-        is_main_process,
+    configure_omp_threads(
+        stage="finetune",
+        num_workers=num_workers,
+        world_size=get_world_size(),
+        log=logger,
     )
 
     distributed = False
