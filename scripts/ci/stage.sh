@@ -81,6 +81,13 @@ ci_mark_ddp_attempt_if_empty() {
   printf '1' >"$path"
 }
 
+ci_prepare_train_invocation_file() {
+  local path="${TRAIN_INVOCATION_FILE:-}"
+  [[ -n "$path" ]] || return 0
+
+  ci_touch_file_dir "$path"
+}
+
 ci_phase2_refresh_lineage_bindings() {
   local new_pretrain="${1:-}"
   local new_grid="${2:-}"
@@ -2138,10 +2145,12 @@ run_with_timeout() {
     local preflight_reason=""
     local preflight_marked=0
     local preflight_fallback_logged=0
+    local fallback_missing_invocation=0
       local requested_devices_numeric=0
       local fallback_devices_value=""
 
       if [[ -n "$ddp_stage" ]]; then
+        ci_prepare_train_invocation_file
         local devices_idx=-1
         local devices_joined=0
         local requested_devices=""
@@ -2585,6 +2594,9 @@ PY
         ddp_fallback_msg+="; retrying with --devices 1"
         echo "$ddp_fallback_msg" >&2
         echo "[diag] stage ddp fallback (stage=${s} rc=${rc} command=${stage_python_cmd_str})" >&2
+        if (( ddp_missing_invocation )); then
+          fallback_missing_invocation=1
+        fi
         continue
       else
         echo "[ERROR][$s] train_jepa.py failed with exit code $rc" >&2
@@ -2592,6 +2604,10 @@ PY
         exit $rc
       fi
     done
+    if (( fallback_missing_invocation )) && [[ -n "${TRAIN_INVOCATION_FILE:-}" ]] && [[ ! -f "$TRAIN_INVOCATION_FILE" ]]; then
+      ci_touch_file_dir "$TRAIN_INVOCATION_FILE"
+      printf '1' >"$TRAIN_INVOCATION_FILE"
+    fi
   # --- WandB mode: run-grid passes a full cmd array --
   else
     ensure_micromamba
