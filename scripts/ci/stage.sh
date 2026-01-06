@@ -2604,9 +2604,11 @@ PY
         exit $rc
       fi
     done
-    if (( fallback_missing_invocation )) && [[ -n "${TRAIN_INVOCATION_FILE:-}" ]] && [[ ! -f "$TRAIN_INVOCATION_FILE" ]]; then
-      ci_touch_file_dir "$TRAIN_INVOCATION_FILE"
-      printf '1' >"$TRAIN_INVOCATION_FILE"
+    if [[ -n "${TRAIN_INVOCATION_FILE:-}" ]] && [[ ! -f "$TRAIN_INVOCATION_FILE" ]]; then
+      if (( fallback_missing_invocation || fallback_attempted )); then
+        ci_touch_file_dir "$TRAIN_INVOCATION_FILE"
+        printf '1' >"$TRAIN_INVOCATION_FILE"
+      fi
     fi
   # --- WandB mode: run-grid passes a full cmd array --
   else
