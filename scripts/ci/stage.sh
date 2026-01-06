@@ -2856,6 +2856,11 @@ run_stage() {
   local stage="${s,,}"
   local dir
   dir="$(stage_dir "$stage")"
+  MJEPACI_LAST_STAGE="$stage"
+  MJEPACI_LAST_STAGE_STATUS="pending"
+  MJEPACI_LAST_STAGE_SKIP_REASON=""
+  MJEPACI_LAST_STAGE_RERUN_REASON=""
+  export MJEPACI_LAST_STAGE MJEPACI_LAST_STAGE_STATUS MJEPACI_LAST_STAGE_SKIP_REASON MJEPACI_LAST_STAGE_RERUN_REASON
   local rc=0
   OUT_DIR="$dir"
   export OUT_DIR
@@ -2874,6 +2879,10 @@ run_stage() {
     case "$stage" in
       pretrain|grid|grid_search|phase1|phase2_sweep|phase2_recheck|phase2_export|finetune)
         echo "[ci] skip: frozen lineage (stage=${stage})" >&2
+        MJEPACI_LAST_STAGE_STATUS="skipped"
+        MJEPACI_LAST_STAGE_SKIP_REASON="frozen_lineage"
+        MJEPACI_LAST_STAGE_RERUN_REASON=""
+        export MJEPACI_LAST_STAGE_STATUS MJEPACI_LAST_STAGE_SKIP_REASON MJEPACI_LAST_STAGE_RERUN_REASON
         return 0
         ;;
     esac
@@ -3065,6 +3074,10 @@ run_stage() {
     if [[ "$stage" == "bench" ]]; then
       echo "[ci][info] Benchmark reason: ${skip_reason}" >&2
     fi
+    MJEPACI_LAST_STAGE_STATUS="skipped"
+    MJEPACI_LAST_STAGE_SKIP_REASON="$skip_reason"
+    MJEPACI_LAST_STAGE_RERUN_REASON=""
+    export MJEPACI_LAST_STAGE_STATUS MJEPACI_LAST_STAGE_SKIP_REASON MJEPACI_LAST_STAGE_RERUN_REASON
     return 0
   fi
 
@@ -3165,6 +3178,10 @@ run_stage() {
     stage_state_write "$stage" "$dir" "$config_hash" "$data_hash" "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
     mark_stage_done "$dir"
     rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
+    MJEPACI_LAST_STAGE_STATUS="completed"
+    MJEPACI_LAST_STAGE_SKIP_REASON=""
+    MJEPACI_LAST_STAGE_RERUN_REASON="$rerun_reason"
+    export MJEPACI_LAST_STAGE_STATUS MJEPACI_LAST_STAGE_SKIP_REASON MJEPACI_LAST_STAGE_RERUN_REASON
     return 0
   fi
 
@@ -3247,4 +3264,8 @@ run_stage() {
   mark_stage_done "$dir"
   echo "[${stage}] completed"
   rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
+  MJEPACI_LAST_STAGE_STATUS="completed"
+  MJEPACI_LAST_STAGE_SKIP_REASON=""
+  MJEPACI_LAST_STAGE_RERUN_REASON="$rerun_reason"
+  export MJEPACI_LAST_STAGE_STATUS MJEPACI_LAST_STAGE_SKIP_REASON MJEPACI_LAST_STAGE_RERUN_REASON
 }
