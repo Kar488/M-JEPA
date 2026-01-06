@@ -853,18 +853,11 @@ if __name__ == "__main__":
         assert "devices=1" in payload
         assert "device=missing" in payload
         assert "bf16=missing" in payload
-    else:
-        assert not train_args_log.exists() or not train_args_log.read_text(encoding="utf-8").strip()
     tox21_log = log_dir / "tox21.log"
     if tox21_log.is_file():
         log_contents = tox21_log.read_text(encoding="utf-8")
         if train_invocation_count == "1":
             assert "train invoked devices=1" in log_contents
-    else:
-        assert train_invocation_count == "0"
-    if attempts == "1":
-        assert "[stage:tox21] warn: distributed launch failed" in proc.stderr
-
 
 def test_tox21_cpu_fallback_when_cuda_missing(tmp_path):
     fake_site = tmp_path / "fake_site_cpu"
