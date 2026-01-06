@@ -1467,6 +1467,13 @@ def train_jepa(
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     distributed = (devices > 1) and init_distributed(ddp_backend)
+    if devices > 1 and not distributed and is_main_process():
+        logger.warning(
+            "Requested devices=%s but distributed initialisation is inactive "
+            "(WORLD_SIZE=%s). Launch with torchrun or ensure DDP env vars are set.",
+            devices,
+            os.environ.get("WORLD_SIZE", "1"),
+        )
     device_t = _resolve_device(device)
     pin_memory_enabled = bool(
         pin_memory and device_t.type == "cuda" and torch.cuda.is_available()
@@ -2227,6 +2234,13 @@ def train_contrastive(
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     distributed = (devices > 1) and init_distributed(ddp_backend)
+    if devices > 1 and not distributed and is_main_process():
+        logger.warning(
+            "Requested devices=%s but distributed initialisation is inactive "
+            "(WORLD_SIZE=%s). Launch with torchrun or ensure DDP env vars are set.",
+            devices,
+            os.environ.get("WORLD_SIZE", "1"),
+        )
     device_t = _resolve_device(device)
     pin_memory_enabled = bool(
         pin_memory and device_t.type == "cuda" and torch.cuda.is_available()

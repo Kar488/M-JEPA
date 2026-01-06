@@ -2124,7 +2124,7 @@ run_with_timeout() {
 
     local ddp_stage=""
     case "$s" in
-      finetune|tox21) ddp_stage="$s" ;;
+      pretrain|finetune|tox21) ddp_stage="$s" ;;
     esac
 
     if [[ -n "$ddp_stage" ]]; then
@@ -2164,6 +2164,9 @@ run_with_timeout() {
 
       if [[ -z "$requested_devices" ]]; then
         case "$ddp_stage" in
+          pretrain)
+            requested_devices="${PRETRAIN_DEVICES:-}"
+            ;;
           finetune)
             requested_devices="${FINETUNE_DEVICES:-}"
             ;;
