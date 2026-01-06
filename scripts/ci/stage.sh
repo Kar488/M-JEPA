@@ -2611,12 +2611,22 @@ PY
         exit $rc
       fi
     done
-    if [[ -n "${TRAIN_INVOCATION_FILE:-}" ]] && [[ ! -f "$TRAIN_INVOCATION_FILE" ]]; then
-      local ddp_attempts_value=""
+    if [[ -n "${TRAIN_INVOCATION_FILE:-}" ]]; then
+      local ddp_attempts_value="" invocation_value="" should_mark_invocation=0
       if [[ -n "${DDP_ATTEMPTS_FILE:-}" && -f "$DDP_ATTEMPTS_FILE" ]]; then
         ddp_attempts_value="$(<"$DDP_ATTEMPTS_FILE")"
       fi
-      if (( ddp_invocation_missing || fallback_missing_invocation || fallback_attempted )) || [[ "${ddp_attempts_value:-}" =~ ^[1-9][0-9]*$ ]]; then
+      if [[ -f "$TRAIN_INVOCATION_FILE" ]]; then
+        invocation_value="$(<"$TRAIN_INVOCATION_FILE")"
+      fi
+
+      if [[ ! -f "$TRAIN_INVOCATION_FILE" ]]; then
+        should_mark_invocation=1
+      elif (( fallback_attempted )) && [[ ! "${invocation_value:-}" =~ ^[1-9][0-9]*$ ]]; then
+        should_mark_invocation=1
+      fi
+
+      if (( should_mark_invocation )) && { (( ddp_invocation_missing || fallback_missing_invocation || fallback_attempted )) || [[ "${ddp_attempts_value:-}" =~ ^[1-9][0-9]*$ ]]; }; then
         ci_touch_file_dir "$TRAIN_INVOCATION_FILE"
         printf '1' >"$TRAIN_INVOCATION_FILE"
       fi
