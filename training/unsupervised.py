@@ -1508,6 +1508,38 @@ def train_jepa(
             os.environ.get("WORLD_SIZE", "1"),
         )
     device_t = _resolve_device(device)
+    ddp_device_index: Optional[int] = None
+    if device_t.type == "cuda":
+        cuda_mod = getattr(torch, "cuda", None)
+        is_available = getattr(cuda_mod, "is_available", None) if cuda_mod is not None else None
+        if callable(is_available) and is_available():
+            candidate_index = getattr(device_t, "index", None)
+            local_rank_env = os.environ.get("LOCAL_RANK")
+            if local_rank_env is not None:
+                try:
+                    local_rank_val = int(local_rank_env)
+                except (TypeError, ValueError):
+                    local_rank_val = None
+                else:
+                    try:
+                        cuda_mod.set_device(local_rank_val)  # type: ignore[attr-defined]
+                        candidate_index = local_rank_val
+                    except Exception:
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "Failed to set CUDA device from LOCAL_RANK=%s",
+                                local_rank_env,
+                                exc_info=True,
+                            )
+            if candidate_index is None or int(candidate_index) < 0:
+                try:
+                    candidate_index = int(cuda_mod.current_device())  # type: ignore[attr-defined]
+                except Exception:
+                    candidate_index = None
+            if candidate_index is not None and int(candidate_index) >= 0:
+                candidate_index = int(candidate_index)
+                device_t = torch.device("cuda", candidate_index)
+                ddp_device_index = candidate_index
     pin_memory_enabled = bool(
         pin_memory and device_t.type == "cuda" and torch.cuda.is_available()
     )
@@ -1660,17 +1692,27 @@ def train_jepa(
     ema_encoder = ema_encoder.to(device_t).eval()
 
     if distributed:
+        ddp_device_ids = None
+        ddp_output_device = None
+        if device_t.type == "cuda":
+            candidate = ddp_device_index
+            if candidate is None or candidate < 0:
+                try:
+                    candidate = int(torch.cuda.current_device())
+                except Exception:
+                    candidate = None
+            if candidate is not None and candidate >= 0:
+                ddp_device_ids = [candidate]
+                ddp_output_device = candidate
         encoder = nn.parallel.DistributedDataParallel(
             encoder,
-            device_ids=[torch.cuda.current_device()]
-            if device_t.type == "cuda"
-            else None,
+            device_ids=ddp_device_ids,
+            output_device=ddp_output_device,
         )
         predictor = nn.parallel.DistributedDataParallel(
             predictor,
-            device_ids=[torch.cuda.current_device()]
-            if device_t.type == "cuda"
-            else None,
+            device_ids=ddp_device_ids,
+            output_device=ddp_output_device,
         )
 
     encoder.train()
@@ -2275,6 +2317,38 @@ def train_contrastive(
             os.environ.get("WORLD_SIZE", "1"),
         )
     device_t = _resolve_device(device)
+    ddp_device_index: Optional[int] = None
+    if device_t.type == "cuda":
+        cuda_mod = getattr(torch, "cuda", None)
+        is_available = getattr(cuda_mod, "is_available", None) if cuda_mod is not None else None
+        if callable(is_available) and is_available():
+            candidate_index = getattr(device_t, "index", None)
+            local_rank_env = os.environ.get("LOCAL_RANK")
+            if local_rank_env is not None:
+                try:
+                    local_rank_val = int(local_rank_env)
+                except (TypeError, ValueError):
+                    local_rank_val = None
+                else:
+                    try:
+                        cuda_mod.set_device(local_rank_val)  # type: ignore[attr-defined]
+                        candidate_index = local_rank_val
+                    except Exception:
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "Failed to set CUDA device from LOCAL_RANK=%s",
+                                local_rank_env,
+                                exc_info=True,
+                            )
+            if candidate_index is None or int(candidate_index) < 0:
+                try:
+                    candidate_index = int(cuda_mod.current_device())  # type: ignore[attr-defined]
+                except Exception:
+                    candidate_index = None
+            if candidate_index is not None and int(candidate_index) >= 0:
+                candidate_index = int(candidate_index)
+                device_t = torch.device("cuda", candidate_index)
+                ddp_device_index = candidate_index
     pin_memory_enabled = bool(
         pin_memory and device_t.type == "cuda" and torch.cuda.is_available()
     )
@@ -2388,11 +2462,22 @@ def train_contrastive(
 
     active_persistent_workers = bool(num_workers) and persistent_workers
     if distributed:
+        ddp_device_ids = None
+        ddp_output_device = None
+        if device_t.type == "cuda":
+            candidate = ddp_device_index
+            if candidate is None or candidate < 0:
+                try:
+                    candidate = int(torch.cuda.current_device())
+                except Exception:
+                    candidate = None
+            if candidate is not None and candidate >= 0:
+                ddp_device_ids = [candidate]
+                ddp_output_device = candidate
         encoder = nn.parallel.DistributedDataParallel(
             encoder.to(device_t),
-            device_ids=[torch.cuda.current_device()]
-            if device_t.type == "cuda"
-            else None,
+            device_ids=ddp_device_ids,
+            output_device=ddp_output_device,
         )
         proj = nn.Sequential(
             nn.Linear(256, projection_dim),
@@ -2401,7 +2486,11 @@ def train_contrastive(
         ).to(device_t)
         if device_t.type == "cuda":
             from torch.nn.parallel import DistributedDataParallel as DDP
-            proj = DDP(proj, device_ids=[torch.cuda.current_device()])
+            proj = DDP(
+                proj,
+                device_ids=ddp_device_ids,
+                output_device=ddp_output_device,
+            )
         opt = optim.Adam(list(encoder.parameters()) + list(proj.parameters()), lr=lr)
 
         encoder.train()
