@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Mapping
 import torch
 
 from . import log_effective_gnn
+from utils.threads import configure_omp_threads
 
 try:  # pragma: no cover - optional relative import depending on entry point
     from ..bench import BenchmarkRule, resolve_metric_threshold
@@ -1635,6 +1636,12 @@ def _run_tox21_single_task(
 def cmd_tox21(args: argparse.Namespace) -> None:
     """Run the Tox21 ranking case study."""
     logger.info("Starting Tox21 case study with args: %s", args)
+    configure_omp_threads(
+        stage="tox21",
+        num_workers=getattr(args, "num_workers", -1),
+        world_size=os.environ.get("WORLD_SIZE"),
+        log=logger,
+    )
     if run_tox21_case_study is None:
         logger.error("Case study module is unavailable.")
         sys.exit(5)

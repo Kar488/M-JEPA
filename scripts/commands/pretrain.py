@@ -26,6 +26,7 @@ except Exception:  # pragma: no cover - helper optional in minimal installs
         return
 
 from . import log_effective_gnn
+from utils.threads import configure_omp_threads
 
 stage_config: Dict[str, Any] = {}
 _TOX21_ASSAYS: Sequence[str] = (
@@ -371,6 +372,12 @@ def _collect_run_metadata(wb) -> Dict[str, Any]:
 def cmd_pretrain(args: argparse.Namespace) -> None:
     """Self‑supervised pretraining of a JEPA encoder and optional contrastive baseline."""
     logger.info("Starting pretrain with args: %s", args)
+    configure_omp_threads(
+        stage="pretrain",
+        num_workers=getattr(args, "num_workers", -1),
+        world_size=None,
+        log=logger,
+    )
     if load_directory_dataset is None or build_encoder is None or train_jepa is None:
         logger.error("Pretraining modules are unavailable.")
         sys.exit(2)

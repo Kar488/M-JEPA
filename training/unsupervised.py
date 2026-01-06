@@ -106,6 +106,7 @@ from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.ddp import (
     DistributedSamplerList,
     cleanup,
+    get_world_size,
     init_distributed,
     is_main_process,
     should_retry_with_gloo,
@@ -1473,6 +1474,15 @@ def train_jepa(
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     backend_override = os.environ.get("DDP_FORCE_BACKEND", "").strip().lower()
+
+    from utils.threads import configure_omp_threads
+
+    configure_omp_threads(
+        stage="pretrain",
+        num_workers=num_workers,
+        world_size=get_world_size(),
+        log=logger,
+    )
 
     def _unwrap_if_ddp(module: Optional[nn.Module]) -> Optional[nn.Module]:
         if module is None:
