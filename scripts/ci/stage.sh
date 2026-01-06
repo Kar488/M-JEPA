@@ -86,6 +86,9 @@ ci_prepare_train_invocation_file() {
   [[ -n "$path" ]] || return 0
 
   ci_touch_file_dir "$path"
+  if [[ ! -e "$path" ]]; then
+    printf '0' >"$path"
+  fi
 }
 
 ci_phase2_refresh_lineage_bindings() {
@@ -2146,23 +2149,24 @@ run_with_timeout() {
     local preflight_marked=0
     local preflight_fallback_logged=0
     local fallback_missing_invocation=0
-      local requested_devices_numeric=0
-      local fallback_devices_value=""
+    local ddp_invocation_missing=0
+    local requested_devices_numeric=0
+    local fallback_devices_value=""
 
-      if [[ -n "$ddp_stage" ]]; then
-        ci_prepare_train_invocation_file
-        local devices_idx=-1
-        local devices_joined=0
-        local requested_devices=""
-        local i=0
-        local detected_cuda_devices=""
-        local available_devices=0
-        local ddp_supported=0
-        while (( i < ${#entrypoint_args[@]} )); do
-          local token="${entrypoint_args[$i]}"
-          if [[ "$token" == "--devices" ]]; then
-            devices_idx=$i
-            if (( i + 1 < ${#entrypoint_args[@]} )); then
+    if [[ -n "$ddp_stage" ]]; then
+      ci_prepare_train_invocation_file
+      local devices_idx=-1
+      local devices_joined=0
+      local requested_devices=""
+      local i=0
+      local detected_cuda_devices=""
+      local available_devices=0
+      local ddp_supported=0
+      while (( i < ${#entrypoint_args[@]} )); do
+        local token="${entrypoint_args[$i]}"
+        if [[ "$token" == "--devices" ]]; then
+          devices_idx=$i
+          if (( i + 1 < ${#entrypoint_args[@]} )); then
             requested_devices="${entrypoint_args[$((i + 1))]}"
           fi
           break
@@ -2545,6 +2549,9 @@ PY
           ddp_missing_invocation=1
         fi
       fi
+      if (( ddp_missing_invocation )); then
+        ddp_invocation_missing=1
+      fi
       if (( ddp_env_modified && using_ddp )); then
         if [[ -n "$previous_world" ]]; then
           export WORLD_SIZE="$previous_world"
@@ -2609,7 +2616,7 @@ PY
       if [[ -n "${DDP_ATTEMPTS_FILE:-}" && -f "$DDP_ATTEMPTS_FILE" ]]; then
         ddp_attempts_value="$(<"$DDP_ATTEMPTS_FILE")"
       fi
-      if (( fallback_missing_invocation || fallback_attempted )) || [[ "${ddp_attempts_value:-}" =~ ^[1-9][0-9]*$ ]]; then
+      if (( ddp_invocation_missing || fallback_missing_invocation || fallback_attempted )) || [[ "${ddp_attempts_value:-}" =~ ^[1-9][0-9]*$ ]]; then
         ci_touch_file_dir "$TRAIN_INVOCATION_FILE"
         printf '1' >"$TRAIN_INVOCATION_FILE"
       fi
