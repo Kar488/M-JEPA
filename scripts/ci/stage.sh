@@ -2083,6 +2083,7 @@ run_with_timeout() {
     local previous_master_addr="${MASTER_ADDR-}"
     local previous_master_port="${MASTER_PORT-}"
     local ddp_env_modified=0
+    local ddp_env_managed=0
     local ddp_missing_invocation=0
     local -a entrypoint_args=("${arr[@]}")
     local -a entrypoint=()
@@ -2321,6 +2322,7 @@ PY
             export MASTER_PORT="$ddp_port"
             export WORLD_SIZE="$effective_devices"
             ddp_env_modified=1
+            ddp_env_managed=1
             echo "[stage:$s] enabling torch.distributed.run (nproc_per_node=${effective_devices}, master_port=${MASTER_PORT})" >&2
           else
             echo "[stage:$s] WORLD_SIZE=${world}; assuming external launcher configured DDP" >&2
@@ -2488,6 +2490,18 @@ PY
     local ddp_attempt=0
     while true; do
       ((ddp_attempt+=1))
+      if (( ddp_enabled )) && (( ddp_attempt > 1 )); then
+        if (( ddp_env_managed )); then
+          unset MASTER_PORT RANK LOCAL_RANK WORLD_SIZE LOCAL_WORLD_SIZE
+          export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+          export MASTER_PORT=$(( (RANDOM % 20000) + 15000 ))
+          export WORLD_SIZE="$effective_devices"
+          export LOCAL_WORLD_SIZE="$effective_devices"
+          ddp_env_modified=1
+          echo "[stage:$s] ddp retry ${ddp_attempt} using master_port=${MASTER_PORT}" >&2
+        fi
+        sleep 1
+      fi
       local torchelastic_error_file=""
       if [[ -n "${LOG_DIR:-}" ]]; then
         torchelastic_error_file="${LOG_DIR%/}/${s}_torchelastic_${ddp_attempt}.log"
@@ -2595,9 +2609,6 @@ PY
       # 137 = killed by SIGKILL   (128+9)
       if [[ $rc -eq 0 ]]; then
         break
-      elif [[ $rc -eq 2 ]]; then
-        echo "[INFO][wandb_agent] no runs left for sweep (rc=2); treating as success."
-        return 0
       elif [[ $rc -eq 124 || $rc -eq 130 || $rc -eq 143 || $rc -eq 137 ]]; then
         echo "[INFO][$s] graceful stop (rc=$rc); not marking stage done; outputs should be flushed."
         mark_graceful_stop "$s"
@@ -2621,6 +2632,10 @@ PY
           fallback_missing_invocation=1
         fi
         continue
+      elif [[ $rc -eq 2 ]]; then
+        echo "[ERROR][$s] train_jepa.py exited with rc=2; treating as failure (non-sweep stage)." >&2
+        echo "[diag] about to exit: train_jepa execution failed (stage=${s} rc=${rc} command=${stage_python_cmd_str})" >&2
+        exit $rc
       else
         echo "[ERROR][$s] train_jepa.py failed with exit code $rc" >&2
         echo "[diag] about to exit: train_jepa execution failed (stage=${s} rc=${rc} command=${stage_python_cmd_str})" >&2

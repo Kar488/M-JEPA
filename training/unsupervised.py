@@ -1474,6 +1474,11 @@ def train_jepa(
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
     backend_override = os.environ.get("DDP_FORCE_BACKEND", "").strip().lower()
 
+    def _unwrap_if_ddp(module: Optional[nn.Module]) -> Optional[nn.Module]:
+        if module is None:
+            return None
+        return module.module if isinstance(module, nn.parallel.DistributedDataParallel) else module
+
     distributed = False
     if devices > 1:
         try:
@@ -1687,9 +1692,13 @@ def train_jepa(
             )
             return module
 
-    encoder = _maybe_compile(encoder.to(device_t), "encoder")
-    predictor = _maybe_compile(predictor.to(device_t), "predictor")
-    ema_encoder = ema_encoder.to(device_t).eval()
+    encoder = _maybe_compile(_unwrap_if_ddp(encoder).to(device_t), "encoder")  # type: ignore[union-attr]
+    predictor = _unwrap_if_ddp(predictor)
+    if predictor is not None:
+        predictor = _maybe_compile(predictor.to(device_t), "predictor")
+    ema_encoder = _maybe_compile(
+        _unwrap_if_ddp(ema_encoder).to(device_t).eval(), "ema_encoder"  # type: ignore[union-attr]
+    )
 
     if distributed:
         ddp_device_ids = None
@@ -1704,16 +1713,20 @@ def train_jepa(
             if candidate is not None and candidate >= 0:
                 ddp_device_ids = [candidate]
                 ddp_output_device = candidate
-        encoder = nn.parallel.DistributedDataParallel(
-            encoder,
-            device_ids=ddp_device_ids,
-            output_device=ddp_output_device,
-        )
-        predictor = nn.parallel.DistributedDataParallel(
-            predictor,
-            device_ids=ddp_device_ids,
-            output_device=ddp_output_device,
-        )
+        if not isinstance(encoder, nn.parallel.DistributedDataParallel):
+            encoder = nn.parallel.DistributedDataParallel(
+                encoder,
+                device_ids=ddp_device_ids,
+                output_device=ddp_output_device,
+            )
+        if predictor is not None and not isinstance(
+            predictor, nn.parallel.DistributedDataParallel
+        ):
+            predictor = nn.parallel.DistributedDataParallel(
+                predictor,
+                device_ids=ddp_device_ids,
+                output_device=ddp_output_device,
+            )
 
     encoder.train()
     predictor.train()
@@ -2260,6 +2273,13 @@ def train_jepa(
         pbar.close()
     wb_finish()
     if distributed:
+        import torch.distributed as dist
+
+        if dist.is_available() and dist.is_initialized():
+            try:
+                dist.barrier()
+            except Exception:
+                logger.debug("Distributed barrier failed during shutdown", exc_info=True)
         cleanup()
     return losses
 
