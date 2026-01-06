@@ -27,6 +27,7 @@ def run_bestcfg(
     cfg: dict,
     env: dict | None = None,
     grid_dir_override: str | None = None,
+    extra_setup=None,
 ) -> tuple[str, str]:
     """Execute best_config_args <stage> and capture stdout/stderr."""
 
@@ -37,6 +38,9 @@ def run_bestcfg(
         cache_dir = grid_dir / ".cache"
         data_dir.mkdir(parents=True, exist_ok=True)
         cache_dir.mkdir(parents=True, exist_ok=True)
+
+        if extra_setup is not None:
+            extra_setup(grid_dir)
 
         run_env = dict(os.environ, **(env or {}))
         run_env.setdefault("DATA_DIR", str(data_dir))
@@ -440,3 +444,35 @@ def test_bestcfg_uses_data_cache_grid_when_env_missing(tmp_path):
     tokens = stdout.split()
     assert "--hidden-dim" in tokens
     assert tokens[tokens.index("--hidden-dim") + 1] == "73"
+
+
+def test_bestcfg_prefers_phase2_json_over_phase1_winner_csv():
+    cfg = {
+        "gnn_type": "gine",
+        "hidden_dim": 128,
+        "num_layers": 2,
+        "learning_rate": 1e-4,
+        "batch_size": 128,
+        "epochs": 4,
+        "prefetch_factor": 2,
+        "persistent_workers": 1,
+        "devices": 2,
+        "dataset": "tox21",
+        "task": "roc_auc",
+        "jepa_encoder": "/tmp/encoder.pt",
+        "ft_ckpt": "/tmp/ft.pt",
+    }
+
+    def _drop_csv(grid_dir: pathlib.Path) -> None:
+        csv_path = grid_dir / "phase2_winner_config.csv"
+        csv_path.write_text(
+            "metric,config.gnn_type,config.hidden_dim,config.num_layers,config.learning_rate\n"
+            "0.1,dmpnn,999,9,0.001\n",
+            encoding="utf-8",
+        )
+
+    stdout, _ = run_bestcfg("bench", cfg, extra_setup=_drop_csv)
+    tokens = stdout.split()
+    assert "--gnn-type" in tokens
+    assert tokens[tokens.index("--gnn-type") + 1] == "gine"
+    assert "dmpnn" not in stdout

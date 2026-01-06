@@ -2132,11 +2132,11 @@ best_config_args() {
     shopt -s nullglob
     local fallback_candidate
     for fallback_candidate in \
-      "$emergency_grid"/*/phase2_winner_config.csv \
       "$emergency_grid"/*/phase2_export/stage-outputs/best_grid_config.json \
       "$emergency_grid"/*/phase2_recheck/stage-outputs/best_grid_config.json \
       "$emergency_grid"/*/phase2_export/best_grid_config.json \
-      "$emergency_grid"/*/best_grid_config.json; do
+      "$emergency_grid"/*/best_grid_config.json \
+      "$emergency_grid"/*/phase2_winner_config.csv; do
       add_winner_candidate "$fallback_candidate"
     done
     shopt -u nullglob
@@ -2146,11 +2146,11 @@ best_config_args() {
   for grid_root in "${grid_roots[@]}"; do
     [[ -n "$grid_root" ]] || continue
     if (( prefer_phase2 )); then
-      add_winner_candidate "${grid_root}/phase2_winner_config.csv"
       add_winner_candidate "${grid_root}/phase2_export/stage-outputs/best_grid_config.json"
       add_winner_candidate "${grid_root}/phase2_recheck/stage-outputs/best_grid_config.json"
       add_winner_candidate "${grid_root}/phase2_export/best_grid_config.json"
       add_winner_candidate "${grid_root}/best_grid_config.json"
+      add_winner_candidate "${grid_root}/phase2_winner_config.csv"
     else
       add_winner_candidate "${grid_root}/best_grid_config.json"
       add_winner_candidate "${grid_root}/phase2_export/best_grid_config.json"
