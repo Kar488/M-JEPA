@@ -89,12 +89,55 @@ def _detect_cuda_devices() -> int:
     return 0
 
 
+def _detect_visible_devices() -> int:
+    """Return the number of visible CUDA devices, respecting environment masks."""
+
+    mask = (os.environ.get("CUDA_VISIBLE_DEVICES", "") or "").strip()
+    if mask:
+        entries = [token.strip() for token in mask.split(",") if token.strip()]
+        if entries:
+            return len(entries)
+
+    try:
+        if torch.cuda.is_available():
+            count = int(torch.cuda.device_count())
+            if count > 0:
+                return count
+    except Exception:
+        pass
+
+    return 1
+
+
 def _resolve_auto_device(device: Optional[str | os.PathLike[str]]) -> str:
     if device:
         return resolve_device(device)
     if _detect_cuda_devices() > 0:
         return "cuda"
     return "cpu"
+
+
+def _normalise_device_and_count(args: argparse.Namespace) -> Tuple[str, int]:
+    """Resolve the device string and GPU count, updating ``args`` in-place."""
+
+    device_value = _resolve_auto_device(getattr(args, "device", None))
+    setattr(args, "device", device_value)
+
+    devices_val = _coerce_int_like(getattr(args, "devices", None))
+    if devices_val is None:
+        raw_devices = getattr(args, "devices", None)
+        try:
+            devices_val = int(raw_devices) if raw_devices is not None else None
+        except Exception:
+            devices_val = None
+    if devices_val is None or devices_val <= 0:
+        if str(device_value).lower().startswith("cuda"):
+            detected = _detect_visible_devices()
+            devices_val = detected if detected > 0 else 1
+        else:
+            devices_val = 1
+    setattr(args, "devices", devices_val)
+    return device_value, devices_val
 
 
 def _estimate_class_balance(csv_path: str, tasks: Iterable[str]) -> Dict[str, Dict[str, float]]:
@@ -894,23 +937,7 @@ def _run_tox21_single_task(
 
     freeze_encoder_flag = bool(getattr(args, "freeze_encoder", False))
 
-    device_value = _resolve_auto_device(getattr(args, "device", None))
-    setattr(args, "device", device_value)
-
-    devices_val = _coerce_int_like(getattr(args, "devices", None))
-    if devices_val is None:
-        raw_devices = getattr(args, "devices", None)
-        try:
-            devices_val = int(raw_devices) if raw_devices is not None else None
-        except Exception:
-            devices_val = None
-    if devices_val is None or devices_val <= 0:
-        if str(device_value).lower().startswith("cuda"):
-            detected = _detect_cuda_devices()
-            devices_val = detected if detected > 0 else 1
-        else:
-            devices_val = 1
-    setattr(args, "devices", devices_val)
+    device_value, devices_val = _normalise_device_and_count(args)
 
     allow_shape_flag = getattr(args, "allow_shape_coercion", None)
 
@@ -1744,9 +1771,21 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             devices_val = int(raw_devices) if raw_devices is not None else None
         except Exception:
             devices_val = None
-    if devices_val is None:
-        devices_val = 1
-    setattr(args, "devices", devices_val)
+    device_value = getattr(args, "device", None)
+    if devices_val is None or devices_val <= 0 or device_value is None:
+        device_value, devices_val = _normalise_device_and_count(args)
+    else:
+        setattr(args, "devices", devices_val)
+        setattr(args, "device", _resolve_auto_device(device_value))
+    try:
+        world_size_env = int(os.environ.get("WORLD_SIZE", "1"))
+    except Exception:
+        world_size_env = 1
+    if devices_val > 1 and world_size_env <= 1:
+        logger.info(
+            "[tox21] devices=%d resolved (mask-aware); enable torchrun or WORLD_SIZE>1 to activate DDP.",
+            devices_val,
+        )
     eval_mode = str(
         getattr(
             args,
