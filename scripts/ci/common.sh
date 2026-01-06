@@ -1509,7 +1509,7 @@ ensure_dir_var LOG_DIR "${APP_DIR}/logs" "logs"
 
 for dir_path in \
   "$CACHE_DIR" "$GRID_DIR" "$PRETRAIN_DIR" "$FINETUNE_DIR" "$BENCH_DIR" \
-  "$TOX21_DIR" "$REPORTS_DIR" "$LOG_DIR" "$WANDB_DIR" "$ARTIFACTS_DIR" \
+  "$TOX21_DIR" "$REPORTS_DIR" "$LOG_DIR" "${WANDB_DIR:-}" "$ARTIFACTS_DIR" \
   "$PRETRAIN_ARTIFACTS_DIR" "$EXPERIMENT_DIR" "$PRETRAIN_EXPERIMENT_ROOT" \
   "$GRID_EXPERIMENT_ROOT"; do
   [[ -z "$dir_path" ]] && continue
