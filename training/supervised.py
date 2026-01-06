@@ -1706,6 +1706,14 @@ def _train_linear_head_impl(
 
     head_has_trainable = any(p.requires_grad for p in head_module.parameters())
 
+    def _unwrap_if_ddp(module: Optional[nn.Module]) -> Optional[nn.Module]:
+        if module is None:
+            return None
+        return module.module if isinstance(module, nn.parallel.DistributedDataParallel) else module
+
+    encoder = _unwrap_if_ddp(encoder) or encoder
+    head_module = _unwrap_if_ddp(head_module) or head_module
+
     if distributed:
         ddp_device_ids = None
         ddp_output_device = None
@@ -1721,7 +1729,7 @@ def _train_linear_head_impl(
             if candidate is not None and candidate >= 0:
                 ddp_device_ids = [candidate]
                 ddp_output_device = candidate
-        if encoder_has_trainable:
+        if encoder_has_trainable and not isinstance(encoder, nn.parallel.DistributedDataParallel):
             encoder = nn.parallel.DistributedDataParallel(
                 encoder,
                 device_ids=ddp_device_ids,
@@ -1731,7 +1739,9 @@ def _train_linear_head_impl(
             logger.debug(
                 "Skipping DDP wrapper for encoder because it has no trainable parameters."
             )
-        if head_has_trainable:
+        if head_has_trainable and not isinstance(
+            head_module, nn.parallel.DistributedDataParallel
+        ):
             head_module = nn.parallel.DistributedDataParallel(
                 head_module,
                 device_ids=ddp_device_ids,
@@ -2861,6 +2871,12 @@ def _train_linear_head_impl(
         logger.debug("Failed to restore head training mode", exc_info=True)
 
     if distributed:
+        dist_mod = getattr(torch, "distributed", None)
+        try:
+            if dist_mod is not None and dist_mod.is_available() and dist_mod.is_initialized():
+                dist_mod.barrier()
+        except Exception:  # pragma: no cover - best effort synchronisation
+            logger.debug("Distributed barrier failed during linear-head shutdown", exc_info=True)
         cleanup()
     metrics["head"] = head_param_source
     return metrics

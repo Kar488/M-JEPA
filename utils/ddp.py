@@ -503,6 +503,16 @@ def cleanup() -> None:
     _LAST_PINNED_CONTEXT = None
     _LAST_PINNED_DEVICE = None
     _LAST_PINNED_DEVICE_CANONICAL = None
+    # Clear launcher-derived environment so subsequent attempts start fresh.
+    for var in (
+        "MASTER_ADDR",
+        "MASTER_PORT",
+        "WORLD_SIZE",
+        "LOCAL_WORLD_SIZE",
+        "RANK",
+        "LOCAL_RANK",
+    ):
+        os.environ.pop(var, None)
 
 
 class DistributedSamplerList:
