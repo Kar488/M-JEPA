@@ -2475,6 +2475,10 @@ PY
       fi
     fi
 
+    if (( requested_devices_numeric > 1 )) && (( !ddp_enabled )) && (( !preflight_marked )); then
+      ci_mark_ddp_attempt_if_empty
+    fi
+
     local build_entrypoint
     build_entrypoint() {
       entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${entrypoint_args[@]}")
