@@ -2545,6 +2545,9 @@ PY
         fi
         ddp_env_modified=0
       fi
+      if (( using_ddp )); then
+        ci_mark_ddp_attempt_if_empty
+      fi
       # 0   = success
       # 124 = 'timeout' exceeded (we later sent SIGTERM/SIGKILL)
       # 143 = terminated by SIGTERM (128+15)
