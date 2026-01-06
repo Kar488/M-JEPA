@@ -1712,7 +1712,8 @@ build_stage_args() {
       fi
     done
     if (( ! per_head_flag_present )); then
-      case "${TOX21_CALIBRATE_PER_HEAD,,}" in
+      local calibrate_per_head="${TOX21_CALIBRATE_PER_HEAD:-}"
+      case "${calibrate_per_head,,}" in
         1|true|yes|on)
           OUT+=("--calibrate-per-head")
           ;;
@@ -2072,6 +2073,7 @@ run_with_timeout() {
     local previous_master_addr="${MASTER_ADDR-}"
     local previous_master_port="${MASTER_PORT-}"
     local ddp_env_modified=0
+    local ddp_missing_invocation=0
     local -a entrypoint_args=("${arr[@]}")
     local -a entrypoint=()
     local ddp_enabled=0
@@ -2467,6 +2469,7 @@ PY
 
     local fallback_attempted=0
     while true; do
+      ddp_missing_invocation=0
       build_entrypoint
 
       local -a stage_cmd=("${python_runner_cmd[@]}")
@@ -2527,6 +2530,12 @@ PY
       local timeout_rc=${PIPESTATUS[0]}
       set -e
       rc=$timeout_rc
+      ddp_missing_invocation=0
+      if (( using_ddp )) && [[ -n "${TRAIN_INVOCATION_FILE:-}" ]]; then
+        if [[ ! -f "$TRAIN_INVOCATION_FILE" ]]; then
+          ddp_missing_invocation=1
+        fi
+      fi
       if (( ddp_env_modified && using_ddp )); then
         if [[ -n "$previous_world" ]]; then
           export WORLD_SIZE="$previous_world"
@@ -2561,13 +2570,20 @@ PY
         echo "[INFO][$s] graceful stop (rc=$rc); not marking stage done; outputs should be flushed."
         mark_graceful_stop "$s"
         return 0
-      elif (( using_ddp )) && (( ddp_enabled )) && (( ! fallback_attempted )); then
+      elif (( using_ddp )) && (( ddp_enabled )) && (( ! fallback_attempted )) && { (( rc != 0 )) || (( ddp_missing_invocation )); }; then
         fallback_attempted=1
         ddp_launcher=()
         set_devices_arg 1
         arr=("${entrypoint_args[@]}")
         ci_mark_ddp_attempt_if_empty
-        echo "[stage:$s] warn: distributed launch failed (rc=$rc); retrying with --devices 1" >&2
+        local ddp_fallback_msg="[stage:$s] warn: distributed launch failed"
+        if (( ddp_missing_invocation )); then
+          ddp_fallback_msg+=" (no invocation marker)"
+        else
+          ddp_fallback_msg+=" (rc=$rc)"
+        fi
+        ddp_fallback_msg+="; retrying with --devices 1"
+        echo "$ddp_fallback_msg" >&2
         echo "[diag] stage ddp fallback (stage=${s} rc=${rc} command=${stage_python_cmd_str})" >&2
         continue
       else
