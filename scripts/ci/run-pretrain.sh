@@ -668,7 +668,12 @@ if legacy_path and os.path.abspath(legacy_path) != os.path.abspath(state_path):
     print(f"[pretrain] synced legacy state to {legacy_path}")
 PY
 
-if [[ "$GRAPH_VISUALS_ENABLED" == "0" ]]; then
+pretrain_stage_status="${MJEPACI_LAST_STAGE_STATUS:-}"
+pretrain_stage_skip_reason="${MJEPACI_LAST_STAGE_SKIP_REASON:-}"
+
+if [[ "$pretrain_stage_status" == "skipped" ]]; then
+  echo "[pretrain] info: pretrain stage skipped (${pretrain_stage_skip_reason:-unknown}); skipping graph visualisations" >&2
+elif [[ "$GRAPH_VISUALS_ENABLED" == "0" ]]; then
   echo "[pretrain] graph visualisations disabled via config (${GRAPH_VISUALS_CONFIG_PATH:-<unset>}); seeding placeholders" >&2
   create_graph_visuals_placeholder "graph visuals disabled via config" || true
 elif ! run_graph_visuals_helper; then
