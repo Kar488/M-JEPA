@@ -103,7 +103,13 @@ except ImportError:  # pragma: no cover - used in minimal test stubs
 
 from data.mdataset import GraphData, GraphDataset
 from utils.checkpoint import load_checkpoint, save_checkpoint
-from utils.ddp import DistributedSamplerList, cleanup, init_distributed, is_main_process
+from utils.ddp import (
+    DistributedSamplerList,
+    cleanup,
+    init_distributed,
+    is_main_process,
+    should_retry_with_gloo,
+)
 from utils.dataloader import (
     autotune_worker_pool,
     check_fd_budget,
@@ -1466,7 +1472,34 @@ def train_jepa(
     **unused
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
-    distributed = (devices > 1) and init_distributed(ddp_backend)
+    backend_override = os.environ.get("DDP_FORCE_BACKEND", "").strip().lower()
+
+    distributed = False
+    if devices > 1:
+        try:
+            distributed = init_distributed(ddp_backend)
+        except RuntimeError as exc:
+            if backend_override == "gloo" or not should_retry_with_gloo(exc):
+                raise
+
+            logger.warning(
+                "Distributed initialisation failed with NCCL backend (%s); retrying with gloo.",
+                exc,
+            )
+            cleanup()
+            previous_backend = os.environ.get("DDP_FORCE_BACKEND")
+            try:
+                os.environ["DDP_FORCE_BACKEND"] = "gloo"
+                distributed = init_distributed("gloo")
+            finally:
+                if previous_backend is None:
+                    os.environ.pop("DDP_FORCE_BACKEND", None)
+                else:
+                    os.environ["DDP_FORCE_BACKEND"] = previous_backend
+        except Exception:
+            cleanup()
+            raise
+
     if devices > 1 and not distributed and is_main_process():
         logger.warning(
             "Requested devices=%s but distributed initialisation is inactive "
