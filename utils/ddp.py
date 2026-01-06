@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import logging
 import math
 import os
 import platform
 import socket
 import types
-from typing import Iterator, Sequence, TYPE_CHECKING
+from typing import Any, Iterator, Sequence, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +300,53 @@ def _visible_cuda_device_count() -> int:
     return len(devices)
 
 
+def _init_process_group_supports_device_id() -> tuple[bool, str | None, bool]:
+    """Return whether ``dist.init_process_group`` accepts a device-id argument."""
+
+    try:
+        signature = inspect.signature(dist.init_process_group)
+    except (TypeError, ValueError):
+        return False, None, False
+
+    for candidate in ("device_id", "device_ids"):
+        if candidate in signature.parameters:
+            return True, candidate, candidate.endswith("s")
+    return False, None, False
+
+
+def _parse_device_index(device: str | None) -> int | None:
+    if device is None:
+        return None
+    token = _canonicalize_device_token(device)
+    if not token:
+        return None
+    try:
+        return int(token)
+    except Exception:
+        return None
+
+
+def _infer_device_id(
+    *,
+    backend: str,
+    local_rank: int,
+    pinned_device: str | None,
+    cuda_available: bool,
+) -> int | None:
+    """Heuristically derive the device id for NCCL initialisation."""
+
+    if backend != "nccl" or not cuda_available:
+        return None
+
+    pinned_index = _parse_device_index(pinned_device)
+    if pinned_index is not None:
+        return pinned_index
+
+    if local_rank >= 0:
+        return local_rank
+    return None
+
+
 def _find_free_port() -> int:
     """Return an available TCP port on the current host."""
 
@@ -455,9 +503,28 @@ def init_distributed(backend: str | None = None) -> bool:
         raise RuntimeError(message)
 
     rank = int(os.environ.get("RANK", "0"))
-    dist.init_process_group(
-        backend=backend, init_method="env://", rank=rank, world_size=world_size
-    )
+    init_kwargs: dict[str, Any] = {
+        "backend": backend,
+        "init_method": "env://",
+        "rank": rank,
+        "world_size": world_size,
+    }
+
+    supports_device_id, device_kw, expects_sequence = _init_process_group_supports_device_id()
+    if supports_device_id:
+        device_id = _infer_device_id(
+            backend=backend,
+            local_rank=local_rank,
+            pinned_device=pinned_device,
+            cuda_available=cuda_available,
+        )
+        if device_id is not None:
+            if expects_sequence:
+                init_kwargs[device_kw or "device_ids"] = [device_id]
+            else:
+                init_kwargs[device_kw or "device_id"] = device_id
+
+    dist.init_process_group(**init_kwargs)
 
     if pinned_device is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = pinned_device
