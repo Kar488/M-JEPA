@@ -1032,7 +1032,7 @@ jobs:
     runs-on: self-hosted #ubuntu-latest
     timeout-minutes: 1860
     needs: [vast_tox21_baseline, vast_benchmark, vast_tox21, vast_finetune]
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_tox21.result == 'success' }}
     env:
       MJEPA_ALLOW_DATA_FALLBACKS: '0'
     steps:
@@ -1043,7 +1043,7 @@ jobs:
           cd "$APP_DIR"
           bash scripts/ci/ensure_experiments_root.sh
       - name: Publish report
-        if: ${{ needs.vast_benchmark.result == 'success' && needs.vast_tox21.result == 'success' }}
+        if: ${{ needs.vast_tox21.result == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
