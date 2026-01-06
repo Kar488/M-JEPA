@@ -2486,123 +2486,125 @@ PY
       entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${entrypoint_args[@]}")
     }
 
-    local fallback_attempted=0
-    local ddp_attempt=0
-    while true; do
-      ((ddp_attempt+=1))
-      if (( ddp_enabled )) && (( ddp_attempt > 1 )); then
-        if (( ddp_env_managed )); then
-          unset MASTER_PORT RANK LOCAL_RANK WORLD_SIZE LOCAL_WORLD_SIZE
-          export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
-          export MASTER_PORT=$(( (RANDOM % 20000) + 15000 ))
-          export WORLD_SIZE="$effective_devices"
-          export LOCAL_WORLD_SIZE="$effective_devices"
-          ddp_env_modified=1
-          echo "[stage:$s] ddp retry ${ddp_attempt} using master_port=${MASTER_PORT}" >&2
+      local fallback_attempted=0
+      local ddp_attempt=0
+      while true; do
+        ((ddp_attempt+=1))
+        local using_ddp=0
+        if (( ${#ddp_launcher[@]} )); then
+          using_ddp=1
         fi
-        sleep 1
-      fi
-      local torchelastic_error_file=""
-      if [[ -n "${LOG_DIR:-}" ]]; then
-        torchelastic_error_file="${LOG_DIR%/}/${s}_torchelastic_${ddp_attempt}.log"
-        rm -f "$torchelastic_error_file"
-      fi
-      ddp_missing_invocation=0
-      build_entrypoint
+        if (( using_ddp )) && (( ddp_attempt > 1 )); then
+          if (( ddp_env_managed )); then
+            unset MASTER_PORT RANK LOCAL_RANK WORLD_SIZE LOCAL_WORLD_SIZE
+            export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+            export MASTER_PORT=$(( (RANDOM % 20000) + 15000 ))
+            export WORLD_SIZE="$effective_devices"
+            export LOCAL_WORLD_SIZE="$effective_devices"
+            ddp_env_modified=1
+            echo "[stage:$s] ddp retry ${ddp_attempt} using master_port=${MASTER_PORT}" >&2
+          fi
+          sleep 1
+        fi
+        local torchelastic_error_file=""
+        if [[ -n "${LOG_DIR:-}" ]]; then
+          torchelastic_error_file="${LOG_DIR%/}/${s}_torchelastic_${ddp_attempt}.log"
+          rm -f "$torchelastic_error_file"
+        fi
+        ddp_missing_invocation=0
+        build_entrypoint
 
-      local -a stage_cmd=("${python_runner_cmd[@]}")
-      local using_ddp=0
-      if (( ${#ddp_launcher[@]} )); then
-        stage_cmd+=("${ddp_launcher[@]}" "${entrypoint[@]}")
-        using_ddp=1
-      else
-        stage_cmd+=("${entrypoint[@]}")
-      fi
+        local -a stage_cmd=("${python_runner_cmd[@]}")
+        if (( ${#ddp_launcher[@]} )); then
+          stage_cmd+=("${ddp_launcher[@]}" "${entrypoint[@]}")
+        else
+          stage_cmd+=("${entrypoint[@]}")
+        fi
 
-      local stage_python_cmd_str=""
-      if (( ${#stage_cmd[@]} )); then
-        printf -v stage_python_cmd_str '%q ' "${stage_cmd[@]}"
-        stage_python_cmd_str=${stage_python_cmd_str% }
-      fi
+        local stage_python_cmd_str=""
+        if (( ${#stage_cmd[@]} )); then
+          printf -v stage_python_cmd_str '%q ' "${stage_cmd[@]}"
+          stage_python_cmd_str=${stage_python_cmd_str% }
+        fi
 
-      if (( preflight_forced_single )) && (( !preflight_fallback_logged )); then
-        local fallback_msg="[stage:$s] warn: distributed launch failed"
-        case "$preflight_reason" in
-          no_cuda_devices)
-            fallback_msg+=" (no CUDA devices detected)"
-            ;;
-          ddp_unavailable)
-            fallback_msg+=" (torch.distributed.run unavailable)"
-            ;;
-          insufficient_cuda:*)
-            local avail="${preflight_reason#insufficient_cuda:}"
-            if (( requested_devices_numeric > 1 )); then
-              fallback_msg+=" (requested ${requested_devices_numeric} but only ${avail} visible)"
-            else
-              fallback_msg+=" (only ${avail} CUDA devices visible)"
-            fi
-            ;;
-          "")
-            ;;
-          *)
-            fallback_msg+=" (${preflight_reason})"
-            ;;
-        esac
-        if [[ -n "$fallback_devices_value" ]]; then
-          fallback_msg+="; retrying with --devices ${fallback_devices_value}"
-        else
-          fallback_msg+="; retrying with single-process execution"
+        if (( preflight_forced_single )) && (( !preflight_fallback_logged )); then
+          local fallback_msg="[stage:$s] warn: distributed launch failed"
+          case "$preflight_reason" in
+            no_cuda_devices)
+              fallback_msg+=" (no CUDA devices detected)"
+              ;;
+            ddp_unavailable)
+              fallback_msg+=" (torch.distributed.run unavailable)"
+              ;;
+            insufficient_cuda:*)
+              local avail="${preflight_reason#insufficient_cuda:}"
+              if (( requested_devices_numeric > 1 )); then
+                fallback_msg+=" (requested ${requested_devices_numeric} but only ${avail} visible)"
+              else
+                fallback_msg+=" (only ${avail} CUDA devices visible)"
+              fi
+              ;;
+            "")
+              ;;
+            *)
+              fallback_msg+=" (${preflight_reason})"
+              ;;
+          esac
+          if [[ -n "$fallback_devices_value" ]]; then
+            fallback_msg+="; retrying with --devices ${fallback_devices_value}"
+          else
+            fallback_msg+="; retrying with single-process execution"
+          fi
+          echo "$fallback_msg" >&2
+          preflight_fallback_logged=1
         fi
-        echo "$fallback_msg" >&2
-        preflight_fallback_logged=1
-      fi
-      echo "[diag] stage python command (stage=${s}): ${stage_python_cmd_str}" >&2
-      if (( using_ddp )); then
-        ci_prepare_ddp_attempts_file
-      fi
-      set +e
-      timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
-        env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-        TORCHELASTIC_ERROR_FILE="${torchelastic_error_file:-}" \
-        "${stage_cmd[@]}" \
-        2>&1 | tee "$LOG_DIR/${s}.log"
-      local timeout_rc=${PIPESTATUS[0]}
-      set -e
-      rc=$timeout_rc
-      if [[ -n "$torchelastic_error_file" && -s "$torchelastic_error_file" ]]; then
-        echo "[diag] torch elastic error detail (stage=${s} attempt=${ddp_attempt}):" >&2
-        cat "$torchelastic_error_file" >&2
-      fi
-      ddp_missing_invocation=0
-      if (( using_ddp )) && [[ -n "${TRAIN_INVOCATION_FILE:-}" ]]; then
-        if [[ ! -f "$TRAIN_INVOCATION_FILE" ]]; then
-          ddp_missing_invocation=1
+        echo "[diag] stage python command (stage=${s}): ${stage_python_cmd_str}" >&2
+        if (( using_ddp )); then
+          ci_prepare_ddp_attempts_file
         fi
-      fi
-      if (( ddp_missing_invocation )); then
-        ddp_invocation_missing=1
-      fi
-      if (( ddp_env_modified && using_ddp )); then
-        if [[ -n "$previous_world" ]]; then
-          export WORLD_SIZE="$previous_world"
-        else
-          unset WORLD_SIZE
+        set +e
+        timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
+          env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+          TORCHELASTIC_ERROR_FILE="${torchelastic_error_file:-}" \
+          "${stage_cmd[@]}" \
+          2>&1 | tee "$LOG_DIR/${s}.log"
+        local timeout_rc=${PIPESTATUS[0]}
+        set -e
+        rc=$timeout_rc
+        if [[ -n "$torchelastic_error_file" && -s "$torchelastic_error_file" ]]; then
+          echo "[diag] torch elastic error detail (stage=${s} attempt=${ddp_attempt}):" >&2
+          cat "$torchelastic_error_file" >&2
         fi
-        if [[ -n "$previous_master_addr" ]]; then
-          export MASTER_ADDR="$previous_master_addr"
-        else
-          unset MASTER_ADDR
+        ddp_missing_invocation=0
+        if (( using_ddp )) && [[ -n "${TRAIN_INVOCATION_FILE:-}" ]]; then
+          if [[ ! -f "$TRAIN_INVOCATION_FILE" ]]; then
+            ddp_missing_invocation=1
+          fi
         fi
-        if [[ -n "$previous_master_port" ]]; then
-          export MASTER_PORT="$previous_master_port"
-        else
-          unset MASTER_PORT
+        if (( ddp_missing_invocation )); then
+          ddp_invocation_missing=1
         fi
-        ddp_env_modified=0
-      fi
-      if (( using_ddp )); then
-        ci_mark_ddp_attempt_if_empty
-      fi
+        if (( ddp_env_modified && using_ddp )); then
+          if [[ -n "$previous_world" ]]; then
+            export WORLD_SIZE="$previous_world"
+          else
+            unset WORLD_SIZE
+          fi
+          if [[ -n "$previous_master_addr" ]]; then
+            export MASTER_ADDR="$previous_master_addr"
+          else
+            unset MASTER_ADDR
+          fi
+          if [[ -n "$previous_master_port" ]]; then
+            export MASTER_PORT="$previous_master_port"
+          else
+            unset MASTER_PORT
+          fi
+          ddp_env_modified=0
+        fi
+        if (( using_ddp )); then
+          ci_mark_ddp_attempt_if_empty
+        fi
       # 0   = success
       # 124 = 'timeout' exceeded (we later sent SIGTERM/SIGKILL)
       # 143 = terminated by SIGTERM (128+15)
