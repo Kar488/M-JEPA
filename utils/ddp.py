@@ -8,7 +8,7 @@ import os
 import platform
 import socket
 import types
-from typing import Any, Callable, Iterator, Sequence, TYPE_CHECKING
+from typing import Any, Iterator, Sequence, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
@@ -300,18 +300,18 @@ def _visible_cuda_device_count() -> int:
     return len(devices)
 
 
-def _init_process_group_supports_device_id() -> tuple[bool, str | None]:
+def _init_process_group_supports_device_id() -> tuple[bool, str | None, bool]:
     """Return whether ``dist.init_process_group`` accepts a device-id argument."""
 
     try:
         signature = inspect.signature(dist.init_process_group)
     except (TypeError, ValueError):
-        return False, None
+        return False, None, False
 
     for candidate in ("device_id", "device_ids"):
         if candidate in signature.parameters:
-            return True, candidate
-    return False, None
+            return True, candidate, candidate.endswith("s")
+    return False, None, False
 
 
 def _parse_device_index(device: str | None) -> int | None:
@@ -510,7 +510,7 @@ def init_distributed(backend: str | None = None) -> bool:
         "world_size": world_size,
     }
 
-    supports_device_id, device_kw = _init_process_group_supports_device_id()
+    supports_device_id, device_kw, expects_sequence = _init_process_group_supports_device_id()
     if supports_device_id:
         device_id = _infer_device_id(
             backend=backend,
@@ -519,7 +519,10 @@ def init_distributed(backend: str | None = None) -> bool:
             cuda_available=cuda_available,
         )
         if device_id is not None:
-            init_kwargs[device_kw or "device_id"] = device_id
+            if expects_sequence:
+                init_kwargs[device_kw or "device_ids"] = [device_id]
+            else:
+                init_kwargs[device_kw or "device_id"] = device_id
 
     dist.init_process_group(**init_kwargs)
 
