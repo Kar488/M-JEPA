@@ -2486,6 +2486,28 @@ PY
       entrypoint=("$APP_DIR/scripts/train_jepa.py" "$subcmd" "${entrypoint_args[@]}")
     }
 
+    local restore_ddp_env_if_modified
+    restore_ddp_env_if_modified() {
+      if (( ddp_env_modified )); then
+        if [[ -n "$previous_world" ]]; then
+          export WORLD_SIZE="$previous_world"
+        else
+          unset WORLD_SIZE
+        fi
+        if [[ -n "$previous_master_addr" ]]; then
+          export MASTER_ADDR="$previous_master_addr"
+        else
+          unset MASTER_ADDR
+        fi
+        if [[ -n "$previous_master_port" ]]; then
+          export MASTER_PORT="$previous_master_port"
+        else
+          unset MASTER_PORT
+        fi
+        ddp_env_modified=0
+      fi
+    }
+
       local fallback_attempted=0
       local ddp_attempt=0
       while true; do
@@ -2494,16 +2516,14 @@ PY
         if (( ${#ddp_launcher[@]} )); then
           using_ddp=1
         fi
-        if (( using_ddp )) && (( ddp_attempt > 1 )); then
-          if (( ddp_env_managed )); then
-            unset MASTER_PORT RANK LOCAL_RANK WORLD_SIZE LOCAL_WORLD_SIZE
-            export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
-            export MASTER_PORT=$(( (RANDOM % 20000) + 15000 ))
-            export WORLD_SIZE="$effective_devices"
-            export LOCAL_WORLD_SIZE="$effective_devices"
-            ddp_env_modified=1
-            echo "[stage:$s] ddp retry ${ddp_attempt} using master_port=${MASTER_PORT}" >&2
-          fi
+        if (( using_ddp && ddp_env_managed )) && (( ddp_attempt > 1 )); then
+          unset MASTER_PORT RANK LOCAL_RANK WORLD_SIZE LOCAL_WORLD_SIZE
+          export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+          export MASTER_PORT=$(( (RANDOM % 20000) + 15000 ))
+          export WORLD_SIZE="$effective_devices"
+          export LOCAL_WORLD_SIZE="$effective_devices"
+          ddp_env_modified=1
+          echo "[stage:$s] ddp retry ${ddp_attempt} using master_port=${MASTER_PORT}" >&2
           sleep 1
         fi
         local torchelastic_error_file=""
@@ -2584,24 +2604,7 @@ PY
         if (( ddp_missing_invocation )); then
           ddp_invocation_missing=1
         fi
-        if (( ddp_env_modified && using_ddp )); then
-          if [[ -n "$previous_world" ]]; then
-            export WORLD_SIZE="$previous_world"
-          else
-            unset WORLD_SIZE
-          fi
-          if [[ -n "$previous_master_addr" ]]; then
-            export MASTER_ADDR="$previous_master_addr"
-          else
-            unset MASTER_ADDR
-          fi
-          if [[ -n "$previous_master_port" ]]; then
-            export MASTER_PORT="$previous_master_port"
-          else
-            unset MASTER_PORT
-          fi
-          ddp_env_modified=0
-        fi
+        restore_ddp_env_if_modified
         if (( using_ddp )); then
           ci_mark_ddp_attempt_if_empty
         fi
@@ -2618,6 +2621,9 @@ PY
       elif (( using_ddp )) && (( ddp_enabled )) && (( ! fallback_attempted )) && { (( rc != 0 )) || (( ddp_missing_invocation )); }; then
         fallback_attempted=1
         ddp_launcher=()
+        ddp_enabled=0
+        ddp_env_managed=0
+        restore_ddp_env_if_modified
         set_devices_arg 1
         arr=("${entrypoint_args[@]}")
         ci_mark_ddp_attempt_if_empty
