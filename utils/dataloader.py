@@ -255,7 +255,8 @@ def autotune_worker_pool(
         else:
             tuned_workers = min(approx_batches, _auto_worker_budget(max_auto_workers))
     else:
-        tuned_workers = max(0, min(int(requested_workers or 0), approx_batches))
+        #tuned_workers = max(0, min(int(requested_workers or 0), approx_batches))
+        tuned_workers = max(0, int(requested_workers or 0))
 
     if tuned_workers > 0:
         ensure_file_system_sharing_strategy()
@@ -301,7 +302,8 @@ def autotune_worker_pool(
         if normalized_prefetch is None:
             tuned_prefetch = min(4, max_prefetch)
         else:
-            tuned_prefetch = max(1, min(normalized_prefetch, max_prefetch))
+            #tuned_prefetch = max(1, min(normalized_prefetch, max_prefetch))
+            tuned_prefetch = max(1, normalized_prefetch)
         if tuned_prefetch == 1 and approx_batches > tuned_workers:
             tuned_prefetch = min(2, max_prefetch)
 

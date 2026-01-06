@@ -1358,11 +1358,11 @@ def main():
             _force_param_value("cache-dir", cache_default)
 
         _force_param_value("cache-datasets", 1)
-        _ensure_param("num-workers", default=4)
-        _ensure_param("prefetch-factor", default=2)
+        _ensure_param("num-workers", default=16)
+        _ensure_param("prefetch-factor", default=4)
         if prefers_cpu:
-            _force_param_value("persistent-workers", 0)
-            _force_param_value("pin-memory", 0)
+            _force_param_value("persistent-workers", 1)
+            _force_param_value("pin-memory", 1)
             _force_param_value("devices", 1)
         else:
             # Respect explicit GPU overrides from the sweep, only correcting

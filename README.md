@@ -321,6 +321,13 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
         # sanity check current ownership
         ls -ld /data /data/mjepa /data/mjepa/experiments
 
+        #expected
+        drwxrwxrwx ... /data/mjepa
+        drwxrwxrwx ... /data/mjepa/experiments
+
+        # create directory if it does not exist
+        mkdir -p /data/mjepa/experiments
+
         # now fix it
         chown -R github:github /data/mjepa
         chmod -R 0775 /data/mjepa
@@ -368,7 +375,28 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
         sudo chown -R github:github /data/mjepa
         sudo chmod -R u+rwX /data/mjepa
         
+        OR THIS
+        chmod -R 777 /data
 
+  4.2) if deploy fails because github password is needed
+
+        cat >/etc/sudoers.d/github-ci <<'EOF'
+        Defaults:github !requiretty
+        github ALL=(ALL) NOPASSWD:ALL
+        EOF
+
+        chmod 0440 /etc/sudoers.d/github-ci
+        visudo -cf /etc/sudoers.d/github-ci
+
+        su - github
+        sudo -n true && echo "sudo works for github (non-interactive) ✅"
+
+        # ignore any password prompts
+
+        #now run runner
+        su - github
+        cd /home/github/actions-runner
+        ./run.sh
   5) After 1st deployment need to ensure large parquest files are pulled down properly to avoid - Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.
 
     From Vast Jupytr notebook terminal 

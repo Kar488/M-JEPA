@@ -51,10 +51,10 @@ parameters:
   max_finetune_batches:  {value: 0}
 
   devices:              {value: 4}
-  num-workers:          {value: 4}
-  persistent-workers:   {value: 0} # 0 false
-  prefetch-factor:      {value: 2}
-  pin-memory:           {value: 0} # 0 false
+  num-workers:          {value: 16}
+  persistent-workers:   {value: 1} # 0 false
+  prefetch-factor:      {value: 4}
+  pin-memory:           {value: 1} # 0 false
   bf16:                 {value: 1} #1 true
 
   task_type: { value: regression }
