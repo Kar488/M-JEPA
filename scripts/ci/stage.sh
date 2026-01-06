@@ -2485,7 +2485,14 @@ PY
     }
 
     local fallback_attempted=0
+    local ddp_attempt=0
     while true; do
+      ((ddp_attempt+=1))
+      local torchelastic_error_file=""
+      if [[ -n "${LOG_DIR:-}" ]]; then
+        torchelastic_error_file="${LOG_DIR%/}/${s}_torchelastic_${ddp_attempt}.log"
+        rm -f "$torchelastic_error_file"
+      fi
       ddp_missing_invocation=0
       build_entrypoint
 
@@ -2542,11 +2549,16 @@ PY
       set +e
       timeout --signal=SIGTERM --kill-after="$GRACE" "$SOFT" \
         env PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+        TORCHELASTIC_ERROR_FILE="${torchelastic_error_file:-}" \
         "${stage_cmd[@]}" \
         2>&1 | tee "$LOG_DIR/${s}.log"
       local timeout_rc=${PIPESTATUS[0]}
       set -e
       rc=$timeout_rc
+      if [[ -n "$torchelastic_error_file" && -s "$torchelastic_error_file" ]]; then
+        echo "[diag] torch elastic error detail (stage=${s} attempt=${ddp_attempt}):" >&2
+        cat "$torchelastic_error_file" >&2
+      fi
       ddp_missing_invocation=0
       if (( using_ddp )) && [[ -n "${TRAIN_INVOCATION_FILE:-}" ]]; then
         if [[ ! -f "$TRAIN_INVOCATION_FILE" ]]; then
