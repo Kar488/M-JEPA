@@ -502,6 +502,11 @@ def init_distributed(backend: str | None = None) -> bool:
         logger.error(message)
         raise RuntimeError(message)
 
+    try:
+        local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("RANK", "0")))
+    except (TypeError, ValueError):
+        local_rank = -1
+
     rank = int(os.environ.get("RANK", "0"))
     init_kwargs: dict[str, Any] = {
         "backend": backend,
