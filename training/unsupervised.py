@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import contextlib
 import errno
 import logging
@@ -121,6 +122,77 @@ from utils.dataset import SupportsTeardown
 from utils.graph_ops import _encode_graph, _pool_graph_emb
 from utils.logging import maybe_init_wandb
 logger = logging.getLogger(__name__)
+
+_DDP_ATEEXIT_REGISTERED = False
+
+
+def _process_group_active() -> bool:
+    dist_mod = getattr(torch, "distributed", None)
+    return bool(
+        dist_mod
+        and getattr(dist_mod, "is_available", lambda: False)()
+        and getattr(dist_mod, "is_initialized", lambda: False)()
+    )
+
+
+def _cleanup_distributed_at_exit() -> None:
+    if _process_group_active():
+        cleanup()
+
+
+def _register_distributed_cleanup_once() -> None:
+    global _DDP_ATEEXIT_REGISTERED
+    if _DDP_ATEEXIT_REGISTERED:
+        return
+    try:
+        atexit.register(_cleanup_distributed_at_exit)
+        _DDP_ATEEXIT_REGISTERED = True
+    except Exception:
+        logger.debug("Failed to register DDP cleanup handler", exc_info=True)
+
+
+def _init_or_reuse_distributed(devices: int, backend: Optional[str]) -> Tuple[bool, bool]:
+    existing_pg = _process_group_active()
+    if existing_pg:
+        return True, False
+
+    if devices <= 1:
+        return False, False
+
+    distributed = False
+    created_here = False
+    backend_override = os.environ.get("DDP_FORCE_BACKEND", "").strip().lower()
+
+    try:
+        distributed = init_distributed(backend)
+        created_here = distributed
+    except RuntimeError as exc:
+        if backend_override == "gloo" or not should_retry_with_gloo(exc):
+            raise
+
+        logger.warning(
+            "Distributed initialisation failed with NCCL backend (%s); retrying with gloo.",
+            exc,
+        )
+        cleanup()
+        previous_backend = os.environ.get("DDP_FORCE_BACKEND")
+        try:
+            os.environ["DDP_FORCE_BACKEND"] = "gloo"
+            distributed = init_distributed("gloo")
+            created_here = distributed
+        finally:
+            if previous_backend is None:
+                os.environ.pop("DDP_FORCE_BACKEND", None)
+            else:
+                os.environ["DDP_FORCE_BACKEND"] = previous_backend
+    except Exception:
+        cleanup()
+        raise
+
+    if created_here:
+        _register_distributed_cleanup_once()
+
+    return distributed, created_here
 
 _RESUME_CONFIG_KEYS: Tuple[str, ...] = (
     "gnn_type",
@@ -1473,7 +1545,6 @@ def train_jepa(
     **unused
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
-    backend_override = os.environ.get("DDP_FORCE_BACKEND", "").strip().lower()
 
     from utils.threads import configure_omp_threads
 
@@ -1489,31 +1560,7 @@ def train_jepa(
             return None
         return module.module if isinstance(module, nn.parallel.DistributedDataParallel) else module
 
-    distributed = False
-    if devices > 1:
-        try:
-            distributed = init_distributed(ddp_backend)
-        except RuntimeError as exc:
-            if backend_override == "gloo" or not should_retry_with_gloo(exc):
-                raise
-
-            logger.warning(
-                "Distributed initialisation failed with NCCL backend (%s); retrying with gloo.",
-                exc,
-            )
-            cleanup()
-            previous_backend = os.environ.get("DDP_FORCE_BACKEND")
-            try:
-                os.environ["DDP_FORCE_BACKEND"] = "gloo"
-                distributed = init_distributed("gloo")
-            finally:
-                if previous_backend is None:
-                    os.environ.pop("DDP_FORCE_BACKEND", None)
-                else:
-                    os.environ["DDP_FORCE_BACKEND"] = previous_backend
-        except Exception:
-            cleanup()
-            raise
+    distributed, _ = _init_or_reuse_distributed(devices, ddp_backend)
 
     if devices > 1 and not distributed and is_main_process():
         logger.warning(
@@ -1710,6 +1757,14 @@ def train_jepa(
         _unwrap_if_ddp(ema_encoder).to(device_t).eval(), "ema_encoder"  # type: ignore[union-attr]
     )
 
+    if distributed and not _process_group_active():
+        distributed = False
+        if devices > 1 and is_main_process():
+            logger.warning(
+                "Distributed initialisation reported success but no process group is active; "
+                "falling back to single-process execution.",
+            )
+
     if distributed:
         ddp_device_ids = None
         ddp_output_device = None
@@ -1772,7 +1827,7 @@ def train_jepa(
     ema_start = float(getattr(ema, "decay", 0.996))
     ema_end   = 0.9999
     wb = maybe_init_wandb(
-        use_wandb,
+        use_wandb and is_main_process(),
         project=wandb_project,
         config=dict(method="jepa", lr=lr, mask_ratio=mask_ratio, contiguous=contiguous),
         tags=wandb_tags,
@@ -2282,7 +2337,7 @@ def train_jepa(
         # Close the progress bar after training
         pbar.close()
     wb_finish()
-    if distributed:
+    if distributed and _process_group_active():
         import torch.distributed as dist
 
         if dist.is_available() and dist.is_initialized():
@@ -2290,7 +2345,6 @@ def train_jepa(
                 dist.barrier()
             except Exception:
                 logger.debug("Distributed barrier failed during shutdown", exc_info=True)
-        cleanup()
     return losses
 
 
@@ -2338,7 +2392,10 @@ def train_contrastive(
     **unused
 ) -> List[float]:
     ddp_backend = os.getenv("DDP_BACKEND")  # optional override
-    distributed = (devices > 1) and init_distributed(ddp_backend)
+    distributed, _ = _init_or_reuse_distributed(devices, ddp_backend)
+    if distributed and not _process_group_active():
+        distributed = False
+
     if devices > 1 and not distributed and is_main_process():
         logger.warning(
             "Requested devices=%s but distributed initialisation is inactive "
@@ -2550,7 +2607,7 @@ def train_contrastive(
     total_steps = epochs * steps_per_epoch
     sch = cosine_with_warmup(opt, warmup_steps, total_steps) if use_scheduler else None
     wb = maybe_init_wandb(
-        use_wandb,
+        use_wandb and is_main_process(),
         project=wandb_project,
         config=dict(method="contrastive", lr=lr, mask_ratio=mask_ratio),
         tags=wandb_tags,
@@ -2867,7 +2924,13 @@ def train_contrastive(
         # Close the progress bar after training
         pbar.close()
     wb_finish()
-    if distributed:
-        cleanup()
+    if distributed and _process_group_active():
+        import torch.distributed as dist
+
+        if dist.is_available() and dist.is_initialized():
+            try:
+                dist.barrier()
+            except Exception:
+                logger.debug("Distributed barrier failed during shutdown", exc_info=True)
 
     return losses
