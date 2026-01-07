@@ -1674,12 +1674,36 @@ def _run_tox21_single_task(
 def cmd_tox21(args: argparse.Namespace) -> None:
     """Run the Tox21 ranking case study."""
     logger.info("Starting Tox21 case study with args: %s", args)
-    configure_omp_threads(
-        stage="tox21",
-        num_workers=getattr(args, "num_workers", -1),
-        world_size=os.environ.get("WORLD_SIZE"),
-        log=logger,
-    )
+    wb = None
+
+    def _export_gate_env(passed: bool) -> None:
+        env_value = "true" if passed else "false"
+        os.environ["TOX21_MET_GATE"] = env_value
+        env_path = os.environ.get("GITHUB_ENV")
+        if env_path:
+            try:
+                with open(env_path, "a", encoding="utf-8") as fh:
+                    fh.write(f"TOX21_MET_GATE={env_value}\n")
+            except Exception:
+                logger.debug("Failed to write TOX21_MET_GATE to %s", env_path, exc_info=True)
+
+    try:
+        configure_omp_threads(
+            stage="tox21",
+            num_workers=getattr(args, "num_workers", -1),
+            world_size=os.environ.get("WORLD_SIZE"),
+            log=logger,
+        )
+    except Exception as exc:
+        logger.exception("Tox21 case study failed")
+        error_log = {"phase": "tox21", "status": "error", "error": str(exc)}
+        _wandb_log_safe(wb, error_log)
+        try:
+            _export_gate_env(False)
+        except Exception:
+            logger.debug("Failed to export failure gate status", exc_info=True)
+        sys.exit(5)
+
     if run_tox21_case_study is None:
         logger.error("Case study module is unavailable.")
         sys.exit(5)
@@ -1937,17 +1961,6 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         csv_dir = os.path.dirname(os.path.abspath(args.csv))
         report_dir = os.path.join(csv_dir, "reports")
     os.makedirs(report_dir, exist_ok=True)
-
-    def _export_gate_env(passed: bool) -> None:
-        env_value = "true" if passed else "false"
-        os.environ["TOX21_MET_GATE"] = env_value
-        env_path = os.environ.get("GITHUB_ENV")
-        if env_path:
-            try:
-                with open(env_path, "a", encoding="utf-8") as fh:
-                    fh.write(f"TOX21_MET_GATE={env_value}\n")
-            except Exception:
-                logger.debug("Failed to write TOX21_MET_GATE to %s", env_path, exc_info=True)
 
     wandb_tags = list(getattr(args, "wandb_tags", []) or [])
     if "target_baseline_roc_auc" not in {str(t) for t in wandb_tags}:

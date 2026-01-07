@@ -31,6 +31,10 @@ def tox21_module(monkeypatch):
     if "experiments.case_study" in sys.modules:
         monkeypatch.delitem(sys.modules, "experiments.case_study", raising=False)
 
+    if "torch" not in sys.modules:
+        dummy_cuda = types.SimpleNamespace(is_available=lambda: False, device_count=lambda: 0)
+        monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(cuda=dummy_cuda))
+
     import builtins
 
     real_import = builtins.__import__
@@ -146,6 +150,20 @@ def test_cmd_tox21_runs_with_fallback(tmp_path, monkeypatch, tox21_module):
 
     gate_env = env_path.read_text()
     assert "TOX21_MET_GATE=true" in gate_env
+
+
+def test_cmd_tox21_exits_on_threading_failure(monkeypatch, tox21_module):
+    def boom(*args, **kwargs):
+        raise TypeError("bad threads")
+
+    monkeypatch.setattr(tox21_module, "configure_omp_threads", boom)
+
+    args = argparse.Namespace(num_workers=0)
+
+    with pytest.raises(SystemExit) as excinfo:
+        tox21_module.cmd_tox21(args)
+
+    assert excinfo.value.code == 5
 
 
 def test_module_main_delegates_to_train_jepa(monkeypatch, tmp_path):
