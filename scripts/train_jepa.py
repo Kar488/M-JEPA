@@ -1431,7 +1431,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Benchmark subcommand
     bench = sub.add_parser("benchmark", help="Compare JEPA and contrastive encoders on labelled data");
     bench.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs");
-    bench.add_argument("--test-dir", required=False, default=None, help="Optional directory of test graphs for eval-only benchmarking");
+    bench.add_argument("--test-dir", required=False, default=None, help="Optional directory of test graphs to hold out for benchmarking");
     bench.add_argument("--label-col", type=str, default="label", help="Label column name");
     bench.add_argument("--jepa-encoder", required=True, help="Path to a JEPA encoder checkpoint (.pt)");
     bench.add_argument("--contrastive-encoder", required=False, help="Path to a contrastive encoder checkpoint (.pt)");
@@ -1440,6 +1440,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--task-type", choices=["classification", "regression"], default="classification");
     bench.add_argument("--patience", type=int, default=CONFIG.get("benchmark", {}).get("patience", 10), help="Early stopping patience");
     bench.add_argument("--ft-ckpt", type=str, default="", help="fine-tuned checkpoint (expects encoder and optionally head)");
+    bench.add_argument("--eval-finetuned", action="store_true", help="Evaluate the fine-tuned checkpoint head in eval-only mode");
     bench.add_argument("--report-dir", type=str, default="reports", help="where to write JSON/CSV");
     bench.add_argument("--report-stem", type=str, default="", help="filename stem; defaults to timestamped benchmark_*")
     _add_common_args(bench, "benchmark")
