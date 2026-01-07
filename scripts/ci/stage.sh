@@ -3282,6 +3282,10 @@ run_stage() {
   for candidate in "${grace_dirs[@]}"; do
     if [[ -n "$candidate" ]] && was_graceful_stop "$stage" "$candidate"; then
       echo "[${stage}] stopped gracefully; leaving cache unstamped so it can resume." >&2
+      MJEPACI_LAST_STAGE_STATUS="cancelled"
+      MJEPACI_LAST_STAGE_SKIP_REASON="graceful_stop"
+      MJEPACI_LAST_STAGE_RERUN_REASON="$rerun_reason"
+      export MJEPACI_LAST_STAGE_STATUS MJEPACI_LAST_STAGE_SKIP_REASON MJEPACI_LAST_STAGE_RERUN_REASON
       rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
       return 0
     fi

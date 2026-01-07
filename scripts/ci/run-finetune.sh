@@ -326,5 +326,9 @@ if ! run_stage finetune; then
   fi
   exit "$rc"
 fi
+if [[ "${MJEPACI_LAST_STAGE_STATUS:-}" == "cancelled" ]]; then
+  echo "[finetune] info: finetune stage was cancelled; skipping artifact collection and export steps." >&2
+  exit 0
+fi
 
 unset BESTCFG_NO_EPOCHS                     # avoid leaking to other stages
