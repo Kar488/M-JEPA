@@ -2955,6 +2955,8 @@ run_stage() {
   local data_hash=""
   local -a stage_args=()
   local stage_args_ready=0
+  local stage_args_file="${MJEPA_STAGE_ARGS_FILE:-}"
+  local stage_args_stage="${MJEPA_STAGE_ARGS_STAGE:-}"
 
   if (( shim_mode )); then
     local shim_meta="${MJEPACI_STAGE_SHIM}"
@@ -3010,11 +3012,19 @@ run_stage() {
         config_hash="$(stage_compute_hash "$stage" "sweep_id=${sweep_id}" "best=${best_sig}" "summary=${summary_sig}")"
         ;;
       *)
-        build_stage_args "$stage"
-        stage_dataset_preflight STAGE_ARGS
-        stage_args_ready=1
-        stage_args=("${STAGE_ARGS[@]}")
-        config_hash="$(stage_compute_hash "$stage" "${stage_args[@]}")"
+        if [[ -n "$stage_args_file" && -f "$stage_args_file" && "${stage_args_stage,,}" == "$stage" ]]; then
+          mapfile -t stage_args < "$stage_args_file"
+          stage_args_ready=1
+          STAGE_ARGS=("${stage_args[@]}")
+          stage_dataset_preflight STAGE_ARGS
+          config_hash="$(stage_compute_hash "$stage" "${stage_args[@]}")"
+        else
+          build_stage_args "$stage"
+          stage_dataset_preflight STAGE_ARGS
+          stage_args_ready=1
+          stage_args=("${STAGE_ARGS[@]}")
+          config_hash="$(stage_compute_hash "$stage" "${stage_args[@]}")"
+        fi
         ;;
     esac
   fi

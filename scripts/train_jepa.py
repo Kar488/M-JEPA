@@ -24,13 +24,14 @@ codes are used so that GitHub Actions can determine which stage failed.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import os
-import sys
-import time
-import json
 import random
+import sys
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -752,13 +753,50 @@ def cmd_grid_search(args: argparse.Namespace) -> None:
     _grid_search.cmd_grid_search(args)
 
 
+def _extract_subcommand_args(subcommand: str) -> List[str]:
+    argv = sys.argv[1:]
+    if subcommand in argv:
+        index = argv.index(subcommand)
+        return argv[index + 1 :]
+    return []
+
+
+def _maybe_use_stage_sh(subcommand: str) -> None:
+    if os.environ.get("MJEPACI_STAGE"):
+        return
+    if os.environ.get("MJEPA_DISABLE_STAGE_SH") == "1":
+        return
+    if os.environ.get("MJEPA_STAGE_SH_LAUNCHED") == "1":
+        return
+    if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
+        return
+
+    repo_root = Path(__file__).resolve().parents[1]
+    stage_script = repo_root / "scripts" / "ci" / f"run-{subcommand}.sh"
+    if not stage_script.is_file():
+        return
+
+    stage_args = _extract_subcommand_args(subcommand)
+    if stage_args:
+        with tempfile.NamedTemporaryFile("w", delete=False) as handle:
+            for entry in stage_args:
+                handle.write(f"{entry}\n")
+        os.environ["MJEPA_STAGE_ARGS_FILE"] = handle.name
+        os.environ["MJEPA_STAGE_ARGS_STAGE"] = subcommand
+
+    os.environ["MJEPA_STAGE_SH_LAUNCHED"] = "1"
+    os.execvpe("bash", ["bash", str(stage_script)], os.environ.copy())
+
+
 def cmd_pretrain(args: argparse.Namespace) -> None:
+    _maybe_use_stage_sh("pretrain")
     _pretrain = _load_cmd("pretrain")
     _inject_shared(_pretrain)
     _pretrain.cmd_pretrain(args)
 
 
 def cmd_finetune(args: argparse.Namespace) -> None:
+    _maybe_use_stage_sh("finetune")
     _finetune = _load_cmd("finetune")
     _inject_shared(_finetune)
     _finetune.cmd_finetune(args)
@@ -777,6 +815,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
 
 def cmd_tox21(args: argparse.Namespace) -> None:
+    _maybe_use_stage_sh("tox21")
     _tox21 = _load_cmd("tox21")
     _inject_shared(_tox21)
     _tox21.cmd_tox21(args)

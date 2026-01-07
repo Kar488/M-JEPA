@@ -141,6 +141,43 @@ def _normalise_device_and_count(args: argparse.Namespace) -> Tuple[str, int]:
     return device_value, devices_val
 
 
+def _should_relaunch_ddp(devices: int, world_size_env: int) -> bool:
+    if devices <= 1 or world_size_env > 1:
+        return False
+    if os.environ.get("TOX21_DDP_LAUNCHED") == "1":
+        return False
+    if os.environ.get("TOX21_DISABLE_DDP_LAUNCH") == "1":
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
+        return False
+    return True
+
+
+def _relaunch_with_torchrun(devices: int) -> None:
+    torchrun_path = shutil.which("torchrun")
+    if torchrun_path:
+        command = [
+            torchrun_path,
+            "--standalone",
+            "--nnodes=1",
+            f"--nproc_per_node={devices}",
+        ]
+    else:
+        command = [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            "--nnodes=1",
+            f"--nproc_per_node={devices}",
+        ]
+    command.extend(sys.argv)
+    env = os.environ.copy()
+    env["TOX21_DDP_LAUNCHED"] = "1"
+    logger.info("[tox21] relaunching with DDP: %s", " ".join(command))
+    os.execvpe(command[0], command, env)
+
+
 def _estimate_class_balance(csv_path: str, tasks: Iterable[str]) -> Dict[str, Dict[str, float]]:
     """Estimate positive/negative counts for each Tox21 assay."""
 
@@ -1789,8 +1826,11 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     except Exception:
         world_size_env = 1
     if devices_val > 1 and world_size_env <= 1:
-        logger.info(
-            "[tox21] devices=%d resolved (mask-aware); enable torchrun or WORLD_SIZE>1 to activate DDP.",
+        if _should_relaunch_ddp(devices_val, world_size_env):
+            _relaunch_with_torchrun(devices_val)
+        logger.warning(
+            "[tox21] devices=%d resolved (mask-aware) but DDP is inactive; "
+            "run with torchrun or WORLD_SIZE>1 to enable DDP.",
             devices_val,
         )
     eval_mode = str(
