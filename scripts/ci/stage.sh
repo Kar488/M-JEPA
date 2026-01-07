@@ -2313,6 +2313,8 @@ PY
 
         if (( effective_devices > 1 && ddp_supported )); then
           local world="${WORLD_SIZE:-}"
+          local rank_env="${RANK:-}"
+          local local_rank_env="${LOCAL_RANK:-}"
           if [[ -z "$world" || "$world" -le 1 ]]; then
             local ddp_port="${MASTER_PORT:-}"
             if [[ -z "$ddp_port" ]]; then
@@ -2321,16 +2323,23 @@ PY
             export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
             export MASTER_PORT="$ddp_port"
             export WORLD_SIZE="$effective_devices"
+            export LOCAL_WORLD_SIZE="$effective_devices"
             ddp_env_modified=1
             ddp_env_managed=1
             echo "[stage:$s] enabling torch.distributed.run (nproc_per_node=${effective_devices}, master_port=${MASTER_PORT})" >&2
+            if command -v torchrun >/dev/null 2>&1; then
+              ddp_launcher=(torchrun --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
+            else
+              ddp_launcher=(-m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
+            fi
           else
-            echo "[stage:$s] WORLD_SIZE=${world}; assuming external launcher configured DDP" >&2
-          fi
-          if command -v torchrun >/dev/null 2>&1; then
-            ddp_launcher=(torchrun --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
-          else
-            ddp_launcher=(-m torch.distributed.run --standalone --nnodes=1 "--nproc_per_node=${effective_devices}")
+            ddp_enabled=1
+            if [[ -n "$rank_env" || -n "$local_rank_env" ]]; then
+              echo "[stage:$s] WORLD_SIZE=${world} with RANK/LOCAL_RANK set; using external launcher for DDP" >&2
+            else
+              echo "[stage:$s] WORLD_SIZE=${world}; assuming external launcher configured DDP" >&2
+            fi
+            ddp_launcher=()
           fi
           ddp_enabled=1
           preflight_forced_single=0
