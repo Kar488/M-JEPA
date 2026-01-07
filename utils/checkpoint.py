@@ -294,6 +294,7 @@ def safe_load_checkpoint(
     default_name: str = "head.pt",
     map_location="cpu",
     allow_missing: bool = True,
+    weights_only: bool = True,
 ):
     """
     Try to load a checkpoint from a list of candidates:
@@ -316,9 +317,25 @@ def safe_load_checkpoint(
     for p in candidates:
         try:
             if p and os.path.isfile(p):
-                state = torch.load(p, map_location=map_location)
+                state = torch.load(p, map_location=map_location, weights_only=weights_only)
                 return state, p
         except Exception as e:
+            if (
+                weights_only
+                and p
+                and os.path.isfile(p)
+                and "weights_only" in str(e).lower()
+            ):
+                logger.warning(
+                    "Retrying checkpoint load with weights_only=False for trusted artifact: %s",
+                    p,
+                )
+                try:
+                    state = torch.load(p, map_location=map_location, weights_only=False)
+                    return state, p
+                except Exception as e2:
+                    errors.append((p, str(e2)))
+                    continue
             errors.append((p, str(e)))
             continue
 
