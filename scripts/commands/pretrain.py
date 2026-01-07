@@ -1020,21 +1020,22 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                 pretrain_losses.extend(ep_loss)
                 # save after each epoch (or every N epochs)
                 if (epoch + 1) % save_every == 0 or (epoch + 1) == args.epochs:
-                    save_checkpoint(
-                        os.path.join(args.ckpt_dir, f"pt_epoch_{epoch+1}.pt"),
-                        epoch=epoch,
-                        metadata=checkpoint_metadata,
-                        encoder=encoder.state_dict(),
-                        ema_encoder=ema_encoder.state_dict(),
-                        predictor=(
-                            predictor.state_dict()
-                            if hasattr(predictor, "state_dict")
-                            else None
-                        ),
-                        ema=ema_helper.state_dict()
-                        if hasattr(ema_helper, "state_dict")
-                        else None,
-                    )
+                    if is_main:
+                        save_checkpoint(
+                            os.path.join(args.ckpt_dir, f"pt_epoch_{epoch+1}.pt"),
+                            epoch=epoch,
+                            metadata=checkpoint_metadata,
+                            encoder=encoder.state_dict(),
+                            ema_encoder=ema_encoder.state_dict(),
+                            predictor=(
+                                predictor.state_dict()
+                                if hasattr(predictor, "state_dict")
+                                else None
+                            ),
+                            ema=ema_helper.state_dict()
+                            if hasattr(ema_helper, "state_dict")
+                            else None,
+                        )
             _wb_log(wb, {"phase": "pretrain", "status": "success"})
         except Exception:
             logger.exception("JEPA pretraining failed")
@@ -1218,32 +1219,34 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             "edge_dim": int(edge_dim) if edge_dim is not None else None,
             "input_dim": int(input_dim),
         }
-        save_checkpoint(
-            ckpt_base,
-            metadata=checkpoint_metadata,
-            encoder=enc_state,
-            encoder_cfg=encoder_cfg,
-        )
-        _wb_log(wb, {"jepa_checkpoint": ckpt_base})
-        if args.contrastive:
-            cont_path = f"{os.path.splitext(ckpt_base)[0]}_contrastive.pt"
+        if is_main:
             save_checkpoint(
-                cont_path,
+                ckpt_base,
                 metadata=checkpoint_metadata,
-                encoder=cont_encoder.state_dict(),
+                encoder=enc_state,
                 encoder_cfg=encoder_cfg,
             )
-            _wb_log(wb, {"contrastive_checkpoint": cont_path})
+            _wb_log(wb, {"jepa_checkpoint": ckpt_base})
+            if args.contrastive:
+                cont_path = f"{os.path.splitext(ckpt_base)[0]}_contrastive.pt"
+                save_checkpoint(
+                    cont_path,
+                    metadata=checkpoint_metadata,
+                    encoder=cont_encoder.state_dict(),
+                    encoder_cfg=encoder_cfg,
+                )
+                _wb_log(wb, {"contrastive_checkpoint": cont_path})
 
-        # keep a stable pointer the FT step can always find
-        try:
-            link = os.path.join(args.ckpt_dir, "encoder.pt")
-            if os.path.realpath(link) != os.path.realpath(ckpt_base):
-                if os.path.islink(link) or os.path.exists(link):
-                    os.remove(link)
-                os.symlink(ckpt_base, link)
-        except Exception:
-            logger.warning("Could not create encoder.pt symlink", exc_info=True)
+        if is_main:
+            # keep a stable pointer the FT step can always find
+            try:
+                link = os.path.join(args.ckpt_dir, "encoder.pt")
+                if os.path.realpath(link) != os.path.realpath(ckpt_base):
+                    if os.path.islink(link) or os.path.exists(link):
+                        os.remove(link)
+                    os.symlink(ckpt_base, link)
+            except Exception:
+                logger.warning("Could not create encoder.pt symlink", exc_info=True)
 
         # Plot training losses to W&B and filesystem
         plot_dir = getattr(args, "plot_dir", None) or os.path.join(

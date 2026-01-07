@@ -1806,47 +1806,49 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
                             best_payload["optimizer"] = optimizer.state_dict()
                         if scheduler is not None and hasattr(scheduler, "state_dict"):
                             best_payload["scheduler"] = scheduler.state_dict()
-                        save_checkpoint(best_path, **best_payload)
-                        wrote_best = True
-                        seed_best_paths[seed] = best_path
-                        seed_best_metric[seed] = float(current)
-                        seed_best_step[seed] = float(
-                            seed_train_steps.get(seed, 0.0)
-                        )
-                        seed_best_mode[seed] = str(current_mode)
-                        # optional: stable link at the finetune root
-
-                        try:
-                            from utils.checkpoint import safe_link_or_copy
-
-                            link = os.path.join(args.ckpt_dir, "head.pt")
-                            mode = safe_link_or_copy(best_path, link)
-                            logger.info("Updated head.pt (%s) -> %s", mode, best_path)
-                        except Exception:
-                            logger.warning(
-                                "Could not create head.pt symlink", exc_info=True
+                        if is_main:
+                            save_checkpoint(best_path, **best_payload)
+                            wrote_best = True
+                            seed_best_paths[seed] = best_path
+                            seed_best_metric[seed] = float(current)
+                            seed_best_step[seed] = float(
+                                seed_train_steps.get(seed, 0.0)
                             )
+                            seed_best_mode[seed] = str(current_mode)
+                            # optional: stable link at the finetune root
+
+                            try:
+                                from utils.checkpoint import safe_link_or_copy
+
+                                link = os.path.join(args.ckpt_dir, "head.pt")
+                                mode = safe_link_or_copy(best_path, link)
+                                logger.info("Updated head.pt (%s) -> %s", mode, best_path)
+                            except Exception:
+                                logger.warning(
+                                    "Could not create head.pt symlink", exc_info=True
+                                )
 
                 # periodic (and last-epoch) snapshot
                 if ((epoch + 1) % save_every == 0) or ((epoch + 1) == args.epochs):
-                    save_payload = {"epoch": epoch}
-                    for name, obj in (("encoder", encoder), ("head", head)):
-                        sd = _maybe_state_dict(obj)
-                        if sd is not None:
-                            save_payload[name] = sd
-                            if name == "encoder":
-                                save_payload["encoder_cfg"] = _resolved_encoder_cfg(encoder)
-                    if len(save_payload) > 1:
-                        save_checkpoint(
-                            os.path.join(seed_dir, f"ft_epoch_{epoch+1}.pt"),
-                            **save_payload,
-                        )
+                    if is_main:
+                        save_payload = {"epoch": epoch}
+                        for name, obj in (("encoder", encoder), ("head", head)):
+                            sd = _maybe_state_dict(obj)
+                            if sd is not None:
+                                save_payload[name] = sd
+                                if name == "encoder":
+                                    save_payload["encoder_cfg"] = _resolved_encoder_cfg(encoder)
+                        if len(save_payload) > 1:
+                            save_checkpoint(
+                                os.path.join(seed_dir, f"ft_epoch_{epoch+1}.pt"),
+                                **save_payload,
+                            )
 
             if budget_abort:
                 break
 
             # Fallback: if no best was recorded, promote last snapshot to best + head.pt
-            if not wrote_best:
+            if not wrote_best and is_main:
                 logger.info("Attempting to write best")
                 try:
                     # find latest epoch file we just wrote
