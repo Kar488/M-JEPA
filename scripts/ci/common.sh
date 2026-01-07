@@ -1466,6 +1466,9 @@ ensure_dir_var GRID_DIR "$GRID_DIR_DEFAULT" "${EXP_ID:+experiments/${EXP_ID}/}gr
 
 if [[ -n "${GRID_EXP_ID:-}" && "${GRID_EXP_ID}" != "${EXP_ID:-}" ]]; then
   GRID_SOURCE_DIR="${EXPERIMENTS_ROOT%/}/${GRID_EXP_ID}/grid"
+  if [[ "${GRID_SOURCE_DIR_EXPLICIT:-0}" == "0" ]]; then
+    GRID_SOURCE_DIR_EXPLICIT=1
+  fi
 elif [[ -n "${GRID_DIR:-}" ]]; then
   GRID_SOURCE_DIR="$GRID_DIR"
 else
