@@ -433,6 +433,10 @@ steps=(phase2_sweep phase2_recheck phase2_export)
 for step in "${steps[@]}"; do
   echo "[ci][phase2] starting ${step} (GRID_DIR=${GRID_DIR:-<unset>} GRID_SOURCE_DIR=${GRID_SOURCE_DIR:-<unset>} EXPERIMENTS_ROOT=${EXPERIMENTS_ROOT:-<unset>})" >&2
   if "$STAGE_BIN" "$step"; then
+    if [[ "${MJEPACI_LAST_STAGE_STATUS:-}" == "cancelled" ]]; then
+      echo "[ci][phase2] ${step} cancelled; skipping remaining Phase-2 artifact exports." >&2
+      exit 0
+    fi
     echo "[ci][phase2] finished ${step}" >&2
   else
     rc=$?

@@ -350,6 +350,16 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
   BASE_LOG_DIR="${LOG_DIR:-$APP_DIR/logs}"
   mapfile -t GRID_VISIBLE_GPUS < <(visible_gpu_ids)
   PHASE1_GPU_COUNT="${#GRID_VISIBLE_GPUS[@]}"
+  PHASE1_GRACEFUL_STOP=0
+
+  phase1_check_graceful_stop() {
+    local dir="${1:-}"
+    if [[ -n "$dir" ]] && was_graceful_stop "wandb_agent" "$dir"; then
+      PHASE1_GRACEFUL_STOP=1
+      return 0
+    fi
+    return 1
+  }
 
   run_backbone_agents() {
     local jepa_id="$1" contrast_id="$2" backbone="$3"
@@ -364,12 +374,15 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
       backbone_slug="$backbone"
     fi
 
+    local jepa_log_dir="${BASE_LOG_DIR}/phase1_jepa_${backbone_slug}"
+    local contrast_log_dir="${BASE_LOG_DIR}/phase1_contrastive_${backbone_slug}"
+
     if (( PHASE1_GPU_COUNT >= 2 )); then
       declare -a PHASE1_GPU_SPLITS
       split_gpu_ids PHASE1_GPU_SPLITS 2 "${GRID_VISIBLE_GPUS[@]}"
 
       (
-        export LOG_DIR="${BASE_LOG_DIR}/phase1_jepa_${backbone_slug}"
+        export LOG_DIR="$jepa_log_dir"
         mkdir -p "$LOG_DIR"
         if [[ -n "${PHASE1_GPU_SPLITS[0]:-}" ]]; then
           export CUDA_VISIBLE_DEVICES="${PHASE1_GPU_SPLITS[0]}"
@@ -390,7 +403,7 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
       PHASE1_JEPA_PID=$!
 
       (
-        export LOG_DIR="${BASE_LOG_DIR}/phase1_contrastive_${backbone_slug}"
+        export LOG_DIR="$contrast_log_dir"
         mkdir -p "$LOG_DIR"
         if [[ -n "${PHASE1_GPU_SPLITS[1]:-}" ]]; then
           export CUDA_VISIBLE_DEVICES="${PHASE1_GPU_SPLITS[1]}"
@@ -427,7 +440,15 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
         echo "[phase1][fatal] (${backbone}) sweep agents failed: JEPA rc=$PHASE1_JEPA_RC contrastive rc=$PHASE1_CONTRAST_RC" >&2
         exit 1
       fi
+
+      phase1_check_graceful_stop "$jepa_log_dir" || true
+      phase1_check_graceful_stop "$contrast_log_dir" || true
+      if (( PHASE1_GRACEFUL_STOP )); then
+        return 0
+      fi
     else
+      export LOG_DIR="$jepa_log_dir"
+      mkdir -p "$LOG_DIR"
       export SWEEP_ID="$jepa_sweep"
       export WANDB_COUNT="$PHASE1_JEPA_COUNT"
       echo "[phase1] (${backbone}) launching JEPA agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
@@ -441,7 +462,13 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
           fi
         fi
       )
+      phase1_check_graceful_stop "$jepa_log_dir" || true
+      if (( PHASE1_GRACEFUL_STOP )); then
+        return 0
+      fi
 
+      export LOG_DIR="$contrast_log_dir"
+      mkdir -p "$LOG_DIR"
       export SWEEP_ID="$contrast_sweep"
       export WANDB_COUNT="$PHASE1_CONTRAST_COUNT"
       echo "[phase1] (${backbone}) launching contrastive agent for sweep $SWEEP_ID (count=$WANDB_COUNT)"
@@ -455,12 +482,24 @@ if [[ "$GRID_MODE_CLEAN" == "wandb" ]]; then
           fi
         fi
       )
+      phase1_check_graceful_stop "$contrast_log_dir" || true
+      if (( PHASE1_GRACEFUL_STOP )); then
+        return 0
+      fi
     fi
   }
 
   for idx in "${!JEPA_IDS[@]}"; do
     run_backbone_agents "${JEPA_IDS[$idx]}" "${CONTRAST_IDS[$idx]}" "${SWEEP_BACKBONES[$idx]}"
+    if (( PHASE1_GRACEFUL_STOP )); then
+      break
+    fi
   done
+
+  if (( PHASE1_GRACEFUL_STOP )); then
+    echo "[phase1] info: phase1 sweep cancelled; skipping artifact exports." >&2
+    exit 0
+  fi
 
   # Require that paired-effect analysis only considers runs that have reached
   # the minimum training budgets that Phase-1 sweeps schedule.  Allow

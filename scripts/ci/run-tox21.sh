@@ -944,6 +944,11 @@ SECONDS=0
 "$STAGE_BIN" tox21
 elapsed="${SECONDS}" 
 
+if [[ "${MJEPACI_LAST_STAGE_STATUS:-}" == "cancelled" ]]; then
+  echo "[tox21] info: tox21 stage was cancelled; skipping artifact collection and export steps." >&2
+  exit 0
+fi
+
 stage_file="${TOX21_DIR}/stage-outputs/tox21_${SOURCE}.json"
 print_python_cmd python_interp_cmd
 "${python_interp_cmd[@]}" - <<'PY' "$stage_file" "$SOURCE" "$env_file" "$elapsed"
