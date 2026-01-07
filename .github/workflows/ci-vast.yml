@@ -779,8 +779,8 @@ jobs:
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXPERIMENT_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
       EXP_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
-      GRID_DIR: ${{ env.GRID_CACHE_DIR }}
-      GRID_SOURCE_DIR: ${{ env.GRID_CACHE_DIR }}
+      GRID_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).grid || '/data/mjepa/cache/grid' }}
+      GRID_SOURCE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).grid || '/data/mjepa/cache/grid' }}
       PRETRAIN_MANIFEST: ${{ needs.vast_pretrain.outputs.pretrain_manifest }}
       PRETRAIN_ENCODER_PATH: ${{ needs.vast_pretrain.outputs.pretrain_encoder }}
       PRETRAIN_TOX21_ENV: ${{ needs.vast_pretrain.outputs.pretrain_tox21_env }}
@@ -886,8 +886,8 @@ jobs:
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXPERIMENT_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
       EXP_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
-      GRID_DIR: ${{ env.GRID_CACHE_DIR }}
-      GRID_SOURCE_DIR: ${{ env.GRID_CACHE_DIR }}
+      GRID_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).grid || '/data/mjepa/cache/grid' }}
+      GRID_SOURCE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).grid || '/data/mjepa/cache/grid' }}
       PRETRAIN_MANIFEST: ${{ needs.vast_pretrain.outputs.pretrain_manifest }}
       PRETRAIN_ENCODER_PATH: ${{ needs.vast_pretrain.outputs.pretrain_encoder }}
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
@@ -925,8 +925,8 @@ jobs:
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXPERIMENT_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
       EXP_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
-      GRID_DIR: ${{ env.GRID_CACHE_DIR }}
-      GRID_SOURCE_DIR: ${{ env.GRID_CACHE_DIR }}
+      GRID_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).grid || '/data/mjepa/cache/grid' }}
+      GRID_SOURCE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).grid || '/data/mjepa/cache/grid' }}
       PRETRAIN_MANIFEST: ${{ needs.vast_pretrain.outputs.pretrain_manifest }}
       PRETRAIN_ENCODER_PATH: ${{ needs.vast_pretrain.outputs.pretrain_encoder }}
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
@@ -963,8 +963,8 @@ jobs:
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXPERIMENT_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
       EXP_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
-      GRID_DIR: ${{ env.GRID_CACHE_DIR }}
-      GRID_SOURCE_DIR: ${{ env.GRID_CACHE_DIR }}
+      GRID_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).grid || '/data/mjepa/cache/grid' }}
+      GRID_SOURCE_DIR: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.cache_overrides).grid || '/data/mjepa/cache/grid' }}
       PRETRAIN_MANIFEST: ${{ needs.vast_pretrain.outputs.pretrain_manifest }}
       PRETRAIN_ENCODER_PATH: ${{ needs.vast_pretrain.outputs.pretrain_encoder }}
       PRETRAIN_TOX21_ENV: ${{ needs.vast_pretrain.outputs.pretrain_tox21_env }}
