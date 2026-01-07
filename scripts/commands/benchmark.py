@@ -4,6 +4,7 @@ import argparse
 import math
 import random
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -55,6 +56,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     else:
         seeds = CONFIG.get("benchmark", {}).get("seeds", [0])  # type: ignore[assignment]
 
+    eval_finetuned = bool(getattr(args, "eval_finetuned", False))
     config_payload: Dict[str, Any] = {
         "labeled_dir": args.labeled_dir,
         "test_dir": getattr(args, "test_dir", None),
@@ -63,6 +65,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         "batch_size": args.batch_size,
         "lr": args.lr,
         "seeds": seeds,
+        "eval_finetuned": eval_finetuned,
         "gnn_type": getattr(args, "gnn_type", None),
         "hidden_dim": getattr(args, "hidden_dim", None),
         "num_layers": getattr(args, "num_layers", None),
@@ -78,11 +81,14 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         config_payload["task"] = task_name
     config_payload.update(threshold_payload)
 
+    run_id = f"benchmark-{uuid.uuid4().hex[:8]}"
     wb = maybe_init_wandb(
         args.use_wandb,
         project=args.wandb_project,
         tags=args.wandb_tags,
         config=config_payload,
+        id=run_id,
+        resume="never",
     )
     log_effective_gnn(args, logger, wb)
 
@@ -225,6 +231,30 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         except Exception:
             combined = _fallback_dataset(graphs_all, labels_arr, smiles_all or None)
         return combined, indices
+    
+    def _split_indices_for_training(dataset: Any) -> Tuple[List[int], List[int], List[int]]:
+        total = len(dataset) if hasattr(dataset, "__len__") else 0
+        indices = list(range(total))
+        if getattr(args, "task_type", None) == "classification":
+            labels_attr = getattr(dataset, "labels", None)
+            if labels_attr is not None:
+                labels_arr = np.asarray(labels_attr)
+                train_idx: List[int] = []
+                val_idx: List[int] = []
+                test_idx: List[int] = []
+                for label in np.unique(labels_arr):
+                    label_idx = np.where(labels_arr == label)[0].tolist()
+                    random.shuffle(label_idx)
+                    n_train = int(math.floor(0.8 * len(label_idx)))
+                    n_val = int(math.floor(0.1 * len(label_idx)))
+                    train_idx.extend(label_idx[:n_train])
+                    val_idx.extend(label_idx[n_train : n_train + n_val])
+                    test_idx.extend(label_idx[n_train + n_val :])
+                return train_idx, val_idx, test_idx
+        random.shuffle(indices)
+        train_end = int(0.8 * total)
+        val_end = int(0.9 * total)
+        return indices[:train_end], indices[train_end:val_end], indices[val_end:]
 
     def _estimate_split_sizes(
         dataset: Any,
@@ -298,7 +328,7 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     split_hint, sibling_dirs = _discover_sibling_splits(Path(args.labeled_dir))
 
     try:
-        if getattr(args, "test_dir", None):
+        if getattr(args, "test_dir", None) and eval_finetuned:
             labeled = load_directory_dataset(
                 args.test_dir,
                 **loader_kwargs,  # type: ignore[arg-type]
@@ -314,18 +344,29 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         elif "train" in sibling_dirs:
             split_datasets: Dict[str, Any] = {}
             split_counts: Dict[str, int] = {}
-            for name in ("train", "val", "test"):
+            for name in ("train", "val"):
                 path = sibling_dirs.get(name)
                 if path is None:
                     continue
                 ds = load_directory_dataset(str(path), **loader_kwargs)  # type: ignore[arg-type]
                 split_datasets[name] = ds
                 split_counts[name] = len(ds) if hasattr(ds, "__len__") else 0
+            if getattr(args, "test_dir", None):
+                test_ds = load_directory_dataset(args.test_dir, **loader_kwargs)  # type: ignore[arg-type]
+                split_datasets["test"] = test_ds
+                split_counts["test"] = len(test_ds) if hasattr(test_ds, "__len__") else 0
+                dataset_strategy = "explicit_splits_with_test_dir"
+            else:
+                path = sibling_dirs.get("test")
+                if path is not None:
+                    ds = load_directory_dataset(str(path), **loader_kwargs)  # type: ignore[arg-type]
+                    split_datasets["test"] = ds
+                    split_counts["test"] = len(ds) if hasattr(ds, "__len__") else 0
+                dataset_strategy = "explicit_splits"
             labeled, indices = _merge_split_datasets(split_datasets)
             train_indices = indices.get("train")
             val_indices = indices.get("val")
             test_indices = indices.get("test")
-            dataset_strategy = "explicit_splits"
             logger.info(
                 "Detected split directory input under %s; using train=%s (N=%d) val=%s (N=%d) test=%s (N=%d)",
                 args.labeled_dir,
@@ -346,30 +387,52 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
                 }
             )
         else:
-            data_dir = getattr(args, "test_dir", None) or args.labeled_dir
-            labeled = load_directory_dataset(
-                data_dir,
-                **loader_kwargs,  # type: ignore[arg-type]
-            )
-            dataset_strategy = "single_split_dir" if split_hint is not None else "single_dir"
-            if split_hint is not None:
-                logger.info(
-                    "Input directory %s appears to be a '%s' split without sibling train data; reusing it for training/validation.",
-                    data_dir,
-                    split_hint,
+            if getattr(args, "test_dir", None):
+                train_ds = load_directory_dataset(
+                    args.labeled_dir,
+                    **loader_kwargs,  # type: ignore[arg-type]
                 )
-                dataset_len = len(labeled) if hasattr(labeled, "__len__") else 0
-                effective_batch_size = _scaled_batch_size(args.batch_size, dataset_len)
-                if effective_batch_size != args.batch_size:
-                    _wb_log(
-                        {
-                            "dataset/batch_size_requested": args.batch_size,
-                            "dataset/batch_size_effective": effective_batch_size,
-                            "dataset/strategy": "single_split_dir",
-                            "dataset/size": dataset_len,
-                        }
+                test_ds = load_directory_dataset(
+                    args.test_dir,
+                    **loader_kwargs,  # type: ignore[arg-type]
+                )
+                labeled, indices = _merge_split_datasets({"train": train_ds, "test": test_ds})
+                train_indices, val_indices, _ = _split_indices_for_training(train_ds)
+                test_indices = indices.get("test")
+                dataset_strategy = "train_val_plus_test_dir"
+                _wb_log(
+                    {
+                        "phase": "data_load",
+                        "train_graphs": len(train_ds) if hasattr(train_ds, "__len__") else 0,
+                        "test_graphs": len(test_ds) if hasattr(test_ds, "__len__") else 0,
+                        "dataset/strategy": dataset_strategy,
+                    }
+                )
+            else:
+                data_dir = getattr(args, "test_dir", None) or args.labeled_dir
+                labeled = load_directory_dataset(
+                    data_dir,
+                    **loader_kwargs,  # type: ignore[arg-type]
+                )
+                dataset_strategy = "single_split_dir" if split_hint is not None else "single_dir"
+                if split_hint is not None:
+                    logger.info(
+                        "Input directory %s appears to be a '%s' split without sibling train data; reusing it for training/validation.",
+                        data_dir,
+                        split_hint,
                     )
-            _wb_log({"phase": "data_load", "labeled_graphs": len(labeled)})
+                    dataset_len = len(labeled) if hasattr(labeled, "__len__") else 0
+                    effective_batch_size = _scaled_batch_size(args.batch_size, dataset_len)
+                    if effective_batch_size != args.batch_size:
+                        _wb_log(
+                            {
+                                "dataset/batch_size_requested": args.batch_size,
+                                "dataset/batch_size_effective": effective_batch_size,
+                                "dataset/strategy": "single_split_dir",
+                                "dataset/size": dataset_len,
+                            }
+                        )
+                _wb_log({"phase": "data_load", "labeled_graphs": len(labeled)})
     except Exception:
         logger.exception("Failed to load labelled dataset for benchmarking")
         _wb_log({"phase": "data_load", "status": "error"})
@@ -394,9 +457,9 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     )
     device = resolve_device(args.device)
 
-    if getattr(args, "ft_ckpt", None) and not getattr(args, "test_dir", None):
+    if getattr(args, "ft_ckpt", None) and not eval_finetuned:
         logger.warning(
-            "Fine-tuned checkpoint provided (%s) but benchmark compares encoders only; ignoring.",
+            "Fine-tuned checkpoint provided (%s) but benchmark compares encoders only; ignoring (use --eval-finetuned to enable).",
             args.ft_ckpt,
         )
 
@@ -404,12 +467,17 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     all_results: Dict[str, Dict[str, float]] = {}
     from typing import Any, Dict
 
-    # If a separate test directory is provided, run in eval-only mode using the
+    # If eval-finetuned is requested, run in eval-only mode using the
     # fine-tuned checkpoint and return early.
-    if getattr(args, "test_dir", None):
+    if eval_finetuned:
         start_payload = {"phase": "benchmark", "status": "start"}
         start_payload.update(threshold_payload)
         _wb_log(start_payload)
+        if not getattr(args, "ft_ckpt", None):
+            _wb_log({"phase": "benchmark", "status": "error", "error": "missing_ft_ckpt"})
+            _wb_finish()
+            logger.error("Fine-tuned checkpoint required for --eval-finetuned mode.")
+            raise SystemExit(1)
         try:
             agg_ft = evaluate_finetuned_head(args.ft_ckpt, labeled, args, device)
         except FileNotFoundError:

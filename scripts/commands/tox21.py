@@ -1674,12 +1674,36 @@ def _run_tox21_single_task(
 def cmd_tox21(args: argparse.Namespace) -> None:
     """Run the Tox21 ranking case study."""
     logger.info("Starting Tox21 case study with args: %s", args)
-    configure_omp_threads(
-        stage="tox21",
-        num_workers=getattr(args, "num_workers", -1),
-        world_size=os.environ.get("WORLD_SIZE"),
-        log=logger,
-    )
+    wb = None
+
+    def _export_gate_env(passed: bool) -> None:
+        env_value = "true" if passed else "false"
+        os.environ["TOX21_MET_GATE"] = env_value
+        env_path = os.environ.get("GITHUB_ENV")
+        if env_path:
+            try:
+                with open(env_path, "a", encoding="utf-8") as fh:
+                    fh.write(f"TOX21_MET_GATE={env_value}\n")
+            except Exception:
+                logger.debug("Failed to write TOX21_MET_GATE to %s", env_path, exc_info=True)
+
+    try:
+        configure_omp_threads(
+            stage="tox21",
+            num_workers=getattr(args, "num_workers", -1),
+            world_size=os.environ.get("WORLD_SIZE"),
+            log=logger,
+        )
+    except Exception as exc:
+        logger.exception("Tox21 case study failed")
+        error_log = {"phase": "tox21", "status": "error", "error": str(exc)}
+        _wandb_log_safe(wb, error_log)
+        try:
+            _export_gate_env(False)
+        except Exception:
+            logger.debug("Failed to export failure gate status", exc_info=True)
+        sys.exit(5)
+
     if run_tox21_case_study is None:
         logger.error("Case study module is unavailable.")
         sys.exit(5)
@@ -1937,17 +1961,6 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         csv_dir = os.path.dirname(os.path.abspath(args.csv))
         report_dir = os.path.join(csv_dir, "reports")
     os.makedirs(report_dir, exist_ok=True)
-
-    def _export_gate_env(passed: bool) -> None:
-        env_value = "true" if passed else "false"
-        os.environ["TOX21_MET_GATE"] = env_value
-        env_path = os.environ.get("GITHUB_ENV")
-        if env_path:
-            try:
-                with open(env_path, "a", encoding="utf-8") as fh:
-                    fh.write(f"TOX21_MET_GATE={env_value}\n")
-            except Exception:
-                logger.debug("Failed to write TOX21_MET_GATE to %s", env_path, exc_info=True)
 
     wandb_tags = list(getattr(args, "wandb_tags", []) or [])
     if "target_baseline_roc_auc" not in {str(t) for t in wandb_tags}:
@@ -2322,6 +2335,14 @@ class _StandaloneBoolFlag(argparse.Action):
 
 def _build_standalone_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="scripts.commands.tox21")
+    parser.add_argument(
+        "--local-rank",
+        "--local_rank",
+        dest="local_rank",
+        type=int,
+        default=0,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--cache-dir")
     parser.add_argument("--csv", required=True)
     parser.add_argument(
@@ -2516,6 +2537,44 @@ def main(argv: Optional[List[str]] | None = None) -> int:
         logger.debug("stage shim requested; exiting early")
         return 0
 
+    def _extract_local_rank_args(raw_args: List[str]) -> Tuple[Optional[int], List[str]]:
+        cleaned: List[str] = []
+        local_rank: Optional[int] = None
+        idx = 0
+        while idx < len(raw_args):
+            token = raw_args[idx]
+            if token in {"--local-rank", "--local_rank"}:
+                if idx + 1 >= len(raw_args) or str(raw_args[idx + 1]).startswith("-"):
+                    raise ValueError(f"missing value for {token}")
+                value = raw_args[idx + 1]
+                try:
+                    local_rank = int(value)
+                except Exception as exc:
+                    raise ValueError(f"invalid value for {token}: {value}") from exc
+                idx += 2
+                continue
+            if token.startswith("--local-rank=") or token.startswith("--local_rank="):
+                value = token.split("=", 1)[1]
+                try:
+                    local_rank = int(value)
+                except Exception as exc:
+                    raise ValueError(f"invalid value for {token}: {value}") from exc
+                idx += 1
+                continue
+            cleaned.append(token)
+            idx += 1
+        return local_rank, cleaned
+
+    try:
+        local_rank_value, remaining_args = _extract_local_rank_args(args)
+    except ValueError as exc:
+        logger.error("Invalid --local-rank flag: %s", exc)
+        return 2
+
+    local_rank_args: List[str] = []
+    if local_rank_value is not None:
+        local_rank_args = ["--local-rank", str(local_rank_value)]
+
     try:
         from scripts import train_jepa as _train_jepa
     except Exception as exc:  # pragma: no cover - defensive guard
@@ -2525,7 +2584,7 @@ def main(argv: Optional[List[str]] | None = None) -> int:
         )
         parser = _build_standalone_parser()
         try:
-            parsed = parser.parse_args(args)
+            parsed = parser.parse_args([*local_rank_args, *remaining_args])
         except SystemExit as exc_parse:
             return int(exc_parse.code or 0)
         parsed = _finalise_standalone_args(parsed)
@@ -2534,7 +2593,7 @@ def main(argv: Optional[List[str]] | None = None) -> int:
 
     parser = _train_jepa.build_parser()
     try:
-        parsed = parser.parse_args(["tox21", *args])
+        parsed = parser.parse_args([*local_rank_args, "tox21", *remaining_args])
     except SystemExit as exc:  # pragma: no cover - argparse handles help/errors
         return int(exc.code or 0)
 
