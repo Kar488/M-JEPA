@@ -1523,6 +1523,7 @@ def _train_linear_head_impl(
                     os.environ["LOCAL_RANK"] = "0"
 
     device_t = torch.device(device)
+    local_rank_val: Optional[int] = None
     ddp_device_index: Optional[int] = None
     if device_t.type == "cuda":
         cuda_mod = getattr(torch, "cuda", None)
@@ -1569,11 +1570,29 @@ def _train_linear_head_impl(
     # unify to encoder's device in case 'device' arg and model diverge
     enc_param = next(encoder.parameters(), None)
     if enc_param is not None:
-        device_t = enc_param.device
-        if isinstance(device_t, torch.device) and device_t.type == "cuda":
-            index_attr = getattr(device_t, "index", None)
-            if index_attr is not None and int(index_attr) >= 0:
-                ddp_device_index = int(index_attr)
+        enc_device = enc_param.device
+        if (
+            distributed
+            and local_rank_val is not None
+            and isinstance(device_t, torch.device)
+            and device_t.type == "cuda"
+        ):
+            desired_device = torch.device("cuda", local_rank_val)
+            if enc_device != desired_device:
+                logger.warning(
+                    "Encoder parameters are on %s but LOCAL_RANK=%s expects %s; moving encoder to match.",
+                    enc_device,
+                    local_rank_val,
+                    desired_device,
+                )
+            device_t = desired_device
+            ddp_device_index = local_rank_val
+        else:
+            device_t = enc_device
+            if isinstance(device_t, torch.device) and device_t.type == "cuda":
+                index_attr = getattr(device_t, "index", None)
+                if index_attr is not None and int(index_attr) >= 0:
+                    ddp_device_index = int(index_attr)
 
     def _apply_encoder_trainability(module: nn.Module) -> None:
         params_fn = getattr(module, "parameters", None)

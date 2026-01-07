@@ -1884,10 +1884,14 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
 
             wb.log({"phase": f"finetune_{seed}", "status": "success"})
             metrics_runs.append({k: v for k, v in metrics.items() if k != "head"})
-        except Exception:
-            logger.exception(f"Fine‑tuning failed on seed {seed}")
-            wb.log({"phase": f"finetune_{seed}", "status": "error"})
-            sys.exit(3)
+        except Exception as exc:
+            logger.exception("Fine‑tuning failed on seed %d", seed)
+            if wb is not None:
+                try:
+                    wb.log({"phase": f"finetune_{seed}", "status": "error"})
+                except Exception:
+                    logger.debug("Failed to log finetune error status to W&B", exc_info=True)
+            raise SystemExit(3) from exc
 
     total_train_batches = float(sum(seed_train_steps.values()))
     if encoder_was_trainable and total_train_batches <= 0:
