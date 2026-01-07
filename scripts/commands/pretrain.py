@@ -26,6 +26,7 @@ except Exception:  # pragma: no cover - helper optional in minimal installs
         return
 
 from . import log_effective_gnn
+from utils.ddp import is_main_process
 from utils.threads import configure_omp_threads
 
 stage_config: Dict[str, Any] = {}
@@ -371,7 +372,9 @@ def _collect_run_metadata(wb) -> Dict[str, Any]:
 
 def cmd_pretrain(args: argparse.Namespace) -> None:
     """Self‑supervised pretraining of a JEPA encoder and optional contrastive baseline."""
-    logger.info("Starting pretrain with args: %s", args)
+    is_main = is_main_process()
+    if is_main:
+        logger.info("Starting pretrain with args: %s", args)
     configure_omp_threads(
         stage="pretrain",
         num_workers=getattr(args, "num_workers", -1),
@@ -398,7 +401,7 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
 
     # W&B run
     wb = maybe_init_wandb(
-        args.use_wandb,
+        args.use_wandb and is_main,
         project=getattr(args, "wandb_project", os.getenv("WANDB_PROJECT", "m-jepa")),
         tags=args.wandb_tags,
         config={

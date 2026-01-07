@@ -537,12 +537,40 @@ def init_distributed(backend: str | None = None) -> bool:
     return True
 
 
+def _rank_from_env() -> int:
+    for key in ("RANK", "LOCAL_RANK"):
+        value = os.environ.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _world_size_from_env() -> int:
+    for key in ("WORLD_SIZE", "LOCAL_WORLD_SIZE"):
+        value = os.environ.get(key)
+        if value is None:
+            continue
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            continue
+    return 1
+
+
 def get_rank() -> int:
-    return dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank()
+    return _rank_from_env()
 
 
 def get_world_size() -> int:
-    return dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_world_size()
+    return _world_size_from_env()
 
 
 def is_main_process() -> bool:

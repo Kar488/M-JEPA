@@ -335,6 +335,8 @@ try:
 except Exception:
     run_grid_search = None  # type: ignore[assignment]
 
+from utils.ddp import is_main_process
+
 try:
     from utils.logging import maybe_init_wandb  # type: ignore[assignment]
 except Exception:
@@ -1851,7 +1853,8 @@ def main() -> None:
     args = parser.parse_args()
     if not hasattr(args, "func"):
         parser.error("No subcommand provided")
-    logger.info("Invoking subcommand %s", getattr(args, "func", None))
+    if is_main_process():
+        logger.info("Invoking subcommand %s", getattr(args, "func", None))
     args.func(args)
 
 

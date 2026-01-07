@@ -31,7 +31,9 @@ torch.multiprocessing.set_sharing_strategy("file_system")
 
 from data.mdataset import GraphData, GraphDataset
 from data.scaffold_split import scaffold_split_indices
+from utils.ddp import is_main_process
 from utils.graph_ops import _encode_graph
+from utils.logging import maybe_init_wandb
 from utils.pooling import global_mean_pool
 from training.supervised import stratified_split
 
@@ -918,8 +920,9 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
         logger.exception("Unable to locate labelled dataset")
         sys.exit(1)
 
+    is_main = is_main_process()
     wb = maybe_init_wandb(
-        args.use_wandb,
+        args.use_wandb and is_main,
         project=args.wandb_project,
         tags=args.wandb_tags,
         config={
