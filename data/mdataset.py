@@ -38,6 +38,7 @@ else:  # pragma: no cover - depends on rdkit availability
 import pandas as pd
 
 from ._graph_pickle import register_graph_class, rebuild_graph_data
+from utils.ddp import is_main_process
 
 logger = logging.getLogger(__name__)
 _MODULE_ANCHOR = sys.modules[__name__]
@@ -1148,7 +1149,8 @@ class GraphDataset:
             cache_name = f"{cache_name}_{_cache_schema_suffix(add_3d)}.pkl"
             cache_path = os.path.join(cache_dir, cache_name)
             if os.path.exists(cache_path):
-                logger.info("Loading graphs from cache %s", cache_path)
+                if is_main_process():
+                    logger.info("Loading graphs from cache %s", cache_path)
                 payload = _load_graph_cache(cache_path)
                 if payload is not None:
                     try:
@@ -1166,11 +1168,12 @@ class GraphDataset:
                             try:
                                 df_cached = pd.read_parquet(filepath, columns=cols)
                                 if len(ds_cached) >= len(df_cached):
-                                    logger.info(
-                                        "Cached dataset %s covers all %d rows; reusing",
-                                        cache_path,
-                                        len(df_cached),
-                                    )
+                                    if is_main_process():
+                                        logger.info(
+                                            "Cached dataset %s covers all %d rows; reusing",
+                                            cache_path,
+                                            len(df_cached),
+                                        )
                                     if n_rows is not None and len(ds_cached) > int(
                                         n_rows
                                     ):
@@ -1295,7 +1298,8 @@ class GraphDataset:
             cache_name = f"{cache_name}_{_cache_schema_suffix(add_3d)}.pkl"
             cache_path = os.path.join(cache_dir, cache_name)
             if os.path.exists(cache_path):
-                logger.info("Loading graphs from cache %s", cache_path)
+                if is_main_process():
+                    logger.info("Loading graphs from cache %s", cache_path)
                 payload = _load_graph_cache(cache_path)
                 if payload is not None:
                     try:
@@ -1313,11 +1317,12 @@ class GraphDataset:
                             try:
                                 df_cached = pd.read_csv(filepath, sep=sep)
                                 if len(ds_cached) >= len(df_cached):
-                                    logger.info(
-                                        "Cached dataset %s covers all %d rows; reusing",
-                                        cache_path,
-                                        len(df_cached),
-                                    )
+                                    if is_main_process():
+                                        logger.info(
+                                            "Cached dataset %s covers all %d rows; reusing",
+                                            cache_path,
+                                            len(df_cached),
+                                        )
                                     if n_rows is not None and len(ds_cached) > int(
                                         n_rows
                                     ):

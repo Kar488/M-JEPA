@@ -628,13 +628,14 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                     prefix_filter=prefix_filter,
                 )  # type: ignore[arg-type]
 
-            logger.info(
-                "Loading unlabeled (cap=%s, rows_per_file=%s, workers=%s%s)…",
-                sample_ul,
-                rows_per_file,
-                getattr(args, "num_workers", -1),
-                "; streaming enabled" if stream_enabled else "",
-            )
+            if is_main:
+                logger.info(
+                    "Loading unlabeled (cap=%s, rows_per_file=%s, workers=%s%s)…",
+                    sample_ul,
+                    rows_per_file,
+                    getattr(args, "num_workers", -1),
+                    "; streaming enabled" if stream_enabled else "",
+                )
             t0 = time.time()
 
             stream_files: List[str] = []
@@ -703,7 +704,8 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
                         f"were found in {os.path.basename(args.unlabeled_dir) or args.unlabeled_dir}. "
                         "Training will proceed on the available graphs."
                     )
-                    logger.warning(warning_msg)
+                    if is_main:
+                        logger.warning(warning_msg)
 
             load_note = ""
             if requested_graphs is not None:
@@ -717,13 +719,14 @@ def cmd_pretrain(args: argparse.Namespace) -> None:
             if stream_enabled:
                 load_note += f"; streaming chunks of {stream_chunk_size} rows per file"
 
-            logger.info(
-                "Loaded unlabeled dataset with %s graphs from %s files in %.2fs%s",
-                dataset_len_hint,
-                num_source_files or "<unknown>",
-                time.time() - t0,
-                load_note,
-            )
+            if is_main:
+                logger.info(
+                    "Loaded unlabeled dataset with %s graphs from %s files in %.2fs%s",
+                    dataset_len_hint,
+                    num_source_files or "<unknown>",
+                    time.time() - t0,
+                    load_note,
+                )
 
             _wb_log(
                 wb,
