@@ -2322,6 +2322,14 @@ class _StandaloneBoolFlag(argparse.Action):
 
 def _build_standalone_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="scripts.commands.tox21")
+    parser.add_argument(
+        "--local-rank",
+        "--local_rank",
+        dest="local_rank",
+        type=int,
+        default=0,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--cache-dir")
     parser.add_argument("--csv", required=True)
     parser.add_argument(
@@ -2516,6 +2524,44 @@ def main(argv: Optional[List[str]] | None = None) -> int:
         logger.debug("stage shim requested; exiting early")
         return 0
 
+    def _extract_local_rank_args(raw_args: List[str]) -> Tuple[Optional[int], List[str]]:
+        cleaned: List[str] = []
+        local_rank: Optional[int] = None
+        idx = 0
+        while idx < len(raw_args):
+            token = raw_args[idx]
+            if token in {"--local-rank", "--local_rank"}:
+                if idx + 1 >= len(raw_args) or str(raw_args[idx + 1]).startswith("-"):
+                    raise ValueError(f"missing value for {token}")
+                value = raw_args[idx + 1]
+                try:
+                    local_rank = int(value)
+                except Exception as exc:
+                    raise ValueError(f"invalid value for {token}: {value}") from exc
+                idx += 2
+                continue
+            if token.startswith("--local-rank=") or token.startswith("--local_rank="):
+                value = token.split("=", 1)[1]
+                try:
+                    local_rank = int(value)
+                except Exception as exc:
+                    raise ValueError(f"invalid value for {token}: {value}") from exc
+                idx += 1
+                continue
+            cleaned.append(token)
+            idx += 1
+        return local_rank, cleaned
+
+    try:
+        local_rank_value, remaining_args = _extract_local_rank_args(args)
+    except ValueError as exc:
+        logger.error("Invalid --local-rank flag: %s", exc)
+        return 2
+
+    local_rank_args: List[str] = []
+    if local_rank_value is not None:
+        local_rank_args = ["--local-rank", str(local_rank_value)]
+
     try:
         from scripts import train_jepa as _train_jepa
     except Exception as exc:  # pragma: no cover - defensive guard
@@ -2525,7 +2571,7 @@ def main(argv: Optional[List[str]] | None = None) -> int:
         )
         parser = _build_standalone_parser()
         try:
-            parsed = parser.parse_args(args)
+            parsed = parser.parse_args([*local_rank_args, *remaining_args])
         except SystemExit as exc_parse:
             return int(exc_parse.code or 0)
         parsed = _finalise_standalone_args(parsed)
@@ -2534,7 +2580,7 @@ def main(argv: Optional[List[str]] | None = None) -> int:
 
     parser = _train_jepa.build_parser()
     try:
-        parsed = parser.parse_args(["tox21", *args])
+        parsed = parser.parse_args([*local_rank_args, "tox21", *remaining_args])
     except SystemExit as exc:  # pragma: no cover - argparse handles help/errors
         return int(exc.code or 0)
 
