@@ -9,7 +9,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-def _coerce_positive_int(value: Optional[str], fallback: int = 1) -> int:
+def _coerce_positive_int(value: Optional[int | str], fallback: int = 1) -> int:
     try:
         parsed = int(value) if value is not None else fallback
     except (TypeError, ValueError):
@@ -27,10 +27,10 @@ def recommend_omp_threads(num_workers: int | None = None, world_size: int | None
 
     cpu_count = os.cpu_count() or 1
     workers = 0 if num_workers is None or num_workers < 0 else int(num_workers)
-    distributed_world_size = world_size
-    if distributed_world_size is None:
+    if world_size is None:
         distributed_world_size = _coerce_positive_int(os.environ.get("WORLD_SIZE"), 1)
-    distributed_world_size = max(1, distributed_world_size)
+    else:
+        distributed_world_size = _coerce_positive_int(world_size, 1)
 
     available = max(1, cpu_count - workers)
     return max(1, available // distributed_world_size)
