@@ -1752,6 +1752,34 @@ def run_tox21_case_study(
     if task_name not in df.columns:
         raise ValueError(f"Task column '{task_name}' not found in {csv_path}")
 
+    manifest_from_checkpoint = False
+    if encoder_checkpoint and not encoder_manifest:
+        checkpoint_path = Path(encoder_checkpoint).expanduser()
+        if checkpoint_path.suffix.lower() == ".json" and checkpoint_path.is_file():
+            manifest_payload = _load_manifest_payload(str(checkpoint_path))
+            if manifest_payload:
+                encoder_manifest = str(checkpoint_path)
+                manifest_from_checkpoint = True
+                _, _, manifest_ckpt, _ = _resolve_manifest_baseline(manifest_payload)
+                if manifest_ckpt:
+                    candidate_path = str(manifest_ckpt)
+                    if not os.path.isabs(candidate_path):
+                        candidate_path = os.path.abspath(
+                            os.path.join(checkpoint_path.parent, candidate_path)
+                        )
+                    encoder_checkpoint = candidate_path
+                    logger.info(
+                        "Resolved encoder checkpoint from manifest %s -> %s",
+                        encoder_manifest,
+                        encoder_checkpoint,
+                    )
+                else:
+                    logger.warning(
+                        "Encoder manifest %s did not include a checkpoint path; skipping checkpoint load.",
+                        encoder_manifest,
+                    )
+                    encoder_checkpoint = None
+
     diagnostics: Dict[str, Any] = {}
 
     df = df[[smiles_col, task_name]]
@@ -1818,6 +1846,7 @@ def run_tox21_case_study(
             encoder_manifest=os.path.abspath(encoder_manifest)
             if encoder_manifest
             else None,
+            encoder_manifest_from_checkpoint=manifest_from_checkpoint,
         )
     else:
         diagnostics["csv_path"] = os.path.abspath(csv_path)
