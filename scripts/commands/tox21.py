@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Mapping
 import torch
 
 from . import log_effective_gnn
+from utils.ddp import is_main_process
 from utils.threads import configure_omp_threads
 
 try:  # pragma: no cover - optional relative import depending on entry point
@@ -2001,8 +2002,9 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     bf16_head_cfg = getattr(args, "bf16_head", None)
     if bf16_head_cfg is not None:
         wandb_config["bf16_head"] = bf16_head_cfg
+    is_main = is_main_process()
     wb = maybe_init_wandb(
-        getattr(args, "use_wandb", False),
+        getattr(args, "use_wandb", False) and is_main,
         project=getattr(args, "wandb_project", "m-jepa"),
         tags=wandb_tags,
         config=wandb_config,
