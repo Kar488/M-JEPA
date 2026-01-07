@@ -161,6 +161,14 @@ def test_module_main_delegates_to_train_jepa(monkeypatch, tmp_path):
 
     def fake_build_parser():
         parser = argparse.ArgumentParser()
+        parser.add_argument(
+            "--local-rank",
+            "--local_rank",
+            dest="local_rank",
+            type=int,
+            default=0,
+            help=argparse.SUPPRESS,
+        )
         sub = parser.add_subparsers(dest="command", required=True)
         tox = sub.add_parser("tox21")
         tox.add_argument("--csv", required=True)
@@ -180,6 +188,81 @@ def test_module_main_delegates_to_train_jepa(monkeypatch, tmp_path):
 
     assert rc == 0
     assert captured["csv"] == str(path)
+
+
+def test_module_main_delegates_with_local_rank(monkeypatch, tmp_path):
+    torch_stub = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: False, device_count=lambda: 0)
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch_stub)
+    import scripts.commands.tox21 as tox21
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        tox21,
+        "cmd_tox21",
+        lambda args: captured.update({"csv": getattr(args, "csv", None)}),
+    )
+
+    def fake_build_parser():
+        parser = argparse.ArgumentParser()
+        parser.add_argument(
+            "--local-rank",
+            "--local_rank",
+            dest="local_rank",
+            type=int,
+            default=0,
+            help=argparse.SUPPRESS,
+        )
+        sub = parser.add_subparsers(dest="command", required=True)
+        tox = sub.add_parser("tox21")
+        tox.add_argument("--csv", required=True)
+        tox.set_defaults(func=tox21.cmd_tox21)
+        return parser
+
+    fake_module = types.SimpleNamespace(build_parser=fake_build_parser)
+    monkeypatch.setitem(sys.modules, "scripts.train_jepa", fake_module)
+    import scripts
+
+    monkeypatch.setattr(scripts, "train_jepa", fake_module, raising=False)
+
+    path = tmp_path / "data.csv"
+    path.write_text("stub", encoding="utf-8")
+
+    rc = tox21.main(["--local-rank", "1", "--csv", str(path)])
+
+    assert rc == 0
+    assert captured["csv"] == str(path)
+
+
+def test_module_main_rejects_invalid_local_rank(monkeypatch, tmp_path):
+    torch_stub = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: False, device_count=lambda: 0)
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch_stub)
+    import scripts.commands.tox21 as tox21
+
+    def fake_build_parser():
+        parser = argparse.ArgumentParser()
+        sub = parser.add_subparsers(dest="command", required=True)
+        tox = sub.add_parser("tox21")
+        tox.add_argument("--csv", required=True)
+        tox.set_defaults(func=lambda args: None)
+        return parser
+
+    fake_module = types.SimpleNamespace(build_parser=fake_build_parser)
+    monkeypatch.setitem(sys.modules, "scripts.train_jepa", fake_module)
+    import scripts
+
+    monkeypatch.setattr(scripts, "train_jepa", fake_module, raising=False)
+
+    path = tmp_path / "data.csv"
+    path.write_text("stub", encoding="utf-8")
+
+    rc = tox21.main(["--local-rank", "invalid", "--csv", str(path)])
+
+    assert rc != 0
 
 
 def test_module_main_standalone_parser_handles_flags(monkeypatch, tmp_path):

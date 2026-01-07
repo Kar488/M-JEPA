@@ -1130,6 +1130,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="JEPA training and evaluation pipeline"
     )
+    parser.add_argument(
+        "--local-rank",
+        "--local_rank",
+        dest="local_rank",
+        type=int,
+        default=0,
+        help=argparse.SUPPRESS,
+    )
     bool_action = getattr(argparse, "BooleanOptionalAction", None)
     sub = parser.add_subparsers(dest="command", required=True)
 
