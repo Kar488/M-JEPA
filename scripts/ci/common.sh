@@ -1437,6 +1437,28 @@ mjepa_init_cache_dirs() {
   fi
 
 # Allow cache directories to be overridden by env vars supplied by the workflow. If Grid_Dir is not set in yaml it uses cache dir
+if [[ -z "${GRID_DIR_EXPLICIT:-}" ]]; then
+  if [[ -n "${GRID_DIR+x}" ]]; then
+    GRID_DIR_EXPLICIT=1
+  else
+    GRID_DIR_EXPLICIT=0
+  fi
+fi
+if [[ -z "${GRID_SOURCE_DIR_EXPLICIT:-}" ]]; then
+  if [[ -n "${GRID_SOURCE_DIR+x}" ]]; then
+    GRID_SOURCE_DIR_EXPLICIT=1
+  else
+    GRID_SOURCE_DIR_EXPLICIT=0
+  fi
+fi
+if [[ -z "${GRID_CACHE_DIR_EXPLICIT:-}" ]]; then
+  if [[ -n "${GRID_CACHE_DIR+x}" ]]; then
+    GRID_CACHE_DIR_EXPLICIT=1
+  else
+    GRID_CACHE_DIR_EXPLICIT=0
+  fi
+fi
+
 GRID_DIR_DEFAULT="${EXPERIMENT_DIR}/grid"
 : "${GRID_DIR:=${GRID_CACHE_DIR:-$GRID_DIR_DEFAULT}}"
 
@@ -2043,11 +2065,11 @@ best_config_args() {
   }
 
   add_grid_root "${GRID_SOURCE_DIR:-}"
-  [[ -n "${GRID_SOURCE_DIR:-}" ]] && has_explicit_grid=1
+  [[ "${GRID_SOURCE_DIR_EXPLICIT:-0}" == "1" ]] && has_explicit_grid=1
   add_grid_root "${GRID_DIR:-}"
-  [[ -n "${GRID_DIR:-}" ]] && has_explicit_grid=1
+  [[ "${GRID_DIR_EXPLICIT:-0}" == "1" ]] && has_explicit_grid=1
   add_grid_root "${GRID_CACHE_DIR:-}"
-  [[ -n "${GRID_CACHE_DIR:-}" ]] && has_explicit_grid=1
+  [[ "${GRID_CACHE_DIR_EXPLICIT:-0}" == "1" ]] && has_explicit_grid=1
 
   if (( ! has_explicit_grid )); then
     if [[ -z "${GRID_CACHE_DIR:-}" ]]; then

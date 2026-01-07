@@ -779,6 +779,8 @@ jobs:
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXPERIMENT_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
       EXP_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
+      GRID_DIR: ${{ env.GRID_CACHE_DIR }}
+      GRID_SOURCE_DIR: ${{ env.GRID_CACHE_DIR }}
       PRETRAIN_MANIFEST: ${{ needs.vast_pretrain.outputs.pretrain_manifest }}
       PRETRAIN_ENCODER_PATH: ${{ needs.vast_pretrain.outputs.pretrain_encoder }}
       PRETRAIN_TOX21_ENV: ${{ needs.vast_pretrain.outputs.pretrain_tox21_env }}
@@ -803,7 +805,7 @@ jobs:
           #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           command_timeout: 1500m
-          envs: APP_DIR,GRID_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
+          envs: APP_DIR,GRID_DIR,GRID_SOURCE_DIR,GRID_CACHE_DIR,TOX21_DIR,MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,SSH_KEY,VAST_HOST,VAST_USER,VAST_PORT,
             BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT,TOX21_EXPLAIN_MODE,TOX21_EXPLAIN_STEPS
@@ -884,6 +886,8 @@ jobs:
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXPERIMENT_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
       EXP_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
+      GRID_DIR: ${{ env.GRID_CACHE_DIR }}
+      GRID_SOURCE_DIR: ${{ env.GRID_CACHE_DIR }}
       PRETRAIN_MANIFEST: ${{ needs.vast_pretrain.outputs.pretrain_manifest }}
       PRETRAIN_ENCODER_PATH: ${{ needs.vast_pretrain.outputs.pretrain_encoder }}
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
@@ -921,6 +925,8 @@ jobs:
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXPERIMENT_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
       EXP_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
+      GRID_DIR: ${{ env.GRID_CACHE_DIR }}
+      GRID_SOURCE_DIR: ${{ env.GRID_CACHE_DIR }}
       PRETRAIN_MANIFEST: ${{ needs.vast_pretrain.outputs.pretrain_manifest }}
       PRETRAIN_ENCODER_PATH: ${{ needs.vast_pretrain.outputs.pretrain_encoder }}
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
@@ -957,6 +963,8 @@ jobs:
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXPERIMENT_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
       EXP_ROOT: ${{ needs.vast_pretrain.outputs.pretrain_root }}
+      GRID_DIR: ${{ env.GRID_CACHE_DIR }}
+      GRID_SOURCE_DIR: ${{ env.GRID_CACHE_DIR }}
       PRETRAIN_MANIFEST: ${{ needs.vast_pretrain.outputs.pretrain_manifest }}
       PRETRAIN_ENCODER_PATH: ${{ needs.vast_pretrain.outputs.pretrain_encoder }}
       PRETRAIN_TOX21_ENV: ${{ needs.vast_pretrain.outputs.pretrain_tox21_env }}
@@ -981,7 +989,7 @@ jobs:
           #passphrase: ${{ secrets.VAST_SSH_PASSPHRASE }}
           request_pty: true
           command_timeout: 3500m
-          envs: APP_DIR,GRID_DIR,TOX21_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
+          envs: APP_DIR,GRID_DIR,GRID_SOURCE_DIR,GRID_CACHE_DIR,TOX21_DIR, MAMBA_ROOT_PREFIX,PYTHONPATH,LOG_DIR,
             WANDB_API_KEY,WANDB_PROJECT,WANDB_DIR,WANDB_RESUME,WANDB_RUN_ID,WANDB_NAME,WANDB_JOB_TYPE,HARD_WALL_MINS,KILL_AFTER_SECS,GITHUB_RUN_ID,
             PRETRAIN_EPOCHS,FINETUNE_EPOCHS,
             BESTCFG_NO_EPOCHS,TOX21_ENCODER_SOURCE,TOX21_EVALUATION_MODE,TOX21_ENCODER_LR,TOX21_EPOCHS,EXP_ID,PRETRAIN_EXP_ID,PRETRAIN_EXPERIMENT_ROOT,PRETRAIN_MANIFEST,PRETRAIN_STATE_FILE,PRETRAIN_STATE_FILE_CANONICAL,PRETRAIN_TOX21_ENV,PRETRAIN_ENCODER_PATH,EXPERIMENTS_ROOT,TOX21_EXPLAIN_MODE,TOX21_EXPLAIN_STEPS
