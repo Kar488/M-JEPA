@@ -8,6 +8,7 @@ import os
 import platform
 import socket
 import types
+import multiprocessing as mp
 from typing import Any, Iterator, Sequence, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
@@ -574,7 +575,17 @@ def get_world_size() -> int:
 
 
 def is_main_process() -> bool:
-    return get_rank() == 0
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank() == 0
+
+    has_rank_env = any(os.environ.get(key) is not None for key in ("RANK", "LOCAL_RANK"))
+    if has_rank_env:
+        return _rank_from_env() == 0
+
+    try:
+        return mp.current_process().name == "MainProcess"
+    except Exception:
+        return True
 
 
 def cleanup() -> None:
