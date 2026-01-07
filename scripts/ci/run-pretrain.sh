@@ -592,6 +592,21 @@ mkdir -p "$STAGE_OUTPUTS_DIR"
 
 "$STAGE_BIN" pretrain
 
+if declare -F was_graceful_stop >/dev/null 2>&1; then
+  pretrain_graceful_stop=0
+  for candidate in "${LOG_DIR:-}" "${PRETRAIN_DIR:-}/logs" "${EXPERIMENT_DIR:-}/logs"; do
+    if [[ -n "$candidate" ]] && was_graceful_stop "pretrain" "$candidate"; then
+      pretrain_graceful_stop=1
+      break
+    fi
+  done
+  if (( pretrain_graceful_stop )); then
+    echo "[pretrain] info: pretrain stage was cancelled; skipping artifact collection and export steps." >&2
+    unset BESTCFG_NO_EPOCHS
+    exit 0
+  fi
+fi
+
 expected_stage_outputs="${STAGE_OUTPUTS_DIR}/pretrain.json"
 expected_manifest="${PRETRAIN_ARTIFACTS_DIR}/encoder_manifest.json"
 expected_encoder="${PRETRAIN_DIR}/encoder.pt"
