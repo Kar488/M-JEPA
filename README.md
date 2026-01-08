@@ -482,11 +482,12 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
 
   a. Implement a shared encoder that learns general chemical knowledge that helps all Tox 21 assays, while each head learns assay-specific details.
   b. Exploring impact of of different gnn_types on tox21 results
-  c. Apply random and stratified on tox21 and compare results
+  c. Apply random and stratified as well a caliberated and random split on tox21 and compare results
   d. cluster assays by biological similarity and rain them jointly, with shared representations and task-aware prompts (similar to Adapting differential molecular representation with  hierarchical prompts for multi-label property predictioj) - we are currently answering "“What is the true, per-assay generalization limit when no cross-task leakage is allowed?” NOT "“How well can we do if assays help each other?”"
   e. report on reproducability of results
   f. Fix all reporting in wandb
   g. Broader training across all Moleculenet datasets
+  h. Explore PR‑AUC during training that could make potential reduction of overfitting in positives
 
   ```bash
   export APP_DIR=/srv/mjepa

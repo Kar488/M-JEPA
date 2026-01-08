@@ -97,7 +97,7 @@ finetune:
 
   calibrate_probabilities: ${FINETUNE_CALIBRATE_PROBABILITIES:-false}
   calibration_method: ${FINETUNE_CALIBRATION_METHOD:-temperature}
-  threshold_metric: ${FINETUNE_THRESHOLD_METRIC:-roc_auc}
+  threshold_metric: ${FINETUNE_THRESHOLD_METRIC:-pr_auc} # change default from roc_auc if needed
   
   per_task_hparams: ${FINETUNE_PER_TASK_HPARAMS:-${APP_DIR}/scripts/ci/per_task_hparams/tox21_hparams.yaml}
   seeds:

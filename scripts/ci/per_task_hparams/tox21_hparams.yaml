@@ -8,24 +8,24 @@
 # - If you later find 1–2 assays are still weak, add *targeted* overrides for those assays only.
 
 NR-AR:
-  pos_weight: 22.511326860841425
+  pos_weight: 8 #override default 22.511326860841425
   dynamic_pos_weight: true
   oversample_minority: false
-  use_focal_loss: false
-  focal_gamma: 2.0
+  use_focal_loss: true # override default false
+  focal_gamma: 1.5 #override default 2.0
   calibrate_probabilities: true
   calibration_method: temperature
-  threshold_metric: roc_auc
+  threshold_metric: pr_auc #override default roc_auc
 
 NR-AR-LBD:
-  pos_weight: 27.514767932489452
+  pos_weight: 8 #override default 27.514767932489452
   dynamic_pos_weight: true
   oversample_minority: false
-  use_focal_loss: false
-  focal_gamma: 2.0
+  use_focal_loss: true #override default false
+  focal_gamma: 1.5 #override default 2.0
   calibrate_probabilities: true
   calibration_method: temperature
-  threshold_metric: roc_auc
+  threshold_metric: pr_auc #override default roc_auc
 
 NR-AhR:
   pos_weight: 7.52734375
@@ -35,17 +35,17 @@ NR-AhR:
   focal_gamma: 2.0
   calibrate_probabilities: true
   calibration_method: temperature
-  threshold_metric: roc_auc
+  threshold_metric: pr_auc #override default roc_auc
 
 NR-Aromatase:
-  pos_weight: 18.403333333333332
+  pos_weight: 10 #override default 18.403333333333332
   dynamic_pos_weight: true
   oversample_minority: false
-  use_focal_loss: false
-  focal_gamma: 2.0
+  use_focal_loss: true #override default false
+  focal_gamma: 1.5 #override default 2.0
   calibrate_probabilities: true
   calibration_method: temperature
-  threshold_metric: roc_auc
+  threshold_metric: pr_auc #override default roc_auc
 
 NR-ER:
   pos_weight: 6.809583858764187
@@ -55,27 +55,27 @@ NR-ER:
   focal_gamma: 2.0
   calibrate_probabilities: true
   calibration_method: temperature
-  threshold_metric: roc_auc
+  threshold_metric: pr_auc #override default roc_auc
 
 NR-ER-LBD:
-  pos_weight: 18.87142857142857
+  pos_weight: 10 #override default 18.87142857142857
   dynamic_pos_weight: true
   oversample_minority: false
-  use_focal_loss: false
-  focal_gamma: 2.0
+  use_focal_loss: true #override default false
+  focal_gamma: 1.5 #override default 2.0
   calibrate_probabilities: true
   calibration_method: temperature
-  threshold_metric: roc_auc
+  threshold_metric: pr_auc #override default roc_auc
 
 NR-PPAR-gamma:
-  pos_weight: 33.67741935483871
+  pos_weight: 8 #override default 33.67741935483871
   dynamic_pos_weight: true
   oversample_minority: false
-  use_focal_loss: false
-  focal_gamma: 2.0
+  use_focal_loss: true #override default false
+  focal_gamma: 1.5 #override default 2.0
   calibrate_probabilities: true
   calibration_method: temperature
-  threshold_metric: roc_auc
+  threshold_metric: pr_auc #override default roc_auc
 
 SR-ARE:
   pos_weight: 5.191082802547771
@@ -85,27 +85,27 @@ SR-ARE:
   focal_gamma: 2.0
   calibrate_probabilities: true
   calibration_method: temperature
-  threshold_metric: roc_auc
+  threshold_metric: pr_auc #override default roc_auc
 
 SR-ATAD5:
-  pos_weight: 25.78787878787879
+  pos_weight: 8 #override default 25.78787878787879
   dynamic_pos_weight: true
   oversample_minority: false
-  use_focal_loss: false
-  focal_gamma: 2.0
+  use_focal_loss: true #override default false
+  focal_gamma: 1.5 #override default 2.0
   calibrate_probabilities: true
   calibration_method: temperature
-  threshold_metric: roc_auc
+  threshold_metric: pr_auc #override default roc_auc
 
 SR-HSE:
-  pos_weight: 16.384408602150536
+  pos_weight: 10 #override default 16.384408602150536
   dynamic_pos_weight: true
   oversample_minority: false
-  use_focal_loss: false
-  focal_gamma: 2.0
+  use_focal_loss: true #override default false
+  focal_gamma: 1.5 #override default 2.0
   calibrate_probabilities: true
   calibration_method: temperature
-  threshold_metric: roc_auc
+  threshold_metric: pr_auc #override default roc_auc
 
 SR-MMP:
   pos_weight: 5.328976034858388
@@ -115,14 +115,14 @@ SR-MMP:
   focal_gamma: 2.0
   calibrate_probabilities: true
   calibration_method: temperature
-  threshold_metric: roc_auc
+  threshold_metric: pr_auc #override default roc_auc
 
 SR-p53:
-  pos_weight: 15.01418439716312
+  pos_weight: 10 #override default 15.01418439716312
   dynamic_pos_weight: true
   oversample_minority: false
-  use_focal_loss: false
-  focal_gamma: 2.0
+  use_focal_loss: true #override default false
+  focal_gamma: 1.5 #override default 2.0
   calibrate_probabilities: true
   calibration_method: temperature
-  threshold_metric: roc_auc
+  threshold_metric: pr_auc #override default roc_auc
