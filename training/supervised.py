@@ -29,7 +29,7 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.isotonic import IsotonicRegression
-from sklearn.metrics import f1_score, roc_curve
+from sklearn.metrics import f1_score, precision_recall_curve, roc_curve
 
 from data.mdataset import GraphDataset
 from data.scaffold_split import scaffold_split_indices
@@ -223,6 +223,17 @@ def _tune_threshold(y_true: np.ndarray, probs: np.ndarray, metric: str = "f1") -
         idx = int(np.argmax(scores))
         best_threshold = float(thresholds[idx])
         best_score = float(scores[idx])
+    elif metric == "pr_auc":
+        precision, recall, thresholds = precision_recall_curve(y, p)
+        if thresholds.size == 0:
+            return None, None
+        precision = precision[:-1]
+        recall = recall[:-1]
+        denom = precision + recall
+        f1_scores = np.where(denom > 0.0, 2.0 * precision * recall / denom, 0.0)
+        idx = int(np.argmax(f1_scores))
+        best_threshold = float(thresholds[idx])
+        best_score = float(f1_scores[idx])
     else:
         candidates = np.linspace(0.05, 0.95, 19, dtype=np.float64)
         for candidate in candidates:
