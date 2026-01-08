@@ -245,7 +245,7 @@ if [[ ! -f "$manifest_path" ]]; then
   exit 1
 fi
 
-if [[ "$baseline_status" != "true" ]]; then
+if [[ "$baseline_status" == "false" ]]; then
   prev_labeled_dir="${FINETUNE_LABELED_DIR:-}"
   prev_labeled_csv="${FINETUNE_LABELED_CSV:-}"
   prev_label_col="${FINETUNE_LABEL_COL:-}"
