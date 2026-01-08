@@ -1565,19 +1565,17 @@ def _train_linear_head_impl(
                 cleanup()
                 raise
 
-            logger.warning(
+            logger.error(
                 "Distributed initialisation failed (requested devices=%s); "
-                "falling back to single-process execution.",
+                "refusing single-process fallback to avoid duplicate training.",
                 devices,
                 exc_info=logger.isEnabledFor(logging.DEBUG),
             )
             cleanup()
-            distributed = False
-            devices = 1
-            os.environ["WORLD_SIZE"] = "1"
-            os.environ["LOCAL_WORLD_SIZE"] = "1"
-            os.environ["RANK"] = "0"
-            os.environ["LOCAL_RANK"] = "0"
+            raise RuntimeError(
+                "DDP initialisation failed; aborting to avoid duplicate training. "
+                "Check torchrun/WORLD_SIZE and CUDA visibility."
+            ) from exc
         else:
             if distributed:
                 dist_mod = getattr(torch, "distributed", None)
@@ -1587,17 +1585,25 @@ def _train_linear_head_impl(
                     and getattr(dist_mod, "is_initialized", lambda: False)()
                 )
                 if not is_initialised:
-                    logger.warning(
+                    logger.error(
                         "Distributed initialisation reported success but no process group is active; "
-                        "falling back to single-process execution.",
+                        "aborting to avoid duplicate training.",
                     )
                     cleanup()
-                    distributed = False
-                    devices = 1
-                    os.environ["WORLD_SIZE"] = "1"
-                    os.environ["LOCAL_WORLD_SIZE"] = "1"
-                    os.environ["RANK"] = "0"
-                    os.environ["LOCAL_RANK"] = "0"
+                    raise RuntimeError(
+                        "DDP initialisation incomplete; aborting to avoid duplicate training."
+                    )
+            else:
+                logger.error(
+                    "Requested devices=%s but distributed initialisation is inactive "
+                    "(WORLD_SIZE=%s). Launch with torchrun or ensure DDP env vars are set.",
+                    devices,
+                    os.environ.get("WORLD_SIZE", "1"),
+                )
+                raise RuntimeError(
+                    "Requested multiple devices without active DDP. "
+                    "Launch with torchrun or set WORLD_SIZE/LOCAL_RANK."
+                )
 
     device_t = torch.device(device)
     local_rank_val: Optional[int] = None
@@ -2047,34 +2053,20 @@ def _train_linear_head_impl(
             and getattr(dist_mod, "is_initialized", lambda: False)()
         ):
             local_len = torch.tensor([len(train_idx_rank)], device=device_t)
-            max_len = local_len.clone()
-            dist_mod.all_reduce(max_len, op=dist_mod.ReduceOp.MAX)
-            target_len = int(max_len.item())
+            min_len = local_len.clone()
+            dist_mod.all_reduce(min_len, op=dist_mod.ReduceOp.MIN)
+            target_len = int(min_len.item())
             if batch_size > 0 and target_len % batch_size != 0:
-                target_len = int(math.ceil(target_len / batch_size) * batch_size)
-            if target_len > 0:
-                if len(train_idx_rank) < target_len:
-                    pad_source = list(train_idx_rank) or list(train_idx)
-                    if pad_source:
-                        pad_needed = target_len - len(train_idx_rank)
-                        repeats = math.ceil(pad_needed / len(pad_source))
-                        padding = (pad_source * repeats)[:pad_needed]
-                        train_idx_rank = list(train_idx_rank) + padding
-                        if train_sampler_weights is not None:
-                            weight_source = list(train_sampler_weights)
-                            if len(weight_source) == len(pad_source):
-                                weight_pad = (weight_source * repeats)[:pad_needed]
-                                train_sampler_weights = weight_source + weight_pad
-                    else:
-                        logger.warning(
-                            "Distributed training found no train indices on rank %s; "
-                            "unable to pad for synchronized batches.",
-                            rank,
-                        )
-                elif len(train_idx_rank) > target_len:
-                    train_idx_rank = list(train_idx_rank[:target_len])
-                    if train_sampler_weights is not None:
-                        train_sampler_weights = list(train_sampler_weights[:target_len])
+                target_len = (target_len // batch_size) * batch_size
+            if target_len > 0 and len(train_idx_rank) > target_len:
+                logger.warning(
+                    "[finetune] Truncating per-rank train indices from %d to %d to keep DDP ranks aligned.",
+                    len(train_idx_rank),
+                    target_len,
+                )
+                train_idx_rank = list(train_idx_rank[:target_len])
+                if train_sampler_weights is not None:
+                    train_sampler_weights = list(train_sampler_weights[:target_len])
 
     collate_fn = _GraphBatchCollator(dataset, task_type)
     pin_memory_enabled = bool(pin_memory and device_t.type == "cuda")

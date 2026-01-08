@@ -17,6 +17,7 @@ _CUDA_VISIBLE_DEVICE_STACK: list[tuple[bool, str]] = []
 _LAST_PINNED_CONTEXT: tuple[int, int] | None = None
 _LAST_PINNED_DEVICE: str | None = None
 _LAST_PINNED_DEVICE_CANONICAL: str | None = None
+_NCCL_ENV_CONFIGURED = False
 
 
 def _restore_cuda_mask_snapshot() -> None:
@@ -356,6 +357,37 @@ def _find_free_port() -> int:
         return sock.getsockname()[1]
 
 
+def _ensure_nccl_watchdog_env() -> None:
+    """Set safe NCCL watchdog defaults to avoid premature timeouts."""
+
+    global _NCCL_ENV_CONFIGURED
+    if _NCCL_ENV_CONFIGURED:
+        return
+
+    timeout_raw = os.environ.get("DDP_NCCL_TIMEOUT", "1800").strip()
+    try:
+        timeout_val = int(float(timeout_raw))
+    except (TypeError, ValueError):
+        timeout_val = 1800
+
+    updates: dict[str, str] = {}
+    if "NCCL_BLOCKING_WAIT" not in os.environ:
+        updates["NCCL_BLOCKING_WAIT"] = "1"
+    if "NCCL_ASYNC_ERROR_HANDLING" not in os.environ:
+        updates["NCCL_ASYNC_ERROR_HANDLING"] = "1"
+    if "NCCL_TIMEOUT" not in os.environ:
+        updates["NCCL_TIMEOUT"] = str(max(1, timeout_val))
+
+    if updates:
+        os.environ.update(updates)
+        logger.info(
+            "Configured NCCL watchdog defaults: %s",
+            ", ".join(f"{key}={value}" for key, value in updates.items()),
+        )
+
+    _NCCL_ENV_CONFIGURED = True
+
+
 try:  # pragma: no cover - exercised when torch is installed
     import torch  # type: ignore
     import torch.distributed as dist  # type: ignore
@@ -487,6 +519,7 @@ def init_distributed(backend: str | None = None) -> bool:
 
     pinned_device: str | None = None
     if backend == "nccl":
+        _ensure_nccl_watchdog_env()
         try:
             pinned_device = _pin_visible_cuda_device_to_local_rank()
         except RuntimeError:
