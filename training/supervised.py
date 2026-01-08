@@ -1890,21 +1890,22 @@ def _train_linear_head_impl(
     rank = get_rank() if distributed else 0
     world = get_world_size() if distributed else 1
     train_idx_rank = train_idx[rank::world]
+    train_idx_rank_raw = list(train_idx_rank)
 
     train_sampler_weights: Optional[List[float]] = None
-    if task_type == "classification" and oversample_minority and len(train_idx_rank) > 0:
+    if task_type == "classification" and oversample_minority and len(train_idx_rank_raw) > 0:
         labels_attr = getattr(dataset, "labels", None)
         if labels_attr is not None:
             labels_arr = np.asarray(labels_attr)
             try:
-                subset = labels_arr[train_idx_rank]
+                subset = labels_arr[train_idx_rank_raw]
             except Exception:
                 subset = labels_arr
             computed_weights = _compute_pos_weight_from_labels(np.asarray(subset))
             if computed_weights is not None:
                 scale = float(np.nanmean(computed_weights))
                 if math.isfinite(scale) and scale > 0:
-                    weights = np.ones(len(train_idx_rank), dtype=np.float32)
+                    weights = np.ones(len(train_idx_rank_raw), dtype=np.float32)
                     pos_mask = subset > 0 if subset.ndim == 1 else (subset > 0).any(axis=1)
                     weights[np.asarray(pos_mask, dtype=bool)] = scale
                     weights = np.clip(weights, 1e-6, None)
@@ -1912,11 +1913,50 @@ def _train_linear_head_impl(
 
     if task_type == "classification" and dynamic_pos_weight and pos_weight_tensor is None:
         labels_attr = getattr(dataset, "labels", None)
-        if labels_attr is not None and len(train_idx_rank) > 0:
-            dynamic_weight_np = _compute_pos_weight_from_labels(np.asarray(labels_attr)[train_idx_rank])
+        if labels_attr is not None and len(train_idx_rank_raw) > 0:
+            dynamic_weight_np = _compute_pos_weight_from_labels(
+                np.asarray(labels_attr)[train_idx_rank_raw]
+            )
             if dynamic_weight_np is not None:
                 pos_weight_tensor = torch.as_tensor(dynamic_weight_np, dtype=torch.float32, device=device_t).reshape(-1)
                 loss_fn = _make_loss_fn(pos_weight_tensor)
+
+    if distributed:
+        dist_mod = getattr(torch, "distributed", None)
+        if (
+            dist_mod is not None
+            and getattr(dist_mod, "is_available", lambda: False)()
+            and getattr(dist_mod, "is_initialized", lambda: False)()
+        ):
+            local_len = torch.tensor([len(train_idx_rank)], device=device_t)
+            max_len = local_len.clone()
+            dist_mod.all_reduce(max_len, op=dist_mod.ReduceOp.MAX)
+            target_len = int(max_len.item())
+            if batch_size > 0 and target_len % batch_size != 0:
+                target_len = int(math.ceil(target_len / batch_size) * batch_size)
+            if target_len > 0:
+                if len(train_idx_rank) < target_len:
+                    pad_source = list(train_idx_rank) or list(train_idx)
+                    if pad_source:
+                        pad_needed = target_len - len(train_idx_rank)
+                        repeats = math.ceil(pad_needed / len(pad_source))
+                        padding = (pad_source * repeats)[:pad_needed]
+                        train_idx_rank = list(train_idx_rank) + padding
+                        if train_sampler_weights is not None:
+                            weight_source = list(train_sampler_weights)
+                            if len(weight_source) == len(pad_source):
+                                weight_pad = (weight_source * repeats)[:pad_needed]
+                                train_sampler_weights = weight_source + weight_pad
+                    else:
+                        logger.warning(
+                            "Distributed training found no train indices on rank %s; "
+                            "unable to pad for synchronized batches.",
+                            rank,
+                        )
+                elif len(train_idx_rank) > target_len:
+                    train_idx_rank = list(train_idx_rank[:target_len])
+                    if train_sampler_weights is not None:
+                        train_sampler_weights = list(train_sampler_weights[:target_len])
 
     collate_fn = _GraphBatchCollator(dataset, task_type)
     pin_memory_enabled = bool(pin_memory and device_t.type == "cuda")
