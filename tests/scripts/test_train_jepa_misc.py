@@ -824,6 +824,67 @@ def test_cmd_tox21_inherits_best_config_hidden_dim(tmp_path, monkeypatch):
     assert args.hidden_dim == 384
 
 
+def test_cmd_tox21_hybrid_respects_tox21_epochs(tmp_path, monkeypatch):
+    best_payload = {"finetune_epochs": {"value": 5}}
+    best_path = tmp_path / "best.json"
+    best_path.write_text(json.dumps(best_payload))
+
+    captures = {}
+
+    def tox_stub(
+        *,
+        csv_path,
+        task_name,
+        pretrain_epochs,
+        finetune_epochs,
+        triage_pct=0.0,
+        calibrate=True,
+        device="cpu",
+        **kwargs,
+    ):
+        captures["finetune_epochs"] = finetune_epochs
+        return 0.2, 0.1, 0.3, {"baseline": 0.15}
+
+    monkeypatch.setattr(tj, "run_tox21_case_study", tox_stub)
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: None)
+    monkeypatch.setattr(tox_cmd.sys, "argv", ["train_jepa.py", "tox21"])
+
+    args = argparse.Namespace(
+        csv=str(tmp_path / "tox.csv"),
+        task="NR-AR",
+        dataset="tox21",
+        pretrain_epochs=1,
+        finetune_epochs=30,
+        epochs=100,
+        evaluation_mode="hybrid",
+        pretrain_lr=1e-4,
+        triage_pct=0.0,
+        tox21_dir=str(tmp_path / "reports"),
+        device="cpu",
+        use_wandb=False,
+        wandb_project="test",
+        wandb_tags=[],
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        bf16=False,
+        bf16_head=False,
+        devices=1,
+        hidden_dim=128,
+        num_layers=3,
+        gnn_type="edge_mpnn",
+        add_3d=False,
+        best_config_path=str(best_path),
+        pretrain_time_budget_mins=0,
+        finetune_time_budget_mins=0,
+    )
+
+    tj.cmd_tox21(args)
+
+    assert captures["finetune_epochs"] == 100
+    assert args.finetune_epochs == 100
+
 def test_cmd_tox21_auto_retries_allow_shape(monkeypatch, tmp_path):
     call_history: list[Optional[bool]] = []
 

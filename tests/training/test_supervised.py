@@ -145,6 +145,47 @@ def test_stratified_split_single_class():
     assert set(tr + val + te) == set(orig)
 
 
+def test_train_linear_head_hybrid_schedule_tracks_phases_and_lrs():
+    np.random.seed(0)
+    torch.manual_seed(0)
+    labels = [0, 1, 0, 1, 0, 1]
+    dataset = DummyDataset(labels)
+    enc = TinyEncoder(hidden_dim=4)
+    metrics = train_linear_head(
+        dataset,
+        enc,
+        "classification",
+        epochs=4,
+        batch_size=2,
+        lr=1e-3,
+        head_lr=1e-3,
+        encoder_lr=1e-4,
+        unfreeze_top_layers=1,
+        hybrid_schedule={
+            "mode": "hybrid",
+            "freeze_epochs": 1,
+            "partial_epochs": 1,
+            "unfreeze_top_layers": 1,
+            "lr_scheduler": "cosine",
+            "warmup_ratio": 0.5,
+            "min_lr": 1e-5,
+        },
+        threshold_metric="f1",
+    )
+
+    phase_trainable = metrics.get("hybrid/phase_trainable", [])
+    phase_names = [entry.get("phase") for entry in phase_trainable]
+    assert phase_names[:3] == ["freeze", "partial", "full"]
+    assert phase_trainable[0]["encoder_trainable"] == 0
+    assert phase_trainable[1]["encoder_trainable"] > 0
+    assert phase_trainable[2]["encoder_trainable"] > 0
+
+    lr_history = metrics.get("hybrid/lr_history", [])
+    assert len(lr_history) >= 2
+    assert lr_history[0]["head_lr"] < lr_history[1]["head_lr"]
+    assert lr_history[-1]["head_lr"] >= 1e-5
+
+
 
 def test_train_linear_head_classification():
     np.random.seed(0)
@@ -654,4 +695,3 @@ def test_resolve_cuda_spawn_context_returns_none_on_failure(monkeypatch):
     monkeypatch.setattr(supervised_mod.torch, "multiprocessing", _DummyMP(), raising=False)
 
     assert _resolve_cuda_spawn_context("cuda") is None
-

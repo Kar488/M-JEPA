@@ -27,6 +27,10 @@ constraining runtime.
   defaults to 10 epochs in the `end_to_end` path and 20 when evaluating a
   fine-tuned encoder, ensuring the tox21 baseline does not silently fall back to
   the shorter sweep-style probes.
+- Hybrid tox21 evaluations (`TOX21_EVALUATION_MODE=hybrid`) always use
+  `TOX21_EPOCHS` for the fine-tune horizon and ignore sweep best-config
+  overrides. The hybrid schedule splits those epochs into freeze/partial/full
+  phases and applies warmup+cosine decay using the CI knobs.
 
 ## Sweep templates
 - Phase-1 sweeps (`sweeps/sweep_phase1_*.yaml`) run with `finetune_epochs: 10`

@@ -2148,6 +2148,70 @@ printf '%s\\n' \"${{STAGE_ARGS[@]}}\" > \"$ARGS_CAPTURE\"
     assert "--no-calibrate" in args_calibrate_false
 
 
+def test_build_stage_args_includes_hybrid_flags(tmp_path):
+    best_cfg = {"config": {}}
+    best_path = tmp_path / "best_grid_config.json"
+    best_path.write_text(json.dumps(best_cfg), encoding="utf-8")
+
+    encoder_path = tmp_path / "encoder.pt"
+    encoder_path.write_text("stub", encoding="utf-8")
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps({"paths": {"encoder": str(encoder_path)}}), encoding="utf-8"
+    )
+    tox21_dir = tmp_path / "tox21"
+    tox21_dir.mkdir()
+
+    base_env = os.environ.copy()
+    base_env.update(
+        {
+            "APP_DIR": str(REPO_ROOT),
+            "GRID_SOURCE_DIR": str(tmp_path),
+            "GRID_DIR": str(tmp_path),
+            "TOX21_DIR": str(tox21_dir),
+            "TOX21_ENCODER_CHECKPOINT": str(encoder_path),
+            "TOX21_ENCODER_MANIFEST": str(manifest_path),
+            "PRETRAIN_MANIFEST": str(manifest_path),
+            "PRETRAIN_DIR": str(tmp_path / "pretrain"),
+            "PRETRAIN_ARTIFACTS_DIR": str(tmp_path / "artifacts"),
+            "FINETUNE_DIR": str(tmp_path / "finetune"),
+            "PRETRAIN_EPOCHS": "5",
+            "FINETUNE_EPOCHS": "5",
+            "WANDB_API_KEY": "",
+            "TOX21_EVALUATION_MODE": "hybrid",
+            "TOX21_EPOCHS": "100",
+            "TOX21_FREEZE_EPOCHS": "15",
+            "TOX21_UNFREEZE_TOP_LAYERS": "2",
+            "TOX21_ENCODER_LR": "1e-5",
+            "TOX21_HEAD_LR": "3e-4",
+            "TOX21_LAYERWISE_DECAY": "0.8",
+            "TOX21_LR_SCHEDULER": "cosine",
+            "TOX21_WARMUP_RATIO": "0.1",
+            "TOX21_MIN_LR": "1e-6",
+        }
+    )
+
+    capture_path = tmp_path / "hybrid_args.txt"
+    base_env["ARGS_CAPTURE"] = str(capture_path)
+    script = f"""
+set -euo pipefail
+source "{REPO_ROOT}/scripts/ci/common.sh"
+source "{REPO_ROOT}/scripts/ci/stage.sh"
+build_stage_args tox21
+printf '%s\\n' "${{STAGE_ARGS[@]}}" > "$ARGS_CAPTURE"
+"""
+    subprocess.run(["bash", "-lc", script], check=True, cwd=REPO_ROOT, env=base_env)
+    args = capture_path.read_text(encoding="utf-8").splitlines()
+    assert "--evaluation-mode" in args
+    assert "--hybrid-freeze-epochs" in args
+    assert "--unfreeze-top-layers" in args
+    assert "--hybrid-lr-scheduler" in args
+    assert "--hybrid-warmup-ratio" in args
+    assert "--hybrid-min-lr" in args
+    assert "--encoder-lr" in args
+    assert "--head-lr" in args
+    assert "--layerwise-decay" in args
+
 def test_build_stage_args_keeps_add3d_from_bestcfg(tmp_path):
     best_cfg = {
         "add_3d": 1,

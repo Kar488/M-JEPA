@@ -30,6 +30,13 @@ Mission Control
     ``--evaluation-mode fine_tuned`` without supplying a checkpoint, the
     command now enables full encoder fine-tuning automatically so the
     evaluation reflects the updated backbone.
+  - ``--evaluation-mode hybrid`` runs a three-phase schedule (freeze →
+    partial unfreeze → full fine-tune) with warmup+cosine learning-rate
+    decay. Hybrid defaults come from the Tox21 CI knobs (``TOX21_EPOCHS``,
+    ``TOX21_FREEZE_EPOCHS``, ``TOX21_UNFREEZE_TOP_LAYERS``) and the per-task
+    YAML policy file.
+  - Published SOTA numbers for Tox21 often rely on non-scaffold splits and may
+    skip calibration; keep that in mind when comparing ROC-AUC/PR-AUC here.
 
 ``scripts/commands/``
   Modular commands that mirror the subcommands above. They are reused by the

@@ -2601,8 +2601,23 @@ tox21_only = {
     "pretrain_time_budget_mins": "--pretrain-time-budget-mins",
     "finetune_time_budget_mins": "--finetune-time-budget-mins",
     "full_finetune": "--full-finetune",
+    "head_lr": "--head-lr",
+    "encoder_lr": "--encoder-lr",
+    "lr_scheduler": "--lr-scheduler",
+    "warmup_ratio": "--warmup-ratio",
+    "min_lr": "--min-lr",
+    "min_lr_ratio": "--min-lr-ratio",
+    "layerwise_decay": "--layerwise-decay",
+    "threshold_metric": "--threshold-metric",
     "unfreeze_top_layers": "--unfreeze-top-layers",
+    "hybrid_freeze_epochs": "--hybrid-freeze-epochs",
+    "hybrid_partial_epochs": "--hybrid-partial-epochs",
+    "hybrid_lr_scheduler": "--hybrid-lr-scheduler",
+    "hybrid_warmup_ratio": "--hybrid-warmup-ratio",
+    "hybrid_min_lr": "--hybrid-min-lr",
+    "hybrid_min_lr_ratio": "--hybrid-min-lr-ratio",
     "tox21_head_batch_size": "--tox21-head-batch-size",
+    "per_task_hparams": "--per-task-hparams",
 }
 
 # 6) Final per-stage maps (compose without duplication)

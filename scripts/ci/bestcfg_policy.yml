@@ -115,3 +115,18 @@ tox21:
     - pretrain_time_budget_mins
     - finetune_time_budget_mins
     - report_dir
+    - head_lr
+    - encoder_lr
+    - lr_scheduler
+    - warmup_ratio
+    - min_lr
+    - min_lr_ratio
+    - hybrid_freeze_epochs
+    - hybrid_partial_epochs
+    - hybrid_lr_scheduler
+    - hybrid_warmup_ratio
+    - hybrid_min_lr
+    - hybrid_min_lr_ratio
+    - layerwise_decay
+    - threshold_metric
+    - per_task_hparams

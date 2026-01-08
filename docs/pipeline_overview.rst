@@ -52,7 +52,9 @@ Stage Orchestration
 #. **Phase 2 sweep.** ``phase2-agent`` rechecks and exports winning configs,
    writing ``grid/phase2_*`` artifacts.
 #. **Tox21 grading (benchmark stage).** ``tox21-agent`` evaluates the encoder on
-   Tox21 tasks and writes ``bench/encoder_frozen.ok`` on success.
+   Tox21 tasks and writes ``bench/encoder_frozen.ok`` on success. Hybrid mode
+   (``TOX21_EVALUATION_MODE=hybrid``) runs a three-phase fine-tuning schedule
+   with warmup+cosine LR decay driven by CI defaults.
 #. **Finetune / Benchmark / Report.** ``finetune-agent`` and ``report-agent``
    consume the frozen lineage and store outputs under the new ``EXP_ID``.
 

@@ -165,6 +165,68 @@ def _build_layerwise_param_groups(module: nn.Module, base_lr: float, decay: floa
     return groups
 
 
+def _compute_warmup_cosine_lr(
+    epoch_index: int,
+    total_epochs: int,
+    base_lr: float,
+    warmup_ratio: float,
+    min_lr: float,
+) -> float:
+    if total_epochs <= 1:
+        return float(base_lr)
+    warmup_ratio = max(0.0, min(1.0, float(warmup_ratio)))
+    warmup_steps = int(round(total_epochs * warmup_ratio))
+    warmup_steps = max(0, min(warmup_steps, total_epochs))
+    if warmup_steps > 0 and epoch_index < warmup_steps:
+        return float(base_lr) * float(epoch_index + 1) / float(max(1, warmup_steps))
+    if total_epochs <= warmup_steps + 1:
+        return float(min_lr)
+    progress = float(epoch_index - warmup_steps) / float(max(1, total_epochs - warmup_steps - 1))
+    cosine = 0.5 * (1.0 + math.cos(math.pi * min(max(progress, 0.0), 1.0)))
+    return float(min_lr) + (float(base_lr) - float(min_lr)) * float(cosine)
+
+
+def _normalise_hybrid_schedule(
+    schedule: Optional[Dict[str, Any]],
+    total_epochs: int,
+    unfreeze_top_layers: int,
+) -> Optional[Dict[str, Any]]:
+    if not schedule or str(schedule.get("mode", "")).lower() != "hybrid":
+        return None
+    total_epochs = max(1, int(total_epochs))
+    freeze_epochs = schedule.get("freeze_epochs")
+    partial_epochs = schedule.get("partial_epochs")
+    try:
+        freeze_epochs = int(freeze_epochs) if freeze_epochs is not None else 0
+    except Exception:
+        freeze_epochs = 0
+    try:
+        partial_epochs = int(partial_epochs) if partial_epochs is not None else 0
+    except Exception:
+        partial_epochs = 0
+    freeze_epochs = max(0, min(int(freeze_epochs), total_epochs))
+    remaining = max(0, total_epochs - freeze_epochs)
+    if partial_epochs <= 0:
+        partial_epochs = remaining // 2 if remaining >= 2 else 0
+    partial_epochs = max(0, min(int(partial_epochs), remaining))
+    full_epochs = max(0, total_epochs - freeze_epochs - partial_epochs)
+    if total_epochs >= 3 and full_epochs == 0:
+        full_epochs = 1
+        if partial_epochs > 0:
+            partial_epochs -= 1
+        elif freeze_epochs > 0:
+            freeze_epochs -= 1
+    schedule = dict(schedule)
+    schedule["freeze_epochs"] = freeze_epochs
+    schedule["partial_epochs"] = partial_epochs
+    schedule["full_epochs"] = full_epochs
+    schedule["total_epochs"] = total_epochs
+    schedule["unfreeze_top_layers"] = int(
+        schedule.get("unfreeze_top_layers", unfreeze_top_layers) or 0
+    )
+    return schedule
+
+
 def _apply_threshold_offset(logits: np.ndarray, threshold: Optional[float]) -> np.ndarray:
     if threshold is None:
         return logits
@@ -1418,6 +1480,7 @@ def _train_linear_head_impl(
     batch_autoscale_floor: int = 64,
     unfreeze_top_layers: int = 0,
     stage_config: Optional[Dict[str, Any]] = None,
+    hybrid_schedule: Optional[Dict[str, Any]] = None,
     pos_weight: Optional[Any] = None,
     class_weight: Optional[Any] = None,
     use_focal_loss: bool = False,
@@ -1476,6 +1539,9 @@ def _train_linear_head_impl(
         cache_graph_embeddings: When ``True`` (default) encoder outputs
             are cached per-graph so subsequent epochs reuse precomputed
             embeddings instead of re-encoding the frozen backbone.
+        hybrid_schedule: Optional schedule dict for hybrid fine-tuning
+            (freeze → partial unfreeze → full unfreeze) with warmup+cosine
+            learning-rate control.
     Returns:
         A dictionary of metrics on the test set (only populated on rank 0).
     """
@@ -1605,16 +1671,18 @@ def _train_linear_head_impl(
                 if index_attr is not None and int(index_attr) >= 0:
                     ddp_device_index = int(index_attr)
 
-    def _apply_encoder_trainability(module: nn.Module) -> None:
+    def _apply_encoder_trainability(
+        module: nn.Module, *, freeze: bool, unfreeze_layers: int
+    ) -> None:
         params_fn = getattr(module, "parameters", None)
         if not callable(params_fn):
             return
         params = list(params_fn())
-        if freeze_encoder:
+        if freeze:
             for param in params:
                 param.requires_grad = False
             return
-        if unfreeze_top_layers is None or unfreeze_top_layers <= 0:
+        if unfreeze_layers is None or unfreeze_layers <= 0:
             for param in params:
                 param.requires_grad = True
             return
@@ -1625,7 +1693,7 @@ def _train_linear_head_impl(
             for param in params:
                 param.requires_grad = True
             return
-        top_count = max(1, int(unfreeze_top_layers))
+        top_count = max(1, int(unfreeze_layers))
         selected = modules[-top_count:]
         for selected_module in selected:
             sub_params_fn = getattr(selected_module, "parameters", None)
@@ -1637,10 +1705,27 @@ def _train_linear_head_impl(
             except Exception:
                 continue
 
+    hybrid_plan = _normalise_hybrid_schedule(
+        hybrid_schedule,
+        epochs,
+        int(unfreeze_top_layers or 0),
+    )
+    if hybrid_plan is not None and optimizer is not None:
+        logger.info(
+            "[hybrid] ignoring provided optimizer to allow phase-specific parameter groups."
+        )
+        optimizer = None
+    if hybrid_plan is not None and scheduler is not None:
+        logger.info("[hybrid] ignoring provided scheduler in favour of hybrid schedule.")
+        scheduler = None
     encoder = encoder.to(device_t)
-    _apply_encoder_trainability(encoder)
+    _apply_encoder_trainability(
+        encoder,
+        freeze=bool(freeze_encoder),
+        unfreeze_layers=int(unfreeze_top_layers or 0),
+    )
     encoder_has_trainable = any(p.requires_grad for p in encoder.parameters())
-    if encoder_has_trainable and cache_graph_embeddings:
+    if (encoder_has_trainable or hybrid_plan is not None) and cache_graph_embeddings:
         logger.info(
             "Disabling graph embedding cache because encoder parameters are trainable."
         )
@@ -1857,10 +1942,14 @@ def _train_linear_head_impl(
         loss_fn = _make_loss_fn(pos_weight_tensor)
     else:
         loss_fn = nn.MSELoss()
-    optimiser: Optimizer
-    if optimizer is not None:
-        optimiser = optimizer
-    else:
+    def _build_optimizer_for_phase(
+        *, freeze_flag: bool, unfreeze_layers: int
+    ) -> Optimizer:
+        _apply_encoder_trainability(
+            encoder,
+            freeze=bool(freeze_flag),
+            unfreeze_layers=int(unfreeze_layers or 0),
+        )
         enc_for_opt = (
             encoder.module
             if isinstance(encoder, nn.parallel.DistributedDataParallel)
@@ -1872,21 +1961,50 @@ def _train_linear_head_impl(
         enc_lr_resolved = encoder_lr if encoder_lr is not None else lr
         if enc_params:
             if layerwise_decay is not None and layerwise_decay > 0:
-                param_groups.extend(
-                    _build_layerwise_param_groups(enc_for_opt, float(enc_lr_resolved), float(layerwise_decay))
+                groups = _build_layerwise_param_groups(
+                    enc_for_opt,
+                    float(enc_lr_resolved),
+                    float(layerwise_decay),
                 )
+                for group in groups:
+                    group.setdefault("name", "encoder")
+                    group.setdefault("base_lr", group.get("lr", enc_lr_resolved))
+                param_groups.extend(groups)
             else:
-                param_groups.append({"params": enc_params, "lr": enc_lr_resolved})
+                param_groups.append(
+                    {
+                        "params": enc_params,
+                        "lr": enc_lr_resolved,
+                        "name": "encoder",
+                        "base_lr": enc_lr_resolved,
+                    }
+                )
         if head_params:
-            param_groups.append({"params": head_params, "lr": head_lr or lr})
+            head_lr_value = head_lr or lr
+            param_groups.append(
+                {
+                    "params": head_params,
+                    "lr": head_lr_value,
+                    "name": "head",
+                    "base_lr": head_lr_value,
+                }
+            )
 
         if param_groups:
             base_lr = param_groups[0].get("lr", head_lr or encoder_lr or lr)
-            optimiser = torch.optim.Adam(param_groups, lr=base_lr)
-        elif head_params:
-            optimiser = torch.optim.Adam(head_params, lr=head_lr or lr)
-        else:
-            raise ValueError("No trainable parameters found for optimiser")
+            return torch.optim.Adam(param_groups, lr=base_lr)
+        if head_params:
+            return torch.optim.Adam(head_params, lr=head_lr or lr)
+        raise ValueError("No trainable parameters found for optimiser")
+
+    optimiser: Optimizer
+    if optimizer is not None and hybrid_plan is None:
+        optimiser = optimizer
+    else:
+        optimiser = _build_optimizer_for_phase(
+            freeze_flag=bool(freeze_encoder),
+            unfreeze_layers=int(unfreeze_top_layers or 0),
+        )
     rank = get_rank() if distributed else 0
     world = get_world_size() if distributed else 1
     train_idx_rank = train_idx[rank::world]
@@ -2569,12 +2687,46 @@ def _train_linear_head_impl(
 
     total_batches_done = 0
     last_epoch_batches = 0
+    phase_plan: List[Dict[str, Any]] = []
+    phase_history: List[str] = []
+    lr_history: List[Dict[str, float]] = []
+    phase_trainable: List[Dict[str, Any]] = []
+    if hybrid_plan is not None:
+        phase_plan = [
+            {
+                "name": "freeze",
+                "epochs": int(hybrid_plan.get("freeze_epochs", 0) or 0),
+                "freeze_encoder": True,
+                "unfreeze_top_layers": 0,
+            },
+            {
+                "name": "partial",
+                "epochs": int(hybrid_plan.get("partial_epochs", 0) or 0),
+                "freeze_encoder": False,
+                "unfreeze_top_layers": int(hybrid_plan.get("unfreeze_top_layers", 0) or 0),
+            },
+            {
+                "name": "full",
+                "epochs": int(hybrid_plan.get("full_epochs", 0) or 0),
+                "freeze_encoder": False,
+                "unfreeze_top_layers": 0,
+            },
+        ]
+        logger.info(
+            "[hybrid] schedule: freeze=%d partial=%d full=%d (total=%d, unfreeze_top_layers=%d)",
+            phase_plan[0]["epochs"],
+            phase_plan[1]["epochs"],
+            phase_plan[2]["epochs"],
+            int(hybrid_plan.get("total_epochs", epochs)),
+            int(hybrid_plan.get("unfreeze_top_layers", 0) or 0),
+        )
     if train_loader is None:
         logger.warning(
             "No training samples available; skipping linear-head optimisation (split size=%d).",
             len(train_idx_rank),
         )
     else:
+        current_phase_name = "default"
         for epoch in range(epochs):
             if max_batches > 0 and total_batches_done >= max_batches:
                 logger.info(
@@ -2585,6 +2737,104 @@ def _train_linear_head_impl(
             if not _time_left():
                 logger.info("Time budget hit before epoch %d; stopping training.", epoch)
                 break
+
+            if phase_plan:
+                elapsed = epoch
+                phase_cursor = 0
+                phase_name = "full"
+                phase_freeze = False
+                phase_unfreeze = 0
+                for phase in phase_plan:
+                    span = int(phase.get("epochs", 0) or 0)
+                    if span <= 0:
+                        continue
+                    if elapsed < phase_cursor + span:
+                        phase_name = str(phase.get("name", "phase"))
+                        phase_freeze = bool(phase.get("freeze_encoder", False))
+                        phase_unfreeze = int(phase.get("unfreeze_top_layers", 0) or 0)
+                        break
+                    phase_cursor += span
+                if phase_name != current_phase_name:
+                    current_phase_name = phase_name
+                    optimiser = _build_optimizer_for_phase(
+                        freeze_flag=phase_freeze,
+                        unfreeze_layers=phase_unfreeze,
+                    )
+                    encoder_trainable = sum(
+                        1 for p in encoder.parameters() if p.requires_grad
+                    )
+                    head_trainable = sum(
+                        1 for p in head_param_source.parameters() if p.requires_grad
+                    )
+                    logger.info(
+                        "[hybrid] phase=%s encoder_trainable=%d head_trainable=%d unfreeze_top_layers=%d",
+                        current_phase_name,
+                        encoder_trainable,
+                        head_trainable,
+                        phase_unfreeze,
+                    )
+                    phase_trainable.append(
+                        {
+                            "phase": current_phase_name,
+                            "encoder_trainable": int(encoder_trainable),
+                            "head_trainable": int(head_trainable),
+                            "unfreeze_top_layers": int(phase_unfreeze),
+                        }
+                    )
+                scheduler_name = str(hybrid_plan.get("lr_scheduler", "") or "cosine").lower()
+                if scheduler_name in {"cosine", "warmup_cosine", "warmup+cosine", "cosine_warmup"}:
+                    warmup_ratio = float(hybrid_plan.get("warmup_ratio") or 0.0)
+                    min_lr = hybrid_plan.get("min_lr")
+                    min_lr_ratio = hybrid_plan.get("min_lr_ratio")
+                    for group in optimiser.param_groups:
+                        base_lr = float(group.get("base_lr", group.get("lr", lr)))
+                        min_lr_value = None
+                        if min_lr is not None:
+                            try:
+                                min_lr_value = float(min_lr)
+                            except Exception:
+                                min_lr_value = None
+                        if min_lr_value is None and min_lr_ratio is not None:
+                            try:
+                                min_lr_value = float(min_lr_ratio) * base_lr
+                            except Exception:
+                                min_lr_value = None
+                        if min_lr_value is None:
+                            min_lr_value = 0.0
+                        min_lr_value = max(0.0, min(min_lr_value, base_lr))
+                        group["lr"] = _compute_warmup_cosine_lr(
+                            epoch,
+                            int(hybrid_plan.get("total_epochs", epochs)),
+                            base_lr,
+                            warmup_ratio,
+                            min_lr_value,
+                        )
+                    head_lr_epoch = [
+                        group["lr"]
+                        for group in optimiser.param_groups
+                        if group.get("name") == "head"
+                    ]
+                    encoder_lr_epoch = [
+                        group["lr"]
+                        for group in optimiser.param_groups
+                        if group.get("name") == "encoder"
+                    ]
+                    lr_snapshot = {
+                        "epoch": float(epoch + 1),
+                        "head_lr": float(head_lr_epoch[0]) if head_lr_epoch else float("nan"),
+                        "encoder_lr": float(sum(encoder_lr_epoch) / len(encoder_lr_epoch))
+                        if encoder_lr_epoch
+                        else float("nan"),
+                    }
+                    lr_history.append(lr_snapshot)
+                    logger.info(
+                        "[hybrid] epoch=%d phase=%s lr_head=%s lr_encoder=%s",
+                        epoch + 1,
+                        current_phase_name,
+                        f"{lr_snapshot['head_lr']:.2e}" if head_lr_epoch else "<frozen>",
+                        f"{lr_snapshot['encoder_lr']:.2e}" if encoder_lr_epoch else "<frozen>",
+                    )
+                phase_history.append(current_phase_name)
 
             if task_type == "classification" and dynamic_pos_weight:
                 labels_attr = getattr(dataset, "labels", None)
@@ -2922,6 +3172,10 @@ def _train_linear_head_impl(
         metrics["train/batches"] = float(total_batches_done)
         metrics["train/loader_batches"] = float(planned_train_batches)
         metrics["train/epoch_batches"] = float(last_epoch_batches)
+        if hybrid_plan is not None:
+            metrics["hybrid/phases"] = list(phase_history)
+            metrics["hybrid/lr_history"] = list(lr_history)
+            metrics["hybrid/phase_trainable"] = list(phase_trainable)
         for ig_logger in ig_loggers:
             ig_logger.finalize(metrics)
 
@@ -2989,6 +3243,7 @@ def train_linear_head(
     batch_autoscale_floor: int = 64,
     unfreeze_top_layers: int = 0,
     stage_config: Optional[Dict[str, Any]] = None,
+    hybrid_schedule: Optional[Dict[str, Any]] = None,
     pos_weight: Optional[Any] = None,
     class_weight: Optional[Any] = None,
     use_focal_loss: bool = False,
@@ -3043,6 +3298,7 @@ def train_linear_head(
             batch_autoscale_floor=batch_autoscale_floor,
             unfreeze_top_layers=unfreeze_top_layers,
             stage_config=stage_config,
+            hybrid_schedule=hybrid_schedule,
             pos_weight=pos_weight,
             class_weight=class_weight,
             use_focal_loss=use_focal_loss,

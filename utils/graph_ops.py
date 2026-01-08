@@ -122,6 +122,18 @@ def _encode_graph(encoder: torch.nn.Module, g: Any):
         if adj_t.ndim > 2: adj_t = adj_t.squeeze()
         if adj_t.shape[0] == adj_t.shape[1]:
             adj_t = adj_t.clone(); adj_t.fill_diagonal_(1.0)
+    if x_t is None:
+        x_t = _to_tensor(getattr(g, "feat", None), dtype=torch.float32, device=device)
+    if (x_t is None or adj_t is None) and hasattr(g, "to_tensors"):
+        try:
+            tensors = g.to_tensors()
+        except Exception:
+            tensors = None
+        if isinstance(tensors, (tuple, list)) and tensors:
+            if x_t is None and tensors[0] is not None:
+                x_t = _to_tensor(tensors[0], dtype=torch.float32, device=device)
+            if len(tensors) > 1 and adj_t is None and tensors[1] is not None:
+                adj_t = _to_tensor(tensors[1], dtype=torch.float32, device=device)
 
     # derive missing representation if needed
     if ei_t is None and adj_t is not None:

@@ -88,8 +88,21 @@ case_study:
   tox21_head_batch_size: 256
   head_ensemble_size: 3
   head_scheduler: cosine
+  lr_scheduler: cosine
+  warmup_ratio: 0.1
+  min_lr: 1.0e-6
+  min_lr_ratio:
   triage_pct: 0.0
   freeze_encoder: false
+  layerwise_decay:
+  threshold_metric:
+  per_task_hparams:
+  hybrid_freeze_epochs: 15
+  hybrid_partial_epochs:
+  hybrid_lr_scheduler: cosine
+  hybrid_warmup_ratio: 0.1
+  hybrid_min_lr: 1.0e-6
+  hybrid_min_lr_ratio:
   baseline_finetune_epochs: 50  # Baseline evaluation defaults (override with TOX21_BASELINE_FINETUNE_EPOCHS)
   baseline_patience: 8          # Early stopping patience for baseline runs (override with TOX21_BASELINE_PATIENCE)
 
