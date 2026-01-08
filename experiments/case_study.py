@@ -1679,6 +1679,10 @@ def run_tox21_case_study(
     pretrain_lr: Optional[float] = None,
     head_lr: Optional[float] = None,
     encoder_lr: Optional[float] = None,
+    lr_scheduler: Optional[str] = None,
+    warmup_ratio: Optional[float] = None,
+    min_lr: Optional[float] = None,
+    min_lr_ratio: Optional[float] = None,
     weight_decay: Optional[float] = None,
     class_weights: Any = "auto",
     pos_class_weight: Any = None,
@@ -1725,6 +1729,8 @@ def run_tox21_case_study(
     tox21_head_batch_size: int = 256,
     head_ensemble_size: int = 1,
     head_scheduler: Optional[str] = None,
+    layerwise_decay: Optional[float] = None,
+    threshold_metric: Optional[str] = None,
     cache_dir: Optional[str] = None,
     explain_mode: Optional[str] = None,
     explain_config: Optional[Dict[str, Any]] = None,
@@ -1738,6 +1744,12 @@ def run_tox21_case_study(
     baseline_patience: Optional[int] = None,
     bestcfg_epochs_override: bool = False,
     bestcfg_patience_override: bool = False,
+    hybrid_freeze_epochs: Optional[int] = None,
+    hybrid_partial_epochs: Optional[int] = None,
+    hybrid_lr_scheduler: Optional[str] = None,
+    hybrid_warmup_ratio: Optional[float] = None,
+    hybrid_min_lr: Optional[float] = None,
+    hybrid_min_lr_ratio: Optional[float] = None,
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
 
@@ -2668,7 +2680,7 @@ def run_tox21_case_study(
     if requested_fine_tuned_alias:
         normalized_mode = "end_to_end"
         display_mode = "fine_tuned"
-    valid_modes = {"pretrain_frozen", "frozen_finetuned", "end_to_end", "baseline"}
+    valid_modes = {"pretrain_frozen", "frozen_finetuned", "end_to_end", "baseline", "hybrid"}
     if normalized_mode not in valid_modes:
         logger.warning(
             "Unknown evaluation_mode '%s'; defaulting to pretrain_frozen.",
@@ -2679,6 +2691,9 @@ def run_tox21_case_study(
         baseline_mode = False
     if baseline_mode:
         normalized_mode = "pretrain_frozen"
+    if normalized_mode == "hybrid":
+        display_mode = "hybrid"
+        full_finetune_effective = True
     auto_full_finetune = False
     auto_pretrain = False
     if normalized_mode == "end_to_end" and full_finetune_requested is None:
@@ -2698,13 +2713,17 @@ def run_tox21_case_study(
             )
 
     freeze_encoder_requested = bool(freeze_encoder)
-    if freeze_encoder_requested and full_finetune_effective:
+    if freeze_encoder_requested and full_finetune_effective and normalized_mode != "hybrid":
         logger.info(
             "Freeze-encoder flag set; disabling full fine-tuning for evaluation mode '%s'.",
             display_mode,
         )
         full_finetune_effective = False
         auto_full_finetune = False
+    elif freeze_encoder_requested and normalized_mode == "hybrid":
+        logger.info(
+            "Hybrid evaluation ignores freeze-encoder flag to allow staged unfreezing.",
+        )
 
     if (
         normalized_mode in {"frozen_finetuned", "end_to_end"}
@@ -2859,7 +2878,7 @@ def run_tox21_case_study(
             encoder_checkpoint,
         )
 
-    fine_tuned_modes = {"frozen_finetuned", "end_to_end"}
+    fine_tuned_modes = {"frozen_finetuned", "end_to_end", "hybrid"}
     if (
         (full_finetune_effective or normalized_mode in fine_tuned_modes)
         and encoder_hash
@@ -3020,6 +3039,20 @@ def run_tox21_case_study(
         "dynamic_pos_weight": bool(dynamic_pos_weight),
         "focal_gamma": float(focal_gamma_value),
     }
+
+    hybrid_schedule: Optional[Dict[str, Any]] = None
+    if normalized_mode == "hybrid":
+        hybrid_schedule = {
+            "mode": "hybrid",
+            "freeze_epochs": hybrid_freeze_epochs,
+            "partial_epochs": hybrid_partial_epochs,
+            "unfreeze_top_layers": int(unfreeze_top_layers),
+            "lr_scheduler": hybrid_lr_scheduler or lr_scheduler,
+            "warmup_ratio": hybrid_warmup_ratio or warmup_ratio,
+            "min_lr": hybrid_min_lr or min_lr,
+            "min_lr_ratio": hybrid_min_lr_ratio or min_lr_ratio,
+        }
+        diagnostics["hybrid_schedule"] = dict(hybrid_schedule)
 
     weight_decay_value: Optional[float] = None
     if weight_decay is not None:
@@ -3247,11 +3280,14 @@ def run_tox21_case_study(
             "freeze_encoder": not full_finetune_effective,
             "head_lr": head_lr_value,
             "encoder_lr": encoder_lr_value,
+            "layerwise_decay": layerwise_decay,
             "train_indices": train_idx,
             "val_indices": val_idx,
             "test_indices": test_idx,
             "enable_batch_autoscale": False,
             "unfreeze_top_layers": int(unfreeze_top_layers),
+            "threshold_metric": threshold_metric or "f1",
+            "hybrid_schedule": hybrid_schedule,
             "explain_mode": explain_mode_norm,
             "explain_config": explain_cfg_payload,
             "oversample_minority": bool(oversample_minority),

@@ -7,6 +7,11 @@
 # - Enable calibration (temperature) for better Brier/ECE reporting.
 # - If you later find 1–2 assays are still weak, add *targeted* overrides for those assays only.
 
+__hybrid__:
+  encoder_lr: 1e-5
+  head_lr: 3e-4
+  layerwise_decay: 0.8
+
 NR-AR:
   pos_weight: 8 #override default 22.511326860841425
   dynamic_pos_weight: true

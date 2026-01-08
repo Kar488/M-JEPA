@@ -123,9 +123,29 @@ elif [[ "$SOURCE" == "end_to_end" ]]; then
   fi
   export FINETUNE_EPOCHS
   export TOX21_FINETUNE_PATIENCE
+elif [[ "$SOURCE" == "hybrid" ]]; then
+  : "${TOX21_EPOCHS:=100}"
+  : "${TOX21_FREEZE_EPOCHS:=15}"
+  : "${TOX21_UNFREEZE_TOP_LAYERS:=2}"
+  : "${TOX21_ENCODER_LR:=1e-5}"
+  : "${TOX21_HEAD_LR:=3e-4}"
+  : "${TOX21_LAYERWISE_DECAY:=0.8}"
+  : "${TOX21_LR_SCHEDULER:=cosine}"
+  : "${TOX21_WARMUP_RATIO:=0.1}"
+  : "${TOX21_MIN_LR:=1e-6}"
+
+  export TOX21_EPOCHS
+  export TOX21_FREEZE_EPOCHS
+  export TOX21_UNFREEZE_TOP_LAYERS
+  export TOX21_ENCODER_LR
+  export TOX21_HEAD_LR
+  export TOX21_LAYERWISE_DECAY
+  export TOX21_LR_SCHEDULER
+  export TOX21_WARMUP_RATIO
+  export TOX21_MIN_LR
 fi
 
-if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
+if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" || "$SOURCE" == "hybrid" ]]; then
   full_flag="${TOX21_FULL_FINETUNE:-}"
   if [[ -z "$full_flag" ]]; then
     TOX21_FULL_FINETUNE="true"
@@ -594,7 +614,7 @@ resolve_cached_encoder_path() {
 
 MET_ENV_FILE="${PRETRAIN_EXPERIMENT_ROOT}/met_benchmark.env"
 mkdir -p "$(dirname "$MET_ENV_FILE")"
-if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]] && [[ -f "$MET_ENV_FILE" ]]; then
+if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" || "$SOURCE" == "hybrid" ]] && [[ -f "$MET_ENV_FILE" ]]; then
   while IFS='=' read -r key value; do
     [[ -z "$key" ]] && continue
     export "$key"="$value"
@@ -614,7 +634,7 @@ ensure_dir() {
   fi
 }
 
-if [[ "$SOURCE" == "pretrain_frozen" ]]; then
+if [[ "$SOURCE" == "pretrain_frozen" || "$SOURCE" == "hybrid" ]]; then
   ensure_dir "$MANIFEST_PATH"
   manifest_encoder=""
   python_cmd=("${python_interp_cmd[@]}")

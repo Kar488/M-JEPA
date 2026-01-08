@@ -17,6 +17,10 @@ from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Mapping
 
 import torch
+try:  # pragma: no cover - optional dependency
+    import yaml
+except Exception:  # pragma: no cover - allow running without PyYAML
+    yaml = None  # type: ignore[assignment]
 
 from . import log_effective_gnn
 from utils.ddp import is_main_process
@@ -531,8 +535,17 @@ def _coerce_float_like(value: Any) -> Optional[float]:
 
 
 def _parse_pos_class_weight(values: Optional[Iterable[str]]) -> Optional[Any]:
-    if not values:
+    if values is None:
         return None
+    if isinstance(values, Mapping):
+        return values
+    if isinstance(values, (int, float)):
+        try:
+            return float(values)
+        except Exception:
+            return None
+    if isinstance(values, str):
+        values = [values]
     scalar: Optional[float] = None
     mapping: Dict[str, float] = {}
     for raw in values:
@@ -662,6 +675,39 @@ def _load_best_config_overrides(args: argparse.Namespace) -> Tuple[Dict[str, Any
     if patience_val is not None:
         overrides["patience"] = patience_val
     return overrides, path
+
+
+def _load_task_hparams(path: Optional[str]) -> Dict[str, Any]:
+    if not path:
+        return {}
+    try:
+        raw = Path(str(path)).expanduser()
+    except Exception:
+        return {}
+    if not raw.is_file():
+        return {}
+    try:
+        text = raw.read_text(encoding="utf-8")
+    except Exception:
+        logger.debug("Failed to read per-task hparams from %s", raw, exc_info=True)
+        return {}
+    if yaml is not None:
+        try:
+            data = yaml.safe_load(text) or {}
+        except Exception:
+            logger.debug("Failed to parse per-task hparams YAML from %s", raw, exc_info=True)
+            return {}
+    else:
+        data = {}
+        for line in text.splitlines():
+            stripped = line.split("#", 1)[0].strip()
+            if not stripped or ":" not in stripped:
+                continue
+            key, value = stripped.split(":", 1)
+            data[key.strip()] = value.strip()
+    if not isinstance(data, dict):
+        return {}
+    return {str(k).strip().lower(): v for k, v in data.items()}
 
 
 def _schema_cache_dir(base: Optional[str], add_3d: Optional[bool], hidden_dim: Optional[int]) -> Optional[str]:
@@ -892,6 +938,8 @@ def _run_tox21_single_task(
     triage_pct: float,
     calibrate: bool,
     calibrate_per_head: bool = False,
+    task_hparam_map: Optional[Dict[str, Any]] = None,
+    hybrid_defaults: Optional[Dict[str, Any]] = None,
     cache_dir: Optional[str],
     report_dir: str,
     wb: Any,
@@ -958,12 +1006,20 @@ def _run_tox21_single_task(
     if not task_name:
         raise ValueError("Tox21 task name must be provided")
 
+    task_key = str(task_name).strip().lower()
+    task_overrides: Dict[str, Any] = {}
+    if task_hparam_map:
+        task_overrides = task_hparam_map.get(task_key, {}) or {}
+    hybrid_defaults = hybrid_defaults or {}
+
     balance_entry = class_balance.get(task_name, {}) if class_balance else {}
-    class_weights_arg = getattr(args, "class_weights", None)
+    class_weights_arg = task_overrides.get("class_weights", getattr(args, "class_weights", None))
     if class_weights_arg is None:
         class_weights_arg = "auto"
 
-    pos_class_weight_arg = _parse_pos_class_weight(getattr(args, "pos_class_weight", None))
+    pos_class_weight_arg = _parse_pos_class_weight(
+        task_overrides.get("pos_weight", getattr(args, "pos_class_weight", None))
+    )
     if pos_class_weight_arg is None:
         auto_weight = auto_pos_weights.get(task_name)
         if auto_weight is not None and auto_weight > 0:
@@ -1080,6 +1136,8 @@ def _run_tox21_single_task(
     start_log.update(target_payload)
     start_log["freeze_encoder"] = freeze_encoder_flag
     start_log["head_ensemble_size"] = head_ensemble_value
+    if task_overrides:
+        start_log["task_overrides"] = list(sorted(task_overrides.keys()))
     if pos_class_weight_arg is not None:
         start_log["pos_class_weight"] = pos_class_weight_arg
     if balance_entry:
@@ -1108,8 +1166,22 @@ def _run_tox21_single_task(
         "finetune_epochs": getattr(args, "finetune_epochs", finetune_epochs_value),
         "lr": getattr(args, "lr", 1e-3),
         "pretrain_lr": getattr(args, "pretrain_lr", None),
-        "head_lr": getattr(args, "head_lr", None),
-        "encoder_lr": getattr(args, "encoder_lr", None),
+        "lr_scheduler": getattr(args, "lr_scheduler", None),
+        "warmup_ratio": getattr(args, "warmup_ratio", None),
+        "min_lr": getattr(args, "min_lr", None),
+        "min_lr_ratio": getattr(args, "min_lr_ratio", None),
+        "head_lr": task_overrides.get(
+            "head_lr",
+            getattr(args, "head_lr", None)
+            if not hybrid_defaults
+            else hybrid_defaults.get("head_lr", getattr(args, "head_lr", None)),
+        ),
+        "encoder_lr": task_overrides.get(
+            "encoder_lr",
+            getattr(args, "encoder_lr", None)
+            if not hybrid_defaults
+            else hybrid_defaults.get("encoder_lr", getattr(args, "encoder_lr", None)),
+        ),
         "weight_decay": getattr(args, "weight_decay", None),
         "class_weights": class_weights_arg,
         "pos_class_weight": pos_class_weight_arg,
@@ -1120,7 +1192,7 @@ def _run_tox21_single_task(
         "add_3d": getattr(args, "add_3d", False),
         "contrastive": getattr(args, "contrastive", False),
         "triage_pct": triage_pct,
-        "calibrate": calibrate,
+        "calibrate": bool(task_overrides.get("calibrate_probabilities", calibrate)),
         "calibrate_per_head": calibrate_per_head,
         "device": device_value,
         "devices": devices_val,
@@ -1152,12 +1224,34 @@ def _run_tox21_single_task(
         "tox21_head_batch_size": int(getattr(args, "tox21_head_batch_size", 256) or 256),
         "head_ensemble_size": head_ensemble_value,
         "head_scheduler": getattr(args, "head_scheduler", None),
+        "layerwise_decay": task_overrides.get(
+            "layerwise_decay",
+            getattr(args, "layerwise_decay", None)
+            if not hybrid_defaults
+            else hybrid_defaults.get("layerwise_decay", getattr(args, "layerwise_decay", None)),
+        ),
+        "threshold_metric": task_overrides.get(
+            "threshold_metric",
+            getattr(args, "threshold_metric", None),
+        ),
+        "hybrid_freeze_epochs": getattr(args, "hybrid_freeze_epochs", None),
+        "hybrid_partial_epochs": getattr(args, "hybrid_partial_epochs", None),
+        "hybrid_warmup_ratio": getattr(args, "hybrid_warmup_ratio", None),
+        "hybrid_lr_scheduler": getattr(args, "hybrid_lr_scheduler", None),
+        "hybrid_min_lr": getattr(args, "hybrid_min_lr", None),
+        "hybrid_min_lr_ratio": getattr(args, "hybrid_min_lr_ratio", None),
         "explain_mode": explain_mode,
         "explain_config": explain_config_payload,
-        "oversample_minority": getattr(args, "oversample_minority", False),
-        "use_focal_loss": getattr(args, "use_focal_loss", False),
-        "dynamic_pos_weight": getattr(args, "dynamic_pos_weight", False),
-        "focal_gamma": getattr(args, "focal_gamma", 2.0),
+        "oversample_minority": bool(
+            task_overrides.get("oversample_minority", getattr(args, "oversample_minority", False))
+        ),
+        "use_focal_loss": bool(
+            task_overrides.get("use_focal_loss", getattr(args, "use_focal_loss", False))
+        ),
+        "dynamic_pos_weight": bool(
+            task_overrides.get("dynamic_pos_weight", getattr(args, "dynamic_pos_weight", False))
+        ),
+        "focal_gamma": task_overrides.get("focal_gamma", getattr(args, "focal_gamma", 2.0)),
         "baseline_finetune_epochs": baseline_finetune_default,
         "baseline_patience": baseline_patience_default,
         "bestcfg_epochs_override": bool(bestcfg_epochs_override),
@@ -1719,8 +1813,19 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     if patience_provided is None:
         patience_provided = _flag_was_provided(("--patience",))
 
+    eval_mode = str(
+        getattr(
+            args,
+            "evaluation_mode",
+            getattr(args, "encoder_source", "pretrain_frozen"),
+        )
+        or "pretrain_frozen"
+    ).lower()
+
     best_overrides, best_path = _load_best_config_overrides(args)
     inherited: List[str] = []
+    if eval_mode == "hybrid" and "finetune_epochs" in best_overrides:
+        best_overrides.pop("finetune_epochs", None)
     setattr(args, "_bestcfg_epochs_override", "finetune_epochs" in best_overrides)
     setattr(args, "_bestcfg_patience_override", "patience" in best_overrides)
     if "add_3d" in best_overrides and not _flag_was_provided(("--add-3d", "--add_3d")):
@@ -1803,6 +1908,28 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             ", ".join(inherited),
         )
 
+    task_hparam_map = _load_task_hparams(getattr(args, "per_task_hparams", None))
+    hybrid_defaults = task_hparam_map.get("__hybrid__", {}) if eval_mode == "hybrid" else {}
+    if hybrid_defaults:
+        head_lr_provided = _flag_was_provided(("--head-lr", "--head_lr"))
+        encoder_lr_provided = _flag_was_provided(("--encoder-lr", "--encoder_lr"))
+        layerwise_provided = _flag_was_provided(("--layerwise-decay", "--layerwise_decay"))
+        if not head_lr_provided and getattr(args, "head_lr", None) is None:
+            setattr(args, "head_lr", hybrid_defaults.get("head_lr"))
+        if not encoder_lr_provided and getattr(args, "encoder_lr", None) is None:
+            setattr(args, "encoder_lr", hybrid_defaults.get("encoder_lr"))
+        if not layerwise_provided and getattr(args, "layerwise_decay", None) is None:
+            setattr(args, "layerwise_decay", hybrid_defaults.get("layerwise_decay"))
+    if eval_mode == "hybrid":
+        if getattr(args, "hybrid_lr_scheduler", None) is None:
+            setattr(args, "hybrid_lr_scheduler", getattr(args, "lr_scheduler", None))
+        if getattr(args, "hybrid_warmup_ratio", None) is None:
+            setattr(args, "hybrid_warmup_ratio", getattr(args, "warmup_ratio", None))
+        if getattr(args, "hybrid_min_lr", None) is None:
+            setattr(args, "hybrid_min_lr", getattr(args, "min_lr", None))
+        if getattr(args, "hybrid_min_lr_ratio", None) is None:
+            setattr(args, "hybrid_min_lr_ratio", getattr(args, "min_lr_ratio", None))
+
     dataset_name = getattr(args, "dataset", "tox21") or "tox21"
     tasks_to_run = _resolve_tox21_tasks(args)
     if not tasks_to_run:
@@ -1858,14 +1985,6 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "run with torchrun or WORLD_SIZE>1 to enable DDP.",
             devices_val,
         )
-    eval_mode = str(
-        getattr(
-            args,
-            "evaluation_mode",
-            getattr(args, "encoder_source", "pretrain_frozen"),
-        )
-        or "pretrain_frozen"
-    ).lower()
     baseline_mode = eval_mode == "baseline"
     bestcfg_epochs_override = bool(getattr(args, "_bestcfg_epochs_override", False))
     bestcfg_patience_override = bool(getattr(args, "_bestcfg_patience_override", False))
@@ -1879,6 +1998,19 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     finetune_epochs_default = 20
     finetune_epochs_value = getattr(args, "finetune_epochs", None)
     bestcfg_epochs_override = bestcfg_epochs_override or ("finetune_epochs" in best_overrides)
+    if eval_mode == "hybrid":
+        hybrid_epochs_raw = getattr(args, "epochs", None)
+        hybrid_epochs_val = _coerce_int_like(hybrid_epochs_raw)
+        if hybrid_epochs_val is not None:
+            if finetune_epochs_provided and finetune_epochs_value not in (None, hybrid_epochs_val):
+                logger.info(
+                    "Hybrid evaluation mode overrides finetune_epochs=%s with TOX21_EPOCHS=%d.",
+                    str(finetune_epochs_value),
+                    hybrid_epochs_val,
+                )
+            finetune_epochs_value = int(hybrid_epochs_val)
+            finetune_epochs_provided = True
+            bestcfg_epochs_override = False
     if baseline_mode and not finetune_epochs_provided and not bestcfg_epochs_override:
         resolved_baseline_epochs = baseline_finetune_default or finetune_epochs_value or finetune_epochs_default
         if resolved_baseline_epochs is not None:
@@ -1997,10 +2129,23 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         "evaluation_mode": eval_mode,
         "head_lr": getattr(args, "head_lr", None),
         "encoder_lr": getattr(args, "encoder_lr", None),
+        "layerwise_decay": getattr(args, "layerwise_decay", None),
         "weight_decay": getattr(args, "weight_decay", None),
         "class_weights": getattr(args, "class_weights", None),
         "pos_class_weight": getattr(args, "pos_class_weight", None),
         "head_scheduler": getattr(args, "head_scheduler", None),
+        "lr_scheduler": getattr(args, "lr_scheduler", None),
+        "warmup_ratio": getattr(args, "warmup_ratio", None),
+        "min_lr": getattr(args, "min_lr", None),
+        "min_lr_ratio": getattr(args, "min_lr_ratio", None),
+        "hybrid_freeze_epochs": getattr(args, "hybrid_freeze_epochs", None),
+        "hybrid_partial_epochs": getattr(args, "hybrid_partial_epochs", None),
+        "hybrid_lr_scheduler": getattr(args, "hybrid_lr_scheduler", None),
+        "hybrid_warmup_ratio": getattr(args, "hybrid_warmup_ratio", None),
+        "hybrid_min_lr": getattr(args, "hybrid_min_lr", None),
+        "hybrid_min_lr_ratio": getattr(args, "hybrid_min_lr_ratio", None),
+        "threshold_metric": getattr(args, "threshold_metric", None),
+        "per_task_hparams": getattr(args, "per_task_hparams", None),
         "auto_pos_class_weight": auto_pos_weights,
         "class_balance": {
             task: {
@@ -2053,6 +2198,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                 triage_pct=triage_pct,
                 calibrate=calibrate,
                 calibrate_per_head=calibrate_per_head,
+                task_hparam_map=task_hparam_map,
+                hybrid_defaults=hybrid_defaults,
                 cache_dir=cache_dir,
                 report_dir=report_dir,
                 wb=wb,
@@ -2376,8 +2523,14 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
     parser.add_argument("--encoder-lr", type=float, dest="encoder_lr")
     parser.add_argument("--weight-decay", type=float, dest="weight_decay")
     parser.add_argument("--lr", type=float)
+    parser.add_argument("--lr-scheduler", dest="lr_scheduler")
+    parser.add_argument("--warmup-ratio", type=float, dest="warmup_ratio")
+    parser.add_argument("--min-lr", type=float, dest="min_lr")
+    parser.add_argument("--min-lr-ratio", type=float, dest="min_lr_ratio")
     parser.add_argument("--pretrain-lr", type=float, dest="pretrain_lr")
     parser.add_argument("--class-weights", dest="class_weights")
+    parser.add_argument("--threshold-metric", dest="threshold_metric")
+    parser.add_argument("--layerwise-decay", type=float, dest="layerwise_decay")
     parser.add_argument(
         "--verify-match-threshold",
         type=float,
@@ -2469,6 +2622,13 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
     parser.add_argument("--head-ensemble-size", type=int, dest="head_ensemble_size")
     parser.add_argument("--head-scheduler", dest="head_scheduler")
     parser.add_argument("--unfreeze-top-layers", type=int, dest="unfreeze_top_layers")
+    parser.add_argument("--hybrid-freeze-epochs", type=int, dest="hybrid_freeze_epochs")
+    parser.add_argument("--hybrid-partial-epochs", type=int, dest="hybrid_partial_epochs")
+    parser.add_argument("--hybrid-lr-scheduler", dest="hybrid_lr_scheduler")
+    parser.add_argument("--hybrid-warmup-ratio", type=float, dest="hybrid_warmup_ratio")
+    parser.add_argument("--hybrid-min-lr", type=float, dest="hybrid_min_lr")
+    parser.add_argument("--hybrid-min-lr-ratio", type=float, dest="hybrid_min_lr_ratio")
+    parser.add_argument("--per-task-hparams", dest="per_task_hparams")
     parser.add_argument("--best-config", dest="best_config")
     parser.add_argument("--best-config-json", dest="best_config_json")
     parser.add_argument("--best-config-path", dest="best_config_path")
@@ -2513,6 +2673,13 @@ def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespa
         namespace.head_ensemble_size = 1
     if getattr(namespace, "tox21_head_batch_size", None) is None:
         namespace.tox21_head_batch_size = 256
+    for attr in ("warmup_ratio", "min_lr", "min_lr_ratio", "layerwise_decay"):
+        if getattr(namespace, attr, None) is None:
+            setattr(namespace, attr, None)
+    if getattr(namespace, "threshold_metric", None) is None:
+        namespace.threshold_metric = None
+    if getattr(namespace, "per_task_hparams", None) is None:
+        namespace.per_task_hparams = None
     for attr in ("gnn_type", "hidden_dim", "num_layers", "dropout"):
         provided = getattr(namespace, attr, None) is not None
         setattr(namespace, f"_{attr}_provided", provided)

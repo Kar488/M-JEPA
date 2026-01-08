@@ -1497,6 +1497,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Learning rate for encoder parameters when they are trainable during Tox21 runs",
     )
     tox.add_argument(
+        "--lr-scheduler",
+        dest="lr_scheduler",
+        default=case_cfg.get("lr_scheduler"),
+        help="Learning-rate scheduler for Tox21 fine-tuning (e.g., cosine)",
+    )
+    tox.add_argument(
+        "--warmup-ratio",
+        dest="warmup_ratio",
+        type=float,
+        default=case_cfg.get("warmup_ratio"),
+        help="Warmup ratio for scheduler-based Tox21 fine-tuning",
+    )
+    tox.add_argument(
+        "--min-lr",
+        dest="min_lr",
+        type=float,
+        default=case_cfg.get("min_lr"),
+        help="Minimum learning-rate floor for Tox21 schedulers",
+    )
+    tox.add_argument(
+        "--min-lr-ratio",
+        dest="min_lr_ratio",
+        type=float,
+        default=case_cfg.get("min_lr_ratio"),
+        help="Minimum learning-rate ratio (relative to base LR) for Tox21 schedulers",
+    )
+    tox.add_argument(
         "--full-finetune",
         dest="full_finetune",
         action=argparse.BooleanOptionalAction,
@@ -1531,6 +1558,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional learning-rate scheduler for the Tox21 head (e.g., cosine)",
     )
     tox.add_argument(
+        "--hybrid-freeze-epochs",
+        dest="hybrid_freeze_epochs",
+        type=int,
+        default=case_cfg.get("hybrid_freeze_epochs"),
+        help="Number of epochs to train the head while the encoder is frozen in hybrid mode",
+    )
+    tox.add_argument(
+        "--hybrid-partial-epochs",
+        dest="hybrid_partial_epochs",
+        type=int,
+        default=case_cfg.get("hybrid_partial_epochs"),
+        help="Number of epochs to unfreeze top layers during hybrid mode",
+    )
+    tox.add_argument(
+        "--hybrid-lr-scheduler",
+        dest="hybrid_lr_scheduler",
+        default=case_cfg.get("hybrid_lr_scheduler"),
+        help="Scheduler name for hybrid fine-tuning (defaults to --lr-scheduler if unset)",
+    )
+    tox.add_argument(
+        "--hybrid-warmup-ratio",
+        dest="hybrid_warmup_ratio",
+        type=float,
+        default=case_cfg.get("hybrid_warmup_ratio"),
+        help="Warmup ratio for hybrid fine-tuning",
+    )
+    tox.add_argument(
+        "--hybrid-min-lr",
+        dest="hybrid_min_lr",
+        type=float,
+        default=case_cfg.get("hybrid_min_lr"),
+        help="Minimum learning-rate floor for hybrid fine-tuning",
+    )
+    tox.add_argument(
+        "--hybrid-min-lr-ratio",
+        dest="hybrid_min_lr_ratio",
+        type=float,
+        default=case_cfg.get("hybrid_min_lr_ratio"),
+        help="Minimum learning-rate ratio for hybrid fine-tuning",
+    )
+    tox.add_argument(
         "--weight-decay",
         dest="weight_decay",
         type=float,
@@ -1538,10 +1606,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Weight decay applied to the Tox21 linear head optimiser",
     )
     tox.add_argument(
+        "--layerwise-decay",
+        dest="layerwise_decay",
+        type=float,
+        default=case_cfg.get("layerwise_decay"),
+        help="Layer-wise learning-rate decay factor for encoder parameters",
+    )
+    tox.add_argument(
         "--class-weights",
         dest="class_weights",
         default=case_cfg.get("class_weights"),
         help="Class weighting policy for Tox21 (auto, none, or JSON mapping)",
+    )
+    tox.add_argument(
+        "--threshold-metric",
+        dest="threshold_metric",
+        default=case_cfg.get("threshold_metric"),
+        help="Metric used for post-hoc threshold tuning (does not affect loss)",
+    )
+    tox.add_argument(
+        "--per-task-hparams",
+        dest="per_task_hparams",
+        default=case_cfg.get("per_task_hparams"),
+        help="YAML file containing per-task hyperparameter overrides for Tox21",
     )
     tox.add_argument(
         "--pos-class-weight",
@@ -1632,7 +1719,7 @@ def build_parser() -> argparse.ArgumentParser:
     tox.add_argument(
         "--evaluation-mode",
         dest="evaluation_mode",
-        choices=["pretrain_frozen", "frozen_finetuned", "fine_tuned", "end_to_end", "baseline"],
+        choices=["pretrain_frozen", "frozen_finetuned", "fine_tuned", "end_to_end", "baseline", "hybrid"],
         default="pretrain_frozen",
         help="Tox21 evaluation policy: frozen pretrain baseline, frozen finetuned encoder, or end-to-end fine-tuned model",
     )

@@ -131,6 +131,13 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
         `--pretrain-lr` to tune pretraining without perturbing the linear head. When running with
         `--evaluation-mode fine_tuned` the command automatically enables full encoder fine-tuning when no
         checkpoint is supplied.
+      - `--evaluation-mode hybrid` runs a three-phase schedule (freeze → partial unfreeze → full fine-tune)
+        driven by `TOX21_EPOCHS` with phase split defaults (`TOX21_FREEZE_EPOCHS`, `TOX21_UNFREEZE_TOP_LAYERS`).
+        Hybrid uses warmup+cosine scheduling via `TOX21_LR_SCHEDULER`/`TOX21_WARMUP_RATIO` and a minimum LR
+        floor (`TOX21_MIN_LR`/`TOX21_MIN_LR_RATIO`).
+      - Per-task hyperparameters in `scripts/ci/per_task_hparams/tox21_hparams.yaml` are the source of truth
+        for encoder/head LRs and other overrides; best-config sweeps should not override those values.
+      - `threshold_metric` only affects post-hoc threshold selection and does not change the training loss.
       - CI keeps its larger pretraining sample sizes and streaming chunk knobs in `scripts/ci/train_jepa_ci.yml` so
         stage defaults in `scripts/default.yaml` remain lightweight for local runs; the best-config merger
         treats those CI-owned values as YAML-only so cached grids cannot overwrite them.

@@ -199,6 +199,20 @@ def test_tox21_parser_accepts_multiple_tasks(tmp_path):
     assert args.tasks == ["NR-AR", "NR-ER"]
 
 
+def test_tox21_parser_accepts_hybrid_mode(tmp_path):
+    parser = build_parser()
+    args = parser.parse_args([
+        "tox21",
+        "--csv",
+        str(tmp_path / "tox.csv"),
+        "--task",
+        "NR-AR",
+        "--evaluation-mode",
+        "hybrid",
+    ])
+    assert args.evaluation_mode == "hybrid"
+
+
 def test_grid_search_parser_defaults_and_handler(tmp_path):
     parser = build_parser()
     args = parser.parse_args([

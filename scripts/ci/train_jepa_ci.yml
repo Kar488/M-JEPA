@@ -85,7 +85,7 @@ finetune:
   num_layers: ${FINETUNE_NUM_LAYERS:-3}
   dropout: ${FINETUNE_DROPOUT:-0.1}
   
-  layerwise_decay: ${FINETUNE_LAYERWISE_DECAY:-}
+  layerwise_decay: ${TOX21_LAYERWISE_DECAY:-${FINETUNE_LAYERWISE_DECAY:-}}
 
   use_focal_loss: ${FINETUNE_USE_FOCAL_LOSS:-false}
   oversample_minority: ${FINETUNE_OVERSAMPLE_MINORITY:-false}
@@ -151,14 +151,26 @@ tox21:
   patience: 12
   head_lr: ${TOX21_HEAD_LR:-0.00025}
   encoder_lr: ${TOX21_ENCODER_LR:-3.0e-6}
+  lr_scheduler: ${TOX21_LR_SCHEDULER:-}
+  warmup_ratio: ${TOX21_WARMUP_RATIO:-}
+  min_lr: ${TOX21_MIN_LR:-}
+  min_lr_ratio: ${TOX21_MIN_LR_RATIO:-}
+  hybrid_freeze_epochs: ${TOX21_FREEZE_EPOCHS:-}
+  hybrid_partial_epochs: ${TOX21_PARTIAL_EPOCHS:-}
+  hybrid_lr_scheduler: ${TOX21_LR_SCHEDULER:-}
+  hybrid_warmup_ratio: ${TOX21_WARMUP_RATIO:-}
+  hybrid_min_lr: ${TOX21_MIN_LR:-}
+  hybrid_min_lr_ratio: ${TOX21_MIN_LR_RATIO:-}
   weight_decay: ${TOX21_WEIGHT_DECAY:-0.0001}
   hidden_dim: ${TOX21_HIDDEN_DIM:-384}
   num_layers: ${TOX21_NUM_LAYERS:-4}
   dropout: ${TOX21_DROPOUT:-0.2}
   head_ensemble_size: ${TOX21_HEAD_ENSEMBLE_SIZE:-1}
   head_scheduler: ${TOX21_HEAD_SCHEDULER:-cosine}
-  layerwise_decay: ${FINETUNE_LAYERWISE_DECAY:-}
-  unfreeze_top_layers: ${UNFREEZE_TOP_LAYERS:-0}
+  layerwise_decay: ${TOX21_LAYERWISE_DECAY:-${FINETUNE_LAYERWISE_DECAY:-}}
+  threshold_metric: ${TOX21_THRESHOLD_METRIC:-}
+  per_task_hparams: ${TOX21_PER_TASK_HPARAMS:-${FINETUNE_PER_TASK_HPARAMS:-${APP_DIR}/scripts/ci/per_task_hparams/tox21_hparams.yaml}}
+  unfreeze_top_layers: ${TOX21_UNFREEZE_TOP_LAYERS:-0}
   triage_pct: ${TOX21_TRIAGE_PCT:-0.0}
   class_weights: "${TOX21_CLASS_WEIGHTS:-auto}"
   pos_class_weight: "${TOX21_POS_CLASS_WEIGHT:-}"
