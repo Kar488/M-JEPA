@@ -184,14 +184,22 @@ fi
 # Ensure the flag carries an explicit "unknown" marker instead of
 # inheriting the "false" default from parameter expansion.
 baseline_status="unknown"
-if [[ -z "${MET_BENCHMARK_BASELINE+x}" ]]; then
-  baseline_status="unknown"
-else
-  # Treat blank or whitespace-only values as unknown to avoid false negatives.
-  baseline_trimmed="${MET_BENCHMARK_BASELINE//[[:space:]]/}"
-  if [[ -z "$baseline_trimmed" ]]; then
-    baseline_status="unknown"
+baseline_source="unset"
+baseline_value="${MET_BENCHMARK_BASELINE-}"
+if [[ -z "${MET_BENCHMARK_BASELINE+x}" || -z "${MET_BENCHMARK_BASELINE//[[:space:]]/}" ]]; then
+  if [[ -n "${MET_BENCHMARK_FINAL+x}" && -n "${MET_BENCHMARK_FINAL//[[:space:]]/}" ]]; then
+    baseline_source="MET_BENCHMARK_FINAL"
+    baseline_value="${MET_BENCHMARK_FINAL}"
   else
+    baseline_value=""
+  fi
+else
+  baseline_source="MET_BENCHMARK_BASELINE"
+fi
+if [[ -n "$baseline_value" ]]; then
+  # Treat blank or whitespace-only values as unknown to avoid false negatives.
+  baseline_trimmed="${baseline_value//[[:space:]]/}"
+  if [[ -n "$baseline_trimmed" ]]; then
     baseline_lower="${baseline_trimmed,,}"
     case "$baseline_lower" in
       true|false)
@@ -205,7 +213,7 @@ else
 fi
 export MET_BENCHMARK_BASELINE="$baseline_status"
 
-echo "[finetune][gate] normalized MET_BENCHMARK_BASELINE=${baseline_status}" >&2
+echo "[finetune][gate] normalized MET_BENCHMARK_BASELINE=${baseline_status} (source=${baseline_source})" >&2
 
 if [[ "$baseline_status" == "true" ]]; then
   echo "[finetune] Baseline met benchmark; skipping fine-tune stage."
@@ -237,14 +245,13 @@ if [[ ! -f "$manifest_path" ]]; then
   exit 1
 fi
 
-if [[ "$baseline_status" == "false" ]]; then
-  : "${FINETUNE_LABELED_CSV:=${APP_DIR}/data/tox21/data.csv}"
-  if [[ -z "${FINETUNE_LABELED_DIR:-}" ]]; then
-    FINETUNE_LABELED_DIR="$(dirname "${FINETUNE_LABELED_CSV}")"
-  elif [[ -f "${FINETUNE_LABELED_DIR}" ]]; then
-    FINETUNE_LABELED_CSV="${FINETUNE_LABELED_CSV:-${FINETUNE_LABELED_DIR}}"
-    FINETUNE_LABELED_DIR="$(dirname "${FINETUNE_LABELED_DIR}")"
-  fi
+if [[ "$baseline_status" != "true" ]]; then
+  prev_labeled_dir="${FINETUNE_LABELED_DIR:-}"
+  prev_labeled_csv="${FINETUNE_LABELED_CSV:-}"
+  prev_label_col="${FINETUNE_LABEL_COL:-}"
+  FINETUNE_LABELED_CSV="${APP_DIR}/data/tox21/data.csv"
+  FINETUNE_LABELED_DIR="$(dirname "${FINETUNE_LABELED_CSV}")"
+  unset FINETUNE_LABEL_COL
   default_tasks=(
     "NR-AR" "NR-AR-LBD" "NR-AhR" "NR-Aromatase"
     "NR-ER" "NR-ER-LBD" "NR-PPAR-gamma" "SR-ARE"
@@ -310,7 +317,10 @@ if [[ "$baseline_status" == "false" ]]; then
 
   export FINETUNE_DATASET_OVERRIDE_REASON
 
-  echo "[finetune] Baseline gate unmet; redirecting fine-tune to Tox21 tasks: ${FINETUNE_LABEL_COLS} (task_type=${FINETUNE_TASK_TYPE} metric=${FINETUNE_METRIC})" >&2
+  echo "[finetune] Baseline gate status=${baseline_status}; redirecting fine-tune to Tox21 tasks: ${FINETUNE_LABEL_COLS} (task_type=${FINETUNE_TASK_TYPE} metric=${FINETUNE_METRIC})." >&2
+  if [[ -n "$prev_labeled_dir" || -n "$prev_labeled_csv" || -n "$prev_label_col" ]]; then
+    echo "[finetune] Overrode labeled dataset/label from labeled_dir=${prev_labeled_dir:-<unset>} labeled_csv=${prev_labeled_csv:-<unset>} label_col=${prev_label_col:-<unset>} to labeled_dir=${FINETUNE_LABELED_DIR} labeled_csv=${FINETUNE_LABELED_CSV} label_col=${FINETUNE_LABEL_COL}." >&2
+  fi
 fi
 
 # fix: ensure fine-tune emits stage outputs for downstream evaluation
