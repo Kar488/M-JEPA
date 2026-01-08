@@ -56,6 +56,13 @@ def _cache_schema_suffix(add_3d: bool) -> str:
     return f"{GRAPH_CACHE_VERSION}_3d{int(add_3d)}_e{edge_dim}_{GRAPH_SCHEMA_VERSION}"
 
 
+def _cache_identity(filepath: str, label_col: Optional[str]) -> str:
+    digest = hashlib.sha1(  # noqa: S324 - non-cryptographic fingerprint
+        f"{os.path.abspath(filepath)}|{label_col or ''}".encode("utf-8")
+    ).hexdigest()
+    return digest[:10]
+
+
 def _resolve_worker_count(num_workers: Optional[int]) -> int:
     """Map worker counts to an automatic CPU-friendly budget when unset."""
 
@@ -1146,7 +1153,10 @@ class GraphDataset:
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
             cache_name = os.path.splitext(os.path.basename(filepath))[0]
-            cache_name = f"{cache_name}_{_cache_schema_suffix(add_3d)}.pkl"
+            cache_name = (
+                f"{cache_name}_{_cache_identity(filepath, label_col)}"
+                f"_{_cache_schema_suffix(add_3d)}.pkl"
+            )
             cache_path = os.path.join(cache_dir, cache_name)
             if os.path.exists(cache_path):
                 if is_main_process():
@@ -1295,7 +1305,10 @@ class GraphDataset:
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
             cache_name = os.path.splitext(os.path.basename(filepath))[0]
-            cache_name = f"{cache_name}_{_cache_schema_suffix(add_3d)}.pkl"
+            cache_name = (
+                f"{cache_name}_{_cache_identity(filepath, label_col)}"
+                f"_{_cache_schema_suffix(add_3d)}.pkl"
+            )
             cache_path = os.path.join(cache_dir, cache_name)
             if os.path.exists(cache_path):
                 if is_main_process():
