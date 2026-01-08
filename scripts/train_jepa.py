@@ -1346,7 +1346,7 @@ def build_parser() -> argparse.ArgumentParser:
     ft.add_argument(
         "--threshold-metric",
         dest="threshold_metric",
-        choices=["f1", "roc_auc"],
+        choices=["f1", "roc_auc", "pr_auc"],
         default="f1",
         help="Validation metric to optimise when tuning the decision threshold",
     )
