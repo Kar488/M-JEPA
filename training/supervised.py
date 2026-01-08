@@ -2056,7 +2056,7 @@ def _train_linear_head_impl(
             min_len = local_len.clone()
             dist_mod.all_reduce(min_len, op=dist_mod.ReduceOp.MIN)
             target_len = int(min_len.item())
-            if batch_size > 0 and target_len % batch_size != 0:
+            if batch_size > 0 and target_len >= batch_size and target_len % batch_size != 0:
                 target_len = (target_len // batch_size) * batch_size
             if target_len > 0 and len(train_idx_rank) > target_len:
                 logger.warning(
