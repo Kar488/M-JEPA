@@ -1862,6 +1862,8 @@ def main() -> None:
     args = parser.parse_args()
     if not hasattr(args, "func"):
         parser.error("No subcommand provided")
+    if not is_main_process():
+        logging.getLogger().setLevel(logging.WARNING)
     if is_main_process():
         logger.info("Invoking subcommand %s", getattr(args, "func", None))
     args.func(args)

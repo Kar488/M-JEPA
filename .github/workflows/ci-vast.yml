@@ -98,6 +98,8 @@ env:
   FORCE_RERUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rerun || '' }}
   GRID_MODE_VAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb' }}
   TOX21_CALIBRATE_PER_HEAD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tox21_calibrate_per_head || 'false' }}
+  BENCH_RUN_VAL: "1"
+  BENCH_RUN_TEST: "1"
 
 jobs:
   # Vast workloads still execute on the remote GPU tenant. Even though many jobs
@@ -946,8 +948,11 @@ jobs:
         env:
           HARD_WALL_MINS: 1500
           KILL_AFTER_SECS: 120
+          BESTCFG_NO_EPOCHS: "1"
           BENCH_VAL_DIR:  ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/val
           BENCH_TEST_DIR: ${{ env.APP_DIR }}/data/katielinkmoleculenet_benchmark/test
+          BENCH_EPOCHS: "200"
+          BENCH_LR: "1.0e-3"
         shell: bash
         run: |
           set -euo pipefail

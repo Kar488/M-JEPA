@@ -46,9 +46,9 @@ evaluate:
   seeds: [0, 1, 2]      # Seeds for evaluation averaging
 
 benchmark:
-  epochs: 50            # Training epochs for benchmark probes
+  epochs: 200           # Training epochs for benchmark probes
   patience: 10          # Early stopping patience
-  lr: 1.0e-4            # Learning rate for benchmarking probes
+  lr: 1.0e-3            # Learning rate for benchmarking probes
   batch_size: 256       # Batch size for benchmarking
   seeds: [0, 1, 2]      # Seeds for benchmarking
 

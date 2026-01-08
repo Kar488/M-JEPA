@@ -113,6 +113,8 @@ bench:
   dataset: esol
   task_type: regression
   jepa_encoder: ${PRETRAIN_DIR}/encoder.pt
+  epochs: ${BENCH_EPOCHS:-200}
+  lr: ${BENCH_LR:-1.0e-3}
   report_dir: ${BENCH_DIR}/reports
   report_stem: ${REPORT_STEM}
   use_wandb: true

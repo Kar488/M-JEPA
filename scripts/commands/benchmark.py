@@ -57,6 +57,15 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         seeds = CONFIG.get("benchmark", {}).get("seeds", [0])  # type: ignore[assignment]
 
     eval_finetuned = bool(getattr(args, "eval_finetuned", False))
+    auto_eval_finetuned = (
+        not eval_finetuned
+        and bool(getattr(args, "ft_ckpt", None))
+        and not getattr(args, "contrastive_encoder", None)
+        and getattr(args, "test_dir", None)
+    )
+    if auto_eval_finetuned:
+        eval_finetuned = True
+        logger.info("Auto-enabling eval-only mode for fine-tuned checkpoint.")
     config_payload: Dict[str, Any] = {
         "labeled_dir": args.labeled_dir,
         "test_dir": getattr(args, "test_dir", None),

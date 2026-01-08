@@ -10,6 +10,15 @@ source "$(dirname "$0")/stage.sh"
 # the repository sample datasets.
 : "${BENCH_VAL_DIR:=${APP_DIR}/data/katielinkmoleculenet_benchmark/val}"
 : "${BENCH_TEST_DIR:=${APP_DIR}/data/katielinkmoleculenet_benchmark/test}"
+: "${BENCH_RUN_VAL:=0}"
+: "${BENCH_RUN_TEST:=1}"
+
+should_run_bench() {
+  case "${1,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 ci_print_env_diag
 
@@ -32,15 +41,24 @@ fi
 
 
 # --- 1) VAL precheck (eval-only, no training) ---
-export BENCH_DATA_DIR="${BENCH_VAL_DIR}"             # becomes --labeled-dir
-export REPORT_STEM="val_${GITHUB_RUN_ID:-${RUN_ID:-bench}}"
-export WANDB_NAME="evaluate-val"
-export WANDB_JOB_TYPE="evaluate"
-run_stage bench
+if should_run_bench "${BENCH_RUN_VAL}"; then
+  export BENCH_DATA_DIR="${BENCH_VAL_DIR}"             # becomes --labeled-dir
+  export REPORT_STEM="val_${GITHUB_RUN_ID:-${RUN_ID:-bench}}"
+  export WANDB_NAME="evaluate-val"
+  export WANDB_JOB_TYPE="evaluate"
+  run_stage bench
+fi
 
 # --- 2) TEST benchmark (eval-only, no training) ---
-export BENCH_DATA_DIR="${BENCH_TEST_DIR}"            # becomes --labeled-dir
-export REPORT_STEM="test_${GITHUB_RUN_ID:-${RUN_ID:-bench}}"
-export WANDB_NAME="benchmark-test"
-export WANDB_JOB_TYPE="benchmark"
-run_stage bench
+if should_run_bench "${BENCH_RUN_TEST}"; then
+  export BENCH_DATA_DIR="${BENCH_TEST_DIR}"            # becomes --labeled-dir
+  export REPORT_STEM="test_${GITHUB_RUN_ID:-${RUN_ID:-bench}}"
+  export WANDB_NAME="benchmark-test"
+  export WANDB_JOB_TYPE="benchmark"
+  run_stage bench
+fi
+
+if ! should_run_bench "${BENCH_RUN_VAL}" && ! should_run_bench "${BENCH_RUN_TEST}"; then
+  echo "[bench] BENCH_RUN_VAL=0 and BENCH_RUN_TEST=0; nothing to run." >&2
+  exit 1
+fi
