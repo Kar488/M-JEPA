@@ -1158,6 +1158,22 @@ def _run_tox21_single_task(
     bestcfg_epochs_override = bool(getattr(args, "_bestcfg_epochs_override", False))
     bestcfg_patience_override = bool(getattr(args, "_bestcfg_patience_override", False))
 
+    head_lr_provided = _flag_was_provided(("--head-lr", "--head_lr"))
+    encoder_lr_provided = _flag_was_provided(("--encoder-lr", "--encoder_lr"))
+    layerwise_provided = _flag_was_provided(("--layerwise-decay", "--layerwise_decay"))
+
+    head_lr_value = task_overrides.get("head_lr", getattr(args, "head_lr", None))
+    if head_lr_value is None and hybrid_defaults and not head_lr_provided:
+        head_lr_value = hybrid_defaults.get("head_lr", head_lr_value)
+
+    encoder_lr_value = task_overrides.get("encoder_lr", getattr(args, "encoder_lr", None))
+    if encoder_lr_value is None and hybrid_defaults and not encoder_lr_provided:
+        encoder_lr_value = hybrid_defaults.get("encoder_lr", encoder_lr_value)
+
+    layerwise_decay_value = task_overrides.get("layerwise_decay", getattr(args, "layerwise_decay", None))
+    if layerwise_decay_value is None and hybrid_defaults and not layerwise_provided:
+        layerwise_decay_value = hybrid_defaults.get("layerwise_decay", layerwise_decay_value)
+
     case_study_kwargs: Dict[str, Any] = {
         "csv_path": getattr(args, "csv"),
         "task_name": task_name,
@@ -1170,18 +1186,8 @@ def _run_tox21_single_task(
         "warmup_ratio": getattr(args, "warmup_ratio", None),
         "min_lr": getattr(args, "min_lr", None),
         "min_lr_ratio": getattr(args, "min_lr_ratio", None),
-        "head_lr": task_overrides.get(
-            "head_lr",
-            getattr(args, "head_lr", None)
-            if not hybrid_defaults
-            else hybrid_defaults.get("head_lr", getattr(args, "head_lr", None)),
-        ),
-        "encoder_lr": task_overrides.get(
-            "encoder_lr",
-            getattr(args, "encoder_lr", None)
-            if not hybrid_defaults
-            else hybrid_defaults.get("encoder_lr", getattr(args, "encoder_lr", None)),
-        ),
+        "head_lr": head_lr_value,
+        "encoder_lr": encoder_lr_value,
         "weight_decay": getattr(args, "weight_decay", None),
         "class_weights": class_weights_arg,
         "pos_class_weight": pos_class_weight_arg,
@@ -1224,12 +1230,7 @@ def _run_tox21_single_task(
         "tox21_head_batch_size": int(getattr(args, "tox21_head_batch_size", 256) or 256),
         "head_ensemble_size": head_ensemble_value,
         "head_scheduler": getattr(args, "head_scheduler", None),
-        "layerwise_decay": task_overrides.get(
-            "layerwise_decay",
-            getattr(args, "layerwise_decay", None)
-            if not hybrid_defaults
-            else hybrid_defaults.get("layerwise_decay", getattr(args, "layerwise_decay", None)),
-        ),
+        "layerwise_decay": layerwise_decay_value,
         "threshold_metric": task_overrides.get(
             "threshold_metric",
             getattr(args, "threshold_metric", None),
