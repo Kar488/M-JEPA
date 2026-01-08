@@ -95,8 +95,6 @@ bench:
     - task
     - jepa_encoder
     - ft_ckpt
-    - lr
-    - learning_rate
 grid:
   yaml_only:
     - cache_dir
