@@ -379,7 +379,7 @@ def test_encoder_base_handles_sequence_wrapped_graph():
     assert encoder.seen_graphs == [graph]
 
 
-def test_train_linear_head_falls_back_when_ddp_init_fails(monkeypatch, caplog):
+def test_train_linear_head_raises_when_ddp_init_fails(monkeypatch, caplog):
     monkeypatch.setenv("WORLD_SIZE", "2")
     monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
     monkeypatch.setenv("RANK", "0")
@@ -398,24 +398,24 @@ def test_train_linear_head_falls_back_when_ddp_init_fails(monkeypatch, caplog):
 
     caplog.set_level(logging.WARNING, logger="training.supervised")
 
-    metrics = train_linear_head(
-        dataset,
-        encoder,
-        "classification",
-        epochs=1,
-        batch_size=2,
-        lr=1e-3,
-        patience=1,
-        devices=2,
-        device="cpu",
-    )
+    with pytest.raises(RuntimeError, match="DDP initialisation failed"):
+        train_linear_head(
+            dataset,
+            encoder,
+            "classification",
+            epochs=1,
+            batch_size=2,
+            lr=1e-3,
+            patience=1,
+            devices=2,
+            device="cpu",
+        )
 
-    assert "falling back to single-process execution" in caplog.text
-    assert "roc_auc" in metrics or "val_auc" in metrics
-    assert os.environ.get("WORLD_SIZE") == "1"
-    assert os.environ.get("LOCAL_WORLD_SIZE") == "1"
-    assert os.environ.get("RANK") == "0"
-    assert os.environ.get("LOCAL_RANK") == "0"
+    assert "refusing single-process fallback" in caplog.text
+    assert os.environ.get("WORLD_SIZE") is None
+    assert os.environ.get("LOCAL_WORLD_SIZE") is None
+    assert os.environ.get("RANK") is None
+    assert os.environ.get("LOCAL_RANK") is None
 
 
 def test_train_linear_head_retries_with_gloo_on_duplicate_devices(monkeypatch):
@@ -439,6 +439,56 @@ def test_train_linear_head_retries_with_gloo_on_duplicate_devices(monkeypatch):
     monkeypatch.setattr(
         "utils.ddp.init_distributed",
         _init_with_duplicate_failure,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervised_mod.torch.distributed,
+        "is_available",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervised_mod.torch.distributed,
+        "is_initialized",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervised_mod.torch.distributed,
+        "get_rank",
+        lambda: 0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervised_mod.torch.distributed,
+        "get_world_size",
+        lambda: 2,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervised_mod.torch.distributed,
+        "all_reduce",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    class _DummyDDP:  # noqa: N801 - mimics torch class name
+        def __init__(self, module, **_kwargs):
+            self.module = module
+
+        @property
+        def training(self):  # type: ignore[override]
+            return self.module.training
+
+        def __getattr__(self, name: str):
+            return getattr(self.module, name)
+
+        def __call__(self, *args, **kwargs):
+            return self.module(*args, **kwargs)
+
+    monkeypatch.setattr(
+        supervised_mod.nn.parallel,
+        "DistributedDataParallel",
+        _DummyDDP,
         raising=False,
     )
 
@@ -465,6 +515,34 @@ def test_train_linear_head_retries_with_gloo_on_duplicate_devices(monkeypatch):
     assert init_calls[1] == "gloo"
     assert "roc_auc" in metrics or "val_auc" in metrics
     assert metrics["head"].training  # type: ignore[index]
+
+
+def test_train_linear_head_requires_ddp_for_multi_device(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "1")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+
+    monkeypatch.setattr("utils.ddp.init_distributed", lambda *_a, **_k: False, raising=False)
+
+    np.random.seed(1)
+    torch.manual_seed(1)
+    labels = [0, 1, 0, 1]
+    dataset = DummyDataset(labels)
+    encoder = DummyEncoder(4)
+
+    with pytest.raises(RuntimeError, match="Requested multiple devices without active DDP"):
+        train_linear_head(
+            dataset,
+            encoder,
+            "classification",
+            epochs=1,
+            batch_size=2,
+            lr=1e-3,
+            patience=1,
+            devices=2,
+            device="cpu",
+        )
 
 
 def test_train_linear_head_uses_encode_graph_cache(monkeypatch):
@@ -654,4 +732,3 @@ def test_resolve_cuda_spawn_context_returns_none_on_failure(monkeypatch):
     monkeypatch.setattr(supervised_mod.torch, "multiprocessing", _DummyMP(), raising=False)
 
     assert _resolve_cuda_spawn_context("cuda") is None
-
