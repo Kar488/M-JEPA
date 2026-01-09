@@ -811,6 +811,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
 
 
 def cmd_benchmark(args: argparse.Namespace) -> None:
+    _maybe_use_stage_sh("benchmark")
     _benchmark = _load_cmd("benchmark")
     _inject_shared(_benchmark)
     _benchmark.cmd_benchmark(args)
