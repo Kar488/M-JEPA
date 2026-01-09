@@ -4,6 +4,7 @@ set -euo pipefail
 trap 'echo "[ci] error at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 unset BESTCFG_NO_EPOCHS
+unset WANDB_RUN_ID
 export MJEPACI_STAGE="finetune"
 
 source "$(dirname "$0")/common.sh"
