@@ -29,6 +29,7 @@ import torch.nn.functional as F
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data.distributed import DistributedSampler
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import f1_score, precision_recall_curve, roc_curve
 
@@ -686,6 +687,55 @@ class _GraphBatchCollator:
             "batch_indices": torch.as_tensor(indices, dtype=torch.long),
         }
         return extras
+
+
+class _WeightedDistributedSampler(torch.utils.data.Sampler[int]):
+    """Distributed sampler that supports weighted sampling with replacement."""
+
+    def __init__(
+        self,
+        weights: Iterable[float],
+        *,
+        num_replicas: Optional[int] = None,
+        rank: Optional[int] = None,
+        shuffle: bool = True,
+        seed: int = 0,
+    ) -> None:
+        self.weights = torch.as_tensor(list(weights), dtype=torch.double)
+        self.num_replicas = num_replicas if num_replicas is not None else get_world_size()
+        self.rank = rank if rank is not None else get_rank()
+        self.shuffle = bool(shuffle)
+        self.seed = int(seed)
+        self.epoch = 0
+        if self.num_replicas <= 0:
+            self.num_replicas = 1
+        if self.rank < 0:
+            self.rank = 0
+        self.num_samples = int(math.ceil(len(self.weights) / self.num_replicas)) if len(self.weights) else 0
+        self.total_size = self.num_samples * self.num_replicas
+
+    def __iter__(self):
+        if len(self.weights) == 0 or self.total_size <= 0:
+            return iter(())
+        generator = torch.Generator()
+        if self.shuffle:
+            generator.manual_seed(self.seed + self.epoch)
+        else:
+            generator.manual_seed(self.seed)
+        sampled = torch.multinomial(
+            self.weights,
+            self.total_size,
+            replacement=True,
+            generator=generator,
+        ).tolist()
+        start = int(self.rank)
+        return iter(sampled[start:self.total_size:self.num_replicas])
+
+    def __len__(self) -> int:
+        return int(self.num_samples)
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
 
 
 def _extract_batch_indices(batch_meta) -> Optional[List[int]]:
@@ -2053,21 +2103,22 @@ def _train_linear_head_impl(
     world = get_world_size() if distributed else 1
     train_idx_rank = train_idx[rank::world]
     train_idx_rank_raw = list(train_idx_rank)
+    train_idx_for_sampler = train_idx if distributed else train_idx_rank_raw
 
     train_sampler_weights: Optional[List[float]] = None
-    if task_type == "classification" and oversample_minority and len(train_idx_rank_raw) > 0:
+    if task_type == "classification" and oversample_minority and len(train_idx_for_sampler) > 0:
         labels_attr = getattr(dataset, "labels", None)
         if labels_attr is not None:
             labels_arr = np.asarray(labels_attr)
             try:
-                subset = labels_arr[train_idx_rank_raw]
+                subset = labels_arr[train_idx_for_sampler]
             except Exception:
                 subset = labels_arr
             computed_weights = _compute_pos_weight_from_labels(np.asarray(subset))
             if computed_weights is not None:
                 scale = float(np.nanmean(computed_weights))
                 if math.isfinite(scale) and scale > 0:
-                    weights = np.ones(len(train_idx_rank_raw), dtype=np.float32)
+                    weights = np.ones(len(train_idx_for_sampler), dtype=np.float32)
                     pos_mask = subset > 0 if subset.ndim == 1 else (subset > 0).any(axis=1)
                     weights[np.asarray(pos_mask, dtype=bool)] = scale
                     weights = np.clip(weights, 1e-6, None)
@@ -2075,36 +2126,34 @@ def _train_linear_head_impl(
 
     if task_type == "classification" and dynamic_pos_weight_enabled:
         labels_attr = getattr(dataset, "labels", None)
-        if labels_attr is not None and len(train_idx_rank_raw) > 0:
+        dynamic_weight_indices = train_idx_for_sampler if distributed else train_idx_rank_raw
+        if labels_attr is not None and len(dynamic_weight_indices) > 0:
             dynamic_weight_np = _compute_pos_weight_from_labels(
-                np.asarray(labels_attr)[train_idx_rank_raw]
+                np.asarray(labels_attr)[dynamic_weight_indices]
             )
             if dynamic_weight_np is not None:
                 pos_weight_tensor = torch.as_tensor(dynamic_weight_np, dtype=torch.float32, device=device_t).reshape(-1)
                 loss_fn = _make_loss_fn(pos_weight_tensor)
 
-    if distributed:
-        dist_mod = getattr(torch, "distributed", None)
-        if (
-            dist_mod is not None
-            and getattr(dist_mod, "is_available", lambda: False)()
-            and getattr(dist_mod, "is_initialized", lambda: False)()
-        ):
-            local_len = torch.tensor([len(train_idx_rank)], device=device_t)
-            min_len = local_len.clone()
-            dist_mod.all_reduce(min_len, op=dist_mod.ReduceOp.MIN)
-            target_len = int(min_len.item())
-            if batch_size > 0 and target_len >= batch_size and target_len % batch_size != 0:
-                target_len = (target_len // batch_size) * batch_size
-            if target_len > 0 and len(train_idx_rank) > target_len:
-                logger.warning(
-                    "[finetune] Truncating per-rank train indices from %d to %d to keep DDP ranks aligned.",
-                    len(train_idx_rank),
-                    target_len,
-                )
-                train_idx_rank = list(train_idx_rank[:target_len])
-                if train_sampler_weights is not None:
-                    train_sampler_weights = list(train_sampler_weights[:target_len])
+    train_sampler = None
+    train_split_size = len(train_idx_rank_raw)
+    if distributed and train_idx_for_sampler:
+        if oversample_minority and train_sampler_weights is not None:
+            train_sampler = _WeightedDistributedSampler(
+                train_sampler_weights,
+                num_replicas=world,
+                rank=rank,
+                shuffle=True,
+            )
+        else:
+            train_sampler = DistributedSampler(
+                train_idx_for_sampler,
+                num_replicas=world,
+                rank=rank,
+                shuffle=True,
+                drop_last=False,
+            )
+        train_split_size = len(train_sampler)
 
     collate_fn = _GraphBatchCollator(dataset, task_type)
     pin_memory_enabled = bool(pin_memory and device_t.type == "cuda")
@@ -2144,9 +2193,7 @@ def _train_linear_head_impl(
         return base + slots * (32 + 48 * prefetch)
 
     active_loader_count = sum(
-        1
-        for split_size in (len(train_idx_rank), len(val_idx), len(test_idx))
-        if split_size > 0
+        1 for split_size in (train_split_size, len(val_idx), len(test_idx)) if split_size > 0
     )
     current_workers = max(0, int(num_workers))
     if current_workers > 0:
@@ -2239,10 +2286,18 @@ def _train_linear_head_impl(
             )
         return effective
 
-    def _build_loader(indices: List[int], shuffle: bool, split_name: str) -> Optional[DataLoader]:
+    def _build_loader(
+        indices: List[int],
+        shuffle: bool,
+        split_name: str,
+        *,
+        sampler: Optional[torch.utils.data.Sampler[int]] = None,
+        split_size: Optional[int] = None,
+    ) -> Optional[DataLoader]:
         if not indices:
             return None
-        worker_count = _effective_worker_count(len(indices))
+        effective_split_size = len(indices) if split_size is None else split_size
+        worker_count = _effective_worker_count(effective_split_size)
         loader_prefetch = prefetch_factor
         spawn_ctx = None
         if worker_count > 0:
@@ -2258,19 +2313,20 @@ def _train_linear_head_impl(
         elif loader_prefetch is not None:
             batches_for_split = max(1, math.ceil(len(indices) / max(1, batch_size)))
             loader_prefetch = max(1, min(loader_prefetch, max(2, batches_for_split)))
-        sampler = None
-        if (
-            split_name == "train"
-            and oversample_minority
-            and train_sampler_weights is not None
-            and len(train_sampler_weights) == len(indices)
-        ):
-            sampler = WeightedRandomSampler(
-                weights=train_sampler_weights,
-                num_samples=len(train_sampler_weights),
-                replacement=True,
-            )
-            shuffle = False
+        local_sampler = sampler
+        if local_sampler is None:
+            if (
+                split_name == "train"
+                and oversample_minority
+                and train_sampler_weights is not None
+                and len(train_sampler_weights) == len(indices)
+            ):
+                local_sampler = WeightedRandomSampler(
+                    weights=train_sampler_weights,
+                    num_samples=len(train_sampler_weights),
+                    replacement=True,
+                )
+                shuffle = False
 
         loader_kwargs = {
             "batch_size": batch_size,
@@ -2280,8 +2336,9 @@ def _train_linear_head_impl(
             "collate_fn": collate_fn,
             "drop_last": False,
         }
-        if sampler is not None:
-            loader_kwargs["sampler"] = sampler
+        if local_sampler is not None:
+            loader_kwargs["sampler"] = local_sampler
+            loader_kwargs["shuffle"] = False
         if worker_count > 0:
             loader_kwargs["persistent_workers"] = bool(persistent_workers)
             if loader_prefetch is not None:
@@ -2361,7 +2418,13 @@ def _train_linear_head_impl(
             _remove_loader_iterator(loader)
         _reset_mp_loader_iters(existing)
         return (
-            _build_loader(train_idx_rank, shuffle=True, split_name="train"),
+            _build_loader(
+                train_idx_for_sampler,
+                shuffle=train_sampler is None,
+                split_name="train",
+                sampler=train_sampler,
+                split_size=train_split_size,
+            ),
             _build_loader(val_idx, shuffle=False, split_name="val"),
             _build_loader(test_idx, shuffle=False, split_name="test"),
         )
@@ -2381,7 +2444,7 @@ def _train_linear_head_impl(
         logger.info(
             "[finetune] train loader built with %d batches (split size=%d, batch_size=%d, workers=%d)",
             planned_train_batches,
-            len(train_idx_rank),
+            train_split_size,
             batch_size,
             train_loader_workers,
         )
@@ -2753,7 +2816,7 @@ def _train_linear_head_impl(
     if train_loader is None:
         logger.warning(
             "No training samples available; skipping linear-head optimisation (split size=%d).",
-            len(train_idx_rank),
+            train_split_size,
         )
     else:
         current_phase_name = "default"
@@ -2868,11 +2931,19 @@ def _train_linear_head_impl(
 
             if task_type == "classification" and dynamic_pos_weight_enabled:
                 labels_attr = getattr(dataset, "labels", None)
-                if labels_attr is not None and len(train_idx_rank) > 0:
-                    updated = _compute_pos_weight_from_labels(np.asarray(labels_attr)[train_idx_rank])
+                dynamic_weight_indices = train_idx_for_sampler if distributed else train_idx_rank
+                if labels_attr is not None and len(dynamic_weight_indices) > 0:
+                    updated = _compute_pos_weight_from_labels(
+                        np.asarray(labels_attr)[dynamic_weight_indices]
+                    )
                     if updated is not None:
                         pos_weight_tensor = torch.as_tensor(updated, dtype=torch.float32, device=device_t).reshape(-1)
                         loss_fn = _make_loss_fn(pos_weight_tensor)
+
+            if distributed and train_loader is not None:
+                sampler = getattr(train_loader, "sampler", None)
+                if hasattr(sampler, "set_epoch"):
+                    sampler.set_epoch(epoch)
 
             encoder.eval()
             head_module.train()
