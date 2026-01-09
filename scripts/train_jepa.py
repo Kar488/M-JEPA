@@ -1438,7 +1438,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_model_args(ev)
     ev.set_defaults(func=cmd_evaluate)
     # Benchmark subcommand
-    bench = sub.add_parser("benchmark", help="Compare JEPA and contrastive encoders on labelled data");
+    bench = sub.add_parser(
+        "benchmark",
+        help="Compare JEPA and contrastive encoders on labelled data",
+        description=(
+            "Compare JEPA and contrastive encoders on labelled data. "
+            "For multi-GPU benchmarking, launch with torchrun so DDP is active; "
+            "otherwise --devices>1 falls back to a single-device run."
+        ),
+    )
     bench.add_argument("--labeled-dir", required=True, help="Directory of labelled graphs");
     bench.add_argument("--test-dir", required=False, default=None, help="Optional directory of test graphs to hold out for benchmarking");
     bench.add_argument("--label-col", type=str, default="label", help="Label column name");

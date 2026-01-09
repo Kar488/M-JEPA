@@ -146,6 +146,8 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
         treats those CI-owned values as YAML-only so cached grids cannot overwrite them.
       - Fine-tuning defaults favour longer runs on smaller batches (50 epochs, batch size 128, patience 5) and expose
         separate `--encoder-lr` / `--head-lr` knobs so the backbone can adapt as quickly as the probe.
+      - Benchmark runs that request multiple GPUs (`--devices > 1`) require a DDP launch via `torchrun`; otherwise the
+        benchmark command will warn and fall back to a single-device run.
       - You can now dial in class imbalance and encoder updates explicitly:
         * `--pos-class-weight` accepts either a float or per-task `TASK=weight` override to up-weight rare positives.
         * `--use-focal-loss/--dynamic-pos-weight/--oversample-minority` mitigate skewed datasets; combine them with
