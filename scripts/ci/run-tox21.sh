@@ -702,6 +702,75 @@ PY
 
   export TOX21_ENCODER_CHECKPOINT
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
+elif [[ "$SOURCE" == "hybrid" ]]; then
+  # Hybrid evaluations should start from the pretrained encoder, not a prior
+  # fine-tuned checkpoint.
+  ensure_dir "$MANIFEST_PATH"
+  manifest_encoder=""
+  python_cmd=("${python_interp_cmd[@]}")
+  print_python_cmd python_cmd
+  manifest_encoder=$("${python_cmd[@]}" - "$MANIFEST_PATH" <<'PY'
+import json, os, sys
+manifest = json.load(open(sys.argv[1]))
+paths = manifest.get("paths") if isinstance(manifest, dict) else {}
+candidate = None
+if isinstance(paths, dict):
+    candidate = paths.get("encoder") or paths.get("encoder_symlink")
+if candidate is None and isinstance(manifest, dict):
+    candidate = manifest.get("encoder_checkpoint")
+if candidate:
+    print(os.path.abspath(candidate))
+PY
+  )
+  python_cmd=()
+  encoder_candidates=()
+  encoder_candidates+=("manifest" "${manifest_encoder:-}")
+  if [[ -n "${PRETRAIN_DIR:-}" ]]; then
+    encoder_candidates+=("pretrain_dir" "${PRETRAIN_DIR%/}/encoder.pt")
+  fi
+  if [[ -n "${PRETRAIN_ARTIFACTS_DIR:-}" ]]; then
+    encoder_candidates+=("artifacts" "${PRETRAIN_ARTIFACTS_DIR%/}/encoder.pt")
+  fi
+
+  resolved_path=""
+  resolved_label=""
+  if ! select_encoder_candidate resolved_path resolved_label "${encoder_candidates[@]}"; then
+    select_status=$?
+  else
+    select_status=0
+  fi
+
+  TOX21_ENCODER_CHECKPOINT="$resolved_path"
+  if [[ -z "${resolved_label:-}" ]]; then
+    resolved_label="manifest"
+  fi
+  encoder_decision_source="$resolved_label"
+
+  if (( select_status )); then
+    if [[ -n "$TOX21_ENCODER_CHECKPOINT" ]]; then
+      echo "[tox21] falling back to ${encoder_decision_source}: ${TOX21_ENCODER_CHECKPOINT}" >&2
+    else
+      echo "[tox21] warning: encoder candidates unavailable from manifest ${MANIFEST_PATH}" >&2
+    fi
+  fi
+
+  encoder_hint_parts=()
+  i=0
+  while (( i < ${#encoder_candidates[@]} )); do
+    label="${encoder_candidates[i]}"
+    path="${encoder_candidates[i+1]}"
+    encoder_hint_parts+=("${label}=${path:-<unset>}")
+    ((i+=2))
+  done
+
+  if [[ -z "$TOX21_ENCODER_CHECKPOINT" || ! -e "$TOX21_ENCODER_CHECKPOINT" ]]; then
+    echo "[diag] about to exit: encoder checkpoint missing (SOURCE=${SOURCE} resolved=${TOX21_ENCODER_CHECKPOINT:-<unset>} candidates=${encoder_hint_parts[*]})" >&2
+    echo "[tox21] error: encoder checkpoint not found. Checked candidates: ${encoder_hint_parts[*]}" >&2
+    exit 1
+  fi
+
+  export TOX21_ENCODER_CHECKPOINT
+  export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
 elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   stage_json="${FINETUNE_DIR}/stage-outputs/finetune.json"
   stage_root=""
@@ -794,7 +863,7 @@ elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   # checkpoints. The finetune bookkeeping file lacks the required
   # hyperparameters section.
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
-elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" || "$SOURCE" == "hybrid" ]]; then
+elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
   stage_json="${FINETUNE_DIR}/stage-outputs/finetune.json"
   stage_root=""
   if stage_root_guess=$(finetune_root_from_stage_output "$stage_json" 2>/dev/null); then
@@ -879,31 +948,6 @@ elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" || "$SOURCE" == "
       echo "[tox21] warning: falling back to cached encoder checkpoint: ${cached_path}" >&2
       resolved_path="$cached_path"
       resolved_label="cached_${resolved_label:-unknown}"
-      select_status=0
-    fi
-  fi
-  if { [[ -z "$resolved_path" || ! -f "$resolved_path" ]] && [[ "$SOURCE" == "hybrid" ]]; }; then
-    manifest_encoder=""
-    python_cmd=("${python_interp_cmd[@]}")
-    print_python_cmd python_cmd
-    manifest_encoder=$("${python_cmd[@]}" - "$MANIFEST_PATH" <<'PY'
-import json, os, sys
-manifest = json.load(open(sys.argv[1]))
-paths = manifest.get("paths") if isinstance(manifest, dict) else {}
-candidate = None
-if isinstance(paths, dict):
-    candidate = paths.get("encoder") or paths.get("encoder_symlink")
-if candidate is None and isinstance(manifest, dict):
-    candidate = manifest.get("encoder_checkpoint")
-if candidate:
-    print(os.path.abspath(candidate))
-PY
-    )
-    python_cmd=()
-    if [[ -n "$manifest_encoder" && -f "$manifest_encoder" ]]; then
-      echo "[tox21] warning: hybrid mode falling back to manifest encoder checkpoint: ${manifest_encoder}" >&2
-      resolved_path="$manifest_encoder"
-      resolved_label="manifest_fallback"
       select_status=0
     fi
   fi
