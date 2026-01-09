@@ -3,7 +3,9 @@ set -euo pipefail
 
 trap 'echo "[ci] error at line $LINENO: $BASH_COMMAND" >&2' ERR
 
-unset BESTCFG_NO_EPOCHS
+if [[ "${BESTCFG_NO_EPOCHS:-}" != "1" ]]; then
+  unset BESTCFG_NO_EPOCHS
+fi
 unset WANDB_RUN_ID
 export MJEPACI_STAGE="finetune"
 
