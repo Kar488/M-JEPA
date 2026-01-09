@@ -1299,6 +1299,12 @@ def _run_tox21_single_task(
                 },
             )
         else:
+            logger.error(
+                "Tox21 case study runtime error for task %s: %s (%s)",
+                task_name,
+                message,
+                exc.__class__.__name__,
+            )
             raise
 
     if allow_shape_retry:

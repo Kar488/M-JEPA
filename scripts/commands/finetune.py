@@ -2172,11 +2172,19 @@ def cmd_finetune(args: argparse.Namespace) -> None:
     setattr(args, "seeds", list(seeds_value or []))
     label_columns = _resolve_label_columns(args)
     _maybe_enforce_tox21_epoch_floor(args, label_columns)
-    if len(label_columns) <= 1:
+    env_label_cols = str(os.getenv("FINETUNE_LABEL_COLS", "") or "").strip()
+    force_fanout = bool(env_label_cols) and len(label_columns) == 1 and bool(label_columns[0])
+    if len(label_columns) <= 1 and not force_fanout:
         if label_columns:
             setattr(args, "label_col", label_columns[0])
         _cmd_finetune_single(args)
         return
+    if force_fanout:
+        logger.info(
+            "[finetune] forcing fan-out for single assay (%s) from FINETUNE_LABEL_COLS=%s",
+            label_columns[0],
+            env_label_cols,
+        )
 
     logger.info(
         "[finetune] multi-assay run over %d tasks: %s",

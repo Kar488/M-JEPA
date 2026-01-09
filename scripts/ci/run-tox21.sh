@@ -635,7 +635,7 @@ ensure_dir() {
   fi
 }
 
-if [[ "$SOURCE" == "pretrain_frozen" || "$SOURCE" == "hybrid" ]]; then
+if [[ "$SOURCE" == "pretrain_frozen" ]]; then
   ensure_dir "$MANIFEST_PATH"
   manifest_encoder=""
   python_cmd=("${python_interp_cmd[@]}")
@@ -794,7 +794,7 @@ elif [[ "$SOURCE" == "frozen_finetuned" ]]; then
   # checkpoints. The finetune bookkeeping file lacks the required
   # hyperparameters section.
   export TOX21_ENCODER_MANIFEST="$MANIFEST_PATH"
-elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
+elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" || "$SOURCE" == "hybrid" ]]; then
   stage_json="${FINETUNE_DIR}/stage-outputs/finetune.json"
   stage_root=""
   if stage_root_guess=$(finetune_root_from_stage_output "$stage_json" 2>/dev/null); then
@@ -879,6 +879,31 @@ elif [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" ]]; then
       echo "[tox21] warning: falling back to cached encoder checkpoint: ${cached_path}" >&2
       resolved_path="$cached_path"
       resolved_label="cached_${resolved_label:-unknown}"
+      select_status=0
+    fi
+  fi
+  if { [[ -z "$resolved_path" || ! -f "$resolved_path" ]] && [[ "$SOURCE" == "hybrid" ]]; }; then
+    manifest_encoder=""
+    python_cmd=("${python_interp_cmd[@]}")
+    print_python_cmd python_cmd
+    manifest_encoder=$("${python_cmd[@]}" - "$MANIFEST_PATH" <<'PY'
+import json, os, sys
+manifest = json.load(open(sys.argv[1]))
+paths = manifest.get("paths") if isinstance(manifest, dict) else {}
+candidate = None
+if isinstance(paths, dict):
+    candidate = paths.get("encoder") or paths.get("encoder_symlink")
+if candidate is None and isinstance(manifest, dict):
+    candidate = manifest.get("encoder_checkpoint")
+if candidate:
+    print(os.path.abspath(candidate))
+PY
+    )
+    python_cmd=()
+    if [[ -n "$manifest_encoder" && -f "$manifest_encoder" ]]; then
+      echo "[tox21] warning: hybrid mode falling back to manifest encoder checkpoint: ${manifest_encoder}" >&2
+      resolved_path="$manifest_encoder"
+      resolved_label="manifest_fallback"
       select_status=0
     fi
   fi
