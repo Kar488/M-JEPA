@@ -1235,6 +1235,10 @@ def _run_tox21_single_task(
             "threshold_metric",
             getattr(args, "threshold_metric", None),
         ),
+        "checkpoint_metric": task_overrides.get(
+            "checkpoint_metric",
+            getattr(args, "checkpoint_metric", None),
+        ),
         "hybrid_freeze_epochs": getattr(args, "hybrid_freeze_epochs", None),
         "hybrid_partial_epochs": getattr(args, "hybrid_partial_epochs", None),
         "hybrid_warmup_ratio": getattr(args, "hybrid_warmup_ratio", None),
@@ -2531,6 +2535,7 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pretrain-lr", type=float, dest="pretrain_lr")
     parser.add_argument("--class-weights", dest="class_weights")
     parser.add_argument("--threshold-metric", dest="threshold_metric")
+    parser.add_argument("--checkpoint-metric", dest="checkpoint_metric")
     parser.add_argument("--layerwise-decay", type=float, dest="layerwise_decay")
     parser.add_argument(
         "--verify-match-threshold",
@@ -2679,6 +2684,8 @@ def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespa
             setattr(namespace, attr, None)
     if getattr(namespace, "threshold_metric", None) is None:
         namespace.threshold_metric = None
+    if getattr(namespace, "checkpoint_metric", None) is None:
+        namespace.checkpoint_metric = "pr_auc"
     if getattr(namespace, "per_task_hparams", None) is None:
         namespace.per_task_hparams = None
     for attr in ("gnn_type", "hidden_dim", "num_layers", "dropout"):

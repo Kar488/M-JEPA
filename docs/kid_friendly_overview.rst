@@ -35,6 +35,10 @@ Mission Control
     decay. Hybrid defaults come from the Tox21 CI knobs (``TOX21_EPOCHS``,
     ``TOX21_FREEZE_EPOCHS``, ``TOX21_UNFREEZE_TOP_LAYERS``) and the per-task
     YAML policy file.
+  - ``TOX21_CHECKPOINT_METRIC`` controls which validation metric selects the
+    best checkpoint (and early-stopping metric) for the tox21 CI step (defaults
+    to PR-AUC), while ``threshold_metric`` stays reserved for post-hoc threshold
+    tuning.
   - Published SOTA numbers for Tox21 often rely on non-scaffold splits and may
     skip calibration; keep that in mind when comparing ROC-AUC/PR-AUC here.
 

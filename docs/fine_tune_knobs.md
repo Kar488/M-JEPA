@@ -31,6 +31,10 @@ constraining runtime.
   `TOX21_EPOCHS` for the fine-tune horizon and ignore sweep best-config
   overrides. The hybrid schedule splits those epochs into freeze/partial/full
   phases and applies warmup+cosine decay using the CI knobs.
+- `TOX21_CHECKPOINT_METRIC` selects which validation metric drives best-checkpoint
+  selection and early stopping for the tox21 stage (defaults to `pr_auc`; set
+  `TOX21_CHECKPOINT_METRIC=roc_auc` in `ci-vast.yml` to revert to ROC-AUC).
+  `threshold_metric` stays reserved for post-hoc decision-threshold tuning.
 
 ## Sweep templates
 - Phase-1 sweeps (`sweeps/sweep_phase1_*.yaml`) run with `finetune_epochs: 10`

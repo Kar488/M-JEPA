@@ -138,6 +138,9 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
       - Per-task hyperparameters in `scripts/ci/per_task_hparams/tox21_hparams.yaml` are the source of truth
         for encoder/head LRs and other overrides; best-config sweeps should not override those values.
       - `threshold_metric` only affects post-hoc threshold selection and does not change the training loss.
+      - `TOX21_CHECKPOINT_METRIC` selects which validation metric drives best-checkpoint selection and early stopping
+        inside the Tox21 case study (defaults to `pr_auc`; set `TOX21_CHECKPOINT_METRIC: roc_auc` in `ci-vast.yml`
+        to revert to ROC-AUC).
       - CI keeps its larger pretraining sample sizes and streaming chunk knobs in `scripts/ci/train_jepa_ci.yml` so
         stage defaults in `scripts/default.yaml` remain lightweight for local runs; the best-config merger
         treats those CI-owned values as YAML-only so cached grids cannot overwrite them.

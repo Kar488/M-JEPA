@@ -216,7 +216,10 @@ Automation & Sweeps
 
 ``scripts/ci/run-pretrain.sh`` / ``run-finetune.sh`` / ``run-tox21.sh``
   Stage-specific wrappers used in CI. They share environment setup and failure
-  handling via ``scripts/ci/common.sh`` and ``scripts/ci/stage.sh``.
+  handling via ``scripts/ci/common.sh`` and ``scripts/ci/stage.sh``. The tox21
+  stage also honours ``TOX21_CHECKPOINT_METRIC`` to pick the validation metric
+  used for best-checkpoint selection/early stopping (distinct from
+  ``threshold_metric`` threshold tuning).
 
 Reporting & Artifacts
 ---------------------

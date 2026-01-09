@@ -2609,6 +2609,7 @@ tox21_only = {
     "min_lr_ratio": "--min-lr-ratio",
     "layerwise_decay": "--layerwise-decay",
     "threshold_metric": "--threshold-metric",
+    "checkpoint_metric": "--checkpoint-metric",
     "unfreeze_top_layers": "--unfreeze-top-layers",
     "hybrid_freeze_epochs": "--hybrid-freeze-epochs",
     "hybrid_partial_epochs": "--hybrid-partial-epochs",
