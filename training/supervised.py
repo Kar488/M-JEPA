@@ -1934,6 +1934,8 @@ def _train_linear_head_impl(
         if pos_weight_tensor is not None:
             pos_weight_tensor = pos_weight_tensor.to(device_t).reshape(-1)
 
+        dynamic_pos_weight_enabled = bool(dynamic_pos_weight) and pos_weight_tensor is None
+
         def _make_loss_fn(weight: Optional[torch.Tensor]) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
             kwargs = {"pos_weight": weight} if weight is not None else {}
             if not use_focal_loss:
@@ -2042,7 +2044,7 @@ def _train_linear_head_impl(
                     weights = np.clip(weights, 1e-6, None)
                     train_sampler_weights = weights.tolist()
 
-    if task_type == "classification" and dynamic_pos_weight and pos_weight_tensor is None:
+    if task_type == "classification" and dynamic_pos_weight_enabled:
         labels_attr = getattr(dataset, "labels", None)
         if labels_attr is not None and len(train_idx_rank_raw) > 0:
             dynamic_weight_np = _compute_pos_weight_from_labels(
@@ -2835,7 +2837,7 @@ def _train_linear_head_impl(
                     )
                 phase_history.append(current_phase_name)
 
-            if task_type == "classification" and dynamic_pos_weight:
+            if task_type == "classification" and dynamic_pos_weight_enabled:
                 labels_attr = getattr(dataset, "labels", None)
                 if labels_attr is not None and len(train_idx_rank) > 0:
                     updated = _compute_pos_weight_from_labels(np.asarray(labels_attr)[train_idx_rank])
