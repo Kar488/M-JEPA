@@ -3194,7 +3194,8 @@ def _train_linear_head_impl(
                 dist_mod.barrier()
         except Exception:  # pragma: no cover - best effort synchronisation
             logger.debug("Distributed barrier failed during linear-head shutdown", exc_info=True)
-        cleanup()
+        # Leave the process group and DDP env vars intact on success so repeated
+        # linear-head runs within the same process can reuse the launcher setup.
     metrics["head"] = head_param_source
     return metrics
 
