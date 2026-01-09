@@ -478,6 +478,11 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
            --format=csv,noheader,nounits --loop=1 \
            --filename /data/mjepa/experiments/$RUN_ID/logs/nv_smi.csv
 
+
+      OR 
+      nvidia-smi pmon -s um -c 1
+      htop #for cpu
+
       #thread dump on train jepa
       kill -USR1 <python-pid> 
 
