@@ -3096,7 +3096,10 @@ def _train_linear_head_impl(
                 current_mode = monitor_mode
                 metric_val_float: Optional[float] = None
                 metric_available = False
-                if metric_key != "val_loss":
+                if metric_key == "val_loss":
+                    metric_available = True
+                    metric_val_float = float(avg_val_loss)
+                else:
                     metric_val = val_metric_values.get(metric_key)
                     if metric_val is not None:
                         try:
