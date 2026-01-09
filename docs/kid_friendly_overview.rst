@@ -25,6 +25,9 @@ Mission Control
   ``pretrain``, ``finetune``, ``evaluate``, ``benchmark`` and ``tox21``. Each
   stage reuses the shared helpers in ``training/`` and ``experiments/`` so the
   whole pipeline can run from one script.
+  - Multi-GPU benchmark runs require a DDP launch via ``torchrun``. If you
+    request ``--devices > 1`` without DDP, the benchmark command now logs a
+    warning and falls back to a single-device run.
   - The ``tox21`` subcommand accepts ``--pretrain-lr`` to decouple the JEPA
     pretraining learning rate from the downstream probe. When you request
     ``--evaluation-mode fine_tuned`` without supplying a checkpoint, the

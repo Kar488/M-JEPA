@@ -139,6 +139,72 @@ def test_cmd_benchmark_modules_missing(monkeypatch):
     assert ex.value.code == 6
 
 
+def test_cmd_benchmark_multidevice_falls_back_without_ddp(tmp_path, monkeypatch, caplog):
+    dataset = DummyDataset()
+
+    def load_dataset_stub(path, label_col=None, add_3d=False, **kwargs):
+        assert path == str(tmp_path)
+        return dataset
+
+    monkeypatch.setattr(tj, "load_directory_dataset", load_dataset_stub)
+
+    class DummyEncoder:
+        def load_state_dict(self, state):
+            pass
+
+    monkeypatch.setattr(tj, "build_encoder", lambda **kwargs: DummyEncoder())
+
+    devices_seen = []
+
+    def train_linear_head_stub(**kwargs):
+        devices_seen.append(kwargs.get("devices"))
+        return {"roc_auc": 0.6}
+
+    monkeypatch.setattr(tj, "train_linear_head", train_linear_head_stub)
+    monkeypatch.setattr(tj.torch, "load", lambda *a, **k: {"encoder": {}})
+    monkeypatch.setattr(tj, "maybe_init_wandb", lambda *a, **k: None)
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "1")
+
+    args = argparse.Namespace(
+        labeled_dir=str(tmp_path),
+        test_dir=None,
+        label_col="y",
+        task_type="classification",
+        epochs=1,
+        batch_size=1,
+        lr=0.01,
+        temperature=(0.1),
+        patience=1,
+        devices=2,
+        seeds=[0],
+        jepa_encoder="jepa.pt",
+        contrastive_encoder=None,
+        dataset="esol",
+        gnn_type="gcn",
+        hidden_dim=16,
+        num_layers=2,
+        device="cpu",
+        use_wandb=False,
+        wandb_project="test",
+        wandb_tags=[],
+        add_3d=False,
+        num_workers=3,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=6,
+    )
+
+    caplog.set_level(logging.WARNING)
+
+    tj.cmd_benchmark(args)
+
+    assert devices_seen == [1]
+    assert any(
+        "Falling back to a single-device run" in rec.message for rec in caplog.records
+    )
+
+
 def test_cmd_benchmark_eval_only_uses_test_dir(tmp_path, monkeypatch):
     dataset = DummyDataset()
 

@@ -122,6 +122,29 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
 
     from pathlib import Path
 
+    def _ddp_env_requested() -> bool:
+        try:
+            world_size = int(os.environ.get("WORLD_SIZE", "1"))
+        except (TypeError, ValueError):
+            world_size = 1
+        try:
+            local_world_size = int(
+                os.environ.get("LOCAL_WORLD_SIZE", os.environ.get("WORLD_SIZE", "1"))
+            )
+        except (TypeError, ValueError):
+            local_world_size = world_size
+        return max(world_size, local_world_size) > 1
+
+    if args.devices > 1 and not _ddp_env_requested():
+        logger.warning(
+            "Benchmark requested %d devices but no DDP environment was detected "
+            "(WORLD_SIZE=%s). Falling back to a single-device run. "
+            "Launch with torchrun or set WORLD_SIZE/LOCAL_RANK to enable multi-GPU benchmarking.",
+            args.devices,
+            os.environ.get("WORLD_SIZE", "1"),
+        )
+        args.devices = 1
+
     # --- paths / report ---
     args.report_dir = getattr(args, "report_dir", "reports")
     os.makedirs(args.report_dir, exist_ok=True)
