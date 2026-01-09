@@ -3094,23 +3094,35 @@ def _train_linear_head_impl(
 
                 monitor_value = avg_val_loss
                 current_mode = monitor_mode
+                metric_val_float: Optional[float] = None
+                metric_available = False
                 if metric_key != "val_loss":
                     metric_val = val_metric_values.get(metric_key)
-                    if metric_val is not None and not np.isnan(metric_val):
-                        monitor_value = float(metric_val)
-                    elif checkpoint_metric is not None:
-                        available = sorted(val_metric_values.keys())
-                        available_display = ", ".join(available) if available else "<none>"
-                        raise ValueError(
-                            "Requested checkpoint_metric '%s' is unavailable. "
-                            "Available validation metrics: %s."
-                            % (checkpoint_metric, available_display)
-                        )
+                    if metric_val is not None:
+                        try:
+                            metric_val_float = float(metric_val)
+                        except Exception:
+                            metric_val_float = None
+                        if metric_val_float is not None and math.isfinite(metric_val_float):
+                            metric_available = True
+                    if metric_available and metric_val_float is not None:
+                        monitor_value = metric_val_float
                     else:
-                        logger.debug(
-                            "Validation metric '%s' unavailable; falling back to val_loss.",
-                            early_stop_metric,
-                        )
+                        if checkpoint_metric is not None:
+                            available = sorted(val_metric_values.keys())
+                            available_display = ", ".join(available) if available else "<none>"
+                            logger.warning(
+                                "Requested checkpoint_metric '%s' is unavailable or NaN; "
+                                "skipping checkpoint selection for this epoch. "
+                                "Available validation metrics: %s.",
+                                checkpoint_metric,
+                                available_display,
+                            )
+                        else:
+                            logger.debug(
+                                "Validation metric '%s' unavailable; falling back to val_loss.",
+                                early_stop_metric,
+                            )
                         monitor_value = avg_val_loss
                         current_mode = "min"
 
@@ -3146,7 +3158,7 @@ def _train_linear_head_impl(
                     elif not best_val_snapshot:
                         best_val_snapshot = dict(val_snapshot)
 
-                if checkpoint_metric is not None:
+                if checkpoint_metric is not None and metric_available:
                     improved = False
                     if best_checkpoint_metric is None:
                         improved = True
