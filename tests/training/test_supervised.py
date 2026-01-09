@@ -398,6 +398,32 @@ def test_train_linear_head_selects_checkpoint_by_pr_auc(monkeypatch):
     assert metrics["checkpoint/value"] == pytest.approx(0.8)
 
 
+def test_train_linear_head_selects_checkpoint_by_val_loss():
+    np.random.seed(0)
+    torch.manual_seed(0)
+    labels = [0, 1] * 10
+    dataset = DummyDataset(labels)
+    enc = DummyEncoder(4)
+
+    metrics = train_linear_head(
+        dataset,
+        enc,
+        "classification",
+        epochs=2,
+        batch_size=2,
+        lr=0.01,
+        patience=2,
+        device="cpu",
+        checkpoint_metric="val_loss",
+        train_indices=list(range(10)),
+        val_indices=list(range(10, 15)),
+        test_indices=list(range(15, 20)),
+    )
+
+    assert metrics["checkpoint/metric"] == "val_loss"
+    assert metrics["checkpoint/epoch"] >= 1
+
+
 def test_train_linear_head_raises_when_checkpoint_metric_missing(monkeypatch):
     np.random.seed(0)
     torch.manual_seed(0)
