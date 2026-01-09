@@ -291,8 +291,15 @@ def _tune_threshold(y_true: np.ndarray, probs: np.ndarray, metric: str = "f1") -
             return None, None
         precision = precision[:-1]
         recall = recall[:-1]
+        precision = np.nan_to_num(precision, nan=0.0, posinf=0.0, neginf=0.0)
+        recall = np.nan_to_num(recall, nan=0.0, posinf=0.0, neginf=0.0)
         denom = precision + recall
-        f1_scores = np.where(denom > 0.0, 2.0 * precision * recall / denom, 0.0)
+        f1_scores = np.divide(
+            2.0 * precision * recall,
+            denom,
+            out=np.zeros_like(denom),
+            where=denom > 0.0,
+        )
         idx = int(np.argmax(f1_scores))
         best_threshold = float(thresholds[idx])
         best_score = float(f1_scores[idx])
@@ -3194,7 +3201,8 @@ def _train_linear_head_impl(
                 dist_mod.barrier()
         except Exception:  # pragma: no cover - best effort synchronisation
             logger.debug("Distributed barrier failed during linear-head shutdown", exc_info=True)
-        cleanup()
+        # Leave the process group and DDP env vars intact on success so repeated
+        # linear-head runs within the same process can reuse the launcher setup.
     metrics["head"] = head_param_source
     return metrics
 

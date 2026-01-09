@@ -558,6 +558,109 @@ def test_train_linear_head_retries_with_gloo_on_duplicate_devices(monkeypatch):
     assert metrics["head"].training  # type: ignore[index]
 
 
+def test_train_linear_head_allows_back_to_back_ddp_runs(monkeypatch):
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+
+    monkeypatch.setattr("utils.ddp.init_distributed", lambda *_a, **_k: True, raising=False)
+    monkeypatch.setattr(
+        supervised_mod.torch.distributed,
+        "is_available",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervised_mod.torch.distributed,
+        "is_initialized",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervised_mod.torch.distributed,
+        "get_rank",
+        lambda: 0,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervised_mod.torch.distributed,
+        "get_world_size",
+        lambda: 2,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervised_mod.torch.distributed,
+        "all_reduce",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervised_mod.torch.distributed,
+        "barrier",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+
+    class _DummyDDP:  # noqa: N801 - mimics torch class name
+        def __init__(self, module, **_kwargs):
+            self.module = module
+
+        @property
+        def training(self):  # type: ignore[override]
+            return self.module.training
+
+        def __getattr__(self, name: str):
+            return getattr(self.module, name)
+
+        def __call__(self, *args, **kwargs):
+            return self.module(*args, **kwargs)
+
+    monkeypatch.setattr(
+        supervised_mod.nn.parallel,
+        "DistributedDataParallel",
+        _DummyDDP,
+        raising=False,
+    )
+
+    np.random.seed(1)
+    torch.manual_seed(1)
+    labels = [0, 1, 0, 1]
+    dataset = DummyDataset(labels)
+    encoder = DummyEncoder(4)
+
+    first = train_linear_head(
+        dataset,
+        encoder,
+        "classification",
+        epochs=1,
+        batch_size=2,
+        lr=1e-3,
+        patience=1,
+        devices=2,
+        device="cpu",
+    )
+
+    second = train_linear_head(
+        dataset,
+        encoder,
+        "classification",
+        epochs=1,
+        batch_size=2,
+        lr=1e-3,
+        patience=1,
+        devices=2,
+        device="cpu",
+    )
+
+    assert "head" in first
+    assert "head" in second
+    assert os.environ.get("WORLD_SIZE") == "2"
+    assert os.environ.get("LOCAL_WORLD_SIZE") == "2"
+    assert os.environ.get("RANK") == "0"
+    assert os.environ.get("LOCAL_RANK") == "0"
+
+
 def test_train_linear_head_requires_ddp_for_multi_device(monkeypatch):
     monkeypatch.setenv("WORLD_SIZE", "1")
     monkeypatch.setenv("LOCAL_WORLD_SIZE", "1")
