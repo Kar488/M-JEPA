@@ -104,6 +104,7 @@ case_study:
   hybrid_warmup_ratio: 0.1
   hybrid_min_lr: 1.0e-6
   hybrid_min_lr_ratio:
+  hybrid_early_stop_min_epochs: 57
   baseline_finetune_epochs: 50  # Baseline evaluation defaults (override with TOX21_BASELINE_FINETUNE_EPOCHS)
   baseline_patience: 8          # Early stopping patience for baseline runs (override with TOX21_BASELINE_PATIENCE)
 

@@ -161,6 +161,7 @@ tox21:
   hybrid_warmup_ratio: ${TOX21_WARMUP_RATIO:-}
   hybrid_min_lr: ${TOX21_MIN_LR:-}
   hybrid_min_lr_ratio: ${TOX21_MIN_LR_RATIO:-}
+  hybrid_early_stop_min_epochs: ${TOX21_HYBRID_EARLY_STOP_MIN_EPOCHS:-}
   weight_decay: ${TOX21_WEIGHT_DECAY:-0.0001}
   hidden_dim: ${TOX21_HIDDEN_DIM:-384}
   num_layers: ${TOX21_NUM_LAYERS:-4}

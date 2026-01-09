@@ -1564,6 +1564,7 @@ def _train_linear_head_impl(
     freeze_encoder: bool = True,
     early_stop_metric: str = "val_loss",
     checkpoint_metric: Optional[str] = None,
+    early_stop_min_epochs: int = 0,
     early_stop_mode: Optional[str] = None,
     cache_graph_embeddings: bool = True,
     train_indices: Optional[Iterable[int]] = None,
@@ -1618,6 +1619,8 @@ def _train_linear_head_impl(
         prefetch_factor: number of batches loaded in advance by each worker.
         bf16: if true mixed precision training on newer GPUs/TPUs
         patience: Number of epochs with no improvement before stopping.
+        early_stop_min_epochs: Minimum number of epochs to complete before early
+            stopping is allowed (useful for hybrid schedules).
         use_scaffold: Whether to use scaffold split if SMILES are provided.
         devices: Number of GPUs for DDP.
         batch_indices: Optional list of indices for a single batch; if provided, overrides internal splitting.
@@ -2188,6 +2191,13 @@ def _train_linear_head_impl(
     early_stopper = (
         EarlyStopping(patience=patience, mode=monitor_mode) if patience > 0 else None
     )
+    early_stop_guard = max(0, int(early_stop_min_epochs or 0))
+    early_stop_guard_logged = False
+    if early_stop_guard > 0:
+        logger.info(
+            "[finetune] early stopping guard enabled: min_epochs=%d",
+            early_stop_guard,
+        )
     best_val_snapshot: Dict[str, float] = {}
     best_checkpoint_metric: Optional[float] = None
     best_checkpoint_epoch: Optional[int] = None
@@ -3154,12 +3164,22 @@ def _train_linear_head_impl(
 
                 should_stop = False
                 if early_stopper is not None:
-                    prev_best = early_stopper.best
-                    should_stop = early_stopper.step(monitor_value)
-                    if early_stopper.best != prev_best:
-                        best_val_snapshot = dict(val_snapshot)
-                    elif not best_val_snapshot:
-                        best_val_snapshot = dict(val_snapshot)
+                    if early_stop_guard > 0 and (epoch + 1) < early_stop_guard:
+                        if not early_stop_guard_logged:
+                            logger.info(
+                                "[finetune] early stopping suppressed until epoch %d (current=%d).",
+                                early_stop_guard,
+                                epoch + 1,
+                            )
+                            early_stop_guard_logged = True
+                        should_stop = False
+                    else:
+                        prev_best = early_stopper.best
+                        should_stop = early_stopper.step(monitor_value)
+                        if early_stopper.best != prev_best:
+                            best_val_snapshot = dict(val_snapshot)
+                        elif not best_val_snapshot:
+                            best_val_snapshot = dict(val_snapshot)
 
                 if checkpoint_metric is not None and metric_available:
                     improved = False
@@ -3407,6 +3427,7 @@ def train_linear_head(
     freeze_encoder: bool = True,
     early_stop_metric: str = "val_loss",
     checkpoint_metric: Optional[str] = None,
+    early_stop_min_epochs: int = 0,
     early_stop_mode: Optional[str] = None,
     cache_graph_embeddings: bool = True,
     train_indices: Optional[Iterable[int]] = None,
@@ -3463,6 +3484,7 @@ def train_linear_head(
             freeze_encoder=freeze_encoder,
             early_stop_metric=early_stop_metric,
             checkpoint_metric=checkpoint_metric,
+            early_stop_min_epochs=early_stop_min_epochs,
             early_stop_mode=early_stop_mode,
             cache_graph_embeddings=cache_graph_embeddings,
             train_indices=train_indices,
@@ -3538,6 +3560,7 @@ def train_linear_head(
                 freeze_encoder=freeze_encoder,
                 early_stop_metric=early_stop_metric,
                 checkpoint_metric=checkpoint_metric,
+                early_stop_min_epochs=early_stop_min_epochs,
                 early_stop_mode=early_stop_mode,
                 cache_graph_embeddings=cache_graph_embeddings,
                 train_indices=train_indices,

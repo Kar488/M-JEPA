@@ -36,6 +36,45 @@ constraining runtime.
   `TOX21_CHECKPOINT_METRIC=roc_auc` in `ci-vast.yml` to revert to ROC-AUC).
   `threshold_metric` stays reserved for post-hoc decision-threshold tuning.
 
+## Metric roles (checkpoint vs threshold vs early stop)
+- **`checkpoint_metric`**: validation metric used to pick the best checkpoint
+  and (when set) to drive early stopping in the Tox21 case study. Defaults to
+  `pr_auc` in `scripts/default.yaml` and can be overridden with
+  `--checkpoint-metric` / `TOX21_CHECKPOINT_METRIC`.
+- **`early_stop_metric`**: the internal training loop metric. Tox21 sets this to
+  `checkpoint_metric` when provided; otherwise it falls back to `val_auc` for
+  full-finetune runs or `val_loss` for frozen/probe runs.
+- **`threshold_metric`**: validation metric used only for post-hoc decision
+  threshold tuning and reporting. It does **not** affect early stopping or
+  checkpoint selection.
+
+## Per-task Tox21 overrides
+- Per-task YAML overrides are loaded by `scripts/commands/tox21.py` and applied
+  per assay before calling `experiments/case_study.run_tox21_case_study`.
+- Location: `scripts/ci/per_task_hparams/tox21_hparams.yaml` (or your own file
+  passed with `--per-task-hparams`).
+- Supported keys include:
+  - `head_lr`, `encoder_lr`, `layerwise_decay`
+  - `pos_weight`, `class_weights`, `dynamic_pos_weight`, `oversample_minority`
+  - `use_focal_loss`, `focal_gamma`
+  - `threshold_metric`, `checkpoint_metric`
+  - `calibrate_probabilities` (apply post-hoc calibration on the validation split)
+  - `calibration_method` (per-task override → CLI → default). Supported methods:
+    `temperature`, `isotonic`, and `platt` (Platt scaling).
+  - `__hybrid__` section for shared hybrid defaults (e.g., `head_lr`,
+    `encoder_lr`, `layerwise_decay`).
+
+Calibration method resolution is: per-task override → `--calibration-method`
+→ default `temperature`. Unsupported values raise a clear error at runtime.
+
+## Hybrid early stopping guard
+- Hybrid training is split into freeze/partial/full phases; early stopping can
+  terminate training before the full schedule completes.
+- To guard against that, set `--hybrid-early-stop-min-epochs` (or
+  `case_study.hybrid_early_stop_min_epochs` in `scripts/default.yaml`) to require
+  a minimum number of epochs before early stopping can trigger. When unset, the
+  previous behaviour is preserved.
+
 ## Sweep templates
 - Phase-1 sweeps (`sweeps/sweep_phase1_*.yaml`) run with `finetune_epochs: 10`
   to keep cost bounded while still training the probe enough to rank backbones.

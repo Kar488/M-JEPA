@@ -424,6 +424,49 @@ def test_train_linear_head_selects_checkpoint_by_val_loss():
     assert metrics["checkpoint/epoch"] >= 1
 
 
+def test_train_linear_head_respects_early_stop_min_epochs(monkeypatch):
+    np.random.seed(0)
+    torch.manual_seed(0)
+    labels = [0, 1] * 5
+    dataset = DummyDataset(labels)
+    enc = DummyEncoder(4)
+    calls = {"steps": 0}
+
+    class ImmediateStopper:
+        def __init__(self, patience, mode):  # noqa: D401, ANN001
+            self.patience = patience
+            self.mode = mode
+            self.best = None
+            self.counter = 0
+
+        def step(self, value):  # noqa: ANN001
+            calls["steps"] += 1
+            if self.best is None:
+                self.best = value
+            self.counter += 1
+            return True
+
+    monkeypatch.setattr(supervised_mod, "EarlyStopping", ImmediateStopper)
+
+    metrics = train_linear_head(
+        dataset,
+        enc,
+        "classification",
+        epochs=3,
+        batch_size=2,
+        lr=0.01,
+        patience=2,
+        device="cpu",
+        early_stop_min_epochs=2,
+        train_indices=list(range(6)),
+        val_indices=list(range(6, 8)),
+        test_indices=list(range(8, 10)),
+    )
+
+    assert calls["steps"] == 1
+    assert metrics["train/batches"] == 6.0
+
+
 def test_train_linear_head_raises_when_checkpoint_metric_missing(monkeypatch):
     np.random.seed(0)
     torch.manual_seed(0)

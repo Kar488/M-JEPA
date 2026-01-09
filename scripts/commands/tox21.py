@@ -581,6 +581,91 @@ def _parse_pos_class_weight(values: Optional[Iterable[str]]) -> Optional[Any]:
     return scalar
 
 
+def _resolve_task_pos_weight(value: Any, task_name: Optional[str]) -> Optional[float]:
+    if value is None:
+        return None
+    candidate = value
+    if isinstance(value, Mapping):
+        keys_to_try: List[str] = []
+        if task_name:
+            keys_to_try.extend(
+                [
+                    str(task_name),
+                    str(task_name).lower(),
+                    str(task_name).upper(),
+                ]
+            )
+        keys_to_try.extend(["default", "Default", "*", "all"])
+        candidate = None
+        for key in keys_to_try:
+            if key in value:
+                candidate = value[key]
+                break
+        if candidate is None:
+            return None
+    try:
+        return float(candidate)
+    except Exception:
+        return None
+
+
+def _describe_class_weights(value: Any) -> str:
+    if value is None:
+        return "auto"
+    if isinstance(value, Mapping):
+        return "explicit"
+    if isinstance(value, str):
+        mode = value.strip()
+        if not mode:
+            return "auto"
+        mode_lower = mode.lower()
+        if mode_lower in {"auto", "balanced"}:
+            return "auto"
+        if mode_lower in {"none", "off"}:
+            return "none"
+        if mode_lower.startswith("{"):
+            return "explicit"
+    return "explicit"
+
+
+def _normalise_hybrid_schedule_for_logging(
+    schedule: Optional[Dict[str, Any]],
+    total_epochs: int,
+    unfreeze_top_layers: int,
+) -> Optional[Dict[str, Any]]:
+    if not schedule:
+        return None
+    try:
+        from training.supervised import _normalise_hybrid_schedule  # type: ignore
+    except Exception:
+        return None
+    try:
+        return _normalise_hybrid_schedule(schedule, total_epochs, unfreeze_top_layers)
+    except Exception:
+        return None
+
+
+_SUPPORTED_TOX21_CALIBRATION_METHODS = {"temperature", "isotonic", "platt"}
+
+
+def _resolve_calibration_method(
+    task_overrides: Dict[str, Any],
+    args: argparse.Namespace,
+) -> Tuple[Optional[str], str]:
+    requested = task_overrides.get("calibration_method")
+    if requested is None:
+        requested = getattr(args, "calibration_method", None)
+    method = (str(requested).strip().lower() if requested else "").strip()
+    if not method:
+        method = "temperature"
+    if method not in _SUPPORTED_TOX21_CALIBRATION_METHODS:
+        supported = ", ".join(sorted(_SUPPORTED_TOX21_CALIBRATION_METHODS))
+        raise ValueError(
+            f"Unsupported calibration_method='{method}'. Supported methods: {supported}"
+        )
+    return requested, method
+
+
 def _discover_best_config_path(args: argparse.Namespace) -> Optional[Path]:
     candidates: List[Path] = []
     for attr in ("best_config_path", "best_config", "best_config_json"):
@@ -1200,6 +1285,7 @@ def _run_tox21_single_task(
         "triage_pct": triage_pct,
         "calibrate": bool(task_overrides.get("calibrate_probabilities", calibrate)),
         "calibrate_per_head": calibrate_per_head,
+        "calibration_method": None,
         "device": device_value,
         "devices": devices_val,
         "num_workers": getattr(args, "num_workers", -1),
@@ -1245,6 +1331,7 @@ def _run_tox21_single_task(
         "hybrid_lr_scheduler": getattr(args, "hybrid_lr_scheduler", None),
         "hybrid_min_lr": getattr(args, "hybrid_min_lr", None),
         "hybrid_min_lr_ratio": getattr(args, "hybrid_min_lr_ratio", None),
+        "hybrid_early_stop_min_epochs": getattr(args, "hybrid_early_stop_min_epochs", None),
         "explain_mode": explain_mode,
         "explain_config": explain_config_payload,
         "oversample_minority": bool(
@@ -1262,6 +1349,68 @@ def _run_tox21_single_task(
         "bestcfg_epochs_override": bool(bestcfg_epochs_override),
         "bestcfg_patience_override": bool(bestcfg_patience_override),
     }
+
+    requested_calibration_method, effective_calibration_method = _resolve_calibration_method(
+        task_overrides,
+        args,
+    )
+    case_study_kwargs["calibration_method"] = effective_calibration_method
+
+    checkpoint_metric_value = case_study_kwargs.get("checkpoint_metric")
+    early_stop_metric_value = (
+        checkpoint_metric_value
+        if checkpoint_metric_value
+        else ("val_auc" if bool(getattr(args, "full_finetune", False)) else "val_loss")
+    )
+    hybrid_schedule_log: Optional[Dict[str, Any]] = None
+    if eval_mode == "hybrid":
+        schedule_payload = {
+            "mode": "hybrid",
+            "freeze_epochs": getattr(args, "hybrid_freeze_epochs", None),
+            "partial_epochs": getattr(args, "hybrid_partial_epochs", None),
+            "unfreeze_top_layers": int(getattr(args, "unfreeze_top_layers", 0) or 0),
+            "lr_scheduler": getattr(args, "hybrid_lr_scheduler", None),
+            "warmup_ratio": getattr(args, "hybrid_warmup_ratio", None),
+            "min_lr": getattr(args, "hybrid_min_lr", None),
+            "min_lr_ratio": getattr(args, "hybrid_min_lr_ratio", None),
+            "early_stop_min_epochs": getattr(args, "hybrid_early_stop_min_epochs", None),
+        }
+        hybrid_schedule_log = _normalise_hybrid_schedule_for_logging(
+            schedule_payload,
+            int(finetune_epochs_value or case_study_kwargs.get("finetune_epochs") or 0),
+            int(getattr(args, "unfreeze_top_layers", 0) or 0),
+        ) or schedule_payload
+
+    effective_config_payload = {
+        "phase": "tox21",
+        "status": "effective_config",
+        "task": task_name,
+        "evaluation_mode": eval_mode,
+        "hybrid_schedule": hybrid_schedule_log,
+        "early_stopping": {
+            "patience": getattr(args, "patience", None),
+            "early_stop_metric": early_stop_metric_value,
+            "checkpoint_metric": checkpoint_metric_value,
+        },
+        "loss_knobs": {
+            "use_focal_loss": case_study_kwargs.get("use_focal_loss", False),
+            "focal_gamma": case_study_kwargs.get("focal_gamma", None),
+            "dynamic_pos_weight": case_study_kwargs.get("dynamic_pos_weight", False),
+            "pos_weight": _resolve_task_pos_weight(pos_class_weight_arg, task_name),
+            "class_weights": _describe_class_weights(class_weights_arg),
+            "oversample_minority": case_study_kwargs.get("oversample_minority", False),
+        },
+        "calibration": {
+            "calibrate_probabilities": bool(
+                task_overrides.get("calibrate_probabilities", calibrate)
+            ),
+            "calibration_method_effective": effective_calibration_method,
+            "calibration_method_requested": requested_calibration_method,
+            "calibrate_per_head": calibrate_per_head,
+        },
+    }
+    logger.info("[tox21] effective config: %s", effective_config_payload)
+    _wandb_log_safe(wb, effective_config_payload)
 
     def _invoke_case_study(allow_shape_value: Optional[bool]) -> Any:
         payload = dict(case_study_kwargs)
@@ -2155,6 +2304,7 @@ def cmd_tox21(args: argparse.Namespace) -> None:
         "hybrid_warmup_ratio": getattr(args, "hybrid_warmup_ratio", None),
         "hybrid_min_lr": getattr(args, "hybrid_min_lr", None),
         "hybrid_min_lr_ratio": getattr(args, "hybrid_min_lr_ratio", None),
+        "hybrid_early_stop_min_epochs": getattr(args, "hybrid_early_stop_min_epochs", None),
         "threshold_metric": getattr(args, "threshold_metric", None),
         "per_task_hparams": getattr(args, "per_task_hparams", None),
         "auto_pos_class_weight": auto_pos_weights,
@@ -2599,6 +2749,11 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
         action=_StandaloneBoolFlag,
         dest="calibrate_per_head",
     )
+    parser.add_argument(
+        "--calibration-method",
+        dest="calibration_method",
+        choices=sorted(_SUPPORTED_TOX21_CALIBRATION_METHODS),
+    )
     parser.add_argument("--pos-class-weight", action="append", dest="pos_class_weight")
     parser.add_argument(
         "--allow-shape-coercion",
@@ -2640,6 +2795,11 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hybrid-warmup-ratio", type=float, dest="hybrid_warmup_ratio")
     parser.add_argument("--hybrid-min-lr", type=float, dest="hybrid_min_lr")
     parser.add_argument("--hybrid-min-lr-ratio", type=float, dest="hybrid_min_lr_ratio")
+    parser.add_argument(
+        "--hybrid-early-stop-min-epochs",
+        type=int,
+        dest="hybrid_early_stop_min_epochs",
+    )
     parser.add_argument("--per-task-hparams", dest="per_task_hparams")
     parser.add_argument("--best-config", dest="best_config")
     parser.add_argument("--best-config-json", dest="best_config_json")
@@ -2665,6 +2825,8 @@ def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespa
         namespace.no_calibrate = False
     if not hasattr(namespace, "calibrate_per_head") or namespace.calibrate_per_head is None:
         namespace.calibrate_per_head = False
+    if getattr(namespace, "calibration_method", None) is None:
+        namespace.calibration_method = None
     if not hasattr(namespace, "pos_class_weight"):
         namespace.pos_class_weight = None
     if getattr(namespace, "baseline_finetune_epochs", None) is None:
@@ -2694,6 +2856,8 @@ def _finalise_standalone_args(namespace: argparse.Namespace) -> argparse.Namespa
         namespace.checkpoint_metric = "pr_auc"
     if getattr(namespace, "per_task_hparams", None) is None:
         namespace.per_task_hparams = None
+    if getattr(namespace, "hybrid_early_stop_min_epochs", None) is None:
+        namespace.hybrid_early_stop_min_epochs = None
     for attr in ("gnn_type", "hidden_dim", "num_layers", "dropout"):
         provided = getattr(namespace, attr, None) is not None
         setattr(namespace, f"_{attr}_provided", provided)
