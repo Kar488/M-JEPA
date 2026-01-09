@@ -639,7 +639,7 @@ def _record_finetune_stage_outputs(payload: Dict[str, Any]) -> None:
         else:
             filename = "finetune.json"
         out_path = stage_dir / filename
-        tmp_path = out_path.with_suffix(".tmp")
+        tmp_path = out_path.with_suffix(f".{os.getpid()}.tmp")
         with tmp_path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
             handle.write("\n")
@@ -682,7 +682,7 @@ def _write_fanout_manifest(base_dir: Path, entries: List[Dict[str, Any]]) -> Opt
 
     manifest_path = base_dir / "fanout_manifest.json"
     try:
-        tmp_path = manifest_path.with_suffix(".tmp")
+        tmp_path = manifest_path.with_suffix(f".{os.getpid()}.tmp")
         with tmp_path.open("w", encoding="utf-8") as handle:
             json.dump({"tasks": entries}, handle, indent=2, sort_keys=True)
             handle.write("\n")
