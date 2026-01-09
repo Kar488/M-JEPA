@@ -58,7 +58,7 @@ pretrain:
   output: ${PRETRAIN_DIR}/encoder.pt
   force_tqdm: true
   use_wandb: true
-  generate_graph_visuals: true
+  generate_graph_visuals: false
 
 finetune:
   <<: *common
@@ -124,17 +124,17 @@ tox21:
   csv: ${APP_DIR}/data/tox21/data.csv
   tasks:
     - NR-AR
-    - NR-AR-LBD
-    - NR-AhR
-    - NR-Aromatase
-    - NR-ER
-    - NR-ER-LBD
-    - NR-PPAR-gamma
-    - SR-ARE
-    - SR-ATAD5
-    - SR-HSE
-    - SR-MMP
-    - SR-p53
+    #- NR-AR-LBD
+    #- NR-AhR
+    #- NR-Aromatase
+    #- NR-ER
+    #- NR-ER-LBD
+    #- NR-PPAR-gamma
+    #- SR-ARE
+    #- SR-ATAD5
+    #- SR-HSE
+    #- SR-MMP
+    #- SR-p53
   dataset: tox21
   tox21_dir: ${TOX21_DIR}
   pretrain_epochs: ${PRETRAIN_EPOCHS:-3}    # maps to --pretrain-epochs for "tox21"

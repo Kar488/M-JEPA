@@ -789,7 +789,7 @@ jobs:
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
-      TOX21_EXPLAIN_MODE: ig,ig_motif
+      TOX21_EXPLAIN_MODE: off # ig,ig_motif
     steps:
       - name: Ensure experiments root available
         shell: bash
@@ -897,6 +897,7 @@ jobs:
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
+      TOX21_FINE_TUNE_TASK: NR-AR # let defaults take over
       TOX21_EXPLAIN_MODE: off
     steps:
       - name: Ensure experiments root available
@@ -978,7 +979,7 @@ jobs:
       PRETRAIN_STATE_FILE: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       PRETRAIN_STATE_FILE_CANONICAL: ${{ needs.vast_pretrain.outputs.pretrain_root }}/pretrain_state.json
       EXPERIMENTS_ROOT: /data/mjepa/experiments
-      TOX21_EXPLAIN_MODE: ig,ig_motif
+      TOX21_EXPLAIN_MODE: off # ig,ig_motif
     steps:
       - name: Ensure experiments root available
         shell: bash
