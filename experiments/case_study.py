@@ -1731,6 +1731,7 @@ def run_tox21_case_study(
     head_scheduler: Optional[str] = None,
     layerwise_decay: Optional[float] = None,
     threshold_metric: Optional[str] = None,
+    checkpoint_metric: Optional[str] = None,
     cache_dir: Optional[str] = None,
     explain_mode: Optional[str] = None,
     explain_config: Optional[Dict[str, Any]] = None,
@@ -3287,6 +3288,7 @@ def run_tox21_case_study(
             "enable_batch_autoscale": False,
             "unfreeze_top_layers": int(unfreeze_top_layers),
             "threshold_metric": threshold_metric or "f1",
+            "checkpoint_metric": checkpoint_metric,
             "hybrid_schedule": hybrid_schedule,
             "explain_mode": explain_mode_norm,
             "explain_config": explain_cfg_payload,
@@ -3296,7 +3298,9 @@ def run_tox21_case_study(
             "focal_gamma": float(focal_gamma_value),
             **extra_args,
         }
-        if full_finetune_effective:
+        if checkpoint_metric:
+            linear_kwargs["early_stop_metric"] = checkpoint_metric
+        elif full_finetune_effective:
             linear_kwargs["early_stop_metric"] = "val_auc"
 
         ensemble_heads: List[torch.nn.Module] = []

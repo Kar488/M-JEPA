@@ -169,6 +169,7 @@ tox21:
   head_scheduler: ${TOX21_HEAD_SCHEDULER:-cosine}
   layerwise_decay: ${TOX21_LAYERWISE_DECAY:-${FINETUNE_LAYERWISE_DECAY:-}}
   threshold_metric: ${TOX21_THRESHOLD_METRIC:-}
+  checkpoint_metric: ${TOX21_CHECKPOINT_METRIC:-pr_auc}
   per_task_hparams: ${TOX21_PER_TASK_HPARAMS:-${FINETUNE_PER_TASK_HPARAMS:-${APP_DIR}/scripts/ci/per_task_hparams/tox21_hparams.yaml}}
   unfreeze_top_layers: ${TOX21_UNFREEZE_TOP_LAYERS:-0}
   triage_pct: ${TOX21_TRIAGE_PCT:-0.0}

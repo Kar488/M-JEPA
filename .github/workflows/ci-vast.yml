@@ -98,6 +98,7 @@ env:
   FORCE_RERUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rerun || '' }}
   GRID_MODE_VAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb' }}
   TOX21_CALIBRATE_PER_HEAD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tox21_calibrate_per_head || 'false' }}
+  TOX21_CHECKPOINT_METRIC: pr_auc
   BENCH_RUN_VAL: "1"
   BENCH_RUN_TEST: "1"
 

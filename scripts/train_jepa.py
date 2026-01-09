@@ -1625,6 +1625,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Metric used for post-hoc threshold tuning (does not affect loss)",
     )
     tox.add_argument(
+        "--checkpoint-metric",
+        dest="checkpoint_metric",
+        default=case_cfg.get("checkpoint_metric", "pr_auc"),
+        help="Metric used for best checkpoint selection and early stopping during Tox21 runs",
+    )
+    tox.add_argument(
         "--per-task-hparams",
         dest="per_task_hparams",
         default=case_cfg.get("per_task_hparams"),

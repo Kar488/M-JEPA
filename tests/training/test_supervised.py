@@ -354,6 +354,81 @@ def test_train_linear_head_switches_mode_when_metric_missing(monkeypatch):
     assert record["instance"].mode == "min"
 
 
+def test_train_linear_head_selects_checkpoint_by_pr_auc(monkeypatch):
+    np.random.seed(0)
+    torch.manual_seed(0)
+    labels = [0, 1] * 10
+    dataset = DummyDataset(labels)
+    enc = DummyEncoder(4)
+    metrics_sequence = [
+        {"roc_auc": 0.9, "pr_auc": 0.2, "brier": 0.1, "ece": 0.1, "acc": 0.5},
+        {"roc_auc": 0.7, "pr_auc": 0.8, "brier": 0.1, "ece": 0.1, "acc": 0.5},
+    ]
+    call_state = {"calls": 0}
+
+    def metrics_stub(y_true, y_pred):
+        idx = min(call_state["calls"], len(metrics_sequence) - 1)
+        call_state["calls"] += 1
+        return metrics_sequence[idx]
+
+    monkeypatch.setattr(
+        supervised_mod,
+        "compute_classification_metrics",
+        metrics_stub,
+        raising=False,
+    )
+
+    metrics = train_linear_head(
+        dataset,
+        enc,
+        "classification",
+        epochs=2,
+        batch_size=2,
+        lr=0.01,
+        patience=2,
+        device="cpu",
+        checkpoint_metric="pr_auc",
+        train_indices=list(range(10)),
+        val_indices=list(range(10, 15)),
+        test_indices=list(range(15, 20)),
+    )
+
+    assert metrics["checkpoint/metric"] == "pr_auc"
+    assert metrics["checkpoint/epoch"] == 2
+    assert metrics["checkpoint/value"] == pytest.approx(0.8)
+
+
+def test_train_linear_head_raises_when_checkpoint_metric_missing(monkeypatch):
+    np.random.seed(0)
+    torch.manual_seed(0)
+    labels = [0, 1] * 6
+    dataset = DummyDataset(labels)
+    enc = DummyEncoder(4)
+
+    def metrics_stub(y_true, y_pred):
+        return {"roc_auc": 0.5}
+
+    monkeypatch.setattr(
+        supervised_mod,
+        "compute_classification_metrics",
+        metrics_stub,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="checkpoint_metric"):
+        train_linear_head(
+            dataset,
+            enc,
+            "classification",
+            epochs=1,
+            batch_size=4,
+            lr=0.01,
+            patience=2,
+            device="cpu",
+            checkpoint_metric="pr_auc",
+        )
+
+
 def test_train_linear_head_respects_max_batches(monkeypatch):
     np.random.seed(0)
     torch.manual_seed(0)

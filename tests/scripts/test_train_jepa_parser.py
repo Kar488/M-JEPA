@@ -143,6 +143,7 @@ def test_tox21_parser_defaults_and_handler(tmp_path):
     assert args.pretrain_epochs == case_cfg["pretrain_epochs"]
     assert args.finetune_epochs == case_cfg["finetune_epochs"]
     assert args.pretrain_lr == case_cfg.get("pretrain_lr", 1e-4)
+    assert args.checkpoint_metric == case_cfg.get("checkpoint_metric", "pr_auc")
     #assert args.gnn_type == CONFIG["model"]["gnn_type"]
     assert args.hidden_dim == CONFIG["model"]["hidden_dim"]
     assert args.pretrain_time_budget_mins == 0

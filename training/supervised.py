@@ -11,6 +11,7 @@ possible. Performance metrics are computed using utilities from
 from __future__ import annotations
 
 import atexit
+import copy
 import csv
 import logging
 import math
@@ -1505,6 +1506,7 @@ def _train_linear_head_impl(
     head_lr: Optional[float] = None,
     freeze_encoder: bool = True,
     early_stop_metric: str = "val_loss",
+    checkpoint_metric: Optional[str] = None,
     early_stop_mode: Optional[str] = None,
     cache_graph_embeddings: bool = True,
     train_indices: Optional[Iterable[int]] = None,
@@ -2124,12 +2126,16 @@ def _train_linear_head_impl(
         "val_r2": "r2",
         "r2": "r2",
     }
-    metric_key = metric_aliases.get(str(early_stop_metric).lower(), "val_loss")
+    effective_metric = checkpoint_metric if checkpoint_metric is not None else early_stop_metric
+    metric_key = metric_aliases.get(str(effective_metric).lower(), "val_loss")
     monitor_mode = early_stop_mode or ("max" if metric_key in {"roc_auc", "pr_auc", "r2"} else "min")
     early_stopper = (
         EarlyStopping(patience=patience, mode=monitor_mode) if patience > 0 else None
     )
     best_val_snapshot: Dict[str, float] = {}
+    best_checkpoint_metric: Optional[float] = None
+    best_checkpoint_epoch: Optional[int] = None
+    best_checkpoint_state: Optional[Dict[str, Any]] = None
 
     cache_state = {"enabled": bool(cache_graph_embeddings)}
 
@@ -2937,7 +2943,7 @@ def _train_linear_head_impl(
             else:
                 logger.debug("Epoch %d produced no training batches", epoch)
 
-            if early_stopper is not None and val_loader is not None:
+            if (early_stopper is not None or checkpoint_metric is not None) and val_loader is not None:
                 encoder.eval()
                 head_module.eval()
                 val_losses = []
@@ -3014,6 +3020,14 @@ def _train_linear_head_impl(
                     metric_val = val_metric_values.get(metric_key)
                     if metric_val is not None and not np.isnan(metric_val):
                         monitor_value = float(metric_val)
+                    elif checkpoint_metric is not None:
+                        available = sorted(val_metric_values.keys())
+                        available_display = ", ".join(available) if available else "<none>"
+                        raise ValueError(
+                            "Requested checkpoint_metric '%s' is unavailable. "
+                            "Available validation metrics: %s."
+                            % (checkpoint_metric, available_display)
+                        )
                     else:
                         logger.debug(
                             "Validation metric '%s' unavailable; falling back to val_loss.",
@@ -3022,7 +3036,7 @@ def _train_linear_head_impl(
                         monitor_value = avg_val_loss
                         current_mode = "min"
 
-                if early_stopper.mode != current_mode:
+                if early_stopper is not None and early_stopper.mode != current_mode:
                     logger.debug(
                         "Switching early stopping mode from %s to %s due to metric fallback.",
                         early_stopper.mode,
@@ -3045,12 +3059,31 @@ def _train_linear_head_impl(
                         continue
                     val_snapshot[f"val_{name}"] = cast_value
 
-                prev_best = early_stopper.best
-                should_stop = early_stopper.step(monitor_value)
-                if early_stopper.best != prev_best:
-                    best_val_snapshot = dict(val_snapshot)
-                elif not best_val_snapshot:
-                    best_val_snapshot = dict(val_snapshot)
+                should_stop = False
+                if early_stopper is not None:
+                    prev_best = early_stopper.best
+                    should_stop = early_stopper.step(monitor_value)
+                    if early_stopper.best != prev_best:
+                        best_val_snapshot = dict(val_snapshot)
+                    elif not best_val_snapshot:
+                        best_val_snapshot = dict(val_snapshot)
+
+                if checkpoint_metric is not None:
+                    improved = False
+                    if best_checkpoint_metric is None:
+                        improved = True
+                    elif current_mode == "max":
+                        improved = monitor_value > best_checkpoint_metric
+                    else:
+                        improved = monitor_value < best_checkpoint_metric
+
+                    if improved:
+                        best_checkpoint_metric = float(monitor_value)
+                        best_checkpoint_epoch = int(epoch) + 1
+                        best_checkpoint_state = {
+                            "encoder": copy.deepcopy(encoder.state_dict()),
+                            "head": copy.deepcopy(head_module.state_dict()),
+                        }
 
                 if should_stop:
                     logger.info("Early stopping at epoch %d", epoch)
@@ -3065,6 +3098,14 @@ def _train_linear_head_impl(
                     max_batches,
                 )
                 break
+
+    if checkpoint_metric is not None and best_checkpoint_state is not None:
+        encoder_state = best_checkpoint_state.get("encoder")
+        if encoder_state:
+            encoder.load_state_dict(encoder_state, strict=False)
+        head_state = best_checkpoint_state.get("head")
+        if head_state:
+            head_module.load_state_dict(head_state, strict=False)
 
     base_encoder_for_ig = (
         encoder.module if isinstance(encoder, nn.parallel.DistributedDataParallel) else encoder
@@ -3235,6 +3276,14 @@ def _train_linear_head_impl(
         # Leave the process group and DDP env vars intact on success so repeated
         # linear-head runs within the same process can reuse the launcher setup.
     metrics["head"] = head_param_source
+    if checkpoint_metric is not None and best_checkpoint_epoch is not None:
+        metrics["checkpoint/metric"] = str(checkpoint_metric)
+        metrics["checkpoint/value"] = (
+            float(best_checkpoint_metric)
+            if best_checkpoint_metric is not None
+            else float("nan")
+        )
+        metrics["checkpoint/epoch"] = int(best_checkpoint_epoch)
     return metrics
 
 
@@ -3264,6 +3313,7 @@ def train_linear_head(
     head_lr: Optional[float] = None,
     freeze_encoder: bool = True,
     early_stop_metric: str = "val_loss",
+    checkpoint_metric: Optional[str] = None,
     early_stop_mode: Optional[str] = None,
     cache_graph_embeddings: bool = True,
     train_indices: Optional[Iterable[int]] = None,
@@ -3319,6 +3369,7 @@ def train_linear_head(
             head_lr=head_lr,
             freeze_encoder=freeze_encoder,
             early_stop_metric=early_stop_metric,
+            checkpoint_metric=checkpoint_metric,
             early_stop_mode=early_stop_mode,
             cache_graph_embeddings=cache_graph_embeddings,
             train_indices=train_indices,
@@ -3393,6 +3444,7 @@ def train_linear_head(
                 head_lr=head_lr,
                 freeze_encoder=freeze_encoder,
                 early_stop_metric=early_stop_metric,
+                checkpoint_metric=checkpoint_metric,
                 early_stop_mode=early_stop_mode,
                 cache_graph_embeddings=cache_graph_embeddings,
                 train_indices=train_indices,
