@@ -852,6 +852,33 @@ def test_train_linear_head_handles_focal_dynamic_and_calibration():
 
     assert "roc_auc" in metrics
     assert metrics.get("calibration/method") in {None, "temperature", "isotonic"}
+
+
+def test_dynamic_pos_weight_ignored_when_pos_weight_set(monkeypatch):
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("dynamic pos weight should not be computed when pos_weight is set")
+
+    monkeypatch.setattr(supervised_mod, "_compute_pos_weight_from_labels", _boom)
+
+    labels = [0] * 6 + [1] * 2
+    dataset = DummyDataset(labels)
+    enc = DummyEncoder(4)
+    metrics = train_linear_head(
+        dataset,
+        enc,
+        "classification",
+        epochs=1,
+        batch_size=2,
+        lr=0.01,
+        patience=0,
+        device="cpu",
+        pos_weight=2.0,
+        dynamic_pos_weight=True,
+    )
+
+    assert "roc_auc" in metrics
+
+
 def test_resolve_cuda_spawn_context_prefers_spawn(monkeypatch):
     sentinel = object()
 
