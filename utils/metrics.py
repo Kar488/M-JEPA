@@ -54,7 +54,7 @@ def compute_classification_metrics(
     if np.unique(y_int).size < 2:
         return metrics
 
-    probs = 1.0 / (1.0 + np.exp(-yp))
+    probs = _sigmoid(yp)
 
     try:
         metrics["roc_auc"] = float(roc_auc_score(y_int, probs))
@@ -127,7 +127,14 @@ def _softmax(z: np.ndarray, axis: int = -1) -> np.ndarray:
 
 
 def _sigmoid(z: np.ndarray) -> np.ndarray:
-    return 1.0 / (1.0 + np.exp(-z, dtype=np.float64))
+    z = np.asarray(z, dtype=np.float64)
+    out = np.empty_like(z, dtype=np.float64)
+    pos_mask = z >= 0
+    neg_mask = ~pos_mask
+    out[pos_mask] = 1.0 / (1.0 + np.exp(-z[pos_mask], dtype=np.float64))
+    exp_z = np.exp(z[neg_mask], dtype=np.float64)
+    out[neg_mask] = exp_z / (1.0 + exp_z)
+    return out
 
 
 def _normalize_probs(y_score: np.ndarray) -> np.ndarray:
