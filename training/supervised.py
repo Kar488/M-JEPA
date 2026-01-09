@@ -10,6 +10,7 @@ possible. Performance metrics are computed using utilities from
 
 from __future__ import annotations
 
+import atexit
 import csv
 import logging
 import math
@@ -67,6 +68,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["stratified_split", "train_linear_head", "set_stage_config", "get_stage_config"]
 
+_DDP_ATEEXIT_REGISTERED = False
+
 
 _STAGE_CONFIG: Dict[str, Any] = {}
 
@@ -99,6 +102,31 @@ def get_stage_config() -> Dict[str, Any]:
     """Return a shallow copy of the active stage configuration."""
 
     return dict(_STAGE_CONFIG)
+
+
+def _process_group_active() -> bool:
+    dist_mod = getattr(torch, "distributed", None)
+    return bool(
+        dist_mod
+        and getattr(dist_mod, "is_available", lambda: False)()
+        and getattr(dist_mod, "is_initialized", lambda: False)()
+    )
+
+
+def _cleanup_distributed_at_exit() -> None:
+    if _process_group_active():
+        cleanup()
+
+
+def _register_distributed_cleanup_once() -> None:
+    global _DDP_ATEEXIT_REGISTERED
+    if _DDP_ATEEXIT_REGISTERED:
+        return
+    try:
+        atexit.register(_cleanup_distributed_at_exit)
+        _DDP_ATEEXIT_REGISTERED = True
+    except Exception:
+        logger.debug("Failed to register DDP cleanup handler", exc_info=True)
 
 
 def _sigmoid_np(x: np.ndarray) -> np.ndarray:
@@ -1593,6 +1621,7 @@ def _train_linear_head_impl(
                     raise RuntimeError(
                         "DDP initialisation incomplete; aborting to avoid duplicate training."
                     )
+                _register_distributed_cleanup_once()
             else:
                 logger.error(
                     "Requested devices=%s but distributed initialisation is inactive "
@@ -3194,7 +3223,8 @@ def _train_linear_head_impl(
                 dist_mod.barrier()
         except Exception:  # pragma: no cover - best effort synchronisation
             logger.debug("Distributed barrier failed during linear-head shutdown", exc_info=True)
-        cleanup()
+        # Leave the process group and DDP env vars intact on success so repeated
+        # linear-head runs within the same process can reuse the launcher setup.
     metrics["head"] = head_param_source
     return metrics
 
