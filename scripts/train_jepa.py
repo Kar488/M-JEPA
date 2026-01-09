@@ -1608,6 +1608,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum learning-rate ratio for hybrid fine-tuning",
     )
     tox.add_argument(
+        "--hybrid-early-stop-min-epochs",
+        dest="hybrid_early_stop_min_epochs",
+        type=int,
+        default=case_cfg.get("hybrid_early_stop_min_epochs"),
+        help="Minimum epochs to run before allowing early stopping in hybrid mode",
+    )
+    tox.add_argument(
         "--weight-decay",
         dest="weight_decay",
         type=float,
@@ -1707,6 +1714,13 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=case_cfg.get("calibrate_per_head", False),
         help="Fit separate calibrators for each head instead of a shared calibrator",
+    )
+    tox.add_argument(
+        "--calibration-method",
+        dest="calibration_method",
+        choices=["temperature", "isotonic", "platt"],
+        default=case_cfg.get("calibration_method"),
+        help="Calibration method for Tox21 probability scaling",
     )
     tox.add_argument(
         "--freeze-encoder",

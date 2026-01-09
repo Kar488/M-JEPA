@@ -2617,6 +2617,7 @@ tox21_only = {
     "hybrid_warmup_ratio": "--hybrid-warmup-ratio",
     "hybrid_min_lr": "--hybrid-min-lr",
     "hybrid_min_lr_ratio": "--hybrid-min-lr-ratio",
+    "hybrid_early_stop_min_epochs": "--hybrid-early-stop-min-epochs",
     "tox21_head_batch_size": "--tox21-head-batch-size",
     "per_task_hparams": "--per-task-hparams",
 }

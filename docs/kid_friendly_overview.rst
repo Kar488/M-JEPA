@@ -38,6 +38,8 @@ Mission Control
     decay. Hybrid defaults come from the Tox21 CI knobs (``TOX21_EPOCHS``,
     ``TOX21_FREEZE_EPOCHS``, ``TOX21_UNFREEZE_TOP_LAYERS``) and the per-task
     YAML policy file.
+  - ``--hybrid-early-stop-min-epochs`` adds a guardrail so hybrid runs can
+    complete the freeze/partial phases before early stopping is allowed.
   - ``TOX21_CHECKPOINT_METRIC`` controls which validation metric selects the
     best checkpoint (and early-stopping metric) for the tox21 CI step (defaults
     to PR-AUC), while ``threshold_metric`` stays reserved for post-hoc threshold

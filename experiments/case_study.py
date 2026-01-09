@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader
+from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 
@@ -1276,10 +1277,66 @@ def _evaluate_case_study(
             arr = np.zeros(expected_len, dtype=float)
         return arr
 
+    def _temperature_scale_logits(logits: np.ndarray, targets: np.ndarray) -> Tuple[np.ndarray, float]:
+        logits_t = torch.as_tensor(logits, dtype=torch.float32)
+        targets_t = torch.as_tensor(targets, dtype=torch.float32)
+        temperature = torch.ones(1, requires_grad=True)
+        optimizer = torch.optim.LBFGS([temperature], lr=0.1, max_iter=50)
+
+        def _closure() -> torch.Tensor:
+            optimizer.zero_grad()
+            scaled = logits_t / temperature.clamp(min=1e-3)
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                scaled.reshape(-1),
+                targets_t.reshape(-1),
+            )
+            loss.backward()
+            return loss
+
+        try:
+            optimizer.step(_closure)
+        except Exception:
+            return logits, 1.0
+
+        temp_value = float(temperature.detach().clamp(min=1e-3).item())
+        return logits / temp_value, temp_value
+
+    def _isotonic_calibration(
+        logits: np.ndarray,
+        targets: np.ndarray,
+    ) -> Tuple[np.ndarray, IsotonicRegression]:
+        probs = _to_probabilities(logits).reshape(-1)
+        iso = IsotonicRegression(out_of_bounds="clip")
+        calibrated = iso.fit_transform(probs, targets.reshape(-1))
+        return calibrated.reshape(logits.shape), iso
+
+    def _to_probabilities(logits: np.ndarray) -> np.ndarray:
+        arr = np.asarray(logits, dtype=float)
+        if arr.ndim == 0:
+            arr = arr.reshape(1)
+        if arr.ndim == 1:
+            return 1.0 / (1.0 + np.exp(-arr))
+        class_dim = int(arr.shape[-1]) if arr.shape else 0
+        if class_dim <= 1:
+            return 1.0 / (1.0 + np.exp(-arr.reshape(-1)))
+        arr = arr - np.max(arr, axis=-1, keepdims=True)
+        exp = np.exp(arr)
+        probs = exp / np.sum(exp, axis=-1, keepdims=True)
+        return probs[..., -1].reshape(-1)
+
+    calibration_method_norm = (calibration_method or "temperature").strip().lower()
+    supported_methods = {"temperature", "isotonic", "platt"}
+    if calibration_method_norm not in supported_methods:
+        supported = ", ".join(sorted(supported_methods))
+        raise ValueError(
+            f"Unsupported calibration_method='{calibration_method_norm}'. Supported methods: {supported}"
+        )
+
     calibrator_info: Dict[str, Any] = {
         "enabled": bool(calibrate),
         "fit_split": "val",
     }
+    calibrator_info["method"] = calibration_method_norm
     if calibrate_per_head:
         calibrator_info["per_head_enabled"] = True
     feature_dim = int(val_logits_feat.shape[1]) if val_logits_feat.ndim == 2 else 1
@@ -1312,30 +1369,71 @@ def _evaluate_case_study(
                     if isinstance(head_test_logits, torch.Tensor)
                     else np.asarray(head_test_logits)
                 )
-                val_feat_head = _select_calibration_features(val_logits_np_head)
-                test_feat_head = _select_calibration_features(test_logits_np_head)
-                entry["feature_dim"] = int(val_feat_head.shape[1]) if val_feat_head.ndim == 2 else 1
-                mask = (~np.isnan(val_y_full)) & np.isfinite(val_feat_head[:, 0])
-                yv = val_y_full[mask].astype(int)
-                Xv = np.nan_to_num(val_feat_head[mask], nan=0.0, posinf=1e6, neginf=-1e6)
-                entry["n_candidates"] = int(mask.sum())
-                entry["n_samples"] = int(yv.size)
-                variance = float(np.nanvar(Xv)) if Xv.size else 0.0
-                entry["variance"] = variance
-                if variance < per_head_variance_threshold:
-                    entry["status"] = "low_variance"
-                    per_head_entries.append(entry)
-                    continue
-                if yv.size > 1 and np.unique(yv).size > 1:
-                    try:
-                        platt = LogisticRegression(
-                            solver="lbfgs",
-                            max_iter=1000,
-                            class_weight="balanced",
+                entry["method"] = calibration_method_norm
+                if calibration_method_norm == "platt":
+                    val_feat_head = _select_calibration_features(val_logits_np_head)
+                    test_feat_head = _select_calibration_features(test_logits_np_head)
+                    entry["feature_dim"] = int(val_feat_head.shape[1]) if val_feat_head.ndim == 2 else 1
+                    mask = (~np.isnan(val_y_full)) & np.isfinite(val_feat_head[:, 0])
+                    yv = val_y_full[mask].astype(int)
+                    Xv = np.nan_to_num(val_feat_head[mask], nan=0.0, posinf=1e6, neginf=-1e6)
+                    entry["n_candidates"] = int(mask.sum())
+                    entry["n_samples"] = int(yv.size)
+                    variance = float(np.nanvar(Xv)) if Xv.size else 0.0
+                    entry["variance"] = variance
+                    if variance < per_head_variance_threshold:
+                        entry["status"] = "low_variance"
+                        per_head_entries.append(entry)
+                        continue
+                    if yv.size > 1 and np.unique(yv).size > 1:
+                        try:
+                            platt = LogisticRegression(
+                                solver="lbfgs",
+                                max_iter=1000,
+                                class_weight="balanced",
+                            )
+                            platt.fit(Xv, yv)
+                            Xt = np.nan_to_num(test_feat_head, nan=0.0, posinf=1e6, neginf=-1e6)
+                            calibrated_head = platt.predict_proba(Xt)[:, 1]
+                            calibrated_head = _resize_to_expected(
+                                calibrated_head,
+                                f"calibrated probabilities (head {head_idx})",
+                            )
+                            per_head_calibrated.append(calibrated_head)
+                            entry.update(
+                                {
+                                    "status": "fitted",
+                                    "type": "platt",
+                                    "class_weight": "balanced",
+                                    "n_samples": int(yv.size),
+                                    "coef": platt.coef_.reshape(-1).astype(float).tolist(),
+                                    "intercept": float(platt.intercept_.reshape(-1)[0]),
+                                }
+                            )
+                        except Exception as exc:  # pragma: no cover - calibration optional
+                            entry.update({"status": "error", "error": str(exc)})
+                        per_head_entries.append(entry)
+                    else:
+                        entry.update(
+                            {
+                                "status": "insufficient_variance",
+                                "reason": "need_two_classes",
+                                "n_samples": int(yv.size),
+                            }
                         )
-                        platt.fit(Xv, yv)
-                        Xt = np.nan_to_num(test_feat_head, nan=0.0, posinf=1e6, neginf=-1e6)
-                        calibrated_head = platt.predict_proba(Xt)[:, 1]
+                        per_head_entries.append(entry)
+                elif calibration_method_norm == "temperature":
+                    val_logits_pos = _select_positive_probabilities(val_logits_np_head)
+                    test_logits_pos = _select_positive_probabilities(test_logits_np_head)
+                    mask = (~np.isnan(val_y_full)) & np.isfinite(val_logits_pos)
+                    yv = val_y_full[mask].astype(int)
+                    if yv.size > 1 and np.unique(yv).size > 1:
+                        scaled_val, temp_value = _temperature_scale_logits(
+                            val_logits_pos[mask],
+                            yv,
+                        )
+                        scaled_test = test_logits_pos / max(temp_value, 1e-3)
+                        calibrated_head = _to_probabilities(scaled_test)
                         calibrated_head = _resize_to_expected(
                             calibrated_head,
                             f"calibrated probabilities (head {head_idx})",
@@ -1344,25 +1442,54 @@ def _evaluate_case_study(
                         entry.update(
                             {
                                 "status": "fitted",
-                                "type": "platt",
-                                "class_weight": "balanced",
+                                "type": "temperature",
+                                "temperature": float(temp_value),
                                 "n_samples": int(yv.size),
-                                "coef": platt.coef_.reshape(-1).astype(float).tolist(),
-                                "intercept": float(platt.intercept_.reshape(-1)[0]),
                             }
                         )
-                    except Exception as exc:  # pragma: no cover - calibration optional
-                        entry.update({"status": "error", "error": str(exc)})
-                    per_head_entries.append(entry)
+                    else:
+                        entry.update(
+                            {
+                                "status": "insufficient_variance",
+                                "reason": "need_two_classes",
+                                "n_samples": int(yv.size),
+                            }
+                        )
+                        per_head_entries.append(entry)
                 else:
-                    entry.update(
-                        {
-                            "status": "insufficient_variance",
-                            "reason": "need_two_classes",
-                            "n_samples": int(yv.size),
-                        }
-                    )
-                    per_head_entries.append(entry)
+                    val_logits_pos = _select_positive_probabilities(val_logits_np_head)
+                    test_logits_pos = _select_positive_probabilities(test_logits_np_head)
+                    mask = (~np.isnan(val_y_full)) & np.isfinite(val_logits_pos)
+                    yv = val_y_full[mask].astype(int)
+                    if yv.size > 1 and np.unique(yv).size > 1:
+                        calibrated_val, iso_model = _isotonic_calibration(
+                            val_logits_pos[mask],
+                            yv,
+                        )
+                        calibrated_test = iso_model.transform(
+                            _to_probabilities(test_logits_pos).reshape(-1)
+                        )
+                        calibrated_head = _resize_to_expected(
+                            calibrated_test,
+                            f"calibrated probabilities (head {head_idx})",
+                        )
+                        per_head_calibrated.append(calibrated_head)
+                        entry.update(
+                            {
+                                "status": "fitted",
+                                "type": "isotonic",
+                                "n_samples": int(yv.size),
+                            }
+                        )
+                    else:
+                        entry.update(
+                            {
+                                "status": "insufficient_variance",
+                                "reason": "need_two_classes",
+                                "n_samples": int(yv.size),
+                            }
+                        )
+                        per_head_entries.append(entry)
             calibrator_info["per_head"] = per_head_entries
             calibrator_info["per_head_variance_threshold"] = per_head_variance_threshold
             if per_head_calibrated:
@@ -1395,33 +1522,91 @@ def _evaluate_case_study(
         calibrator_info["status"] = "skipped"
         try:
             val_y = all_labels[val_idx_arr].astype(float)
-            mask = (~np.isnan(val_y)) & np.isfinite(val_logits_feat[:, 0])
-            yv = val_y[mask].astype(int)
-            Xv = np.nan_to_num(val_logits_feat[mask], nan=0.0, posinf=1e6, neginf=-1e6)
-            calibrator_info["n_candidates"] = int(mask.sum())
-            if yv.size > 1 and np.unique(yv).size > 1:
-                platt = LogisticRegression(solver="lbfgs", max_iter=1000, class_weight="balanced")
-                platt.fit(Xv, yv)
-                Xt = np.nan_to_num(test_logits_feat, nan=0.0, posinf=1e6, neginf=-1e6)
-                calibrated_probs = platt.predict_proba(Xt)[:, 1]
-                calibrator_info.update(
-                    {
-                        "status": "fitted",
-                        "type": "platt",
-                        "class_weight": "balanced",
-                        "n_samples": int(yv.size),
-                        "coef": platt.coef_.reshape(-1).astype(float).tolist(),
-                        "intercept": float(platt.intercept_.reshape(-1)[0]),
-                    }
-                )
+            if calibration_method_norm == "platt":
+                mask = (~np.isnan(val_y)) & np.isfinite(val_logits_feat[:, 0])
+                yv = val_y[mask].astype(int)
+                Xv = np.nan_to_num(val_logits_feat[mask], nan=0.0, posinf=1e6, neginf=-1e6)
+                calibrator_info["n_candidates"] = int(mask.sum())
+                if yv.size > 1 and np.unique(yv).size > 1:
+                    platt = LogisticRegression(solver="lbfgs", max_iter=1000, class_weight="balanced")
+                    platt.fit(Xv, yv)
+                    Xt = np.nan_to_num(test_logits_feat, nan=0.0, posinf=1e6, neginf=-1e6)
+                    calibrated_probs = platt.predict_proba(Xt)[:, 1]
+                    calibrator_info.update(
+                        {
+                            "status": "fitted",
+                            "type": "platt",
+                            "class_weight": "balanced",
+                            "n_samples": int(yv.size),
+                            "coef": platt.coef_.reshape(-1).astype(float).tolist(),
+                            "intercept": float(platt.intercept_.reshape(-1)[0]),
+                        }
+                    )
+                else:
+                    calibrator_info.update(
+                        {
+                            "status": "insufficient_variance",
+                            "reason": "need_two_classes",
+                            "n_samples": int(yv.size),
+                        }
+                    )
+            elif calibration_method_norm == "temperature":
+                val_logits_pos = _select_positive_probabilities(val_logits_np)
+                test_logits_pos = _select_positive_probabilities(test_logits_np)
+                mask = (~np.isnan(val_y)) & np.isfinite(val_logits_pos)
+                yv = val_y[mask].astype(int)
+                calibrator_info["n_candidates"] = int(mask.sum())
+                if yv.size > 1 and np.unique(yv).size > 1:
+                    _, temp_value = _temperature_scale_logits(
+                        val_logits_pos[mask],
+                        yv,
+                    )
+                    calibrated_probs = _to_probabilities(test_logits_pos / max(temp_value, 1e-3))
+                    calibrator_info.update(
+                        {
+                            "status": "fitted",
+                            "type": "temperature",
+                            "temperature": float(temp_value),
+                            "n_samples": int(yv.size),
+                        }
+                    )
+                else:
+                    calibrator_info.update(
+                        {
+                            "status": "insufficient_variance",
+                            "reason": "need_two_classes",
+                            "n_samples": int(yv.size),
+                        }
+                    )
             else:
-                calibrator_info.update(
-                    {
-                        "status": "insufficient_variance",
-                        "reason": "need_two_classes",
-                        "n_samples": int(yv.size),
-                    }
-                )
+                val_logits_pos = _select_positive_probabilities(val_logits_np)
+                test_logits_pos = _select_positive_probabilities(test_logits_np)
+                mask = (~np.isnan(val_y)) & np.isfinite(val_logits_pos)
+                yv = val_y[mask].astype(int)
+                calibrator_info["n_candidates"] = int(mask.sum())
+                if yv.size > 1 and np.unique(yv).size > 1:
+                    calibrated_val, iso_model = _isotonic_calibration(
+                        val_logits_pos[mask],
+                        yv,
+                    )
+                    calibrated_probs = iso_model.transform(
+                        _to_probabilities(test_logits_pos).reshape(-1)
+                    )
+                    calibrator_info.update(
+                        {
+                            "status": "fitted",
+                            "type": "isotonic",
+                            "n_samples": int(yv.size),
+                        }
+                    )
+                else:
+                    calibrator_info.update(
+                        {
+                            "status": "insufficient_variance",
+                            "reason": "need_two_classes",
+                            "n_samples": int(yv.size),
+                        }
+                    )
         except Exception as exc:  # pragma: no cover - calibration optional
             logger.warning("Calibration skipped due to error: %s", exc)
             calibrated_probs = test_probs_np
@@ -1697,6 +1882,7 @@ def run_tox21_case_study(
     triage_pct: float = 0.0,
     calibrate: bool = True,
     calibrate_per_head: bool = False,
+    calibration_method: Optional[str] = None,
     use_pos_weight: bool = True,
     device: str = "cpu",
     baseline_embeddings: dict[str, str] | None = None,
@@ -1751,6 +1937,7 @@ def run_tox21_case_study(
     hybrid_warmup_ratio: Optional[float] = None,
     hybrid_min_lr: Optional[float] = None,
     hybrid_min_lr_ratio: Optional[float] = None,
+    hybrid_early_stop_min_epochs: Optional[int] = None,
 ) -> CaseStudyResult:
     """Run the Tox21 case study and return structured evaluation results."""
 
@@ -3041,6 +3228,20 @@ def run_tox21_case_study(
         "focal_gamma": float(focal_gamma_value),
     }
 
+    early_stop_min_epochs_value = 0
+    if hybrid_early_stop_min_epochs is not None:
+        try:
+            early_stop_min_epochs_value = max(0, int(hybrid_early_stop_min_epochs))
+        except Exception:
+            logger.warning(
+                "Failed to parse hybrid_early_stop_min_epochs=%s; disabling guard.",
+                hybrid_early_stop_min_epochs,
+                exc_info=True,
+            )
+            early_stop_min_epochs_value = 0
+    if normalized_mode != "hybrid":
+        early_stop_min_epochs_value = 0
+
     hybrid_schedule: Optional[Dict[str, Any]] = None
     if normalized_mode == "hybrid":
         hybrid_schedule = {
@@ -3053,6 +3254,8 @@ def run_tox21_case_study(
             "min_lr": hybrid_min_lr or min_lr,
             "min_lr_ratio": hybrid_min_lr_ratio or min_lr_ratio,
         }
+        if early_stop_min_epochs_value:
+            hybrid_schedule["early_stop_min_epochs"] = early_stop_min_epochs_value
         diagnostics["hybrid_schedule"] = dict(hybrid_schedule)
 
     weight_decay_value: Optional[float] = None
@@ -3271,6 +3474,7 @@ def run_tox21_case_study(
             "device": device,
             "devices": devices,
             "patience": int(patience_value),
+            "early_stop_min_epochs": early_stop_min_epochs_value,
             "num_workers": num_workers,
             "pin_memory": pin_memory,
             "persistent_workers": persistent_workers,
@@ -3331,8 +3535,18 @@ def run_tox21_case_study(
                 run_kwargs["optimizer"] = opt_seed
             if sched_seed is not None:
                 run_kwargs["scheduler"] = sched_seed
+            try:
+                member_seed = int(seed) + member
+            except Exception:
+                member_seed = seed
+            logger.info(
+                "[tox21] training head ensemble member %d/%d (seed=%s)",
+                member + 1,
+                ensemble_size,
+                member_seed,
+            )
             if member > 0:
-                set_seed(int(seed) + member)
+                set_seed(int(member_seed))
             metrics_payload = linear_train_fn(**run_kwargs)
             ensemble_metrics.append(metrics_payload)
 

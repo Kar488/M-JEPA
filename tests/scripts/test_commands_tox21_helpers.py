@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 import scripts.commands.tox21 as tox
 
 
@@ -285,7 +287,9 @@ def test_run_single_task_applies_task_overrides(tmp_path, monkeypatch):
             "head_lr": 3e-4,
             "encoder_lr": 1e-5,
             "threshold_metric": "pr_auc",
+            "checkpoint_metric": "pr_auc",
             "use_focal_loss": True,
+            "dynamic_pos_weight": True,
             "pos_weight": 7,
         }
     }
@@ -310,8 +314,325 @@ def test_run_single_task_applies_task_overrides(tmp_path, monkeypatch):
     assert captured["head_lr"] == 3e-4
     assert captured["encoder_lr"] == 1e-5
     assert captured["threshold_metric"] == "pr_auc"
+    assert captured["checkpoint_metric"] == "pr_auc"
     assert captured["use_focal_loss"] is True
+    assert captured["dynamic_pos_weight"] is True
     assert captured["pos_class_weight"] is not None
+
+
+def test_run_single_task_resolves_calibration_method(tmp_path, monkeypatch):
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    captured = {}
+
+    def fake_case_study(**kwargs):
+        captured.update(kwargs)
+        eval_obj = SimpleNamespace(
+            encoder_source="pretrain_frozen",
+            name="pretrain_frozen",
+            mean_true=0.5,
+            mean_random=0.4,
+            mean_pred=0.6,
+            metrics={"roc_auc": 0.7},
+            benchmark_metric="roc_auc",
+            benchmark_threshold=0.65,
+            met_benchmark=True,
+            manifest_path=str(report_dir / "manifest.json"),
+            baseline_means={},
+        )
+        return SimpleNamespace(
+            evaluations=[eval_obj],
+            diagnostics={},
+            gate_passed=True,
+            threshold_payload={},
+            target_payload={},
+            json_path=str(report_dir / "task.json"),
+            csv_path=str(report_dir / "task.csv"),
+            calibrator_path=str(report_dir / "task_calib.json"),
+            manifest_path=str(report_dir / "task_manifest.json"),
+            auc_summary={"pretrain_frozen": 0.7},
+        )
+
+    monkeypatch.setattr(tox, "run_tox21_case_study", fake_case_study)
+    monkeypatch.setattr(tox, "resolve_metric_threshold", lambda *_args, **_kwargs: None)
+
+    args = SimpleNamespace(
+        task="NR-AR",
+        csv="samples/tox21_mini.csv",
+        class_weights="auto",
+        pos_class_weight=None,
+        head_ensemble_size=1,
+        freeze_encoder=False,
+        devices=1,
+        allow_shape_coercion=False,
+        encoder_checkpoint=None,
+        pretrain_epochs=1,
+        finetune_epochs=2,
+        lr=1e-3,
+        pretrain_lr=None,
+        head_lr=1e-4,
+        encoder_lr=1e-6,
+        weight_decay=None,
+        hidden_dim=64,
+        num_layers=2,
+        dropout=None,
+        gnn_type="mpnn",
+        add_3d=False,
+        contrastive=False,
+        device="cpu",
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        bf16=False,
+        bf16_head=False,
+        pretrain_time_budget_mins=0,
+        finetune_time_budget_mins=0,
+        cache_dir=None,
+        strict_encoder_config=False,
+        encoder_source="pretrain_frozen",
+        evaluation_mode="pretrain_frozen",
+        allow_equal_hash=False,
+        verify_match_threshold=0.98,
+        patience=5,
+        tox21_head_batch_size=64,
+        head_scheduler=None,
+        full_finetune=False,
+        unfreeze_top_layers=0,
+        explain_mode=None,
+        explain_steps=None,
+        oversample_minority=False,
+        use_focal_loss=False,
+        dynamic_pos_weight=False,
+        focal_gamma=2.0,
+        layerwise_decay=None,
+        threshold_metric="roc_auc",
+        calibration_method="isotonic",
+        _hidden_dim_provided=True,
+        _num_layers_provided=True,
+        _gnn_type_provided=True,
+    )
+
+    task_hparam_map = {"nr-ar": {"calibration_method": "temperature"}}
+
+    tox._run_tox21_single_task(
+        args,
+        dataset_name="tox21",
+        eval_mode="pretrain_frozen",
+        triage_pct=0.0,
+        calibrate=True,
+        calibrate_per_head=False,
+        task_hparam_map=task_hparam_map,
+        hybrid_defaults={},
+        cache_dir=None,
+        report_dir=str(report_dir),
+        wb=None,
+        class_balance={"NR-AR": {}},
+        auto_pos_weights={},
+        calibration_warn_threshold=0.2,
+    )
+
+    assert captured["calibration_method"] == "temperature"
+
+
+def test_run_single_task_accepts_isotonic_calibration(tmp_path, monkeypatch):
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    captured = {}
+
+    def fake_case_study(**kwargs):
+        captured.update(kwargs)
+        eval_obj = SimpleNamespace(
+            encoder_source="pretrain_frozen",
+            name="pretrain_frozen",
+            mean_true=0.5,
+            mean_random=0.4,
+            mean_pred=0.6,
+            metrics={"roc_auc": 0.7},
+            benchmark_metric="roc_auc",
+            benchmark_threshold=0.65,
+            met_benchmark=True,
+            manifest_path=str(report_dir / "manifest.json"),
+            baseline_means={},
+        )
+        return SimpleNamespace(
+            evaluations=[eval_obj],
+            diagnostics={},
+            gate_passed=True,
+            threshold_payload={},
+            target_payload={},
+            json_path=str(report_dir / "task.json"),
+            csv_path=str(report_dir / "task.csv"),
+            calibrator_path=str(report_dir / "task_calib.json"),
+            manifest_path=str(report_dir / "task_manifest.json"),
+            auc_summary={"pretrain_frozen": 0.7},
+        )
+
+    monkeypatch.setattr(tox, "run_tox21_case_study", fake_case_study)
+    monkeypatch.setattr(tox, "resolve_metric_threshold", lambda *_args, **_kwargs: None)
+
+    args = SimpleNamespace(
+        task="NR-AR",
+        csv="samples/tox21_mini.csv",
+        class_weights="auto",
+        pos_class_weight=None,
+        head_ensemble_size=1,
+        freeze_encoder=False,
+        devices=1,
+        allow_shape_coercion=False,
+        encoder_checkpoint=None,
+        pretrain_epochs=1,
+        finetune_epochs=2,
+        lr=1e-3,
+        pretrain_lr=None,
+        head_lr=1e-4,
+        encoder_lr=1e-6,
+        weight_decay=None,
+        hidden_dim=64,
+        num_layers=2,
+        dropout=None,
+        gnn_type="mpnn",
+        add_3d=False,
+        contrastive=False,
+        device="cpu",
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        bf16=False,
+        bf16_head=False,
+        pretrain_time_budget_mins=0,
+        finetune_time_budget_mins=0,
+        cache_dir=None,
+        strict_encoder_config=False,
+        encoder_source="pretrain_frozen",
+        evaluation_mode="pretrain_frozen",
+        allow_equal_hash=False,
+        verify_match_threshold=0.98,
+        patience=5,
+        tox21_head_batch_size=64,
+        head_scheduler=None,
+        full_finetune=False,
+        unfreeze_top_layers=0,
+        explain_mode=None,
+        explain_steps=None,
+        oversample_minority=False,
+        use_focal_loss=False,
+        dynamic_pos_weight=False,
+        focal_gamma=2.0,
+        layerwise_decay=None,
+        threshold_metric="roc_auc",
+        calibration_method=None,
+        _hidden_dim_provided=True,
+        _num_layers_provided=True,
+        _gnn_type_provided=True,
+    )
+
+    task_hparam_map = {"nr-ar": {"calibration_method": "isotonic"}}
+
+    tox._run_tox21_single_task(
+        args,
+        dataset_name="tox21",
+        eval_mode="pretrain_frozen",
+        triage_pct=0.0,
+        calibrate=True,
+        calibrate_per_head=False,
+        task_hparam_map=task_hparam_map,
+        hybrid_defaults={},
+        cache_dir=None,
+        report_dir=str(report_dir),
+        wb=None,
+        class_balance={"NR-AR": {}},
+        auto_pos_weights={},
+        calibration_warn_threshold=0.2,
+    )
+
+    assert captured["calibration_method"] == "isotonic"
+
+
+def test_run_single_task_rejects_unsupported_calibration_method(tmp_path, monkeypatch):
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(tox, "run_tox21_case_study", lambda **_kwargs: None)
+    monkeypatch.setattr(tox, "resolve_metric_threshold", lambda *_args, **_kwargs: None)
+
+    args = SimpleNamespace(
+        task="NR-AR",
+        csv="samples/tox21_mini.csv",
+        class_weights="auto",
+        pos_class_weight=None,
+        head_ensemble_size=1,
+        freeze_encoder=False,
+        devices=1,
+        allow_shape_coercion=False,
+        encoder_checkpoint=None,
+        pretrain_epochs=1,
+        finetune_epochs=2,
+        lr=1e-3,
+        pretrain_lr=None,
+        head_lr=1e-4,
+        encoder_lr=1e-6,
+        weight_decay=None,
+        hidden_dim=64,
+        num_layers=2,
+        dropout=None,
+        gnn_type="mpnn",
+        add_3d=False,
+        contrastive=False,
+        device="cpu",
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=2,
+        bf16=False,
+        bf16_head=False,
+        pretrain_time_budget_mins=0,
+        finetune_time_budget_mins=0,
+        cache_dir=None,
+        strict_encoder_config=False,
+        encoder_source="pretrain_frozen",
+        evaluation_mode="pretrain_frozen",
+        allow_equal_hash=False,
+        verify_match_threshold=0.98,
+        patience=5,
+        tox21_head_batch_size=64,
+        head_scheduler=None,
+        full_finetune=False,
+        unfreeze_top_layers=0,
+        explain_mode=None,
+        explain_steps=None,
+        oversample_minority=False,
+        use_focal_loss=False,
+        dynamic_pos_weight=False,
+        focal_gamma=2.0,
+        layerwise_decay=None,
+        threshold_metric="roc_auc",
+        calibration_method=None,
+        _hidden_dim_provided=True,
+        _num_layers_provided=True,
+        _gnn_type_provided=True,
+    )
+
+    task_hparam_map = {"nr-ar": {"calibration_method": "unsupported"}}
+
+    with pytest.raises(ValueError, match="Unsupported calibration_method"):
+        tox._run_tox21_single_task(
+            args,
+            dataset_name="tox21",
+            eval_mode="pretrain_frozen",
+            triage_pct=0.0,
+            calibrate=True,
+            calibrate_per_head=False,
+            task_hparam_map=task_hparam_map,
+            hybrid_defaults={},
+            cache_dir=None,
+            report_dir=str(report_dir),
+            wb=None,
+            class_balance={"NR-AR": {}},
+            auto_pos_weights={},
+            calibration_warn_threshold=0.2,
+        )
 
 def test_run_single_task_allows_disabling_explain(tmp_path, monkeypatch):
     report_dir = tmp_path / "reports"
