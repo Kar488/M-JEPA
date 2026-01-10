@@ -67,6 +67,35 @@ constraining runtime.
 Calibration method resolution is: per-task override → `--calibration-method`
 → default `temperature`. Unsupported values raise a clear error at runtime.
 
+## Tox21 seed ensembling & reporting
+- Tox21 uses a head ensemble as the **seed ensemble**. Each head is trained with
+  an incremented seed, and predictions are merged by **mean logits**
+  (`ensemble_method=mean_logits`). Calibration runs **once** on the ensemble
+  logits (fit on the validation split, applied to test).
+- The ensemble metrics are the primary reported values. Per-seed metrics are
+  computed from each head's uncalibrated probabilities (sigmoid of the seed
+  logits) and used to report dispersion (`*_std`) for ROC-AUC, PR-AUC, Brier, and
+  ECE.
+
+### Exported Tox21 artifacts (all bundled in the tox21 artifact zip)
+- `tox21_<ASSAY>_scores.csv`: ensemble predictions with columns
+  `graph_id, assay, true_label, ensemble_logit, ensemble_probability`.
+- `tox21_<ASSAY>_scores_by_seed.csv`: per-seed predictions with columns
+  `graph_id, assay, seed, true_label, logit, probability`.
+- `tox21_<ASSAY>_reliability_bins.json`: reliability diagram bins from ensemble
+  probabilities (`bin_edges`, `bin_counts`, `bin_accuracy`, `bin_confidence`).
+- `tox21_<MODE>_metrics.csv`: aggregated metrics with `evaluation=ensemble`,
+  `evaluation=seed_<id>`, and `metrics/*_std` rows.
+- `tox21_<ASSAY>.json`: per-assay summary including ensemble metadata, per-seed
+  metrics, and dispersion stats (matches CSV + W&B).
+
+### Reliability diagram reconstruction
+Use `tox21_<ASSAY>_reliability_bins.json` to plot calibration curves without
+rerunning inference:
+1. Load `bin_edges`, `bin_accuracy`, and `bin_confidence`.
+2. Plot `bin_confidence` (x) vs `bin_accuracy` (y), with `bin_counts` for marker
+   size or tooltips.
+
 ## Hybrid early stopping guard
 - Hybrid training is split into freeze/partial/full phases; early stopping can
   terminate training before the full schedule completes.
