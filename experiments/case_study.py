@@ -1082,6 +1082,8 @@ def _evaluate_case_study(
     device: str,
     edge_dim: int,
     seed: int,
+    *,
+    calibration_method: Optional[str] = None,
     calibrate_per_head: bool = False,
     baseline_embeddings: Optional[dict[str, str]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
@@ -1642,6 +1644,49 @@ def _evaluate_case_study(
                     smiles_for_test.append("")
             prediction_payload["smiles"] = smiles_for_test
         diagnostics["test_predictions"] = prediction_payload
+        diagnostics.setdefault("ensemble_method", "mean_logits")
+        seed_payload: Dict[str, Any] = {
+            "indices": _to_list(test_idx_arr),
+            "true_labels": _to_list(labels_for_test),
+        }
+        head_test_logits = per_head_logits.get("test", [])
+        head_test_probs = per_head_probs.get("test", [])
+        head_count = min(len(head_test_logits), len(head_test_probs))
+        if head_count > 0:
+            seeds_used: List[Any] = []
+            for head_idx in range(head_count):
+                try:
+                    seed_val = int(seed) + head_idx
+                except Exception:
+                    seed_val = seed
+                seeds_used.append(seed_val)
+            seed_payload["seeds"] = seeds_used
+            seed_payload["logits"] = []
+            seed_payload["probabilities"] = []
+            for head_idx in range(head_count):
+                logits_head = head_test_logits[head_idx]
+                probs_head = head_test_probs[head_idx]
+                logits_np = (
+                    logits_head.detach().cpu().numpy()
+                    if isinstance(logits_head, torch.Tensor)
+                    else np.asarray(logits_head)
+                )
+                probs_np = (
+                    probs_head.detach().cpu().numpy()
+                    if isinstance(probs_head, torch.Tensor)
+                    else np.asarray(probs_head)
+                )
+                positive_head_logits = _select_positive_probabilities(logits_np)
+                positive_head_probs = _select_positive_probabilities(probs_np)
+                positive_head_logits = _resize_to_expected(
+                    positive_head_logits, f"head {head_idx} logits"
+                )
+                positive_head_probs = _resize_to_expected(
+                    positive_head_probs, f"head {head_idx} probabilities"
+                )
+                seed_payload["logits"].append(_to_list(positive_head_logits))
+                seed_payload["probabilities"].append(_to_list(positive_head_probs))
+            diagnostics["seed_predictions"] = seed_payload
 
     if triage_pct <= 0:
         k = 0
@@ -3643,7 +3688,9 @@ def run_tox21_case_study(
         test_idx=test_idx,
         triage_pct=triage_pct,
         calibrate=calibrate,
+        calibration_method=calibration_method,
         calibrate_per_head=calibrate_per_head,
+        calibration_method=calibration_method,
         device=device,
         edge_dim=edge_dim,
         seed=seed,

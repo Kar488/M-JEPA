@@ -257,6 +257,58 @@ def test_evaluate_case_study_records_test_predictions(monkeypatch):
     assert preds.get("true_labels", [])[0] == pytest.approx(0.0)
 
 
+@pytest.mark.parametrize(
+    ("calibration_method", "expected_method"),
+    [
+        (None, "temperature"),
+        ("temperature", "temperature"),
+    ],
+)
+def test_evaluate_case_study_defaults_calibration_method(
+    monkeypatch, calibration_method, expected_method
+):
+    import experiments.case_study as case_study
+
+    dataset = types.SimpleNamespace(graphs=[types.SimpleNamespace(), types.SimpleNamespace()])
+    labels = np.array([0.0, 0.0])
+
+    def fake_predict(
+        dataset,
+        indices,
+        encoder,
+        head,
+        device,
+        edge_dim,
+        batch_size=256,
+        diag_hook=None,
+    ):
+        logits = torch.tensor([[0.1], [0.1]], dtype=torch.float32)
+        probs = torch.sigmoid(logits)
+        return logits, probs
+
+    monkeypatch.setattr(case_study, "_predict_logits_probs_in_chunks", fake_predict)
+
+    _, _, _, _, _, calibrator = case_study._evaluate_case_study(
+        dataset=dataset,
+        encoder=None,
+        head=None,
+        all_labels=labels,
+        train_idx=[0],
+        val_idx=[0, 1],
+        test_idx=[0, 1],
+        triage_pct=0.0,
+        calibrate=True,
+        calibration_method=calibration_method,
+        device="cpu",
+        edge_dim=0,
+        seed=0,
+        baseline_embeddings=None,
+    )
+
+    assert calibrator["enabled"] is True
+    assert calibrator["method"] == expected_method
+
+
 def test_evaluate_case_study_handles_resize_failure(monkeypatch):
     import experiments.case_study as case_study
 
@@ -487,6 +539,7 @@ def test_evaluate_case_study_multitask_two_logits(monkeypatch):
         test_idx=[0, 1, 2],
         triage_pct=0.0,
         calibrate=True,
+        calibration_method="platt",
         device="cpu",
         edge_dim=0,
         seed=0,
@@ -1037,3 +1090,50 @@ def test_auto_shape_coercion_normalises_metadata(tmp_path, monkeypatch):
     assert load_calls["edge_dim"] == 1
     assert add3d_calls == [True]
     assert result.diagnostics.get("encoder_config", {}).get("hidden_dim") == 512
+
+
+def test_tox21_ensemble_diagnostics_capture_seed_predictions(monkeypatch):
+    import experiments.case_study as case_study
+
+    class DummyDataset:
+        graphs: list = []
+        smiles = ["A", "B"]
+
+    outputs = [
+        (torch.tensor([[0.0], [1.0]]), torch.tensor([[0.5], [0.73]])),
+        (torch.tensor([[2.0], [3.0]]), torch.tensor([[0.88], [0.95]])),
+        (torch.tensor([[0.0], [1.0]]), torch.tensor([[0.5], [0.73]])),
+        (torch.tensor([[2.0], [3.0]]), torch.tensor([[0.88], [0.95]])),
+    ]
+
+    def fake_predict(*_args, **_kwargs):
+        return outputs.pop(0)
+
+    monkeypatch.setattr(case_study, "_predict_logits_probs_in_chunks", fake_predict)
+
+    diagnostics: Dict[str, Any] = {}
+    case_study._evaluate_case_study(
+        dataset=DummyDataset(),
+        encoder=None,
+        head=[object(), object()],
+        all_labels=np.asarray([1.0, 0.0], dtype=float),
+        train_idx=[0],
+        val_idx=[0, 1],
+        test_idx=[0, 1],
+        triage_pct=0.0,
+        calibrate=False,
+        device="cpu",
+        edge_dim=1,
+        seed=7,
+        diagnostics=diagnostics,
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False,
+        prefetch_factor=1,
+    )
+
+    ensemble_logits = diagnostics["test_predictions"]["logits"]
+    assert ensemble_logits == [1.0, 2.0]
+    seed_block = diagnostics["seed_predictions"]
+    assert seed_block["seeds"] == [7, 8]
+    assert seed_block["logits"][0] == [0.0, 1.0]
