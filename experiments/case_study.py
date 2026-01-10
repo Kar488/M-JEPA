@@ -3688,7 +3688,6 @@ def run_tox21_case_study(
         test_idx=test_idx,
         triage_pct=triage_pct,
         calibrate=calibrate,
-        calibration_method=calibration_method,
         calibrate_per_head=calibrate_per_head,
         calibration_method=calibration_method,
         device=device,
