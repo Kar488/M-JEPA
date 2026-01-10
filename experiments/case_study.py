@@ -3113,7 +3113,8 @@ def run_tox21_case_study(
 
     fine_tuned_modes = {"frozen_finetuned", "end_to_end", "hybrid"}
     if (
-        (full_finetune_effective or normalized_mode in fine_tuned_modes)
+        normalized_mode != "hybrid"
+        and (full_finetune_effective or normalized_mode in fine_tuned_modes)
         and encoder_hash
         and baseline_hash
         and str(encoder_hash) == str(baseline_hash)

@@ -657,7 +657,7 @@ def test_case_study_end_to_end_with_checkpoint_enables_full_finetune(monkeypatch
     monkeypatch.setattr(
         case_study,
         "safe_load_checkpoint",
-        lambda *args, **kwargs: ({"encoder": {}}, {}),
+        lambda *args, **kwargs: ({"encoder": {"weight": 1}}, {}),
         raising=False,
     )
     monkeypatch.setattr(
@@ -680,6 +680,106 @@ def test_case_study_end_to_end_with_checkpoint_enables_full_finetune(monkeypatch
     assert calls.get("encoder_lr") is not None
     assert result.diagnostics.get("auto_full_finetune") is True
     assert result.diagnostics.get("full_finetune") is True
+
+
+def test_case_study_hybrid_allows_equal_hash(monkeypatch, tmp_path):
+    import experiments.case_study as case_study
+
+    dummy_ckpt = tmp_path / "encoder.pt"
+    dummy_ckpt.write_text("stub", encoding="utf-8")
+
+    monkeypatch.setenv("PRETRAIN_ENCODER_PATH", str(dummy_ckpt))
+    monkeypatch.setattr(
+        case_study,
+        "safe_load_checkpoint",
+        lambda *args, **kwargs: ({"encoder": {"weight": 1}}, {}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        case_study,
+        "_load_encoder_strict",
+        lambda *args, **kwargs: {"hash": "same"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        case_study,
+        "extract_encoder_hash",
+        lambda *args, **kwargs: "same",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        case_study,
+        "load_state_dict_forgiving",
+        lambda *args, **kwargs: None,
+        raising=False,
+    )
+
+    def fake_train_linear_head(*, dataset, encoder, **kwargs):
+        head = torch.nn.Linear(getattr(encoder, "hidden_dim", 32), 1)
+        return {"head": head, "train/batches": 1.0}
+
+    monkeypatch.setattr(case_study, "train_linear_head", fake_train_linear_head)
+
+    result = case_study.run_tox21_case_study(
+        csv_path="samples/tox21_mini.csv",
+        task_name="NR-AR",
+        finetune_epochs=1,
+        encoder_checkpoint=str(dummy_ckpt),
+        evaluation_mode="hybrid",
+    )
+
+    assert result.diagnostics.get("full_finetune") is True
+
+
+def test_case_study_end_to_end_raises_on_equal_hash(monkeypatch, tmp_path):
+    import experiments.case_study as case_study
+
+    dummy_ckpt = tmp_path / "encoder.pt"
+    dummy_ckpt.write_text("stub", encoding="utf-8")
+
+    monkeypatch.setenv("PRETRAIN_ENCODER_PATH", str(dummy_ckpt))
+    monkeypatch.setattr(
+        case_study,
+        "safe_load_checkpoint",
+        lambda *args, **kwargs: ({"encoder": {"weight": 1}}, {}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        case_study,
+        "_load_encoder_strict",
+        lambda *args, **kwargs: {"hash": "same"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        case_study,
+        "extract_encoder_hash",
+        lambda *args, **kwargs: "same",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        case_study,
+        "load_state_dict_forgiving",
+        lambda *args, **kwargs: None,
+        raising=False,
+    )
+
+    def fake_train_linear_head(*, dataset, encoder, **kwargs):
+        head = torch.nn.Linear(getattr(encoder, "hidden_dim", 32), 1)
+        return {"head": head, "train/batches": 1.0}
+
+    monkeypatch.setattr(case_study, "train_linear_head", fake_train_linear_head)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Fine-tuned evaluation aborted: encoder hash matches baseline hash",
+    ):
+        case_study.run_tox21_case_study(
+            csv_path="samples/tox21_mini.csv",
+            task_name="NR-AR",
+            finetune_epochs=1,
+            encoder_checkpoint=str(dummy_ckpt),
+            evaluation_mode="end_to_end",
+        )
 
 
 def test_case_study_frozen_finetuned_trains_linear_probe(monkeypatch, caplog):
