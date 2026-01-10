@@ -1085,7 +1085,6 @@ def _evaluate_case_study(
     *,
     calibration_method: Optional[str] = None,
     calibrate_per_head: bool = False,
-    calibration_method: Optional[str] = None,
     baseline_embeddings: Optional[dict[str, str]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
     num_workers: Optional[int] = None,
