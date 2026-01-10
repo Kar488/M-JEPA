@@ -16,7 +16,9 @@ from random import Random
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Mapping
 
+import numpy as np
 import torch
+from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 try:  # pragma: no cover - optional dependency
     import yaml
 except Exception:  # pragma: no cover - allow running without PyYAML
@@ -24,6 +26,7 @@ except Exception:  # pragma: no cover - allow running without PyYAML
 
 from . import log_effective_gnn
 from utils.ddp import is_main_process
+from utils.metrics import expected_calibration_error
 from utils.threads import configure_omp_threads
 
 try:  # pragma: no cover - optional relative import depending on entry point
@@ -1015,6 +1018,125 @@ def _coerce_case_study_result(result: Any) -> Tuple[List[Any], Any]:
     return [], rule_from_result
 
 
+def _resize_array(arr: np.ndarray, expected_len: int) -> np.ndarray:
+    arr = np.asarray(arr, dtype=float).reshape(-1)
+    if expected_len == 0:
+        return np.zeros((0,), dtype=float)
+    if arr.size == 0:
+        return np.zeros(expected_len, dtype=float)
+    if arr.size != expected_len:
+        try:
+            arr = np.resize(arr, expected_len).reshape(-1)
+        except Exception:
+            arr = np.zeros(expected_len, dtype=float)
+    if arr.size != expected_len:
+        arr = np.zeros(expected_len, dtype=float)
+    return arr
+
+
+def _compute_seed_metrics(
+    y_true: Iterable[Any],
+    y_prob: Iterable[Any],
+) -> Dict[str, float]:
+    metrics: Dict[str, float] = {
+        "roc_auc": float("nan"),
+        "pr_auc": float("nan"),
+        "brier": float("nan"),
+        "ece": float("nan"),
+    }
+    y_true_arr = np.asarray(list(y_true), dtype=float).reshape(-1)
+    y_prob_arr = np.asarray(list(y_prob), dtype=float).reshape(-1)
+    mask_valid = np.isfinite(y_true_arr)
+    num_valid = int(mask_valid.sum())
+    if num_valid < 2:
+        return metrics
+    y_true_m = y_true_arr[mask_valid]
+    if np.unique(y_true_m.astype(int)).size < 2:
+        return metrics
+    y_prob_arr = _resize_array(y_prob_arr, int(y_true_arr.size))
+    y_pred_m = y_prob_arr[mask_valid]
+    if y_pred_m.size != num_valid:
+        y_pred_m = _resize_array(y_pred_m, num_valid)
+    pp = np.nan_to_num(y_pred_m, nan=0.5, posinf=1.0, neginf=0.0)
+    yy = y_true_m.astype(int)
+    try:
+        metrics["roc_auc"] = float(roc_auc_score(yy, pp))
+    except Exception:
+        metrics["roc_auc"] = float("nan")
+    try:
+        metrics["pr_auc"] = float(average_precision_score(yy, pp))
+    except Exception:
+        metrics["pr_auc"] = float("nan")
+    try:
+        metrics["brier"] = float(brier_score_loss(yy, pp))
+    except Exception:
+        metrics["brier"] = float("nan")
+    try:
+        metrics["ece"] = float(expected_calibration_error(pp, yy, n_bins=10))
+    except Exception:
+        metrics["ece"] = float("nan")
+    return metrics
+
+
+def _compute_seed_metric_std(
+    seed_metrics: Dict[str, Dict[str, float]],
+) -> Dict[str, float]:
+    metrics: Dict[str, float] = {}
+    metric_names = ("roc_auc", "pr_auc", "brier", "ece")
+    for name in metric_names:
+        values: List[float] = []
+        for payload in seed_metrics.values():
+            raw = payload.get(name)
+            if raw is None:
+                continue
+            try:
+                values.append(float(raw))
+            except Exception:
+                continue
+        if values:
+            metrics[f"{name}_std"] = float(np.nanstd(values))
+        else:
+            metrics[f"{name}_std"] = float("nan")
+    return metrics
+
+
+def _compute_reliability_bins(
+    y_true: Iterable[Any],
+    y_prob: Iterable[Any],
+    n_bins: int = 10,
+) -> Dict[str, List[float]]:
+    labels = np.asarray(list(y_true), dtype=float).reshape(-1)
+    probs = np.asarray(list(y_prob), dtype=float).reshape(-1)
+    mask_valid = np.isfinite(labels) & np.isfinite(probs)
+    labels = labels[mask_valid]
+    probs = probs[mask_valid]
+    edges = np.linspace(0.0, 1.0, n_bins + 1, dtype=float)
+    bin_counts: List[float] = []
+    bin_accuracy: List[float] = []
+    bin_confidence: List[float] = []
+    for idx in range(n_bins):
+        left = edges[idx]
+        right = edges[idx + 1]
+        if idx == n_bins - 1:
+            mask = (probs >= left) & (probs <= right)
+        else:
+            mask = (probs >= left) & (probs < right)
+        count = int(mask.sum())
+        bin_counts.append(float(count))
+        if count == 0:
+            bin_accuracy.append(float("nan"))
+            bin_confidence.append(float("nan"))
+        else:
+            bin_accuracy.append(float(np.nanmean(labels[mask])))
+            bin_confidence.append(float(np.nanmean(probs[mask])))
+    return {
+        "bin_edges": edges.astype(float).tolist(),
+        "bin_counts": bin_counts,
+        "bin_accuracy": bin_accuracy,
+        "bin_confidence": bin_confidence,
+    }
+
+
 def _run_tox21_single_task(
     args: argparse.Namespace,
     *,
@@ -1539,6 +1661,42 @@ def _run_tox21_single_task(
     )
 
     primary_metrics = getattr(primary, "metrics", {}) or {}
+    ensemble_metrics = {
+        key: float(value)
+        for key, value in primary_metrics.items()
+        if isinstance(value, (int, float))
+    }
+    seed_predictions = diagnostics.get("seed_predictions") if isinstance(diagnostics, dict) else None
+    seed_metrics: Dict[str, Dict[str, float]] = {}
+    seeds_used: List[Any] = []
+    seed_prediction_rows: List[Dict[str, Any]] = []
+    if isinstance(seed_predictions, dict):
+        seeds_used = list(seed_predictions.get("seeds") or [])
+        seed_logits = seed_predictions.get("logits") or []
+        seed_probs = seed_predictions.get("probabilities") or []
+        seed_labels = seed_predictions.get("true_labels") or []
+        seed_indices = seed_predictions.get("indices") or []
+        seed_count = min(len(seed_logits), len(seed_probs), len(seeds_used))
+        for idx in range(seed_count):
+            seed_val = seeds_used[idx]
+            logits_seq = seed_logits[idx] if idx < len(seed_logits) else []
+            probs_seq = seed_probs[idx] if idx < len(seed_probs) else []
+            seed_metrics[str(seed_val)] = _compute_seed_metrics(seed_labels, probs_seq)
+            seed_prediction_rows.append(
+                {
+                    "seed": seed_val,
+                    "indices": seed_indices,
+                    "true_labels": seed_labels,
+                    "logits": logits_seq,
+                    "probabilities": probs_seq,
+                }
+            )
+    seed_metric_std = _compute_seed_metric_std(seed_metrics) if seed_metrics else {
+        "roc_auc_std": float("nan"),
+        "pr_auc_std": float("nan"),
+        "brier_std": float("nan"),
+        "ece_std": float("nan"),
+    }
     gate_metric_name = getattr(primary, "benchmark_metric", None)
     gate_threshold = getattr(primary, "benchmark_threshold", None)
     gate_metric_value = None
@@ -1576,6 +1734,9 @@ def _run_tox21_single_task(
         "selected_path": selected_source,
         "selected_met_benchmark": selected_benchmark,
         "prediction_csv": None,
+        "ensemble_method": "mean_logits",
+        "ensemble_num_seeds": int(len(seeds_used)),
+        "seeds_used": seeds_used,
     }
     if split_strategy is not None:
         summary_payload["split_strategy"] = split_strategy
@@ -1622,9 +1783,15 @@ def _run_tox21_single_task(
             payload[f"{prefix}met_benchmark"] = bool(met_benchmark)
         payload[f"{prefix}tox21_gate_passed"] = bool(met_benchmark) if met_benchmark is not None else False
 
-        metrics_block: Dict[str, Any] = getattr(eval_res, "metrics", {}) or {}
+        if eval_res is primary:
+            metrics_block = dict(ensemble_metrics)
+        else:
+            metrics_block = getattr(eval_res, "metrics", {}) or {}
         for name, value in metrics_block.items():
             payload[f"{prefix}metrics/{name}"] = float(value)
+        if eval_res is primary and seed_metric_std:
+            for name, value in seed_metric_std.items():
+                payload[f"{prefix}metrics/{name}"] = float(value)
 
         ece_value = metrics_block.get("ece")
         try:
@@ -1666,10 +1833,20 @@ def _run_tox21_single_task(
             _wandb_save_safe(wb, manifest_path)
             _wandb_log_safe(wb, {f"{prefix}encoder_manifest": manifest_path, "task": task_name})
 
+    if seed_metrics:
+        for seed_key, metrics in seed_metrics.items():
+            seed_prefix = f"{task_name}/seed/{seed_key}/" if task_name else f"seed/{seed_key}/"
+            seed_payload = {"phase": "tox21", "status": "success", "task": task_name}
+            for name, value in metrics.items():
+                seed_payload[f"{seed_prefix}metrics/{name}"] = float(value)
+            _wandb_log_safe(wb, seed_payload)
+
     stem = f"tox21_{task_name}"
     json_path = os.path.join(report_dir, f"{stem}.json")
     csv_path = os.path.join(report_dir, f"{stem}.csv")
     prediction_csv_path: Optional[str] = None
+    prediction_seed_csv_path: Optional[str] = None
+    reliability_bins_path: Optional[str] = None
 
     json_payload: Dict[str, Any] = {
         "task": task_name,
@@ -1702,6 +1879,14 @@ def _run_tox21_single_task(
         "split_strategy": split_strategy,
         "split_positive_floor": split_positive_floor,
         "calibrator": calibrator_state,
+        "ensemble": {
+            "method": "mean_logits",
+            "num_seeds": int(len(seeds_used)),
+            "seeds": seeds_used,
+            "metrics": ensemble_metrics,
+            "metrics_std": seed_metric_std,
+        },
+        "seed_metrics": seed_metrics,
         "allow_shape_coercion": bool(allow_shape_effective_val),
         "allow_shape_coercion_requested": allow_shape_requested_marker,
         "allow_shape_coercion_auto": bool(auto_allow_shape),
@@ -1755,7 +1940,15 @@ def _run_tox21_single_task(
             prediction_csv_path = os.path.join(report_dir, f"{stem}_scores.csv")
             with open(prediction_csv_path, "w", newline="", encoding="utf-8") as pred_handle:
                 writer = csv.writer(pred_handle)
-                writer.writerow(["graph_id", "assay", "true_label", "logit", "probability"])
+                writer.writerow(
+                    [
+                        "graph_id",
+                        "assay",
+                        "true_label",
+                        "ensemble_logit",
+                        "ensemble_probability",
+                    ]
+                )
                 for row_idx in range(base_count):
                     idx_val = _coerce_int_like(indices[row_idx])
                     graph_id = f"graph_{idx_val:05d}" if idx_val is not None else f"graph_{indices[row_idx]}"
@@ -1776,6 +1969,62 @@ def _run_tox21_single_task(
                 {"task": task_name, "prediction_csv": prediction_csv_path},
             )
             summary_payload["prediction_csv"] = prediction_csv_path
+            if seed_prediction_rows:
+                prediction_seed_csv_path = os.path.join(
+                    report_dir, f"{stem}_scores_by_seed.csv"
+                )
+                with open(prediction_seed_csv_path, "w", newline="", encoding="utf-8") as seed_handle:
+                    writer = csv.writer(seed_handle)
+                    writer.writerow(
+                        ["graph_id", "assay", "seed", "true_label", "logit", "probability"]
+                    )
+                    for seed_row in seed_prediction_rows:
+                        seed_val = seed_row.get("seed")
+                        seed_logits = _resize_array(
+                            np.asarray(seed_row.get("logits") or []), base_count
+                        )
+                        seed_probs = _resize_array(
+                            np.asarray(seed_row.get("probabilities") or []), base_count
+                        )
+                        for row_idx in range(base_count):
+                            idx_val = _coerce_int_like(indices[row_idx])
+                            graph_id = (
+                                f"graph_{idx_val:05d}"
+                                if idx_val is not None
+                                else f"graph_{indices[row_idx]}"
+                            )
+                            label_val = labels[row_idx] if row_idx < len(labels) else float("nan")
+                            writer.writerow(
+                                [
+                                    graph_id,
+                                    task_name,
+                                    seed_val,
+                                    _as_float(label_val),
+                                    _as_float(seed_logits[row_idx]),
+                                    _as_float(seed_probs[row_idx]),
+                                ]
+                            )
+                json_payload["prediction_seed_csv"] = prediction_seed_csv_path
+                _wandb_save_safe(wb, prediction_seed_csv_path)
+                _wandb_log_safe(
+                    wb,
+                    {"task": task_name, "prediction_seed_csv": prediction_seed_csv_path},
+                )
+                summary_payload["prediction_seed_csv"] = prediction_seed_csv_path
+            reliability_bins = _compute_reliability_bins(labels[:base_count], probabilities[:base_count])
+            reliability_path = os.path.join(report_dir, f"{stem}_reliability_bins.json")
+            reliability_bins_path = reliability_path
+            with open(reliability_path, "w", encoding="utf-8") as rel_handle:
+                json.dump(reliability_bins, rel_handle, indent=2, sort_keys=True)
+                rel_handle.write("\n")
+            json_payload["reliability_bins"] = reliability_bins
+            json_payload["reliability_bins_path"] = reliability_path
+            _wandb_save_safe(wb, reliability_path)
+            _wandb_log_safe(
+                wb,
+                {"task": task_name, "reliability_bins": reliability_path},
+            )
+            summary_payload["reliability_bins"] = reliability_path
 
     with open(json_path, "w", encoding="utf-8") as fh:
         json.dump(json_payload, fh, indent=2, sort_keys=True)
@@ -1783,27 +2032,31 @@ def _run_tox21_single_task(
     with open(csv_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(["evaluation", "metric", "value"])
-        for eval_res in evaluations:
-            name = getattr(eval_res, "name", "evaluation")
-            writer.writerow([name, "mean_true", float(getattr(eval_res, "mean_true", 0.0))])
-            writer.writerow([name, "mean_rand", float(getattr(eval_res, "mean_random", 0.0))])
-            writer.writerow([name, "mean_pred", float(getattr(eval_res, "mean_pred", 0.0))])
-            for key, value in (getattr(eval_res, "baseline_means", {}) or {}).items():
-                writer.writerow([name, f"baseline/{key}", float(value)])
-            for key, value in (getattr(eval_res, "metrics", {}) or {}).items():
-                writer.writerow([name, f"metrics/{key}", float(value)])
-            bm_metric = getattr(eval_res, "benchmark_metric", None)
-            if bm_metric is not None:
-                writer.writerow([name, "benchmark_metric", bm_metric])
-            bm_thresh = getattr(eval_res, "benchmark_threshold", None)
-            if bm_thresh is not None:
-                writer.writerow([name, "benchmark_threshold", float(bm_thresh)])
-            bm_met = getattr(eval_res, "met_benchmark", None)
-            if bm_met is not None:
-                writer.writerow([name, "met_benchmark", int(bool(bm_met))])
-            manifest_path = getattr(eval_res, "manifest_path", None)
-            if manifest_path:
-                writer.writerow([name, "encoder_manifest", manifest_path])
+        writer.writerow(["ensemble", "mean_true", float(getattr(primary, "mean_true", 0.0))])
+        writer.writerow(["ensemble", "mean_rand", float(getattr(primary, "mean_random", 0.0))])
+        writer.writerow(["ensemble", "mean_pred", float(getattr(primary, "mean_pred", 0.0))])
+        for key, value in (getattr(primary, "baseline_means", {}) or {}).items():
+            writer.writerow(["ensemble", f"baseline/{key}", float(value)])
+        for key, value in ensemble_metrics.items():
+            writer.writerow(["ensemble", f"metrics/{key}", float(value)])
+        for key, value in seed_metric_std.items():
+            writer.writerow(["ensemble", f"metrics/{key}", float(value)])
+        bm_metric = getattr(primary, "benchmark_metric", None)
+        if bm_metric is not None:
+            writer.writerow(["ensemble", "benchmark_metric", bm_metric])
+        bm_thresh = getattr(primary, "benchmark_threshold", None)
+        if bm_thresh is not None:
+            writer.writerow(["ensemble", "benchmark_threshold", float(bm_thresh)])
+        bm_met = getattr(primary, "met_benchmark", None)
+        if bm_met is not None:
+            writer.writerow(["ensemble", "met_benchmark", int(bool(bm_met))])
+        manifest_path = getattr(primary, "manifest_path", None)
+        if manifest_path:
+            writer.writerow(["ensemble", "encoder_manifest", manifest_path])
+        for seed_key, metrics in seed_metrics.items():
+            seed_eval = f"seed_{seed_key}"
+            for key, value in metrics.items():
+                writer.writerow([seed_eval, f"metrics/{key}", float(value)])
 
     calibrator_path = os.path.join(report_dir, f"{stem}_calibrator.json")
     with open(calibrator_path, "w", encoding="utf-8") as cal_file:
@@ -1857,6 +2110,10 @@ def _run_tox21_single_task(
     }
     if prediction_csv_path:
         manifest_payload["reports"]["prediction_csv"] = prediction_csv_path
+    if prediction_seed_csv_path:
+        manifest_payload["reports"]["prediction_seed_csv"] = prediction_seed_csv_path
+    if reliability_bins_path:
+        manifest_payload["reports"]["reliability_bins"] = reliability_bins_path
 
     manifest_path = os.path.join(report_dir, f"run_manifest_{task_name}.json")
     with open(manifest_path, "w", encoding="utf-8") as manifest_file:
@@ -1879,6 +2136,8 @@ def _run_tox21_single_task(
         **target_payload,
         "auc_summary": auc_summary,
         "prediction_csv": prediction_csv_path,
+        "prediction_seed_csv": prediction_seed_csv_path,
+        "reliability_bins": reliability_bins_path,
         "evaluations": [
             {
                 "encoder_source": getattr(ev, "encoder_source", getattr(ev, "name", "unknown")),
@@ -1918,6 +2177,8 @@ def _run_tox21_single_task(
         "csv_path": csv_path,
         "calibrator_path": calibrator_path,
         "prediction_csv_path": prediction_csv_path,
+        "prediction_seed_csv_path": prediction_seed_csv_path,
+        "reliability_bins_path": reliability_bins_path,
         "manifest_path": manifest_path,
         "stage_path": stage_path,
         "auc_summary": auc_summary,
@@ -2340,6 +2601,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
     aggregated_calibrator_paths: Dict[str, str] = {}
     aggregated_manifest_paths: Dict[str, str] = {}
     aggregated_prediction_paths: Dict[str, str] = {}
+    aggregated_prediction_seed_paths: Dict[str, str] = {}
+    aggregated_reliability_paths: Dict[str, str] = {}
     aggregated_auc_summaries: Dict[str, Any] = {}
     per_task_diagnostics: Dict[str, Any] = {}
     diagnostics_template: Dict[str, Any] | None = None
@@ -2378,6 +2641,12 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             aggregated_calibrator_paths[task_name] = result.get("calibrator_path", "")
             aggregated_manifest_paths[task_name] = result.get("manifest_path", "")
             aggregated_prediction_paths[task_name] = result.get("prediction_csv_path", "")
+            aggregated_prediction_seed_paths[task_name] = result.get(
+                "prediction_seed_csv_path", ""
+            )
+            aggregated_reliability_paths[task_name] = result.get(
+                "reliability_bins_path", ""
+            )
             aggregated_auc_summaries[task_name] = result.get("auc_summary", {})
             diagnostics = result.get("diagnostics") or {}
             if isinstance(diagnostics, dict):
@@ -2536,6 +2805,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
             "calibrator": aggregated_calibrator_paths,
             "manifest": aggregated_manifest_paths,
             "predictions": aggregated_prediction_paths,
+            "prediction_seed_csv": aggregated_prediction_seed_paths,
+            "reliability_bins": aggregated_reliability_paths,
         }
         if aggregate_csv_path:
             aggregated_stage["summary_files"]["aggregate_csv"] = aggregate_csv_path
@@ -2570,6 +2841,8 @@ def cmd_tox21(args: argparse.Namespace) -> None:
                     "calibrator_json": aggregated_calibrator_paths.get(task),
                     "manifest_json": aggregated_manifest_paths.get(task),
                     "prediction_csv": aggregated_prediction_paths.get(task),
+                    "prediction_seed_csv": aggregated_prediction_seed_paths.get(task),
+                    "reliability_bins": aggregated_reliability_paths.get(task),
                 }
                 for task in tasks_to_run
             },
