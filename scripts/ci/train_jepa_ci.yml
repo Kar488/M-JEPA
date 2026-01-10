@@ -62,7 +62,7 @@ pretrain:
 
 finetune:
   <<: *common
-  labeled_dir: "${FINETUNE_LABELED_DIR:-${APP_DIR}/data/katielinkmoleculenet_benchmark/train}"
+  labeled_dir: "${FINETUNE_LABELED_DIR:-${APP_DIR}/data/katielinkmoleculenet_benchmark/train}" # overriden wehn tox21env gate is set to tox21 ds
   labeled_csv: "${FINETUNE_LABELED_CSV:-}"
   encoder: ${PRETRAIN_DIR}/encoder.pt
   task_type: "${FINETUNE_TASK_TYPE:-classification}"
