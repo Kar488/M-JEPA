@@ -539,6 +539,7 @@ def test_evaluate_case_study_multitask_two_logits(monkeypatch):
         test_idx=[0, 1, 2],
         triage_pct=0.0,
         calibrate=True,
+        calibration_method="platt",
         device="cpu",
         edge_dim=0,
         seed=0,

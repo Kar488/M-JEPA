@@ -1082,6 +1082,7 @@ def _evaluate_case_study(
     device: str,
     edge_dim: int,
     seed: int,
+    *,
     calibration_method: Optional[str] = None,
     calibrate_per_head: bool = False,
     calibration_method: Optional[str] = None,
