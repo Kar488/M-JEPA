@@ -26,6 +26,13 @@ normalize_bool() {
 : "${MJEPA_DIR_OWNER_UID:=}"
 : "${MJEPA_DIR_OWNER_GID:=}"
 
+if [[ -n "${NCCL_BLOCKING_WAIT:-}" && -z "${TORCH_NCCL_BLOCKING_WAIT:-}" ]]; then
+  export TORCH_NCCL_BLOCKING_WAIT="${NCCL_BLOCKING_WAIT}"
+fi
+if [[ -n "${NCCL_ASYNC_ERROR_HANDLING:-}" && -z "${TORCH_NCCL_ASYNC_ERROR_HANDLING:-}" ]]; then
+  export TORCH_NCCL_ASYNC_ERROR_HANDLING="${NCCL_ASYNC_ERROR_HANDLING}"
+fi
+
 if [[ -z "${MJEPA_DIR_OWNER_UID:-}" ]]; then
   if [[ -n "${SUDO_UID:-}" ]]; then
     MJEPA_DIR_OWNER_UID="$SUDO_UID"
@@ -216,7 +223,6 @@ ci_cleanup_read_environ() {
 ci_cleanup_matches_mjepa() {
   local cmdline="$1"
   local app_dir="${APP_DIR:-/srv/mjepa}"
-  [[ "$cmdline" == *"train_jepa.py"* ]] || return 1
   if [[ "$cmdline" == *"${app_dir%/}/scripts/train_jepa.py"* ]]; then
     return 0
   fi
@@ -224,6 +230,15 @@ ci_cleanup_matches_mjepa() {
     return 0
   fi
   if [[ "$cmdline" == *"scripts/train_jepa.py"* ]]; then
+    return 0
+  fi
+  if [[ "$cmdline" == *"${app_dir%/}/scripts/commands/"* ]]; then
+    return 0
+  fi
+  if [[ "$cmdline" == *"/srv/mjepa/scripts/commands/"* ]]; then
+    return 0
+  fi
+  if [[ "$cmdline" == *" -m scripts.commands."* ]]; then
     return 0
   fi
   return 1

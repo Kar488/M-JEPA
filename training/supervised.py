@@ -2851,6 +2851,22 @@ def _train_linear_head_impl(
             train_split_size,
         )
     else:
+        diag_every = 0
+        slow_batch_threshold = None
+        diag_every_env = os.getenv("MJEPA_DIAG_BATCH_EVERY")
+        if diag_every_env is not None:
+            try:
+                diag_every = max(0, int(diag_every_env))
+            except Exception:
+                diag_every = 0
+        slow_batch_env = os.getenv("MJEPA_DIAG_SLOW_BATCH_SECS")
+        if slow_batch_env is not None:
+            try:
+                slow_batch_threshold = max(0.0, float(slow_batch_env))
+            except Exception:
+                slow_batch_threshold = None
+        diag_enabled = diag_every > 0 or slow_batch_threshold is not None
+        diag_main_process = is_main_process()
         current_phase_name = "default"
         for epoch in range(epochs):
             if max_batches > 0 and total_batches_done >= max_batches:
@@ -2982,8 +2998,35 @@ def _train_linear_head_impl(
             batch_losses = []
             epoch_batches = 0
             hit_batch_cap = False
+            last_batch_end = _time.monotonic()
 
             for batch in _yield_batches("train"):
+                batch_fetch_end = _time.monotonic()
+                batch_fetch_time = batch_fetch_end - last_batch_end
+                if (
+                    diag_enabled
+                    and diag_main_process
+                    and slow_batch_threshold is not None
+                    and batch_fetch_time >= slow_batch_threshold
+                ):
+                    logger.info(
+                        "[finetune][diag] slow batch fetch: epoch=%d batch=%d wait=%.3fs",
+                        epoch + 1,
+                        epoch_batches + 1,
+                        batch_fetch_time,
+                    )
+                elif (
+                    diag_enabled
+                    and diag_main_process
+                    and diag_every > 0
+                    and (epoch_batches % diag_every == 0)
+                ):
+                    logger.info(
+                        "[finetune][diag] batch fetch: epoch=%d batch=%d wait=%.3fs",
+                        epoch + 1,
+                        epoch_batches + 1,
+                        batch_fetch_time,
+                    )
                 if max_batches > 0 and total_batches_done >= max_batches:
                     hit_batch_cap = True
                     break
@@ -3000,7 +3043,33 @@ def _train_linear_head_impl(
                 if batch_labels is None:
                     raise ValueError("Dataset must have labels for supervised training.")
 
+                emb_start = _time.monotonic()
                 graph_emb = _get_graph_embeddings(batch_x, batch_adj, batch_ptr, batch_meta)
+                emb_elapsed = _time.monotonic() - emb_start
+                if (
+                    diag_enabled
+                    and diag_main_process
+                    and slow_batch_threshold is not None
+                    and emb_elapsed >= slow_batch_threshold
+                ):
+                    logger.info(
+                        "[finetune][diag] slow embedding: epoch=%d batch=%d elapsed=%.3fs",
+                        epoch + 1,
+                        epoch_batches + 1,
+                        emb_elapsed,
+                    )
+                elif (
+                    diag_enabled
+                    and diag_main_process
+                    and diag_every > 0
+                    and (epoch_batches % diag_every == 0)
+                ):
+                    logger.info(
+                        "[finetune][diag] embedding: epoch=%d batch=%d elapsed=%.3fs",
+                        epoch + 1,
+                        epoch_batches + 1,
+                        emb_elapsed,
+                    )
                 param = next(head_param_source.parameters(), None)
                 if param is not None and graph_emb.dtype != param.dtype:
                     graph_emb = graph_emb.to(param.dtype)
@@ -3212,12 +3281,13 @@ def _train_linear_head_impl(
             if scheduler is not None and epoch_batches > 0:
                 scheduler.step()
 
-            if hit_batch_cap and max_batches > 0 and total_batches_done >= max_batches:
-                logger.info(
-                    "Max linear-head batches reached (%d); stopping training.",
-                    max_batches,
-                )
-                break
+                if hit_batch_cap and max_batches > 0 and total_batches_done >= max_batches:
+                    logger.info(
+                        "Max linear-head batches reached (%d); stopping training.",
+                        max_batches,
+                    )
+                    break
+                last_batch_end = _time.monotonic()
 
     if checkpoint_metric is not None and best_checkpoint_state is not None:
         encoder_state = best_checkpoint_state.get("encoder")
