@@ -929,8 +929,8 @@ jobs:
     name: Benchmark
     runs-on: self-hosted #ubuntu-latest
     timeout-minutes: 1860
-    needs: [vast_pretrain, vast_tox21_baseline, vast_finetune]
-    if: ${{ always() && ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_pretrain.result == 'success' && needs.vast_tox21_baseline.result == 'success' && needs.vast_finetune.result == 'success' }}
+    needs: [vast_pretrain, vast_tox21_baseline]
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_pretrain.result == 'success' && needs.vast_tox21_baseline.result == 'success' }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -951,7 +951,6 @@ jobs:
           cd "$APP_DIR"
           bash scripts/ci/ensure_experiments_root.sh
       - name: Benchmark
-        if: ${{ needs.vast_finetune.result == 'success' }}
         env:
           HARD_WALL_MINS: 1500
           KILL_AFTER_SECS: 120
