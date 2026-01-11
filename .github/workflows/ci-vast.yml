@@ -971,7 +971,7 @@ jobs:
     runs-on: self-hosted  #ubuntu-latest
     timeout-minutes: 1860
     needs: [vast_pretrain, vast_tox21_baseline, vast_finetune]
-    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && (needs.vast_finetune.result == 'success' || (needs.vast_finetune.result == 'skipped' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.tox21_eval_mode) || 'hybrid') == 'hybrid' && needs.vast_tox21_baseline.result == 'success' && needs.vast_tox21_baseline.outputs.tox21_gate == 'false')) }}
+    if: ${{ always() && ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && (needs.vast_finetune.result == 'success' || (needs.vast_finetune.result == 'skipped' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.tox21_eval_mode) || 'hybrid') == 'hybrid' && needs.vast_tox21_baseline.result == 'success' && needs.vast_tox21_baseline.outputs.tox21_gate == 'false')) }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
