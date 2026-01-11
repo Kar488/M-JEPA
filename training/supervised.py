@@ -2464,13 +2464,22 @@ def _train_linear_head_impl(
         except TypeError:
             planned_train_batches = 0
         train_loader_workers = getattr(train_loader, "num_workers", 0)
-        logger.info(
-            "[finetune] train loader built with %d batches (split size=%d, batch_size=%d, workers=%d)",
-            planned_train_batches,
-            train_split_size,
-            batch_size,
-            train_loader_workers,
-        )
+        if is_main_process():
+            global_train_size = len(train_idx)
+            global_batches = 0
+            if batch_size > 0:
+                global_batches = int(math.ceil(global_train_size / float(batch_size)))
+            logger.info(
+                "[finetune] loader: shard_size=%d (rank=%d/%d), shard_batches=%d, global_train=%d, global_batches≈%d, batch_size=%d, workers=%d",
+                train_split_size,
+                rank,
+                world,
+                planned_train_batches,
+                global_train_size,
+                global_batches,
+                batch_size,
+                train_loader_workers,
+            )
 
     def _get_loader(name: str) -> Optional[DataLoader]:
         if name == "train":
