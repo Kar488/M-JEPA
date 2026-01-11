@@ -277,7 +277,13 @@ Automation scripts keep the lab humming, especially inside CI.
 
 ``scripts/ci/run-pretrain.sh``, ``scripts/ci/run-finetune.sh``, ``scripts/ci/run-bench.sh`` and ``scripts/ci/run-tox21.sh``
   Stage-specific launchers used by GitHub Actions. They all rely on the shared
-  setup helpers in ``scripts/ci/common.sh`` and ``scripts/ci/stage.sh``.
+  setup helpers in ``scripts/ci/common.sh`` and ``scripts/ci/stage.sh``. The
+  stage runner performs a quick cleanup before and after each stage to shut down
+  any leftover ``train_jepa.py`` or ``torchrun`` workers tied to the current
+  experiment, preventing later stages from hanging on orphaned DDP processes.
+  Torchrun jobs are stopped by process group so all ranks exit together. Set
+  ``MJEPACI_DISABLE_CLEANUP=1`` to disable this safeguard or
+  ``MJEPACI_CLEANUP_DRYRUN=1`` to log what would be terminated.
 
 ``commands/sweep_run.py``
   The entry point executed by each sweep agent. It logs the backbone, hidden

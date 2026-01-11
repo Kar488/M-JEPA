@@ -144,6 +144,10 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
       - CI keeps its larger pretraining sample sizes and streaming chunk knobs in `scripts/ci/train_jepa_ci.yml` so
         stage defaults in `scripts/default.yaml` remain lightweight for local runs; the best-config merger
         treats those CI-owned values as YAML-only so cached grids cannot overwrite them.
+      - CI stages now perform defensive cleanup of MJepa `train_jepa.py` / `torchrun` processes at both stage
+        start and stage exit (success or failure) to prevent orphaned DDP workers from hanging later stages.
+        Torchrun launches are terminated by process group so all ranks exit together. Set
+        `MJEPACI_DISABLE_CLEANUP=1` to opt out or `MJEPACI_CLEANUP_DRYRUN=1` to log matches without killing.
       - Fine-tuning defaults favour longer runs on smaller batches (50 epochs, batch size 128, patience 5) and expose
         separate `--encoder-lr` / `--head-lr` knobs so the backbone can adapt as quickly as the probe.
       - Benchmark runs that request multiple GPUs (`--devices > 1`) require a DDP launch via `torchrun`; otherwise the
