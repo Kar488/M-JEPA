@@ -3281,13 +3281,13 @@ def _train_linear_head_impl(
             if scheduler is not None and epoch_batches > 0:
                 scheduler.step()
 
-                if hit_batch_cap and max_batches > 0 and total_batches_done >= max_batches:
-                    logger.info(
-                        "Max linear-head batches reached (%d); stopping training.",
-                        max_batches,
-                    )
-                    break
-                last_batch_end = _time.monotonic()
+            if hit_batch_cap and max_batches > 0 and total_batches_done >= max_batches:
+                logger.info(
+                    "Max linear-head batches reached (%d); stopping training.",
+                    max_batches,
+                )
+                break
+            last_batch_end = _time.monotonic()
 
     if checkpoint_metric is not None and best_checkpoint_state is not None:
         encoder_state = best_checkpoint_state.get("encoder")
