@@ -112,6 +112,347 @@ mjepa_log_error() {
   echo "[ci] error: $*" >&2
 }
 
+ci_cleanup_log() {
+  echo "[ci][cleanup] $*" >&2
+}
+
+ci_cleanup_should_skip() {
+  local disabled dryrun
+  disabled="$(normalize_bool "${MJEPACI_DISABLE_CLEANUP:-}" 0)"
+  dryrun="$(normalize_bool "${MJEPACI_CLEANUP_DRYRUN:-}" 0)"
+  if [[ "$disabled" == "1" ]]; then
+    ci_cleanup_log "disabled via MJEPACI_DISABLE_CLEANUP=1; skipping."
+    return 0
+  fi
+  if [[ "$dryrun" == "1" ]]; then
+    ci_cleanup_log "dry-run enabled via MJEPACI_CLEANUP_DRYRUN=1."
+  fi
+  return 1
+}
+
+ci_cleanup_collect_tokens() {
+  local -n __out_tokens="$1"
+  local -n __out_env_tokens="$2"
+  __out_tokens=()
+  __out_env_tokens=()
+
+  local -a id_tokens=()
+  if [[ -n "${EXP_ID:-}" ]]; then
+    id_tokens+=("$EXP_ID")
+    __out_env_tokens+=("EXP_ID=${EXP_ID}")
+  fi
+  if [[ -n "${PRETRAIN_EXP_ID:-}" ]]; then
+    id_tokens+=("$PRETRAIN_EXP_ID")
+    __out_env_tokens+=("PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID}")
+  fi
+  if [[ -n "${GRID_EXP_ID:-}" ]]; then
+    id_tokens+=("$GRID_EXP_ID")
+    __out_env_tokens+=("GRID_EXP_ID=${GRID_EXP_ID}")
+  fi
+  if [[ -n "${RUN_ID:-}" ]]; then
+    id_tokens+=("$RUN_ID")
+    __out_env_tokens+=("RUN_ID=${RUN_ID}")
+  fi
+
+  local -a path_tokens=()
+  if [[ -n "${EXPERIMENT_DIR:-}" ]]; then
+    path_tokens+=("${EXPERIMENT_DIR%/}")
+    __out_env_tokens+=("EXPERIMENT_DIR=${EXPERIMENT_DIR}")
+  fi
+  if [[ -n "${EXPERIMENTS_ROOT:-}" && -n "${EXP_ID:-}" ]]; then
+    path_tokens+=("${EXPERIMENTS_ROOT%/}/${EXP_ID}")
+  fi
+  if [[ -n "${DATA_ROOT:-}" && -n "${EXP_ID:-}" ]]; then
+    path_tokens+=("${DATA_ROOT%/}/experiments/${EXP_ID}")
+  fi
+  if [[ -n "${PRETRAIN_EXPERIMENT_ROOT:-}" ]]; then
+    path_tokens+=("${PRETRAIN_EXPERIMENT_ROOT%/}")
+    __out_env_tokens+=("PRETRAIN_EXPERIMENT_ROOT=${PRETRAIN_EXPERIMENT_ROOT}")
+  fi
+  if [[ -n "${GRID_EXPERIMENT_ROOT:-}" ]]; then
+    path_tokens+=("${GRID_EXPERIMENT_ROOT%/}")
+    __out_env_tokens+=("GRID_EXPERIMENT_ROOT=${GRID_EXPERIMENT_ROOT}")
+  fi
+  if [[ -n "${CACHE_DIR:-}" ]]; then
+    if [[ -n "${EXP_ID:-}" && "${CACHE_DIR}" == *"${EXP_ID}"* ]]; then
+      path_tokens+=("${CACHE_DIR%/}")
+      __out_env_tokens+=("CACHE_DIR=${CACHE_DIR}")
+    fi
+  fi
+  if [[ -n "${FINETUNE_DIR:-}" ]]; then
+    path_tokens+=("${FINETUNE_DIR%/}")
+    __out_env_tokens+=("FINETUNE_DIR=${FINETUNE_DIR}")
+  fi
+  if [[ -n "${BENCH_DIR:-}" ]]; then
+    path_tokens+=("${BENCH_DIR%/}")
+    __out_env_tokens+=("BENCH_DIR=${BENCH_DIR}")
+  fi
+  if [[ -n "${TOX21_DIR:-}" ]]; then
+    path_tokens+=("${TOX21_DIR%/}")
+    __out_env_tokens+=("TOX21_DIR=${TOX21_DIR}")
+  fi
+  if [[ -n "${GRID_DIR:-}" ]]; then
+    path_tokens+=("${GRID_DIR%/}")
+    __out_env_tokens+=("GRID_DIR=${GRID_DIR}")
+  fi
+
+  local token
+  for token in "${id_tokens[@]}" "${path_tokens[@]}"; do
+    [[ -n "$token" ]] || continue
+    __out_tokens+=("$token")
+  done
+}
+
+ci_cleanup_read_cmdline() {
+  local pid="$1"
+  tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null || return 1
+}
+
+ci_cleanup_read_environ() {
+  local pid="$1"
+  tr '\0' '\n' <"/proc/${pid}/environ" 2>/dev/null || return 1
+}
+
+ci_cleanup_matches_mjepa() {
+  local cmdline="$1"
+  local app_dir="${APP_DIR:-/srv/mjepa}"
+  [[ "$cmdline" == *"train_jepa.py"* ]] || return 1
+  if [[ "$cmdline" == *"${app_dir%/}/scripts/train_jepa.py"* ]]; then
+    return 0
+  fi
+  if [[ "$cmdline" == *"/srv/mjepa/scripts/train_jepa.py"* ]]; then
+    return 0
+  fi
+  if [[ "$cmdline" == *"scripts/train_jepa.py"* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+ci_cleanup_match_reason() {
+  local cmdline="$1"
+  local env_blob="$2"
+  shift 2
+  local -a tokens=("$@")
+  local token
+  for token in "${tokens[@]}"; do
+    [[ -n "$token" ]] || continue
+    if [[ "$cmdline" == *"$token"* ]]; then
+      printf 'cmdline:%s' "$token"
+      return 0
+    fi
+    if [[ -n "$env_blob" && "$env_blob" == *"$token"* ]]; then
+      printf 'env:%s' "$token"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ci_cleanup_is_torchrun() {
+  local pid="$1"
+  local cmdline="$2"
+  if [[ "$cmdline" == *"torchrun"* || "$cmdline" == *"torch.distributed.run"* ]]; then
+    return 0
+  fi
+  local ppid=""
+  if [[ -r "/proc/${pid}/stat" ]]; then
+    ppid="$(awk '{print $4}' "/proc/${pid}/stat" 2>/dev/null || true)"
+  fi
+  if [[ -n "$ppid" && -r "/proc/${ppid}/cmdline" ]]; then
+    local parent_cmd
+    parent_cmd="$(ci_cleanup_read_cmdline "$ppid" 2>/dev/null || true)"
+    if [[ "$parent_cmd" == *"torchrun"* || "$parent_cmd" == *"torch.distributed.run"* ]]; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+ci_cleanup_signal_target() {
+  local target="$1"
+  local description="$2"
+  local dryrun
+  dryrun="$(normalize_bool "${MJEPACI_CLEANUP_DRYRUN:-}" 0)"
+  local target_alive
+  target_alive() {
+    local candidate="$1"
+    if [[ "$candidate" == -* ]]; then
+      local group="${candidate#-}"
+      local proc pid pgid
+      for proc in /proc/[0-9]*; do
+        pid="${proc#/proc/}"
+        pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+        if [[ -n "$pgid" && "$pgid" == "$group" ]]; then
+          return 0
+        fi
+      done
+      return 1
+    fi
+    kill -0 -- "$candidate" 2>/dev/null
+  }
+
+  local sig
+  for sig in INT TERM KILL; do
+    if [[ "$dryrun" == "1" ]]; then
+      ci_cleanup_log "dry-run: would send SIG${sig} to ${description}"
+      continue
+    fi
+    kill "-${sig}" -- "$target" 2>/dev/null || true
+    sleep 1
+    if target_alive "$target"; then
+      continue
+    fi
+    return 0
+  done
+}
+
+ci_cleanup_stage_processes() {
+  local phase="$1"
+  local stage="${2:-${MJEPACI_STAGE:-<unset>}}"
+  local exit_rc="${3:-0}"
+  local dryrun
+  dryrun="$(normalize_bool "${MJEPACI_CLEANUP_DRYRUN:-}" 0)"
+
+  if ci_cleanup_should_skip; then
+    return 0
+  fi
+
+  local -a match_tokens=()
+  local -a env_tokens=()
+  ci_cleanup_collect_tokens match_tokens env_tokens
+  if (( ${#match_tokens[@]} == 0 && ${#env_tokens[@]} == 0 )); then
+    ci_cleanup_log "no EXP_ID/path tokens available; skipping cleanup."
+    return 0
+  fi
+
+  local -A group_targets=()
+  local -A pid_targets=()
+  local -A match_logs=()
+
+  local proc pid cmdline env_blob reason pgid
+  for proc in /proc/[0-9]*; do
+    pid="${proc#/proc/}"
+    [[ -r "${proc}/cmdline" ]] || continue
+    cmdline="$(ci_cleanup_read_cmdline "$pid" 2>/dev/null || true)"
+    [[ -n "$cmdline" ]] || continue
+    if ! ci_cleanup_matches_mjepa "$cmdline"; then
+      continue
+    fi
+    env_blob=""
+    if env_blob="$(ci_cleanup_read_environ "$pid" 2>/dev/null || true)"; then
+      :
+    fi
+    reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
+    if [[ -z "$reason" ]]; then
+      continue
+    fi
+    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    if [[ -z "$pgid" ]]; then
+      pgid="$pid"
+    fi
+    if ci_cleanup_is_torchrun "$pid" "$cmdline"; then
+      group_targets["$pgid"]=1
+      match_logs["$pid"]="pid=${pid} pgid=${pgid} reason=${reason} cmdline=${cmdline}"
+    else
+      pid_targets["$pid"]=1
+      match_logs["$pid"]="pid=${pid} pgid=${pgid} reason=${reason} cmdline=${cmdline}"
+    fi
+  done
+
+  if (( ${#group_targets[@]} == 0 && ${#pid_targets[@]} == 0 )); then
+    ci_cleanup_log "no MJepa processes matched for stage=${stage} phase=${phase}."
+    return 0
+  fi
+
+  ci_cleanup_log "cleanup phase=${phase} stage=${stage} exit_rc=${exit_rc} matches=${#match_logs[@]}."
+  local log_pid
+  for log_pid in "${!match_logs[@]}"; do
+    ci_cleanup_log "match ${match_logs[$log_pid]}"
+  done
+
+  local pgid_key pid_key
+  for pgid_key in "${!group_targets[@]}"; do
+    ci_cleanup_log "terminating torchrun process group pgid=${pgid_key}"
+    ci_cleanup_signal_target "-${pgid_key}" "process group ${pgid_key}"
+  done
+
+  for pid_key in "${!pid_targets[@]}"; do
+    if [[ -n "${group_targets[$(ps -o pgid= -p "$pid_key" 2>/dev/null | tr -d ' ' || true)]-}" ]]; then
+      continue
+    fi
+    ci_cleanup_log "terminating pid=${pid_key}"
+    ci_cleanup_signal_target "$pid_key" "pid ${pid_key}"
+  done
+
+  local -a remaining=()
+  for proc in /proc/[0-9]*; do
+    pid="${proc#/proc/}"
+    [[ -r "${proc}/cmdline" ]] || continue
+    cmdline="$(ci_cleanup_read_cmdline "$pid" 2>/dev/null || true)"
+    [[ -n "$cmdline" ]] || continue
+    if ! ci_cleanup_matches_mjepa "$cmdline"; then
+      continue
+    fi
+    env_blob=""
+    if env_blob="$(ci_cleanup_read_environ "$pid" 2>/dev/null || true)"; then
+      :
+    fi
+    reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
+    if [[ -n "$reason" ]]; then
+      remaining+=("$pid")
+    fi
+  done
+
+  if (( ${#remaining[@]} )); then
+    if [[ "$dryrun" == "1" ]]; then
+      ci_cleanup_log "warning: remaining MJepa processes after cleanup: ${remaining[*]}"
+      return 0
+    fi
+    ci_cleanup_log "warning: remaining MJepa processes after cleanup; retrying by pid: ${remaining[*]}"
+    local leftover_pid
+    for leftover_pid in "${remaining[@]}"; do
+      ci_cleanup_log "terminating leftover pid=${leftover_pid}"
+      ci_cleanup_signal_target "$leftover_pid" "pid ${leftover_pid}"
+    done
+    remaining=()
+    for proc in /proc/[0-9]*; do
+      pid="${proc#/proc/}"
+      [[ -r "${proc}/cmdline" ]] || continue
+      cmdline="$(ci_cleanup_read_cmdline "$pid" 2>/dev/null || true)"
+      [[ -n "$cmdline" ]] || continue
+      if ! ci_cleanup_matches_mjepa "$cmdline"; then
+        continue
+      fi
+      env_blob=""
+      if env_blob="$(ci_cleanup_read_environ "$pid" 2>/dev/null || true)"; then
+        :
+      fi
+      reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
+      if [[ -n "$reason" ]]; then
+        remaining+=("$pid")
+      fi
+    done
+    if (( ${#remaining[@]} )); then
+      ci_cleanup_log "warning: remaining MJepa processes after retry: ${remaining[*]}"
+    else
+      ci_cleanup_log "cleanup complete after retry; no matching MJepa processes remain."
+    fi
+  else
+    ci_cleanup_log "cleanup complete; no matching MJepa processes remain."
+  fi
+}
+
+cleanup_preflight() {
+  ci_cleanup_stage_processes "preflight" "${1:-${MJEPACI_STAGE:-<unset>}}"
+}
+
+cleanup_on_exit() {
+  local stage="${1:-${MJEPACI_STAGE:-<unset>}}"
+  local exit_rc="${2:-0}"
+  ci_cleanup_stage_processes "exit" "$stage" "$exit_rc"
+}
+
 : "${MJEPA_ALLOW_DATA_FALLBACKS:=1}"
 
 mjepa_require_primary_path() {

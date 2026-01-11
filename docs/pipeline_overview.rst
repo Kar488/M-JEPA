@@ -84,6 +84,13 @@ Configuration defaults and precedence
   ``run-tox21.sh`` supplies its own ``FINETUNE_EPOCHS`` fallback when the
   workflow leaves it blank, and the wrappers clear ``BESTCFG_NO_EPOCHS`` at the
   start so stage-local defaults are applied deterministically.
+- **Stage cleanup.** ``scripts/ci/stage.sh`` runs a defensive cleanup pass at
+  both stage start and stage exit to terminate orphaned ``train_jepa.py`` /
+  ``torchrun`` jobs tied to the active ``EXP_ID`` or experiment paths, so later
+  stages do not hang on stale DDP workers. Torchrun launches are terminated by
+  process group to ensure all ranks exit together. Set
+  ``MJEPACI_DISABLE_CLEANUP=1`` to opt out or ``MJEPACI_CLEANUP_DRYRUN=1`` to log
+  matches without killing.
 
 Precedence summary: ``ci-vast.yml`` env vars → ``train_jepa_ci.yml`` argument
 templates → CLI flags → ``scripts/default.yaml``. If a value is omitted at a
