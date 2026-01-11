@@ -1443,6 +1443,73 @@ fi
     assert values["TOX21_FULL_FINETUNE"].lower() == "true"
 
 
+def test_run_tox21_ignores_full_finetune_for_pretrain_frozen(tmp_path):
+    experiments_root = tmp_path / "experiments"
+    exp_dir = experiments_root / "111112"
+    pretrain_dir = exp_dir / "pretrain"
+    artifacts_dir = exp_dir / "artifacts"
+    finetune_dir = exp_dir / "finetune"
+    tox21_dir = exp_dir / "tox21"
+    for path in (pretrain_dir, artifacts_dir, finetune_dir, tox21_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    encoder_path = pretrain_dir / "encoder.pt"
+    encoder_path.write_text("stub", encoding="utf-8")
+    manifest_path = artifacts_dir / "encoder_manifest.json"
+    manifest_path.write_text(
+        json.dumps({"paths": {"encoder": str(encoder_path)}}) + "\n",
+        encoding="utf-8",
+    )
+
+    capture_path = tmp_path / "tox21_env_capture.txt"
+    shim_path = tmp_path / "tox21_shim.sh"
+    shim_path.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+stage="$1"
+if [[ "$stage" == "tox21" ]]; then
+  if [[ -n "${ENV_CAPTURE:-}" ]]; then
+    {
+      printf 'TOX21_FULL_FINETUNE=%s\\n' "${TOX21_FULL_FINETUNE:-<unset>}"
+      printf 'TOX21_EVALUATION_MODE=%s\\n' "${TOX21_EVALUATION_MODE:-<unset>}"
+    } >"$ENV_CAPTURE"
+  fi
+fi
+""",
+        encoding="utf-8",
+    )
+    shim_path.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "EXPERIMENTS_ROOT": str(experiments_root),
+            "EXP_ID": "111112",
+            "PRETRAIN_EXP_ID": "111112",
+            "PRETRAIN_DIR": str(pretrain_dir),
+            "PRETRAIN_ARTIFACTS_DIR": str(artifacts_dir),
+            "PRETRAIN_MANIFEST": str(manifest_path),
+            "PRETRAIN_TOX21_ENV": str(tmp_path / "tox21_gate.env"),
+            "FINETUNE_DIR": str(finetune_dir),
+            "TOX21_DIR": str(tox21_dir),
+            "MJEPACI_STAGE_SHIM": str(shim_path),
+            "GITHUB_ENV": str(tmp_path / "github_env"),
+            "WANDB_API_KEY": "",
+            "FROZEN": "1",
+            "TOX21_EVALUATION_MODE": "pretrain_frozen",
+            "TOX21_FULL_FINETUNE": "true",
+            "ENV_CAPTURE": str(capture_path),
+        }
+    )
+
+    _run(["bash", "scripts/ci/run-tox21.sh"], env)
+
+    payload = capture_path.read_text(encoding="utf-8").strip().splitlines()
+    values = dict(line.split("=", 1) for line in payload if "=" in line)
+    assert values["TOX21_EVALUATION_MODE"] == "pretrain_frozen"
+    assert values["TOX21_FULL_FINETUNE"] == "<unset>"
+
+
 def test_tox21_cached_finetune_artifacts_are_discovered(tmp_path):
     experiments_root = tmp_path / "experiments"
     exp_id = "19678842966"

@@ -158,7 +158,8 @@ if [[ "$SOURCE" == "fine_tuned" || "$SOURCE" == "end_to_end" || "$SOURCE" == "hy
     export TOX21_FULL_FINETUNE
   fi
 elif [[ -n "${TOX21_FULL_FINETUNE:-}" ]]; then
-  export TOX21_FULL_FINETUNE
+  echo "[tox21] ignoring TOX21_FULL_FINETUNE for evaluation mode ${SOURCE}; keeping encoder frozen" >&2
+  unset TOX21_FULL_FINETUNE
 fi
 
 echo "[tox21] using pretrain experiment id=${PRETRAIN_EXP_ID}" >&2
