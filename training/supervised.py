@@ -3127,24 +3127,22 @@ def _train_linear_head_impl(
                             metric_val_float = None
                         if metric_val_float is not None and math.isfinite(metric_val_float):
                             metric_available = True
-                    if metric_available and metric_val_float is not None:
-                        monitor_value = metric_val_float
+                if metric_available and metric_val_float is not None:
+                    monitor_value = metric_val_float
+                else:
+                    if checkpoint_metric is not None:
+                        available = sorted(val_metric_values.keys())
+                        available_display = ", ".join(available) if available else "<none>"
+                        raise ValueError(
+                            "Requested checkpoint_metric "
+                            f"'{checkpoint_metric}' is unavailable or NaN. "
+                            f"Available validation metrics: {available_display}."
+                        )
                     else:
-                        if checkpoint_metric is not None:
-                            available = sorted(val_metric_values.keys())
-                            available_display = ", ".join(available) if available else "<none>"
-                            logger.warning(
-                                "Requested checkpoint_metric '%s' is unavailable or NaN; "
-                                "skipping checkpoint selection for this epoch. "
-                                "Available validation metrics: %s.",
-                                checkpoint_metric,
-                                available_display,
-                            )
-                        else:
-                            logger.debug(
-                                "Validation metric '%s' unavailable; falling back to val_loss.",
-                                early_stop_metric,
-                            )
+                        logger.debug(
+                            "Validation metric '%s' unavailable; falling back to val_loss.",
+                            early_stop_metric,
+                        )
                         monitor_value = avg_val_loss
                         current_mode = "min"
 
