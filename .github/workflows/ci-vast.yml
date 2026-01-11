@@ -99,6 +99,7 @@ env:
   GRID_MODE_VAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb' }}
   TOX21_CALIBRATE_PER_HEAD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tox21_calibrate_per_head || 'false' }}
   TOX21_CHECKPOINT_METRIC: pr_auc
+  TOX21_EVAL_MODE: hybrid
   BENCH_RUN_VAL: "1"
   BENCH_RUN_TEST: "1"
 
@@ -885,7 +886,7 @@ jobs:
     runs-on: self-hosted  #ubuntu-latest
     timeout-minutes: 3860
     needs: [vast_pretrain, vast_tox21_baseline]
-    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_pretrain.result == 'success' && needs.vast_tox21_baseline.result == 'success' && needs.vast_tox21_baseline.outputs.tox21_gate == 'false' }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_pretrain.result == 'success' && needs.vast_tox21_baseline.result == 'success' && needs.vast_tox21_baseline.outputs.tox21_gate == 'false' && env.TOX21_EVAL_MODE != 'hybrid' }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -966,7 +967,7 @@ jobs:
     runs-on: self-hosted  #ubuntu-latest
     timeout-minutes: 1860
     needs: [vast_pretrain, vast_finetune]
-    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_finetune.result == 'success' }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && (needs.vast_finetune.result == 'success' || (needs.vast_finetune.result == 'skipped' && env.TOX21_EVAL_MODE == 'hybrid')) }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -1010,8 +1011,8 @@ jobs:
           PRETRAIN_EPOCHS: "70"
           FINETUNE_EPOCHS: "50"
           BESTCFG_NO_EPOCHS: "1" # use best config without reloading any epochs
-          TOX21_ENCODER_SOURCE: hybrid
-          TOX21_EVALUATION_MODE: hybrid
+          TOX21_ENCODER_SOURCE: ${{ env.TOX21_EVAL_MODE }}
+          TOX21_EVALUATION_MODE: ${{ env.TOX21_EVAL_MODE }}
           TOX21_FULL_FINETUNE: true
           TOX21_ENCODER_LR: "1e-5"
           TOX21_HEAD_LR: "3e-4"
