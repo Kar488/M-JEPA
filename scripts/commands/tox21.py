@@ -1104,7 +1104,7 @@ def _compute_reliability_bins(
     y_true: Iterable[Any],
     y_prob: Iterable[Any],
     n_bins: int = 10,
-) -> Dict[str, List[float]]:
+) -> Dict[str, List[Optional[float]]]:
     labels = np.asarray(list(y_true), dtype=float).reshape(-1)
     probs = np.asarray(list(y_prob), dtype=float).reshape(-1)
     mask_valid = np.isfinite(labels) & np.isfinite(probs)
@@ -1124,8 +1124,8 @@ def _compute_reliability_bins(
         count = int(mask.sum())
         bin_counts.append(float(count))
         if count == 0:
-            bin_accuracy.append(float("nan"))
-            bin_confidence.append(float("nan"))
+            bin_accuracy.append(None)
+            bin_confidence.append(None)
         else:
             bin_accuracy.append(float(np.nanmean(labels[mask])))
             bin_confidence.append(float(np.nanmean(probs[mask])))
