@@ -2867,6 +2867,40 @@ PY
   fi
 }
 
+ci_stage_cleanup_setup() {
+  local stage="${1:-${MJEPACI_STAGE:-<unset>}}"
+  if ! declare -F cleanup_on_exit >/dev/null 2>&1; then
+    return 0
+  fi
+  MJEPACI_CLEANUP_STAGE="$stage"
+  MJEPACI_CLEANUP_ACTIVE=1
+  MJEPACI_CLEANUP_PREV_EXIT_TRAP="$(trap -p EXIT || true)"
+  trap 'ci_stage_cleanup_trap' EXIT
+}
+
+ci_stage_cleanup_trap() {
+  local rc=$?
+  if [[ "${MJEPACI_CLEANUP_ACTIVE:-0}" == "1" ]] && declare -F cleanup_on_exit >/dev/null 2>&1; then
+    cleanup_on_exit "${MJEPACI_CLEANUP_STAGE:-<unset>}" "$rc"
+  fi
+  exit "$rc"
+}
+
+ci_stage_cleanup_finalize() {
+  local rc="${1:-0}"
+  if [[ "${MJEPACI_CLEANUP_ACTIVE:-0}" == "1" ]] && declare -F cleanup_on_exit >/dev/null 2>&1; then
+    cleanup_on_exit "${MJEPACI_CLEANUP_STAGE:-<unset>}" "$rc"
+  fi
+  MJEPACI_CLEANUP_ACTIVE=0
+  if [[ -n "${MJEPACI_CLEANUP_PREV_EXIT_TRAP:-}" ]]; then
+    eval "${MJEPACI_CLEANUP_PREV_EXIT_TRAP}"
+    MJEPACI_CLEANUP_PREV_EXIT_TRAP=""
+  else
+    trap - EXIT
+  fi
+  return "$rc"
+}
+
 # ---------- one-call entry ----------
 run_stage() {
   local s="${1:?stage}"
@@ -2892,6 +2926,11 @@ run_stage() {
   echo "     READ: ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>} GRID_DIR=${grid_read}" >&2
   echo "     WRITE: OUT_DIR=${OUT_DIR:-<unset>} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>}" >&2
 
+  ci_stage_cleanup_setup "$stage"
+  if declare -F cleanup_preflight >/dev/null 2>&1; then
+    cleanup_preflight "$stage"
+  fi
+
   if (( FROZEN )) && [[ "${CI_FORCE_UNFREEZE_GRID}" != "1" ]]; then
     case "$stage" in
       pretrain|grid|grid_search|phase1|phase2_sweep|phase2_recheck|phase2_export|finetune)
@@ -2900,6 +2939,7 @@ run_stage() {
         MJEPACI_LAST_STAGE_SKIP_REASON="frozen_lineage"
         MJEPACI_LAST_STAGE_RERUN_REASON=""
         export MJEPACI_LAST_STAGE_STATUS MJEPACI_LAST_STAGE_SKIP_REASON MJEPACI_LAST_STAGE_RERUN_REASON
+        ci_stage_cleanup_finalize 0
         return 0
         ;;
     esac
@@ -2937,22 +2977,27 @@ run_stage() {
 
     if [[ -z "$grid_root" ]]; then
       echo "[pretrain][fatal] GRID_DIR is unset; run phase2_sweep/recheck before pretraining." >&2
+      ci_stage_cleanup_finalize 3
       return 3
     fi
     if [[ ! -f "$sweep_file" ]]; then
       echo "[pretrain][fatal] expected phase2 sweep output at $sweep_file" >&2
+      ci_stage_cleanup_finalize 3
       return 3
     fi
     if [[ ! -f "$best_json" ]]; then
       echo "[pretrain][fatal] expected best_grid_config.json at $best_json" >&2
+      ci_stage_cleanup_finalize 3
       return 3
     fi
     if [[ ! -f "$summary_json" ]]; then
       echo "[pretrain][fatal] expected recheck_summary.json at $summary_json" >&2
+      ci_stage_cleanup_finalize 3
       return 3
     fi
     if [[ ! -f "$sentinel_path" ]]; then
       echo "[pretrain][fatal] missing Phase-2 recheck sentinel at $sentinel_path" >&2
+      ci_stage_cleanup_finalize 3
       return 3
     fi
   fi
@@ -3105,6 +3150,7 @@ run_stage() {
     MJEPACI_LAST_STAGE_SKIP_REASON="$skip_reason"
     MJEPACI_LAST_STAGE_RERUN_REASON=""
     export MJEPACI_LAST_STAGE_STATUS MJEPACI_LAST_STAGE_SKIP_REASON MJEPACI_LAST_STAGE_RERUN_REASON
+    ci_stage_cleanup_finalize 0
     return 0
   fi
 
@@ -3168,7 +3214,9 @@ run_stage() {
     echo "[${stage}] starting (shim)" >&2
     if ! "$MJEPACI_STAGE_SHIM" "$stage"; then
       rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
-      return $?
+      local shim_rc=$?
+      ci_stage_cleanup_finalize "$shim_rc"
+      return "$shim_rc"
     fi
     case "$stage" in
       phase2_sweep)
@@ -3209,6 +3257,7 @@ run_stage() {
     MJEPACI_LAST_STAGE_SKIP_REASON=""
     MJEPACI_LAST_STAGE_RERUN_REASON="$rerun_reason"
     export MJEPACI_LAST_STAGE_STATUS MJEPACI_LAST_STAGE_SKIP_REASON MJEPACI_LAST_STAGE_RERUN_REASON
+    ci_stage_cleanup_finalize 0
     return 0
   fi
 
@@ -3218,6 +3267,7 @@ run_stage() {
     else
       echo "[${stage}] error: unable to bootstrap micromamba environment" >&2
       rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
+      ci_stage_cleanup_finalize 1
       return 1
     fi
   fi
@@ -3242,7 +3292,8 @@ run_stage() {
       if ! run_phase2_sweep_stage "$dir" "$stage"; then
         rc=$?
         rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
-        return $rc
+        ci_stage_cleanup_finalize "$rc"
+        return "$rc"
       fi
       ;;
     phase2_recheck)
@@ -3251,7 +3302,8 @@ run_stage() {
       if ! run_phase2_recheck_stage "$dir" "$stage"; then
         rc=$?
         rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
-        return $rc
+        ci_stage_cleanup_finalize "$rc"
+        return "$rc"
       fi
       ;;
     phase2_export)
@@ -3260,7 +3312,8 @@ run_stage() {
       if ! run_phase2_export_stage "$dir" "$stage"; then
         rc=$?
         rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
-        return $rc
+        ci_stage_cleanup_finalize "$rc"
+        return "$rc"
       fi
       ;;
     *)
@@ -3287,6 +3340,7 @@ run_stage() {
       MJEPACI_LAST_STAGE_RERUN_REASON="$rerun_reason"
       export MJEPACI_LAST_STAGE_STATUS MJEPACI_LAST_STAGE_SKIP_REASON MJEPACI_LAST_STAGE_RERUN_REASON
       rm -f "$inputs_tmp" "$deps_tmp" "$outputs_tmp"
+      ci_stage_cleanup_finalize 0
       return 0
     fi
   done
@@ -3299,4 +3353,5 @@ run_stage() {
   MJEPACI_LAST_STAGE_SKIP_REASON=""
   MJEPACI_LAST_STAGE_RERUN_REASON="$rerun_reason"
   export MJEPACI_LAST_STAGE_STATUS MJEPACI_LAST_STAGE_SKIP_REASON MJEPACI_LAST_STAGE_RERUN_REASON
+  ci_stage_cleanup_finalize 0
 }
