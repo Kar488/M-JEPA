@@ -41,6 +41,10 @@ on:
         options:
           - "false"
           - "true"
+      tox21_eval_mode:
+        description: "Tox21 evaluation mode (baseline, hybrid, end_to_end, etc.)"
+        required: false
+        default: "hybrid"
 
 concurrency:
   group: vast-${{ github.ref }}
@@ -99,7 +103,7 @@ env:
   GRID_MODE_VAR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.hyperparam_mode || 'wandb' }}
   TOX21_CALIBRATE_PER_HEAD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tox21_calibrate_per_head || 'false' }}
   TOX21_CHECKPOINT_METRIC: pr_auc
-  TOX21_EVAL_MODE: hybrid
+  TOX21_EVAL_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tox21_eval_mode || 'hybrid' }}
   BENCH_RUN_VAL: "1"
   BENCH_RUN_TEST: "1"
 
@@ -886,7 +890,7 @@ jobs:
     runs-on: self-hosted  #ubuntu-latest
     timeout-minutes: 3860
     needs: [vast_pretrain, vast_tox21_baseline]
-    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_pretrain.result == 'success' && needs.vast_tox21_baseline.result == 'success' && needs.vast_tox21_baseline.outputs.tox21_gate == 'false' && env.TOX21_EVAL_MODE != 'hybrid' }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && needs.vast_pretrain.result == 'success' && needs.vast_tox21_baseline.result == 'success' && needs.vast_tox21_baseline.outputs.tox21_gate == 'false' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.tox21_eval_mode) || 'hybrid') != 'hybrid' }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
@@ -967,7 +971,7 @@ jobs:
     runs-on: self-hosted  #ubuntu-latest
     timeout-minutes: 1860
     needs: [vast_pretrain, vast_finetune]
-    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && (needs.vast_finetune.result == 'success' || (needs.vast_finetune.result == 'skipped' && env.TOX21_EVAL_MODE == 'hybrid')) }}
+    if: ${{ ((github.event_name != 'workflow_dispatch') || contains(github.event.inputs.task_flags || '', 'run_vast_jobs')) && (needs.vast_finetune.result == 'success' || (needs.vast_finetune.result == 'skipped' && ((github.event_name == 'workflow_dispatch' && github.event.inputs.tox21_eval_mode) || 'hybrid') == 'hybrid')) }}
     env:
       EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
       PRETRAIN_EXP_ID: ${{ needs.vast_pretrain.outputs.exp_id }}
