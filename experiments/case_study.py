@@ -1338,8 +1338,9 @@ def _evaluate_case_study(
         "enabled": bool(calibrate),
         "fit_split": "val",
     }
-    calibrator_info["method"] = calibration_method_norm
-    if calibrate_per_head:
+    if calibrate:
+        calibrator_info["method"] = calibration_method_norm
+    if calibrate and calibrate_per_head:
         calibrator_info["per_head_enabled"] = True
     feature_dim = int(val_logits_feat.shape[1]) if val_logits_feat.ndim == 2 else 1
     if calibrate or (val_logits_np.ndim >= 2 and val_logits_np.shape[-1] > 1):
