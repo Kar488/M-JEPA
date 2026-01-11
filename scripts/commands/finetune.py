@@ -31,7 +31,7 @@ torch.multiprocessing.set_sharing_strategy("file_system")
 
 from data.mdataset import GraphData, GraphDataset
 from data.scaffold_split import scaffold_split_indices
-from utils.ddp import is_main_process
+from utils.ddp import get_rank, get_world_size, is_main_process
 from utils.graph_ops import _encode_graph
 from utils.logging import maybe_init_wandb
 from utils.pooling import global_mean_pool
@@ -118,6 +118,27 @@ def _coerce_float_like(value: Any) -> Optional[float]:
         return float(value)
     except Exception:
         return None
+
+
+def _build_finetune_epoch_batch_warning(
+    epoch_batches: float,
+    train_batches: float,
+    max_finetune_batches: int,
+    *,
+    seed: int,
+    epoch: int,
+) -> Optional[str]:
+    if max_finetune_batches != 0:
+        return None
+    resolved_batches = max(float(epoch_batches or 0.0), float(train_batches or 0.0))
+    if resolved_batches >= 10:
+        return None
+    rank = get_rank()
+    world = get_world_size()
+    return (
+        "Fine-tune epoch produced only %d per-rank batches (rank=%d/%d, seed=%d epoch=%d); "
+        "representation updates may be limited."
+    ) % (int(resolved_batches), rank, world, seed, epoch)
 
 
 def _parse_pos_class_weight(values: Optional[Iterable[str]]) -> Optional[Any]:
@@ -921,6 +942,8 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
         sys.exit(1)
 
     is_main = is_main_process()
+    rank = get_rank()
+    world = get_world_size()
     wb = maybe_init_wandb(
         args.use_wandb and is_main,
         project=args.wandb_project,
@@ -1718,41 +1741,50 @@ def _cmd_finetune_single(args: argparse.Namespace) -> Dict[str, Any]:
                             pass
                     break
 
-                if epoch == start_epoch and loader_batches > 0:
+                if is_main and epoch == start_epoch and loader_batches > 0:
                     logger.info(
-                        "[finetune] seed=%d train loader reports %d batches per epoch (max_finetune_batches=%d)",
+                        "[finetune] seed=%d train loader reports %d per-rank batches (rank=%d/%d, max_finetune_batches=%d)",
                         seed,
                         int(loader_batches),
+                        rank,
+                        world,
                         max_finetune_batches,
                     )
                 batch_size_hint = int(getattr(args, "batch_size", 0) or 0)
                 if (
-                    not warned_small_loader
+                    is_main
+                    and not warned_small_loader
                     and loader_batches > 0
                     and loader_batches < 6
                     and batch_size_hint >= 256
                 ):
                     logger.warning(
-                        "[finetune] seed=%d loader has %d batches with batch_size=%d; consider using 128 or 64 for ≥6 steps per epoch.",
+                        "[finetune] seed=%d loader has %d per-rank batches (rank=%d/%d, batch_size=%d); consider using 128 or 64 for ≥6 steps per epoch.",
                         seed,
                         int(loader_batches),
+                        rank,
+                        world,
                         batch_size_hint,
                     )
                     warned_small_loader = True
-                if train_batches > 0:
+                if is_main and train_batches > 0:
                     logger.info(
-                        "[finetune] seed=%d epoch=%d encoder batches=%d",
+                        "[finetune] seed=%d epoch=%d encoder batches=%d (rank=%d/%d)",
                         seed,
                         epoch,
                         int(train_batches),
+                        rank,
+                        world,
                     )
-                if max_finetune_batches == 0 and epoch_batches < 10:
-                    logger.warning(
-                        "Fine-tune epoch produced only %d batches (seed=%d epoch=%d); representation updates may be limited.",
-                        int(epoch_batches),
-                        seed,
-                        epoch,
-                    )
+                warning_msg = _build_finetune_epoch_batch_warning(
+                    epoch_batches,
+                    train_batches,
+                    max_finetune_batches,
+                    seed=seed,
+                    epoch=epoch,
+                )
+                if warning_msg and is_main:
+                    logger.warning(warning_msg)
                 seed_train_steps[seed] = seed_train_steps.get(seed, 0.0) + epoch_batches
                 cumulative_encoder_batches += epoch_batches
                 if wb is not None:

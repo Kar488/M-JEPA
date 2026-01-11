@@ -58,6 +58,10 @@ Stage Orchestration
 #. **Finetune / Benchmark / Report.** ``finetune-agent`` and ``report-agent``
    consume the frozen lineage and store outputs under the new ``EXP_ID``.
 
+   Fine-tune logs report per-rank loader shard sizes when running under DDP and
+   include an estimated global batch count so readers can distinguish local
+   shards from the global dataset footprint.
+
 The CI/CD pipeline automatically resumes from the latest completed stage, using
 GitHub workflows to schedule jobs and Vast.ai workers to execute sweeps and
 benchmarks. Freeze markers prevent accidental overwrites; set

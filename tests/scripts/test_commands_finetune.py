@@ -122,6 +122,37 @@ def test_maybe_enable_add_3d_sets_flag():
     assert args.add_3d is True
 
 
+def test_finetune_epoch_warning_uses_nonzero_batches(monkeypatch):
+    monkeypatch.setattr(finetune, "get_rank", lambda: 0)
+    monkeypatch.setattr(finetune, "get_world_size", lambda: 4)
+    msg = finetune._build_finetune_epoch_batch_warning(
+        epoch_batches=0,
+        train_batches=6,
+        max_finetune_batches=0,
+        seed=7,
+        epoch=2,
+    )
+    assert msg is not None
+    assert "only 0" not in msg
+    assert "only 6 per-rank batches" in msg
+    assert "rank=0/4" in msg
+
+
+def test_finetune_epoch_warning_triggers_on_zero_batches(monkeypatch):
+    monkeypatch.setattr(finetune, "get_rank", lambda: 1)
+    monkeypatch.setattr(finetune, "get_world_size", lambda: 4)
+    msg = finetune._build_finetune_epoch_batch_warning(
+        epoch_batches=0,
+        train_batches=0,
+        max_finetune_batches=0,
+        seed=3,
+        epoch=1,
+    )
+    assert msg is not None
+    assert "only 0 per-rank batches" in msg
+    assert "rank=1/4" in msg
+
+
 def test_ensure_dataset_has_pos_raises_for_missing_coords():
     graphs = [
         GraphData(
