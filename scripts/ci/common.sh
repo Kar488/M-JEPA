@@ -474,6 +474,9 @@ ci_cleanup_stage_processes() {
         if [[ -z "$lock_reason" && "$allow_lock_pgid_fallback" == "1" ]]; then
           lock_reason="pgid"
         fi
+        if [[ -z "$lock_reason" && "$allow_lock_pgid_fallback" == "1" ]]; then
+          lock_reason="pgid"
+        fi
         if [[ -n "$lock_reason" ]]; then
           lock_group_match=1
           match_logs["$lock_pid_candidate"]="pid=${lock_pid_candidate} pgid=${lock_pgid} reason=lock:${lock_reason} cmdline=${lock_cmdline}"
