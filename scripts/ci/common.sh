@@ -546,6 +546,15 @@ ci_cleanup_stage_processes() {
       :
     fi
     reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
+    if [[ ${#stage_tokens[@]} -gt 0 ]]; then
+      local stage_reason=""
+      stage_reason="$(ci_cleanup_match_stage_reason "$cmdline" "${stage_tokens[@]}" || true)"
+      if [[ -z "$reason" ]]; then
+        reason="$stage_reason"
+      elif [[ -n "$stage_reason" ]]; then
+        reason="${reason};${stage_reason}"
+      fi
+    fi
     if [[ -n "$reason" ]]; then
       remaining+=("$pid")
     fi
@@ -576,6 +585,15 @@ ci_cleanup_stage_processes() {
         :
       fi
       reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
+      if [[ ${#stage_tokens[@]} -gt 0 ]]; then
+        local stage_reason=""
+        stage_reason="$(ci_cleanup_match_stage_reason "$cmdline" "${stage_tokens[@]}" || true)"
+        if [[ -z "$reason" ]]; then
+          reason="$stage_reason"
+        elif [[ -n "$stage_reason" ]]; then
+          reason="${reason};${stage_reason}"
+        fi
+      fi
       if [[ -n "$reason" ]]; then
         remaining+=("$pid")
       fi
