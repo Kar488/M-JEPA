@@ -166,6 +166,10 @@ ci_cleanup_collect_tokens() {
     path_tokens+=("${EXPERIMENT_DIR%/}")
     __out_env_tokens+=("EXPERIMENT_DIR=${EXPERIMENT_DIR}")
   fi
+  if [[ -n "${OUT_DIR:-}" ]]; then
+    path_tokens+=("${OUT_DIR%/}")
+    __out_env_tokens+=("OUT_DIR=${OUT_DIR}")
+  fi
   if [[ -n "${EXPERIMENTS_ROOT:-}" && -n "${EXP_ID:-}" ]]; then
     path_tokens+=("${EXPERIMENTS_ROOT%/}/${EXP_ID}")
   fi
@@ -227,6 +231,9 @@ ci_cleanup_matches_mjepa() {
     return 0
   fi
   if [[ "$cmdline" == *"/srv/mjepa/scripts/train_jepa.py"* ]]; then
+    return 0
+  fi
+  if [[ "$cmdline" == *"train_jepa.py"* ]]; then
     return 0
   fi
   if [[ "$cmdline" == *"scripts/train_jepa.py"* ]]; then
@@ -337,7 +344,7 @@ ci_cleanup_stage_processes() {
   local -a env_tokens=()
   ci_cleanup_collect_tokens match_tokens env_tokens
   if (( ${#match_tokens[@]} == 0 && ${#env_tokens[@]} == 0 )); then
-    ci_cleanup_log "no EXP_ID/path tokens available; skipping cleanup."
+    ci_cleanup_log "no EXP_ID/path tokens available; skipping cleanup (stage=${stage} phase=${phase})."
     return 0
   fi
 
@@ -377,6 +384,7 @@ ci_cleanup_stage_processes() {
 
   if (( ${#group_targets[@]} == 0 && ${#pid_targets[@]} == 0 )); then
     ci_cleanup_log "no MJepa processes matched for stage=${stage} phase=${phase}."
+    ci_cleanup_log "match criteria: tokens=(${match_tokens[*]:-}) env=(${env_tokens[*]:-})"
     return 0
   fi
 
@@ -466,6 +474,134 @@ cleanup_on_exit() {
   local stage="${1:-${MJEPACI_STAGE:-<unset>}}"
   local exit_rc="${2:-0}"
   ci_cleanup_stage_processes "exit" "$stage" "$exit_rc"
+  if declare -F ci_stage_lock_release >/dev/null 2>&1; then
+    ci_stage_lock_release "$stage"
+  fi
+}
+
+ci_stage_lock_root() {
+  local root="${DATA_ROOT:-}"
+  if [[ -z "$root" ]]; then
+    root="${EXPERIMENTS_ROOT:-}"
+  fi
+  if [[ -z "$root" ]]; then
+    root="${APP_DIR:-/srv/mjepa}"
+  fi
+  printf '%s/locks' "${root%/}"
+}
+
+ci_stage_lock_path() {
+  local stage="${1:?stage}"
+  local exp_id="${EXP_ID:-}"
+  if [[ -z "$exp_id" ]]; then
+    return 1
+  fi
+  printf '%s/mjepa_%s_%s.lock' "$(ci_stage_lock_root)" "$stage" "$exp_id"
+}
+
+ci_stage_lock_acquire() {
+  local stage="${1:?stage}"
+  local disabled
+  disabled="$(normalize_bool "${MJEPACI_DISABLE_LOCKS:-}" 0)"
+  if [[ "$disabled" == "1" ]]; then
+    echo "[ci][lock] disabled via MJEPACI_DISABLE_LOCKS=1; skipping lock." >&2
+    return 0
+  fi
+
+  local exp_id="${EXP_ID:-}"
+  if [[ -z "$exp_id" ]]; then
+    echo "[ci][lock] EXP_ID is unset; skipping lock for stage=${stage}." >&2
+    return 0
+  fi
+
+  local lock_path
+  if ! lock_path="$(ci_stage_lock_path "$stage")"; then
+    echo "[ci][lock] unable to resolve lock path; skipping lock for stage=${stage}." >&2
+    return 0
+  fi
+  local lock_dir
+  lock_dir="$(dirname "$lock_path")"
+  mkdir -p "$lock_dir"
+
+  local cmdline=""
+  cmdline="$(ps -o args= -p $$ 2>/dev/null | sed -e 's/[[:space:]]\+/ /g' || true)"
+
+  local attempt=0
+  local existing_pid=""
+  while (( attempt < 2 )); do
+    ((attempt+=1))
+    if [[ -f "$lock_path" ]]; then
+      existing_pid="$(grep -E '^PID=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2- || true)"
+      if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+        echo "[ci][lock] lock already held for stage=${stage} exp_id=${exp_id} (pid=${existing_pid}); refusing to start." >&2
+        return 3
+      fi
+      if [[ -n "$existing_pid" ]]; then
+        echo "[ci][lock] removing stale lock for stage=${stage} exp_id=${exp_id} (pid=${existing_pid})." >&2
+      else
+        echo "[ci][lock] removing stale lock for stage=${stage} exp_id=${exp_id} (missing pid)." >&2
+      fi
+      rm -f "$lock_path"
+    fi
+
+    local tmp_lock=""
+    tmp_lock="$(mktemp "${lock_path}.tmp.XXXXXX")"
+    {
+      printf 'PID=%s\n' "$$"
+      printf 'START_TS=%s\n' "$(date -Is)"
+      printf 'STAGE=%s\n' "$stage"
+      printf 'EXP_ID=%s\n' "$exp_id"
+      printf 'CMDLINE=%s\n' "$cmdline"
+    } >"$tmp_lock"
+
+    if ln "$tmp_lock" "$lock_path" 2>/dev/null; then
+      rm -f "$tmp_lock"
+      break
+    fi
+
+    rm -f "$tmp_lock"
+  done
+
+  if [[ ! -f "$lock_path" ]]; then
+    echo "[ci][lock] failed to acquire lock for stage=${stage} exp_id=${exp_id}; refusing to start." >&2
+    return 3
+  fi
+
+  MJEPACI_LOCK_ACTIVE=1
+  MJEPACI_LOCK_STAGE="$stage"
+  MJEPACI_LOCK_PATH="$lock_path"
+  MJEPACI_LOCK_PID="$$"
+  export MJEPACI_LOCK_ACTIVE MJEPACI_LOCK_STAGE MJEPACI_LOCK_PATH MJEPACI_LOCK_PID
+  return 0
+}
+
+ci_stage_lock_release() {
+  local stage="${1:-${MJEPACI_LOCK_STAGE:-}}"
+  if [[ "${MJEPACI_LOCK_ACTIVE:-0}" != "1" ]]; then
+    return 0
+  fi
+  local lock_path="${MJEPACI_LOCK_PATH:-}"
+  if [[ -z "$lock_path" || ! -f "$lock_path" ]]; then
+    MJEPACI_LOCK_ACTIVE=0
+    return 0
+  fi
+
+  local existing_pid=""
+  existing_pid="$(grep -E '^PID=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2- || true)"
+  if [[ -n "$existing_pid" && "$existing_pid" != "${MJEPACI_LOCK_PID:-}" && -n "${MJEPACI_LOCK_PID:-}" ]]; then
+    if kill -0 "$existing_pid" 2>/dev/null; then
+      echo "[ci][lock] lock for stage=${stage} held by pid=${existing_pid}; not releasing." >&2
+      return 0
+    fi
+  fi
+
+  rm -f "$lock_path" 2>/dev/null || true
+  MJEPACI_LOCK_ACTIVE=0
+  MJEPACI_LOCK_PATH=""
+  MJEPACI_LOCK_PID=""
+  MJEPACI_LOCK_STAGE=""
+  export MJEPACI_LOCK_ACTIVE MJEPACI_LOCK_STAGE MJEPACI_LOCK_PATH MJEPACI_LOCK_PID
+  return 0
 }
 
 : "${MJEPA_ALLOW_DATA_FALLBACKS:=1}"

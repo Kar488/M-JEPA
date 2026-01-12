@@ -2486,6 +2486,10 @@ PY
       fi
     fi
 
+    if [[ "$s" == "bench" ]]; then
+      ci_benchmark_enforce_single_device entrypoint_args "$s"
+    fi
+
     if (( requested_devices_numeric > 1 )) && (( !ddp_enabled )) && (( !preflight_marked )); then
       ci_mark_ddp_attempt_if_empty
     fi
@@ -2901,6 +2905,66 @@ ci_stage_cleanup_finalize() {
   return "$rc"
 }
 
+ci_benchmark_enforce_single_device() {
+  local -n __args="$1"
+  local stage_label="${2:-bench}"
+  local requested_devices=""
+  local devices_idx=-1
+  local devices_joined=0
+  local i=0
+  while (( i < ${#__args[@]} )); do
+    local token="${__args[$i]}"
+    if [[ "$token" == "--devices" ]]; then
+      devices_idx=$i
+      if (( i + 1 < ${#__args[@]} )); then
+        requested_devices="${__args[$((i + 1))]}"
+      fi
+      break
+    elif [[ "$token" == --devices=* ]]; then
+      devices_idx=$i
+      devices_joined=1
+      requested_devices="${token#--devices=}"
+      break
+    fi
+    ((++i))
+  done
+
+  if [[ -z "$requested_devices" || ! "$requested_devices" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+
+  local requested_numeric=$(( requested_devices + 0 ))
+  if (( requested_numeric <= 1 )); then
+    return 0
+  fi
+
+  local world="${WORLD_SIZE:-}"
+  local rank_env="${RANK:-}"
+  local local_rank_env="${LOCAL_RANK:-}"
+  if [[ -n "$world" && "$world" =~ ^[0-9]+$ && "$world" -gt 1 ]]; then
+    return 0
+  fi
+  if [[ -n "$rank_env" || -n "$local_rank_env" ]]; then
+    return 0
+  fi
+
+  if (( devices_idx >= 0 )); then
+    if (( devices_joined )); then
+      __args[$devices_idx]="--devices=1"
+    else
+      if (( devices_idx + 1 < ${#__args[@]} )); then
+        __args[$((devices_idx + 1))]="1"
+      else
+        __args+=("1")
+      fi
+    fi
+  else
+    __args+=("--devices" "1")
+  fi
+
+  echo "[stage:${stage_label}] warn: benchmark requested --devices ${requested_numeric} without DDP; forcing --devices 1. Launch with torchrun for multi-GPU." >&2
+}
+
 # ---------- one-call entry ----------
 run_stage() {
   local s="${1:?stage}"
@@ -2925,6 +2989,15 @@ run_stage() {
   echo "[ci] STAGE=${stage} EXP_ID=${EXP_ID:-<unset>} PRETRAIN_EXP_ID=${PRETRAIN_EXP_ID:-<unset>} GRID_EXP_ID=${GRID_EXP_ID:-<unset>} FROZEN=${FROZEN:-0}" >&2
   echo "     READ: ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>} GRID_DIR=${grid_read}" >&2
   echo "     WRITE: OUT_DIR=${OUT_DIR:-<unset>} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>}" >&2
+
+  case "$stage" in
+    pretrain|finetune|tox21|bench|benchmark)
+      if ! ci_stage_lock_acquire "$stage"; then
+        echo "[ci][lock] refusing to run stage=${stage} while another run is active." >&2
+        return 3
+      fi
+      ;;
+  esac
 
   ci_stage_cleanup_setup "$stage"
   if declare -F cleanup_preflight >/dev/null 2>&1; then
