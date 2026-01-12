@@ -283,7 +283,11 @@ Automation scripts keep the lab humming, especially inside CI.
   experiment, preventing later stages from hanging on orphaned DDP processes.
   Torchrun jobs are stopped by process group so all ranks exit together. Set
   ``MJEPACI_DISABLE_CLEANUP=1`` to disable this safeguard or
-  ``MJEPACI_CLEANUP_DRYRUN=1`` to log what would be terminated.
+  ``MJEPACI_CLEANUP_DRYRUN=1`` to log what would be terminated. The same runner
+  also enforces per-stage lock files under ``$DATA_ROOT/locks`` to prevent
+  overlapping runs; set ``MJEPACI_DISABLE_LOCKS=1`` to opt out. Benchmark runs
+  only use multi-GPU when launched under ``torchrun``; otherwise the stage
+  forces ``--devices 1`` and logs a warning so results are never ambiguous.
 
 ``commands/sweep_run.py``
   The entry point executed by each sweep agent. It logs the backbone, hidden

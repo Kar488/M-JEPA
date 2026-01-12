@@ -94,7 +94,13 @@ Configuration defaults and precedence
   stages do not hang on stale DDP workers. Torchrun launches are terminated by
   process group to ensure all ranks exit together. Set
   ``MJEPACI_DISABLE_CLEANUP=1`` to opt out or ``MJEPACI_CLEANUP_DRYRUN=1`` to log
-  matches without killing.
+  matches without killing. The same runner also writes per-stage lock files
+  under ``$DATA_ROOT/locks`` to prevent overlapping runs; set
+  ``MJEPACI_DISABLE_LOCKS=1`` to opt out.
+- **Benchmark DDP policy.** The benchmark stage only honors multi-GPU settings
+  when launched under ``torchrun``. If ``--devices`` is greater than 1 without a
+  distributed launcher, the stage logs a warning and forces single-device
+  execution to avoid misleading results.
 
 Precedence summary: ``ci-vast.yml`` env vars → ``train_jepa_ci.yml`` argument
 templates → CLI flags → ``scripts/default.yaml``. If a value is omitted at a

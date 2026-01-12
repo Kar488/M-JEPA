@@ -221,6 +221,17 @@ Automation & Sweeps
   used for best-checkpoint selection/early stopping (distinct from
   ``threshold_metric`` threshold tuning).
 
+  ``scripts/ci/stage.sh`` enforces per-stage lock files under
+  ``$DATA_ROOT/locks`` to avoid overlapping runs for the same ``EXP_ID``. Set
+  ``MJEPACI_DISABLE_LOCKS=1`` to opt out. The stage runner also performs cleanup
+  before and after each stage to shut down orphaned ``train_jepa.py`` or
+  ``torchrun`` workers tied to the current experiment; set
+  ``MJEPACI_DISABLE_CLEANUP=1`` to disable this safeguard or
+  ``MJEPACI_CLEANUP_DRYRUN=1`` to log potential matches without killing. The
+  benchmark stage only uses multi-GPU when launched under ``torchrun``; if
+  ``--devices`` is greater than 1 without a distributed launcher, the stage
+  forces single-device execution and logs a warning.
+
 Reporting & Artifacts
 ---------------------
 
