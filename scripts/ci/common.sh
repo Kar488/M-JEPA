@@ -315,12 +315,12 @@ ci_cleanup_match_stage_reason() {
 ci_cleanup_has_exp_id_marker() {
   local cmdline="$1"
   local env_blob="$2"
-  local marker
-  for marker in "EXP_ID=" "PRETRAIN_EXP_ID=" "GRID_EXP_ID=" "RUN_ID="; do
-    if [[ -n "$env_blob" && "$env_blob" == *"$marker"* ]]; then
+  local marker_name
+  for marker_name in "EXP_ID" "PRETRAIN_EXP_ID" "GRID_EXP_ID" "RUN_ID"; do
+    if [[ -n "$env_blob" && "$env_blob" =~ (^|$'\n')${marker_name}= ]]; then
       return 0
     fi
-    if [[ "$cmdline" == *"$marker"* ]]; then
+    if [[ "$cmdline" =~ (^|[[:space:]])${marker_name}= ]]; then
       return 0
     fi
   done
