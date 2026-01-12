@@ -523,30 +523,49 @@ ci_stage_lock_acquire() {
   lock_dir="$(dirname "$lock_path")"
   mkdir -p "$lock_dir"
 
-  local existing_pid=""
-  if [[ -f "$lock_path" ]]; then
-    existing_pid="$(grep -E '^PID=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2- || true)"
-    if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
-      echo "[ci][lock] lock already held for stage=${stage} exp_id=${exp_id} (pid=${existing_pid}); refusing to start." >&2
-      return 3
-    fi
-    if [[ -n "$existing_pid" ]]; then
-      echo "[ci][lock] removing stale lock for stage=${stage} exp_id=${exp_id} (pid=${existing_pid})." >&2
-    else
-      echo "[ci][lock] removing stale lock for stage=${stage} exp_id=${exp_id} (missing pid)." >&2
-    fi
-    rm -f "$lock_path"
-  fi
-
   local cmdline=""
   cmdline="$(ps -o args= -p $$ 2>/dev/null | sed -e 's/[[:space:]]\+/ /g' || true)"
-  {
-    printf 'PID=%s\n' "$$"
-    printf 'START_TS=%s\n' "$(date -Is)"
-    printf 'STAGE=%s\n' "$stage"
-    printf 'EXP_ID=%s\n' "$exp_id"
-    printf 'CMDLINE=%s\n' "$cmdline"
-  } >"$lock_path"
+
+  local attempt=0
+  local existing_pid=""
+  while (( attempt < 2 )); do
+    ((attempt+=1))
+    if [[ -f "$lock_path" ]]; then
+      existing_pid="$(grep -E '^PID=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2- || true)"
+      if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+        echo "[ci][lock] lock already held for stage=${stage} exp_id=${exp_id} (pid=${existing_pid}); refusing to start." >&2
+        return 3
+      fi
+      if [[ -n "$existing_pid" ]]; then
+        echo "[ci][lock] removing stale lock for stage=${stage} exp_id=${exp_id} (pid=${existing_pid})." >&2
+      else
+        echo "[ci][lock] removing stale lock for stage=${stage} exp_id=${exp_id} (missing pid)." >&2
+      fi
+      rm -f "$lock_path"
+    fi
+
+    local tmp_lock=""
+    tmp_lock="$(mktemp "${lock_path}.tmp.XXXXXX")"
+    {
+      printf 'PID=%s\n' "$$"
+      printf 'START_TS=%s\n' "$(date -Is)"
+      printf 'STAGE=%s\n' "$stage"
+      printf 'EXP_ID=%s\n' "$exp_id"
+      printf 'CMDLINE=%s\n' "$cmdline"
+    } >"$tmp_lock"
+
+    if ln "$tmp_lock" "$lock_path" 2>/dev/null; then
+      rm -f "$tmp_lock"
+      break
+    fi
+
+    rm -f "$tmp_lock"
+  done
+
+  if [[ ! -f "$lock_path" ]]; then
+    echo "[ci][lock] failed to acquire lock for stage=${stage} exp_id=${exp_id}; refusing to start." >&2
+    return 3
+  fi
 
   MJEPACI_LOCK_ACTIVE=1
   MJEPACI_LOCK_STAGE="$stage"
