@@ -449,7 +449,7 @@ ci_cleanup_stage_processes() {
           :
         fi
         lock_reason="$(ci_cleanup_match_reason "$lock_cmdline" "$lock_env" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
-        if [[ -z "$lock_reason" && ${#stage_tokens[@]} -gt 0 ]]; then
+        if [[ -z "$lock_reason" && "$allow_stage_fallback" == "1" && ${#stage_tokens[@]} -gt 0 ]]; then
           lock_reason="$(ci_cleanup_match_stage_reason "$lock_cmdline" "${stage_tokens[@]}" || true)"
         fi
         if [[ -z "$lock_reason" && "$allow_lock_pgid_fallback" == "1" ]]; then
@@ -482,7 +482,7 @@ ci_cleanup_stage_processes() {
       :
     fi
     reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
-    if [[ -z "$reason" && ${#stage_tokens[@]} -gt 0 ]]; then
+    if [[ -z "$reason" && "$allow_stage_fallback" == "1" && ${#stage_tokens[@]} -gt 0 ]]; then
       reason="$(ci_cleanup_match_stage_reason "$cmdline" "${stage_tokens[@]}" || true)"
     fi
     if [[ -z "$reason" ]]; then
@@ -541,7 +541,7 @@ ci_cleanup_stage_processes() {
       :
     fi
     reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
-    if [[ -z "$reason" && ${#stage_tokens[@]} -gt 0 ]]; then
+    if [[ -z "$reason" && "$allow_stage_fallback" == "1" && ${#stage_tokens[@]} -gt 0 ]]; then
       reason="$(ci_cleanup_match_stage_reason "$cmdline" "${stage_tokens[@]}" || true)"
     fi
     if [[ -n "$reason" ]]; then
@@ -574,7 +574,7 @@ ci_cleanup_stage_processes() {
         :
       fi
       reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
-      if [[ -z "$reason" && ${#stage_tokens[@]} -gt 0 ]]; then
+      if [[ -z "$reason" && "$allow_stage_fallback" == "1" && ${#stage_tokens[@]} -gt 0 ]]; then
         reason="$(ci_cleanup_match_stage_reason "$cmdline" "${stage_tokens[@]}" || true)"
       fi
       if [[ -n "$reason" ]]; then
