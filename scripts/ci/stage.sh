@@ -2486,7 +2486,7 @@ PY
       fi
     fi
 
-    if [[ "$s" == "bench" ]]; then
+    if [[ "$s" == "bench" || "$s" == "benchmark" ]]; then
       ci_benchmark_enforce_single_device entrypoint_args "$s"
     fi
 
@@ -2990,14 +2990,15 @@ run_stage() {
   echo "     READ: ARTIFACTS_DIR=${PRETRAIN_ARTIFACTS_DIR:-<unset>} GRID_DIR=${grid_read}" >&2
   echo "     WRITE: OUT_DIR=${OUT_DIR:-<unset>} EXPERIMENT_DIR=${EXPERIMENT_DIR:-<unset>}" >&2
 
-  case "$stage" in
-    pretrain|finetune|tox21|bench|benchmark)
-      if ! ci_stage_lock_acquire "$stage"; then
-        echo "[ci][lock] refusing to run stage=${stage} while another run is active." >&2
-        return 3
-      fi
-      ;;
-  esac
+  if ! ci_stage_lock_acquire "$stage"; then
+    if stage_is_forced "$stage"; then
+      echo "[ci][lock] rerun blocked by existing lock for stage=${stage} (forced)." >&2
+    else
+      echo "[ci][lock] rerun blocked by existing lock for stage=${stage}." >&2
+    fi
+    echo "[ci][lock] refusing to run stage=${stage} while another run is active." >&2
+    return 3
+  fi
 
   ci_stage_cleanup_setup "$stage"
   if declare -F cleanup_preflight >/dev/null 2>&1; then

@@ -271,6 +271,63 @@ ci_cleanup_match_reason() {
   return 1
 }
 
+ci_cleanup_stage_tokens() {
+  local stage="${1:-}"
+  local -n __out_tokens="$2"
+  __out_tokens=()
+  stage="${stage,,}"
+  case "$stage" in
+    bench)
+      __out_tokens+=("benchmark")
+      ;;
+    benchmark)
+      __out_tokens+=("benchmark" "bench")
+      ;;
+    pretrain|finetune|tox21)
+      __out_tokens+=("$stage")
+      ;;
+  esac
+}
+
+ci_cleanup_match_stage_reason() {
+  local cmdline="$1"
+  shift
+  local -a stage_tokens=("$@")
+  local token
+  for token in "${stage_tokens[@]}"; do
+    [[ -n "$token" ]] || continue
+    if [[ "$cmdline" == *"scripts/commands/${token}"* ]]; then
+      printf 'stage:%s' "$token"
+      return 0
+    fi
+    if [[ "$cmdline" == *" -m scripts.commands.${token}"* ]]; then
+      printf 'stage:%s' "$token"
+      return 0
+    fi
+    if [[ "$cmdline" =~ (^|[[:space:]])${token}([[:space:]]|$) ]]; then
+      printf 'stage:%s' "$token"
+      return 0
+    fi
+  done
+  return 1
+}
+
+ci_cleanup_lock_info() {
+  local stage="$1"
+  local -n __out_pid="$2"
+  local -n __out_pgid="$3"
+  local lock_path=""
+  __out_pid=""
+  __out_pgid=""
+  if ! lock_path="$(ci_stage_lock_path "$stage" 2>/dev/null)"; then
+    return 0
+  fi
+  [[ -f "$lock_path" ]] || return 0
+  __out_pid="$(grep -E '^PID=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2- || true)"
+  __out_pgid="$(grep -E '^PGID=' "$lock_path" 2>/dev/null | head -n1 | cut -d= -f2- || true)"
+  return 0
+}
+
 ci_cleanup_is_torchrun() {
   local pid="$1"
   local cmdline="$2"
@@ -347,10 +404,53 @@ ci_cleanup_stage_processes() {
     ci_cleanup_log "no EXP_ID/path tokens available; skipping cleanup (stage=${stage} phase=${phase})."
     return 0
   fi
+  local -a stage_tokens=()
+  ci_cleanup_stage_tokens "$stage" stage_tokens
+  local lock_pid=""
+  local lock_pgid=""
+  if declare -F ci_cleanup_lock_info >/dev/null 2>&1; then
+    ci_cleanup_lock_info "$stage" lock_pid lock_pgid
+  fi
 
   local -A group_targets=()
   local -A pid_targets=()
   local -A match_logs=()
+
+  if [[ -n "$lock_pid" && -n "$lock_pgid" ]]; then
+    if kill -0 "$lock_pid" 2>/dev/null; then
+      local lock_group_match=0
+      ci_cleanup_log "lock pgid candidate detected: stage=${stage} pid=${lock_pid} pgid=${lock_pgid}"
+      local lock_proc lock_pid_candidate lock_cmdline lock_env lock_reason lock_pgid_candidate
+      for lock_proc in /proc/[0-9]*; do
+        lock_pid_candidate="${lock_proc#/proc/}"
+        lock_pgid_candidate="$(ps -o pgid= -p "$lock_pid_candidate" 2>/dev/null | tr -d ' ' || true)"
+        [[ "$lock_pgid_candidate" == "$lock_pgid" ]] || continue
+        [[ -r "${lock_proc}/cmdline" ]] || continue
+        lock_cmdline="$(ci_cleanup_read_cmdline "$lock_pid_candidate" 2>/dev/null || true)"
+        [[ -n "$lock_cmdline" ]] || continue
+        if ! ci_cleanup_matches_mjepa "$lock_cmdline"; then
+          continue
+        fi
+        lock_env=""
+        if lock_env="$(ci_cleanup_read_environ "$lock_pid_candidate" 2>/dev/null || true)"; then
+          :
+        fi
+        lock_reason="$(ci_cleanup_match_reason "$lock_cmdline" "$lock_env" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
+        if [[ -z "$lock_reason" && ${#stage_tokens[@]} -gt 0 ]]; then
+          lock_reason="$(ci_cleanup_match_stage_reason "$lock_cmdline" "${stage_tokens[@]}" || true)"
+        fi
+        if [[ -n "$lock_reason" ]]; then
+          lock_group_match=1
+          match_logs["$lock_pid_candidate"]="pid=${lock_pid_candidate} pgid=${lock_pgid} reason=lock:${lock_reason} cmdline=${lock_cmdline}"
+        fi
+      done
+      if (( lock_group_match )); then
+        group_targets["$lock_pgid"]=1
+      else
+        ci_cleanup_log "lock pgid candidate had no matching MJepa processes; skipping pgid=${lock_pgid}"
+      fi
+    fi
+  fi
 
   local proc pid cmdline env_blob reason pgid
   for proc in /proc/[0-9]*; do
@@ -366,6 +466,9 @@ ci_cleanup_stage_processes() {
       :
     fi
     reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
+    if [[ -z "$reason" && ${#stage_tokens[@]} -gt 0 ]]; then
+      reason="$(ci_cleanup_match_stage_reason "$cmdline" "${stage_tokens[@]}" || true)"
+    fi
     if [[ -z "$reason" ]]; then
       continue
     fi
@@ -384,7 +487,7 @@ ci_cleanup_stage_processes() {
 
   if (( ${#group_targets[@]} == 0 && ${#pid_targets[@]} == 0 )); then
     ci_cleanup_log "no MJepa processes matched for stage=${stage} phase=${phase}."
-    ci_cleanup_log "match criteria: tokens=(${match_tokens[*]:-}) env=(${env_tokens[*]:-})"
+    ci_cleanup_log "match criteria: tokens=(${match_tokens[*]:-}) env=(${env_tokens[*]:-}) stage_patterns=(${stage_tokens[*]:-})"
     return 0
   fi
 
@@ -525,6 +628,8 @@ ci_stage_lock_acquire() {
 
   local cmdline=""
   cmdline="$(ps -o args= -p $$ 2>/dev/null | sed -e 's/[[:space:]]\+/ /g' || true)"
+  local pgid=""
+  pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
 
   local attempt=0
   local existing_pid=""
@@ -548,6 +653,9 @@ ci_stage_lock_acquire() {
     tmp_lock="$(mktemp "${lock_path}.tmp.XXXXXX")"
     {
       printf 'PID=%s\n' "$$"
+      if [[ -n "$pgid" ]]; then
+        printf 'PGID=%s\n' "$pgid"
+      fi
       printf 'START_TS=%s\n' "$(date -Is)"
       printf 'STAGE=%s\n' "$stage"
       printf 'EXP_ID=%s\n' "$exp_id"

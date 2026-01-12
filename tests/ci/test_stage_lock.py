@@ -81,3 +81,36 @@ def test_lock_clears_stale_pid(tmp_path: Path) -> None:
     )
     assert result.returncode == 0
     assert "PID=999999" not in result.stdout
+
+
+def test_rerun_blocked_when_lock_held(tmp_path: Path) -> None:
+    exp_id = "lock-rerun"
+    env = _lock_env(tmp_path, exp_id)
+    env.update(
+        {
+            "TOX21_DIR": str(tmp_path / "tox21"),
+            "FORCE_RERUN": "tox21",
+            "MJEPACI_DISABLE_CLEANUP": "1",
+        }
+    )
+    sleeper = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(300)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        lock_path_result = _run_bash("source scripts/ci/common.sh; ci_stage_lock_path tox21", env)
+        assert lock_path_result.returncode == 0
+        lock_path = Path(lock_path_result.stdout.strip())
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(
+            f"PID={sleeper.pid}\nSTART_TS=now\nSTAGE=tox21\nEXP_ID={exp_id}\nCMDLINE=sleep\n",
+            encoding="utf-8",
+        )
+
+        result = _run_bash("source scripts/ci/common.sh; source scripts/ci/stage.sh; run_stage tox21", env)
+        assert result.returncode == 3
+        assert "rerun blocked by existing lock" in result.stderr
+    finally:
+        sleeper.terminate()
+        sleeper.wait(timeout=5)

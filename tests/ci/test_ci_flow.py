@@ -938,7 +938,6 @@ if __name__ == "__main__":
         text=True,
         check=True,
     )
-
     payload = train_args_log.read_text(encoding="utf-8")
     assert "devices=1" in payload
     assert "device=cpu" in payload
@@ -948,6 +947,59 @@ if __name__ == "__main__":
     log_contents = (log_dir / "tox21.log").read_text(encoding="utf-8")
     assert "train invoked devices=1 device=cpu bf16=0" in log_contents
     assert "[stage:tox21] warn: CUDA unavailable" in proc.stderr
+
+
+def test_benchmark_forces_single_device_without_ddp(tmp_path):
+    app_dir = tmp_path / "app_bench"
+    (app_dir / "scripts").mkdir(parents=True)
+    train_invocations = tmp_path / "train_invocations_bench.txt"
+    train_args_log = tmp_path / "train_args_bench.txt"
+    _write_train_stub(app_dir / "scripts" / "train_jepa.py")
+
+    log_dir = tmp_path / "logs_bench"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "APP_DIR": str(app_dir),
+            "LOG_DIR": str(log_dir),
+            "MJEPACI_FORCE_SYSTEM_PYTHON": "1",
+            "MJEPACI_SYSTEM_PYTHON_BIN": sys.executable,
+            "TRAIN_LOG_FILE": str(train_args_log),
+            "TRAIN_INVOCATION_FILE": str(train_invocations),
+        }
+    )
+
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "source scripts/ci/common.sh",
+            "source scripts/ci/stage.sh",
+            "mkdir -p \"${LOG_DIR}\"",
+            "STAGE_ARGS=(--devices 2 --epochs 1)",
+            "set +e",
+            "run_with_timeout bench STAGE_ARGS",
+            "rc=$?",
+            "set -e",
+            "exit $rc",
+        ]
+    )
+
+    proc = subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    train_invocation_count = train_invocations.read_text(encoding="utf-8").strip()
+    assert train_invocation_count == "1"
+    payload = train_args_log.read_text(encoding="utf-8")
+    assert "devices=1" in payload
+    assert "[stage:bench] warn: benchmark requested --devices 2 without DDP; forcing --devices 1." in proc.stderr
+
 
 def test_dedupe_stage_args_handles_joined_aliases():
     common_sh = REPO_ROOT / "scripts" / "ci" / "common.sh"
