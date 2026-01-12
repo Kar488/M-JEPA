@@ -405,13 +405,11 @@ ci_cleanup_stage_processes() {
   ci_cleanup_collect_tokens match_tokens env_tokens
   local -a stage_tokens=()
   ci_cleanup_stage_tokens "$stage" stage_tokens
-  local allow_stage_fallback=0
   if (( ${#match_tokens[@]} == 0 && ${#env_tokens[@]} == 0 )); then
     if (( ${#stage_tokens[@]} == 0 )); then
       ci_cleanup_log "no EXP_ID/path tokens or stage tokens available; skipping cleanup (stage=${stage} phase=${phase})."
       return 0
     fi
-    allow_stage_fallback=1
     ci_cleanup_log "no EXP_ID/path tokens available; using stage-token cleanup only (stage=${stage} phase=${phase})."
   fi
   local lock_pid=""
@@ -451,7 +449,7 @@ ci_cleanup_stage_processes() {
           :
         fi
         lock_reason="$(ci_cleanup_match_reason "$lock_cmdline" "$lock_env" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
-        if [[ -z "$lock_reason" && "$allow_stage_fallback" == "1" && ${#stage_tokens[@]} -gt 0 ]]; then
+        if [[ -z "$lock_reason" && ${#stage_tokens[@]} -gt 0 ]]; then
           lock_reason="$(ci_cleanup_match_stage_reason "$lock_cmdline" "${stage_tokens[@]}" || true)"
         fi
         if [[ -z "$lock_reason" && "$allow_lock_pgid_fallback" == "1" ]]; then
@@ -487,7 +485,7 @@ ci_cleanup_stage_processes() {
       :
     fi
     reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
-    if [[ -z "$reason" && "$allow_stage_fallback" == "1" && ${#stage_tokens[@]} -gt 0 ]]; then
+    if [[ -z "$reason" && ${#stage_tokens[@]} -gt 0 ]]; then
       reason="$(ci_cleanup_match_stage_reason "$cmdline" "${stage_tokens[@]}" || true)"
     fi
     if [[ -z "$reason" ]]; then
