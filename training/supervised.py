@@ -284,7 +284,7 @@ def _temperature_scale_logits(logits: np.ndarray, targets: np.ndarray) -> Tuple[
         optimizer.zero_grad()
         loss = loss_fn(logits_t / temperature, targets_t)
         loss.backward()
-        return loss
+        return loss.detach()
 
     optimizer.step(_closure)
     temp_value = float(temperature.detach().clamp(min=1e-3).item())
