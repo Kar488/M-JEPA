@@ -121,6 +121,9 @@ bench:
 
 tox21:
   <<: *common
+  num_workers: ${TOX21_NUM_WORKERS:-4}
+  prefetch_factor: ${TOX21_PREFETCH_FACTOR:-2}
+  persistent_workers: ${TOX21_PERSISTENT_WORKERS:-0}
   csv: ${APP_DIR}/data/tox21/data.csv
   tasks:
     - NR-AR

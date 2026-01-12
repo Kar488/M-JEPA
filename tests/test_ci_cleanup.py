@@ -30,6 +30,24 @@ def _spawn_train_process(exp_id: str, env: dict, extra_args: list[str] | None = 
     )
 
 
+def _spawn_stage_process(stage: str, env: dict, extra_args: list[str] | None = None) -> subprocess.Popen:
+    cmd = [
+        sys.executable,
+        "-c",
+        "import time; time.sleep(300)",
+        "/srv/mjepa/scripts/train_jepa.py",
+        stage,
+    ]
+    if extra_args:
+        cmd.extend(extra_args)
+    return subprocess.Popen(
+        cmd,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def _run_cleanup(stage: str, env: dict, dry_run: bool = False) -> subprocess.CompletedProcess:
     cleanup_env = env.copy()
     cleanup_env["MJEPACI_STAGE"] = stage
@@ -175,6 +193,7 @@ def test_cleanup_kills_torchrun_process_group(tmp_path: Path) -> None:
         assert os.getpgid(parent.pid) == os.getpgid(child_pid)
         result = _run_cleanup("pretrain", env, dry_run=False)
         assert result.returncode == 0
+        assert "terminating torchrun process group" in result.stderr
         assert "match" in result.stderr
         assert _wait_for_exit(parent)
         if child_pid:
@@ -183,3 +202,89 @@ def test_cleanup_kills_torchrun_process_group(tmp_path: Path) -> None:
         if parent.poll() is None:
             parent.kill()
             parent.wait(timeout=3)
+
+
+def test_cleanup_matches_stage_when_exp_id_missing_from_cmdline(tmp_path: Path) -> None:
+    exp_id = "cleanup-stage-fallback"
+    env = _base_env(tmp_path, exp_id)
+    pretrain_artifacts = tmp_path / "data" / "experiments" / exp_id / "artifacts"
+    pretrain_artifacts.mkdir(parents=True, exist_ok=True)
+    (pretrain_artifacts / "encoder_manifest.json").write_text(
+        '{"paths": {"encoder": "/tmp/encoder.pt"}}\n',
+        encoding="utf-8",
+    )
+    env["PRETRAIN_EXP_ID"] = exp_id
+    env["PRETRAIN_ARTIFACTS_DIR"] = str(pretrain_artifacts)
+    process_env = os.environ.copy()
+    for key in (
+        "EXP_ID",
+        "PRETRAIN_EXP_ID",
+        "GRID_EXP_ID",
+        "RUN_ID",
+        "EXPERIMENT_DIR",
+        "OUT_DIR",
+        "PRETRAIN_EXPERIMENT_ROOT",
+        "GRID_EXPERIMENT_ROOT",
+        "FINETUNE_DIR",
+        "BENCH_DIR",
+        "TOX21_DIR",
+        "GRID_DIR",
+        "EXPERIMENTS_ROOT",
+        "DATA_ROOT",
+    ):
+        process_env.pop(key, None)
+    proc = _spawn_stage_process("tox21", process_env)
+    try:
+        result = _run_cleanup("tox21", env, dry_run=False)
+        assert result.returncode == 0
+        assert "match" in result.stderr
+        assert "stage:tox21" in result.stderr
+        assert _wait_for_exit(proc)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=3)
+
+
+def test_cleanup_uses_lock_pgid_when_present(tmp_path: Path) -> None:
+    exp_id = "cleanup-lock-pgid"
+    env = _base_env(tmp_path, exp_id)
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(300)",
+            "/srv/mjepa/scripts/train_jepa.py",
+            "pretrain",
+        ],
+        env=os.environ.copy(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        lock_dir = Path(env["DATA_ROOT"]) / "locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = lock_dir / f"mjepa_pretrain_{exp_id}.lock"
+        lock_path.write_text(
+            "\n".join(
+                [
+                    f"PID={proc.pid}",
+                    f"PGID={os.getpgid(proc.pid)}",
+                    "START_TS=now",
+                    "STAGE=pretrain",
+                    f"EXP_ID={exp_id}",
+                    "CMDLINE=test",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        result = _run_cleanup("pretrain", env, dry_run=False)
+        assert result.returncode == 0
+        assert "lock pgid candidate detected" in result.stderr
+        assert _wait_for_exit(proc)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=3)
