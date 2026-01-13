@@ -151,7 +151,7 @@ tox21:
   freeze_encoder: false
   batch_size: 256
   epochs: ${TOX21_EPOCHS:-30}
-  patience: 12
+  patience: 20 #higher patience-PRC_AUC is noisy - default 12
   head_lr: ${TOX21_HEAD_LR:-0.00025}
   encoder_lr: ${TOX21_ENCODER_LR:-3.0e-6}
   lr_scheduler: ${TOX21_LR_SCHEDULER:-}

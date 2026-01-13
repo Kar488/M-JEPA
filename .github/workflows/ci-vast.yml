@@ -1018,15 +1018,15 @@ jobs:
           TOX21_ENCODER_SOURCE: ${{ env.TOX21_EVAL_MODE }}
           TOX21_EVALUATION_MODE: ${{ env.TOX21_EVAL_MODE }}
           TOX21_FULL_FINETUNE: true
-          TOX21_ENCODER_LR: "1e-5"
+          TOX21_ENCODER_LR: "5e-5" #1e-5 default
           TOX21_HEAD_LR: "3e-4"
-          TOX21_LAYERWISE_DECAY: "0.8"
+          TOX21_LAYERWISE_DECAY: "0.9" #default 0.8
           TOX21_EPOCHS: "100"
-          TOX21_FREEZE_EPOCHS: "15"
-          TOX21_UNFREEZE_TOP_LAYERS: "2"
+          TOX21_FREEZE_EPOCHS: 15
+          TOX21_UNFREEZE_TOP_LAYERS: "4" #default 2
           TOX21_LR_SCHEDULER: cosine
-          TOX21_WARMUP_RATIO: "0.1"
-          TOX21_MIN_LR: "1e-6"
+          TOX21_WARMUP_RATIO: "0.05" #0.1 default
+          TOX21_MIN_LR: "5e-7" #1e-6 default
           MJEPACI_CLEANUP_FORCE_PGID: "1"
 
       - name: Checkout repository for tox21 artifacts

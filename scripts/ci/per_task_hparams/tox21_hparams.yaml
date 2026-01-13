@@ -13,11 +13,11 @@ __hybrid__:
   layerwise_decay: 0.8
 
 NR-AR:
-  pos_weight: 8 #override default 22.511326860841425, takes precdence over dynamic_pos_weight
+  pos_weight: 12 #override default 22.511326860841425, takes precdence over dynamic_pos_weight
   dynamic_pos_weight: true
   oversample_minority: false
   use_focal_loss: true # override default false
-  focal_gamma: 1.5 #override default 2.0
+  focal_gamma: 2.0
   calibrate_probabilities: true
   calibration_method: temperature
   threshold_metric: pr_auc #override default roc_auc
