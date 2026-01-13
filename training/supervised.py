@@ -3256,6 +3256,31 @@ def _train_linear_head_impl(
                             best_val_snapshot = dict(val_snapshot)
                         elif not best_val_snapshot:
                             best_val_snapshot = dict(val_snapshot)
+                        if should_stop:
+                            logger.info(
+                                "[finetune][ddp] rank=%s requested early stop at epoch %d",
+                                rank,
+                                epoch + 1,
+                            )
+
+                if distributed:
+                    dist_mod = getattr(torch, "distributed", None)
+                    if (
+                        dist_mod is not None
+                        and getattr(dist_mod, "is_available", lambda: False)()
+                        and getattr(dist_mod, "is_initialized", lambda: False)()
+                    ):
+                        stop_tensor = torch.tensor(
+                            [1 if should_stop else 0], device=device_t, dtype=torch.int
+                        )
+                        dist_mod.all_reduce(stop_tensor, op=dist_mod.ReduceOp.MAX)
+                        synced_stop = bool(stop_tensor.item())
+                        if synced_stop and is_main_process():
+                            logger.info(
+                                "[finetune][ddp] early stop synchronized across ranks at epoch %d",
+                                epoch + 1,
+                            )
+                        should_stop = synced_stop
 
                 if checkpoint_metric is not None and metric_available:
                     improved = False
