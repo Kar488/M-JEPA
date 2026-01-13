@@ -342,15 +342,61 @@ ci_cleanup_resolve_reason() {
   printf '%s' "$reason"
 }
 
+
 ci_cleanup_has_exp_id_marker() {
   local cmdline="$1"
   local env_blob="$2"
-  local marker_name
-  for marker_name in "EXP_ID" "PRETRAIN_EXP_ID" "GRID_EXP_ID" "RUN_ID"; do
-    if [[ -n "$env_blob" && "$env_blob" =~ (^|$'\n')${marker_name}= ]]; then
+  local marker
+  for marker in "EXP_ID=" "PRETRAIN_EXP_ID=" "GRID_EXP_ID=" "RUN_ID="; do
+    if [[ -n "$env_blob" && "$env_blob" == *"$marker"* ]]; then
       return 0
     fi
-    if [[ "$cmdline" =~ (^|[[:space:]])${marker_name}= ]]; then
+    if [[ "$cmdline" == *"$marker"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+ci_cleanup_resolve_reason() {
+  local cmdline="$1"
+  local env_blob="$2"
+  local allow_stage_fallback="$3"
+  local stage_tokens_name="$4"
+  shift 4
+  local -n __stage_tokens="$stage_tokens_name"
+  local -a tokens=("$@")
+  local reason=""
+  local stage_reason=""
+  local has_exp_marker=0
+  if ci_cleanup_has_exp_id_marker "$cmdline" "$env_blob"; then
+    has_exp_marker=1
+  fi
+  reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${tokens[@]}" || true)"
+  if [[ ${#__stage_tokens[@]} -gt 0 ]]; then
+    if [[ "$allow_stage_fallback" == "1" ]] || (( ! has_exp_marker )); then
+      stage_reason="$(ci_cleanup_match_stage_reason "$cmdline" "${__stage_tokens[@]}" || true)"
+    fi
+  fi
+  if [[ -n "$stage_reason" ]]; then
+    if (( ! has_exp_marker )); then
+      reason="$stage_reason"
+    elif [[ -z "$reason" ]]; then
+      reason="$stage_reason"
+    fi
+  fi
+  printf '%s' "$reason"
+}
+
+ci_cleanup_has_exp_id_marker() {
+  local cmdline="$1"
+  local env_blob="$2"
+  local marker
+  for marker in "EXP_ID=" "PRETRAIN_EXP_ID=" "GRID_EXP_ID=" "RUN_ID="; do
+    if [[ -n "$env_blob" && "$env_blob" == *"$marker"* ]]; then
+      return 0
+    fi
+    if [[ "$cmdline" == *"$marker"* ]]; then
       return 0
     fi
   done
@@ -515,9 +561,11 @@ ci_cleanup_stage_processes() {
       done
       if (( lock_group_match )); then
         group_targets["$lock_pgid"]=1
-      elif [[ "$force_lock_pgid" == "1" ]]; then
+      elif [[ "$force_lock_pgid" == "1" && "$phase" == "exit" ]]; then
         group_targets["$lock_pgid"]=1
         ci_cleanup_log "force-matching lock pgid without token match (stage=${stage} pgid=${lock_pgid})"
+      elif [[ "$force_lock_pgid" == "1" && "$phase" != "exit" ]]; then
+        ci_cleanup_log "force-matching lock pgid skipped during ${phase} (stage=${stage} pgid=${lock_pgid})"
       else
         ci_cleanup_log "lock pgid candidate had no matching MJepa processes; skipping pgid=${lock_pgid}"
       fi
@@ -606,6 +654,7 @@ ci_cleanup_stage_processes() {
       stage_tokens \
       "${match_tokens[@]}" \
       "${env_tokens[@]}")"
+
     if [[ -n "$reason" ]]; then
       remaining+=("$pid")
     fi
