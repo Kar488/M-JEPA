@@ -348,8 +348,10 @@ ci_cleanup_has_exp_id_marker() {
   local env_blob="$2"
   local marker
   for marker in "EXP_ID=" "PRETRAIN_EXP_ID=" "GRID_EXP_ID=" "RUN_ID="; do
-    if [[ -n "$env_blob" && "$env_blob" == *"$marker"* ]]; then
-      return 0
+    if [[ -n "$env_blob" ]]; then
+      if [[ "$env_blob" == "${marker}"* || "$env_blob" == *$'\n'"${marker}"* ]]; then
+        return 0
+      fi
     fi
     if [[ "$cmdline" == *"$marker"* ]]; then
       return 0
@@ -393,8 +395,10 @@ ci_cleanup_has_exp_id_marker() {
   local env_blob="$2"
   local marker
   for marker in "EXP_ID=" "PRETRAIN_EXP_ID=" "GRID_EXP_ID=" "RUN_ID="; do
-    if [[ -n "$env_blob" && "$env_blob" == *"$marker"* ]]; then
-      return 0
+    if [[ -n "$env_blob" ]]; then
+      if [[ "$env_blob" == "${marker}"* || "$env_blob" == *$'\n'"${marker}"* ]]; then
+        return 0
+      fi
     fi
     if [[ "$cmdline" == *"$marker"* ]]; then
       return 0
