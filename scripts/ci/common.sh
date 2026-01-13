@@ -312,6 +312,82 @@ ci_cleanup_match_stage_reason() {
   return 1
 }
 
+ci_cleanup_resolve_reason() {
+  local cmdline="$1"
+  local env_blob="$2"
+  local allow_stage_fallback="$3"
+  local stage_tokens_name="$4"
+  shift 4
+  local -n __stage_tokens="$stage_tokens_name"
+  local -a tokens=("$@")
+  local reason=""
+  local stage_reason=""
+  local has_exp_marker=0
+  if ci_cleanup_has_exp_id_marker "$cmdline" "$env_blob"; then
+    has_exp_marker=1
+  fi
+  reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${tokens[@]}" || true)"
+  if [[ ${#__stage_tokens[@]} -gt 0 ]]; then
+    if [[ "$allow_stage_fallback" == "1" ]] || (( ! has_exp_marker )); then
+      stage_reason="$(ci_cleanup_match_stage_reason "$cmdline" "${__stage_tokens[@]}" || true)"
+    fi
+  fi
+  if [[ -n "$stage_reason" ]]; then
+    if (( ! has_exp_marker )); then
+      reason="$stage_reason"
+    elif [[ -z "$reason" ]]; then
+      reason="$stage_reason"
+    fi
+  fi
+  printf '%s' "$reason"
+}
+
+
+ci_cleanup_has_exp_id_marker() {
+  local cmdline="$1"
+  local env_blob="$2"
+  local marker
+  for marker in "EXP_ID=" "PRETRAIN_EXP_ID=" "GRID_EXP_ID=" "RUN_ID="; do
+    if [[ -n "$env_blob" && "$env_blob" == *"$marker"* ]]; then
+      return 0
+    fi
+    if [[ "$cmdline" == *"$marker"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+ci_cleanup_resolve_reason() {
+  local cmdline="$1"
+  local env_blob="$2"
+  local allow_stage_fallback="$3"
+  local stage_tokens_name="$4"
+  shift 4
+  local -n __stage_tokens="$stage_tokens_name"
+  local -a tokens=("$@")
+  local reason=""
+  local stage_reason=""
+  local has_exp_marker=0
+  if ci_cleanup_has_exp_id_marker "$cmdline" "$env_blob"; then
+    has_exp_marker=1
+  fi
+  reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${tokens[@]}" || true)"
+  if [[ ${#__stage_tokens[@]} -gt 0 ]]; then
+    if [[ "$allow_stage_fallback" == "1" ]] || (( ! has_exp_marker )); then
+      stage_reason="$(ci_cleanup_match_stage_reason "$cmdline" "${__stage_tokens[@]}" || true)"
+    fi
+  fi
+  if [[ -n "$stage_reason" ]]; then
+    if (( ! has_exp_marker )); then
+      reason="$stage_reason"
+    elif [[ -z "$reason" ]]; then
+      reason="$stage_reason"
+    fi
+  fi
+  printf '%s' "$reason"
+}
+
 ci_cleanup_has_exp_id_marker() {
   local cmdline="$1"
   local env_blob="$2"
@@ -465,11 +541,15 @@ ci_cleanup_stage_processes() {
         if lock_env="$(ci_cleanup_read_environ "$lock_pid_candidate" 2>/dev/null || true)"; then
           :
         fi
-        lock_reason="$(ci_cleanup_match_reason "$lock_cmdline" "$lock_env" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
-        if [[ -z "$lock_reason" && ${#stage_tokens[@]} -gt 0 ]]; then
-          if [[ "$allow_stage_fallback" == "1" ]] || ! ci_cleanup_has_exp_id_marker "$lock_cmdline" "$lock_env"; then
-            lock_reason="$(ci_cleanup_match_stage_reason "$lock_cmdline" "${stage_tokens[@]}" || true)"
-          fi
+        lock_reason="$(ci_cleanup_resolve_reason \
+          "$lock_cmdline" \
+          "$lock_env" \
+          "$allow_stage_fallback" \
+          stage_tokens \
+          "${match_tokens[@]}" \
+          "${env_tokens[@]}")"
+        if [[ -z "$lock_reason" && "$allow_lock_pgid_fallback" == "1" ]]; then
+          lock_reason="pgid"
         fi
         if [[ -z "$lock_reason" && "$allow_lock_pgid_fallback" == "1" ]]; then
           lock_reason="pgid"
@@ -505,12 +585,13 @@ ci_cleanup_stage_processes() {
     if env_blob="$(ci_cleanup_read_environ "$pid" 2>/dev/null || true)"; then
       :
     fi
-    reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
-    if [[ -z "$reason" && ${#stage_tokens[@]} -gt 0 ]]; then
-      if [[ "$allow_stage_fallback" == "1" ]] || ! ci_cleanup_has_exp_id_marker "$cmdline" "$env_blob"; then
-        reason="$(ci_cleanup_match_stage_reason "$cmdline" "${stage_tokens[@]}" || true)"
-      fi
-    fi
+    reason="$(ci_cleanup_resolve_reason \
+      "$cmdline" \
+      "$env_blob" \
+      "$allow_stage_fallback" \
+      stage_tokens \
+      "${match_tokens[@]}" \
+      "${env_tokens[@]}")"
     if [[ -z "$reason" ]]; then
       continue
     fi
@@ -566,12 +647,14 @@ ci_cleanup_stage_processes() {
     if env_blob="$(ci_cleanup_read_environ "$pid" 2>/dev/null || true)"; then
       :
     fi
-    reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
-    if [[ -z "$reason" && ${#stage_tokens[@]} -gt 0 ]]; then
-      if [[ "$allow_stage_fallback" == "1" ]] || ! ci_cleanup_has_exp_id_marker "$cmdline" "$env_blob"; then
-        reason="$(ci_cleanup_match_stage_reason "$cmdline" "${stage_tokens[@]}" || true)"
-      fi
-    fi
+    reason="$(ci_cleanup_resolve_reason \
+      "$cmdline" \
+      "$env_blob" \
+      "$allow_stage_fallback" \
+      stage_tokens \
+      "${match_tokens[@]}" \
+      "${env_tokens[@]}")"
+
     if [[ -n "$reason" ]]; then
       remaining+=("$pid")
     fi
@@ -601,12 +684,13 @@ ci_cleanup_stage_processes() {
       if env_blob="$(ci_cleanup_read_environ "$pid" 2>/dev/null || true)"; then
         :
       fi
-      reason="$(ci_cleanup_match_reason "$cmdline" "$env_blob" "${match_tokens[@]}" "${env_tokens[@]}" || true)"
-      if [[ -z "$reason" && ${#stage_tokens[@]} -gt 0 ]]; then
-        if [[ "$allow_stage_fallback" == "1" ]] || ! ci_cleanup_has_exp_id_marker "$cmdline" "$env_blob"; then
-          reason="$(ci_cleanup_match_stage_reason "$cmdline" "${stage_tokens[@]}" || true)"
-        fi
-      fi
+      reason="$(ci_cleanup_resolve_reason \
+        "$cmdline" \
+        "$env_blob" \
+        "$allow_stage_fallback" \
+        stage_tokens \
+        "${match_tokens[@]}" \
+        "${env_tokens[@]}")"
       if [[ -n "$reason" ]]; then
         remaining+=("$pid")
       fi
