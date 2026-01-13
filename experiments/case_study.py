@@ -1293,7 +1293,7 @@ def _evaluate_case_study(
                 targets_t.reshape(-1),
             )
             loss.backward()
-            return loss
+            return loss.detach()
 
         try:
             optimizer.step(_closure)
