@@ -566,8 +566,17 @@ ci_cleanup_stage_processes() {
       if (( lock_group_match )); then
         group_targets["$lock_pgid"]=1
       elif [[ "$force_lock_pgid" == "1" && "$phase" == "exit" ]]; then
-        group_targets["$lock_pgid"]=1
-        ci_cleanup_log "force-matching lock pgid without token match (stage=${stage} pgid=${lock_pgid})"
+        local current_pid="$$"
+        local current_pgid=""
+        current_pgid="$(ps -o pgid= -p "$current_pid" 2>/dev/null | tr -d ' ' || true)"
+        if [[ -n "$current_pgid" && "$lock_pgid" == "$current_pgid" ]]; then
+          ci_cleanup_log "force-matching lock pgid skipped to avoid signaling current process group (stage=${stage} pgid=${lock_pgid})"
+        elif [[ -n "$lock_pid" && "$lock_pid" == "$current_pid" ]]; then
+          ci_cleanup_log "force-matching lock pgid skipped to avoid signaling current process pid (stage=${stage} pid=${lock_pid})"
+        else
+          group_targets["$lock_pgid"]=1
+          ci_cleanup_log "force-matching lock pgid without token match (stage=${stage} pgid=${lock_pgid})"
+        fi
       elif [[ "$force_lock_pgid" == "1" && "$phase" != "exit" ]]; then
         ci_cleanup_log "force-matching lock pgid skipped during ${phase} (stage=${stage} pgid=${lock_pgid})"
       else
