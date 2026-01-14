@@ -13,18 +13,18 @@ __hybrid__:
   layerwise_decay: 0.8
 
 NR-AR:
-  pos_weight: 12 #override default 22.511326860841425, takes precdence over dynamic_pos_weight
-  dynamic_pos_weight: true
+  pos_weight: 8 #override default 22.511326860841425, takes precdence over dynamic_pos_weight
+  dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: true # override default false
-  focal_gamma: 2.0
+  focal_gamma: 1.5 # default 2.0
   calibrate_probabilities: true
   calibration_method: temperature
   threshold_metric: pr_auc #override default roc_auc
 
 NR-AR-LBD:
   pos_weight: 8 #override default 27.514767932489452, takes precdence over dynamic_pos_weight
-  dynamic_pos_weight: true
+  dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: true #override default false
   focal_gamma: 1.5 #override default 2.0
@@ -34,7 +34,7 @@ NR-AR-LBD:
 
 NR-AhR:
   pos_weight: 7.52734375 #, takes precdence over dynamic_pos_weight
-  dynamic_pos_weight: true
+  dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: false
   focal_gamma: 2.0
@@ -44,7 +44,7 @@ NR-AhR:
 
 NR-Aromatase:
   pos_weight: 10 #override default 18.403333333333332, takes precdence over dynamic_pos_weight
-  dynamic_pos_weight: true
+  dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: true #override default false
   focal_gamma: 1.5 #override default 2.0
@@ -54,7 +54,7 @@ NR-Aromatase:
 
 NR-ER:
   pos_weight: 6.809583858764187 #, takes precdence over dynamic_pos_weight
-  dynamic_pos_weight: true
+  dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: false
   focal_gamma: 2.0
@@ -64,7 +64,7 @@ NR-ER:
 
 NR-ER-LBD:
   pos_weight: 10 #override default 18.87142857142857, takes precdence over dynamic_pos_weight
-  dynamic_pos_weight: true
+  dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: true #override default false
   focal_gamma: 1.5 #override default 2.0
@@ -74,7 +74,7 @@ NR-ER-LBD:
 
 NR-PPAR-gamma:
   pos_weight: 8 #override default 33.67741935483871, takes precdence over dynamic_pos_weight
-  dynamic_pos_weight: true
+  dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: true #override default false
   focal_gamma: 1.5 #override default 2.0
@@ -84,7 +84,7 @@ NR-PPAR-gamma:
 
 SR-ARE:
   pos_weight: 5.191082802547771 #, takes precdence over dynamic_pos_weight
-  dynamic_pos_weight: true
+  dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: false
   focal_gamma: 2.0
@@ -94,7 +94,7 @@ SR-ARE:
 
 SR-ATAD5:
   pos_weight: 8 #override default 25.78787878787879, takes precdence over dynamic_pos_weight
-  dynamic_pos_weight: true
+  dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: true #override default false
   focal_gamma: 1.5 #override default 2.0
@@ -104,7 +104,7 @@ SR-ATAD5:
 
 SR-HSE:
   pos_weight: 10 #override default 16.384408602150536, takes precdence over dynamic_pos_weight
-  dynamic_pos_weight: true
+  dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: true #override default false
   focal_gamma: 1.5 #override default 2.0
@@ -114,7 +114,7 @@ SR-HSE:
 
 SR-MMP:
   pos_weight: 5.328976034858388 #, takes precdence over dynamic_pos_weight
-  dynamic_pos_weight: true
+  dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: false
   focal_gamma: 2.0
@@ -124,7 +124,7 @@ SR-MMP:
 
 SR-p53:
   pos_weight: 10 #override default 15.01418439716312, takes precdence over dynamic_pos_weight
-  dynamic_pos_weight: true
+  dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: true #override default false
   focal_gamma: 1.5 #override default 2.0
