@@ -1654,6 +1654,14 @@ def _evaluate_case_study(
         head_test_probs = per_head_probs.get("test", [])
         head_count = min(len(head_test_logits), len(head_test_probs))
         if head_count > 0:
+            calibrated_seed_probs: Optional[List[np.ndarray]] = None
+            if (
+                calibrate
+                and calibrate_per_head
+                and per_head_calibrated
+                and len(per_head_calibrated) == head_count
+            ):
+                calibrated_seed_probs = per_head_calibrated
             seeds_used: List[Any] = []
             for head_idx in range(head_count):
                 try:
@@ -1682,9 +1690,12 @@ def _evaluate_case_study(
                 positive_head_logits = _resize_to_expected(
                     positive_head_logits, f"head {head_idx} logits"
                 )
-                positive_head_probs = _resize_to_expected(
-                    positive_head_probs, f"head {head_idx} probabilities"
-                )
+                if calibrated_seed_probs is not None:
+                    positive_head_probs = calibrated_seed_probs[head_idx]
+                else:
+                    positive_head_probs = _resize_to_expected(
+                        positive_head_probs, f"head {head_idx} probabilities"
+                    )
                 seed_payload["logits"].append(_to_list(positive_head_logits))
                 seed_payload["probabilities"].append(_to_list(positive_head_probs))
             diagnostics["seed_predictions"] = seed_payload
