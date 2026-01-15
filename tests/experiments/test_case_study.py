@@ -8,6 +8,9 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
+
+from utils.metrics import expected_calibration_error
 
 
 def test_tox21_case_study_smoke(monkeypatch):
@@ -206,6 +209,80 @@ def test_evaluate_case_study_handles_probability_mismatch(monkeypatch):
     assert mean_rand == pytest.approx(0.0)
     assert mean_pred == pytest.approx(1.0)
     assert baselines == {}
+
+
+def test_evaluate_case_study_ensemble_metrics_use_raw_and_calibrated(monkeypatch):
+    import experiments.case_study as case_study
+
+    dataset = types.SimpleNamespace(graphs=[types.SimpleNamespace()] * 6)
+    labels = np.array([0.0, 1.0, 0.0, 1.0, 0.0, 1.0])
+    raw_probs = np.array([0.2, 0.8, 0.1, 0.4, 0.35, 0.8], dtype=float)
+    raw_logits = np.log(raw_probs / (1.0 - raw_probs))
+    calibrated_probs = np.array([0.2, 0.5, 0.5, 0.9], dtype=float)
+
+    def fake_predict(
+        dataset,
+        indices,
+        encoder,
+        head,
+        device,
+        edge_dim,
+        batch_size=256,
+        diag_hook=None,
+    ):
+        idx = np.asarray(indices, dtype=int)
+        logits = torch.tensor(raw_logits[idx], dtype=torch.float32).reshape(-1, 1)
+        probs = torch.tensor(raw_probs[idx], dtype=torch.float32).reshape(-1, 1)
+        return logits, probs
+
+    class DummyLR:
+        def __init__(self, *args, **kwargs):
+            self.coef_ = None
+            self.intercept_ = None
+
+        def fit(self, X, y):
+            self.coef_ = np.zeros((1, X.shape[1]), dtype=float)
+            self.intercept_ = np.zeros((1,), dtype=float)
+            return self
+
+        def predict_proba(self, X):
+            probs = calibrated_probs[: X.shape[0]]
+            return np.column_stack([1.0 - probs, probs])
+
+    monkeypatch.setattr(case_study, "_predict_logits_probs_in_chunks", fake_predict)
+    monkeypatch.setattr(case_study, "LogisticRegression", DummyLR)
+
+    _, _, _, _, metrics, _ = case_study._evaluate_case_study(
+        dataset=dataset,
+        encoder=None,
+        head=None,
+        all_labels=labels,
+        train_idx=[0, 1],
+        val_idx=[0, 1],
+        test_idx=[2, 3, 4, 5],
+        triage_pct=0.0,
+        calibrate=True,
+        device="cpu",
+        edge_dim=0,
+        seed=0,
+        calibration_method="platt",
+    )
+
+    y_true = labels[[2, 3, 4, 5]].astype(int)
+    raw_test = raw_probs[[2, 3, 4, 5]]
+
+    assert metrics["roc_auc"] == pytest.approx(roc_auc_score(y_true, raw_test))
+    assert metrics["pr_auc"] == pytest.approx(average_precision_score(y_true, raw_test))
+    assert metrics["roc_auc"] != pytest.approx(roc_auc_score(y_true, calibrated_probs))
+    assert metrics["pr_auc"] != pytest.approx(average_precision_score(y_true, calibrated_probs))
+    assert metrics["brier"] == pytest.approx(brier_score_loss(y_true, calibrated_probs))
+    assert metrics["ece"] == pytest.approx(
+        expected_calibration_error(calibrated_probs, y_true, n_bins=10)
+    )
+    assert metrics["brier"] != pytest.approx(brier_score_loss(y_true, raw_test))
+    assert metrics["ece"] != pytest.approx(
+        expected_calibration_error(raw_test, y_true, n_bins=10)
+    )
 
 
 def test_evaluate_case_study_records_test_predictions(monkeypatch):

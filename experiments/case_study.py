@@ -1763,47 +1763,51 @@ def _evaluate_case_study(
         if unique_valid_labels.size < 2:
             logger.warning("TEST split degenerate (one class/empty). Skipping AUC/Brier/ECE.")
         else:
-            try:
-                y_pred_m = calibrated_probs[mask_valid]
-            except IndexError:
-                logger.warning(
-                    "Failed to align calibrated probabilities with %d valid test labels; substituting zeros.",
-                    num_valid,
-                )
-                y_pred_m = np.zeros(num_valid, dtype=float)
-            else:
-                if y_pred_m.size != num_valid:
+            def _align_predictions(preds: np.ndarray, label: str) -> np.ndarray:
+                try:
+                    y_pred = preds[mask_valid]
+                except IndexError:
                     logger.warning(
-                        "Probability array length %d mismatched with %d valid labels; resizing.",
-                        y_pred_m.size,
+                        "Failed to align %s with %d valid test labels; substituting zeros.",
+                        label,
                         num_valid,
                     )
-                    if y_pred_m.size == 0:
-                        y_pred_m = np.zeros(num_valid, dtype=float)
-                    else:
-                        y_pred_m = np.resize(y_pred_m, num_valid)
+                    y_pred = np.zeros(num_valid, dtype=float)
+                else:
+                    if y_pred.size != num_valid:
+                        logger.warning(
+                            "Probability array length %d mismatched with %d valid labels; resizing.",
+                            y_pred.size,
+                            num_valid,
+                        )
+                        if y_pred.size == 0:
+                            y_pred = np.zeros(num_valid, dtype=float)
+                        else:
+                            y_pred = np.resize(y_pred, num_valid)
+                return np.nan_to_num(y_pred, nan=0.5, posinf=1.0, neginf=0.0)
 
-            pp = np.nan_to_num(y_pred_m, nan=0.5, posinf=1.0, neginf=0.0)
+            pp_rank = _align_predictions(test_probs_np, "raw probabilities")
+            pp_cal = _align_predictions(calibrated_probs, "calibrated probabilities")
             yy = y_true_m.astype(int)
             try:
-                roc_auc_val = float(roc_auc_score(yy, pp))
+                roc_auc_val = float(roc_auc_score(yy, pp_rank))
             except Exception:
                 roc_auc_val = float("nan")
             if math.isnan(roc_auc_val) and np.unique(yy).size >= 2:
-                spread = float(np.nanmax(pp) - np.nanmin(pp)) if pp.size else 0.0
+                spread = float(np.nanmax(pp_rank) - np.nanmin(pp_rank)) if pp_rank.size else 0.0
                 if spread <= 1e-12:
                     roc_auc_val = 0.5
             metrics["roc_auc"] = roc_auc_val
             try:
-                metrics["pr_auc"] = float(average_precision_score(yy, pp))
+                metrics["pr_auc"] = float(average_precision_score(yy, pp_rank))
             except Exception:
                 metrics["pr_auc"] = float("nan")
             try:
-                metrics["brier"] = float(brier_score_loss(yy, pp))
+                metrics["brier"] = float(brier_score_loss(yy, pp_cal))
             except Exception:
                 metrics["brier"] = float("nan")
             try:
-                metrics["ece"] = float(expected_calibration_error(pp, yy, n_bins=10))
+                metrics["ece"] = float(expected_calibration_error(pp_cal, yy, n_bins=10))
             except Exception:
                 metrics["ece"] = float("nan")
 
