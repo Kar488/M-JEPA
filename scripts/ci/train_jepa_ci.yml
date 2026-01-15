@@ -169,7 +169,7 @@ tox21:
   hidden_dim: ${TOX21_HIDDEN_DIM:-384}
   num_layers: ${TOX21_NUM_LAYERS:-4}
   dropout: ${TOX21_DROPOUT:-0.2}
-  head_ensemble_size: ${TOX21_HEAD_ENSEMBLE_SIZE:-1}
+  head_ensemble_size: ${TOX21_HEAD_ENSEMBLE_SIZE:-3}
   head_scheduler: ${TOX21_HEAD_SCHEDULER:-cosine}
   layerwise_decay: ${TOX21_LAYERWISE_DECAY:-${FINETUNE_LAYERWISE_DECAY:-}}
   threshold_metric: ${TOX21_THRESHOLD_METRIC:-}
@@ -183,6 +183,8 @@ tox21:
     - 0
     - 1
     - 2
+    - 3
+    - 4
   allow_shape_coercion: false
   allow_equal_hash: false
   verify_match_threshold: 0.98

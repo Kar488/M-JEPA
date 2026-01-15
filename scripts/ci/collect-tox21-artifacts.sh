@@ -138,7 +138,7 @@ collect_files_matching() {
       continue
     fi
     local found=""
-    if found=$(ssh "${SSH_OPTS[@]}" "$REMOTE" "cd '$remote_dir' && find . -maxdepth 1 -type f -name '$pattern' -printf '%P\n'" 2>/dev/null); then
+    if found=$(ssh "${SSH_OPTS[@]}" "$REMOTE" "cd '$remote_dir' && find . -maxdepth 1 \\( -type f -o -type l \\) -name '$pattern' -printf '%P\n'" 2>/dev/null); then
       if [[ -n "$found" ]]; then
         local rel
         while IFS= read -r rel; do

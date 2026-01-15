@@ -36,7 +36,7 @@ NR-AhR:
   pos_weight: 7.52734375 #, takes precdence over dynamic_pos_weight
   dynamic_pos_weight: false
   oversample_minority: false
-  use_focal_loss: false
+  use_focal_loss: true
   focal_gamma: 2.0
   calibrate_probabilities: true
   calibration_method: temperature
@@ -56,7 +56,7 @@ NR-ER:
   pos_weight: 6.809583858764187 #, takes precdence over dynamic_pos_weight
   dynamic_pos_weight: false
   oversample_minority: false
-  use_focal_loss: false
+  use_focal_loss: true
   focal_gamma: 2.0
   calibrate_probabilities: true
   calibration_method: temperature
@@ -73,7 +73,7 @@ NR-ER-LBD:
   threshold_metric: pr_auc #override default roc_auc
 
 NR-PPAR-gamma:
-  pos_weight: 8 #override default 33.67741935483871, takes precdence over dynamic_pos_weight
+  pos_weight: 10 #override default 33.67741935483871, takes precdence over dynamic_pos_weight
   dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: true #override default false
@@ -86,7 +86,7 @@ SR-ARE:
   pos_weight: 5.191082802547771 #, takes precdence over dynamic_pos_weight
   dynamic_pos_weight: false
   oversample_minority: false
-  use_focal_loss: false
+  use_focal_loss: true
   focal_gamma: 2.0
   calibrate_probabilities: true
   calibration_method: temperature
@@ -97,7 +97,7 @@ SR-ATAD5:
   dynamic_pos_weight: false
   oversample_minority: false
   use_focal_loss: true #override default false
-  focal_gamma: 1.5 #override default 2.0
+  focal_gamma: 1.2 #override default 2.0
   calibrate_probabilities: true
   calibration_method: temperature
   threshold_metric: pr_auc #override default roc_auc
@@ -116,7 +116,7 @@ SR-MMP:
   pos_weight: 5.328976034858388 #, takes precdence over dynamic_pos_weight
   dynamic_pos_weight: false
   oversample_minority: false
-  use_focal_loss: false
+  use_focal_loss: true
   focal_gamma: 2.0
   calibrate_probabilities: true
   calibration_method: temperature
