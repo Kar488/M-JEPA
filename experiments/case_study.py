@@ -1279,6 +1279,8 @@ def _evaluate_case_study(
             arr = np.zeros(expected_len, dtype=float)
         return arr
 
+    test_probs_np = _resize_to_expected(test_probs_np, "raw probabilities")
+
     def _temperature_scale_logits(logits: np.ndarray, targets: np.ndarray) -> Tuple[np.ndarray, float]:
         logits_t = torch.as_tensor(logits, dtype=torch.float32)
         targets_t = torch.as_tensor(targets, dtype=torch.float32)
