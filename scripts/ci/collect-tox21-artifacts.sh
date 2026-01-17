@@ -132,6 +132,20 @@ collect_files_matching() {
     return 0
   fi
   mkdir -p "$local_dir"
+  if (( copy_with_rsync )); then
+    local rsync_filters=()
+    rsync_filters+=(--include='*/')
+    local pattern
+    for pattern in "${patterns[@]}"; do
+      [[ -z "$pattern" ]] && continue
+      rsync_filters+=(--include="$pattern")
+    done
+    rsync_filters+=(--exclude='*')
+    if "${RSYNC[@]}" "${rsync_filters[@]}" "$REMOTE:${remote_dir%/}/" "$local_dir/" >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "[collect][warn] ${remote_dir}: rsync include filters failed; falling back to per-file copy" >&2
+  fi
   local pattern
   for pattern in "${patterns[@]}"; do
     if [[ -z "$pattern" ]]; then
