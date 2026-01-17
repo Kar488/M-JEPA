@@ -24,7 +24,7 @@ on:
       force_rerun:
         description: "Comma-separated stage names to force rerun"
         required: false
-        default: ""
+        default: "report"
       hyperparam_mode:
         description: "Which hyperparameter search strategy to use"
         required: false
