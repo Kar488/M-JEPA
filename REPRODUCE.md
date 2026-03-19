@@ -300,6 +300,7 @@ Then run a small downstream evaluation:
 ```bash
 python scripts/train_jepa.py evaluate \
   --labeled-dir data/tox21 \
+  --labeled-csv data/tox21/data.csv \
   --encoder ckpts/pretrain_smoke/encoder.pt \
   --label-col NR-AR \
   --task-type classification \

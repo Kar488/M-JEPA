@@ -162,6 +162,7 @@ python scripts/train_jepa.py pretrain \
 # 2) Minimal downstream evaluation on bundled Tox21 labels
 python scripts/train_jepa.py evaluate \
   --labeled-dir data/tox21 \
+  --labeled-csv data/tox21/data.csv \
   --encoder ckpts/pretrain_smoke/encoder.pt \
   --label-col NR-AR \
   --task-type classification \
