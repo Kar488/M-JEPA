@@ -102,7 +102,7 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
 
    # Fine-tuning/evaluation: note the labeled dataset is separate
    python scripts/train_jepa.py finetune --labeled-dir data/tox21 --labeled-csv data/tox21/data.csv --encoder encoder.pt --label-col NR-AR
-   python scripts/train_jepa.py evaluate --labeled-dir data/tox21 --labeled-csv data/tox21/data.csv --encoder encoder.pt --label-col NR-AR
+   python scripts/train_jepa.py evaluate --labeled-dir data/tox21/data.csv --encoder encoder.pt --label-col NR-AR
    ```
 
    Keep the README brief and use [`REPRODUCE.md`](REPRODUCE.md) for full setup,
