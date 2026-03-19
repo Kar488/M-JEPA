@@ -70,6 +70,29 @@ For automated remote runs, the repository expects environment variables such as 
 
 The code uses a few distinct path conventions. Keeping them separate is important for reproducibility.
 
+### Repository-bundled `data/` directory in this public repo
+
+This public repository already contains several benchmark/example datasets under `data/`. Reviewers do **not** need to manually place these specific folders on disk before running the documented smoke paths.
+
+| Data folder | What it is in this repo | Data status | Source / provenance from repo evidence | Used by command(s) |
+| --- | --- | --- | --- | --- |
+| `data/tox21/data.csv` | Labeled Tox21-style assay table with `smiles` plus the standard Tox21 task columns used by the repository's Tox21 workflows. | Bundled labeled benchmark CSV. | Repository code and docs consistently treat Tox21 as a MoleculeNet-style benchmark task, but the exact public source snapshot for this checked-in CSV is not stated. TODO: confirm exact public source / snapshot for this dataset. | `scripts/train_jepa.py finetune`, `evaluate`, and `tox21`; also the default pretrain probe dataset. |
+| `data/ZINC-canonicalized/` | Unlabeled parquet shard directory used as the pretraining corpus path in CI and cache warming. | Bundled curated/preprocessed unlabeled shard dataset. | `scripts/download_unlabeled.py` documents ZINC as a public source family and multiple CI paths explicitly point to `data/ZINC-canonicalized`, but the exact canonicalization procedure and snapshot are not documented here. TODO: confirm exact public source / snapshot for this dataset. | `scripts/train_jepa.py pretrain`; CI pretrain/cache-warm paths. |
+| `data/katielinkmoleculenet_benchmark/train`, `val`, `test` | Pre-generated benchmark split directories consumed directly by benchmark/CI evaluation paths. | Bundled benchmark-ready split artifacts. | Folder naming and workflow usage indicate a MoleculeNet benchmark fixture, but the exact upstream public source and split-generation history are not documented in the repository. TODO: confirm exact public source / snapshot for this dataset. | `scripts/train_jepa.py benchmark`; CI benchmark/cache-warm paths. |
+| `data/BASF_AIPubChem_v4/` | Additional unlabeled parquet shard directory bundled as an offline example corpus. | Bundled curated/preprocessed unlabeled shard dataset. | Repo docs mention this folder as an example shard set for offline experiments; no exact upstream provenance is documented. TODO: confirm exact public source / snapshot for this dataset. | Not part of the main reviewer smoke path; can be supplied to `pretrain --unlabeled-dir` as an alternate unlabeled corpus. |
+
+#### Distinguishing raw public data, curated fixtures, runtime splits, and caches
+
+- **`data/tox21/data.csv`** is a single labeled CSV table. `finetune`, `evaluate`, and `tox21` read it as a labeled dataset source and can generate train/validation/test partitions from it at runtime.
+- **`data/ZINC-canonicalized/...`** is an unlabeled parquet shard directory. `pretrain` expects exactly this style of flat shard directory for `--unlabeled-dir`.
+- **`data/katielinkmoleculenet_benchmark/train|val|test`** are already-split benchmark fixtures on disk. These are different from runtime-generated splits because the split membership is materialized as separate folders before execution.
+- **Runtime-generated scaffold splits** are created either by `scripts/make_scaffold_splits.py` or internally by `finetune` / `tox21` when scaffold splitting is enabled and SMILES are available. Those runtime splits are execution-time artifacts, not the same thing as the checked-in benchmark fixture directories.
+- **Cache artifacts** under `--cache-dir` store featurized graphs and dataset caches for speed. They are neither the source data nor an authoritative record of split membership.
+
+#### Important note on the pre-existing `train/val/test` folders
+
+The checked-in `data/katielinkmoleculenet_benchmark/train|val|test` folders should be read as **benchmark-ready split artifacts / fixtures** that the repository can consume immediately. They are distinct from scaffold splits generated at runtime by `finetune` or `tox21`. From repository evidence alone, it is **not** possible to state that these folders are the exact manuscript splits; this guide therefore treats them neutrally as archival benchmark fixtures unless and until a more specific provenance record is added.
+
 ### Source data layouts
 
 #### Unlabeled corpora used by `pretrain`
@@ -230,11 +253,7 @@ Then use `data/unlabeled/train` as `--unlabeled-dir` for pretraining.
 
 #### Labeled dataset for downstream evaluation
 
-Place the labeled dataset on disk, for example:
-
-```text
-data/tox21/data.csv
-```
+The repository already includes `data/tox21/data.csv`. If you use that checked-in file, no extra download step is required for the Tox21 smoke paths below.
 
 ### 2. Optional: generate explicit scaffold split files
 
@@ -251,15 +270,23 @@ python scripts/make_scaffold_splits.py \
   --seed 42
 ```
 
-This is most directly useful for `benchmark` or for archiving the exact split files. `finetune` and `tox21` can generate splits internally.
+This is most directly useful for `benchmark` or for archiving explicit split files. `finetune` and `tox21` can generate splits internally. Unless you separately document their provenance, such generated split files should not be described as the manuscript splits by default.
 
-### 3. Smoke-test path
+### 3. What a reviewer can run immediately from this repo
+
+Without downloading additional benchmark assets, a reviewer can immediately use the checked-in `data/` contents for:
+
+- CPU smoke-test pretraining on `data/ZINC-canonicalized/`.
+- CPU fine-tuning / evaluation / Tox21 smoke paths on `data/tox21/data.csv`.
+- Benchmark-path inspection or CI-style benchmark execution against the checked-in `data/katielinkmoleculenet_benchmark/` split directories.
+
+### 4. Smoke-test path
 
 A minimal reviewer-friendly smoke test is:
 
 ```bash
 python scripts/train_jepa.py pretrain \
-  --unlabeled-dir data/unlabeled/train \
+  --unlabeled-dir data/ZINC-canonicalized \
   --output encoder.pt \
   --ckpt-dir ckpts/pretrain_smoke \
   --epochs 1 \
@@ -281,11 +308,11 @@ python scripts/train_jepa.py evaluate \
   --device cpu
 ```
 
-### 4. Full pretraining
+### 5. Full pretraining
 
 ```bash
 python scripts/train_jepa.py pretrain \
-  --unlabeled-dir data/zinc_pretrain \
+  --unlabeled-dir data/ZINC-canonicalized \
   --output encoder.pt \
   --ckpt-dir ckpts/pretrain \
   --cache-dir cache/graphs_10m \
@@ -302,7 +329,7 @@ Notes:
 - If `--cache-dir` is set, graph featurizations are reused across runs.
 - CI/remote runs typically set `ARTIFACTS_DIR` so a manifest is also written to `<experiment>/artifacts/encoder_manifest.json`.
 
-### 5. Fine-tuning / evaluation
+### 6. Fine-tuning / evaluation
 
 Single-task example using a labeled CSV directory:
 
@@ -333,13 +360,13 @@ python scripts/train_jepa.py evaluate \
   --device cuda
 ```
 
-### 6. Benchmarking
+### 7. Benchmarking
 
-If you created explicit split directories, benchmark can consume them directly:
+The repository already includes one benchmark-ready split fixture under `data/katielinkmoleculenet_benchmark/`, and benchmark can also consume any explicit split directories you generate yourself:
 
 ```bash
 python scripts/train_jepa.py benchmark \
-  --labeled-dir data/tox21_scaffold/train \
+  --labeled-dir data/katielinkmoleculenet_benchmark/train \
   --jepa-encoder ckpts/pretrain/encoder.pt \
   --task-type classification \
   --label-col NR-AR \
@@ -347,9 +374,9 @@ python scripts/train_jepa.py benchmark \
   --device cuda
 ```
 
-If sibling `val/` and `test/` directories exist next to the supplied `train/` directory, `benchmark` discovers them automatically.
+If sibling `val/` and `test/` directories exist next to the supplied `train/` directory, `benchmark` discovers them automatically. The checked-in `data/katielinkmoleculenet_benchmark/` folder is arranged exactly in that fixture style.
 
-### 7. Tox21 case study
+### 8. Tox21 case study
 
 ```bash
 python scripts/train_jepa.py tox21 \
@@ -409,6 +436,8 @@ python scripts/make_scaffold_splits.py \
 ```
 
 Defaults are `train=0.8`, `val=0.1`, and therefore `test=0.1`.
+
+This command writes a **new split artifact** to disk. It does not modify the repository-bundled benchmark fixture directories, and it is separate from the runtime split logic used by `finetune` / `tox21`.
 
 ### Implicit split generation during `finetune`
 
