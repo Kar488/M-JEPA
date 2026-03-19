@@ -74,39 +74,56 @@ including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
    WANDB_API_KEY = your W&B key
 
 3. **Datasets**
-   - Unlabeled corpora for `scripts/train_jepa.py pretrain` must be provided as a
-     **flat directory of `.parquet` or `.csv` shards**. Pass that shard directory
-     to `--unlabeled-dir`.
-   - `scripts/download_unlabeled.py` writes split subdirectories under
-     `data/unlabeled/train`, `data/unlabeled/val`, and `data/unlabeled/test`.
-     If you use that helper, point `--unlabeled-dir` at a shard directory such as
-     `data/unlabeled/train`, **not** at the `data/unlabeled` parent.
-   - Labeled datasets for `finetune` / `evaluate` are supplied separately, usually
-     as a directory plus an optional CSV such as `data/tox21/data.csv`.
-   - Generated scaffold split files are a separate artifact. Use
-     `scripts/make_scaffold_splits.py` if you want explicit `train/`, `val/`, and
-     `test/` directories on disk; `finetune` and `tox21` can also generate splits
-     internally from SMILES.
-   - `--cache-dir` stores **featurized graph caches** only. Cached graph artifacts
-     speed up repeated runs, but they do **not** replace raw datasets or split
-     generation metadata. Clear/rebuild caches when changing featurization such as
-     `--add-3d`.
-   - The test suite uses small synthetic or bundled samples and does **not**
-     require the large training corpora.
+
+   ### Repository data contents
+
+   **Included public benchmark / example assets already in this repository**
+   - `data/tox21/data.csv`: labeled Tox21-style benchmark CSV used by `finetune`,
+     `evaluate`, and `tox21` examples.
+   - `data/ZINC-canonicalized/`: unlabeled parquet shards used by pretraining and
+     CI cache-warming paths.
+   - `data/katielinkmoleculenet_benchmark/train|val|test`: pre-generated benchmark
+     split directories used by the benchmark/CI paths.
+   - `data/BASF_AIPubChem_v4/`: additional unlabeled parquet shards bundled as an
+     offline example dataset.
+
+   **Optional externally obtained data**
+   - Any larger or alternate unlabeled corpus you want to pass to
+     `scripts/train_jepa.py pretrain --unlabeled-dir ...`.
+   - Any alternate labeled benchmark dataset you want to pass to
+     `finetune` / `evaluate` / `benchmark`.
+
+   **Generated caches / outputs (not source data)**
+   - Runtime scaffold split folders produced by `scripts/make_scaffold_splits.py`.
+   - Graph caches under `--cache-dir` (including `prebuilt_datasets/`).
+   - Checkpoints, reports, and CI experiment artifacts under `ckpts/`, `reports/`,
+     or `/data/mjepa/experiments/<EXP_ID>/...`.
+
+   Notes:
+   - `pretrain` still expects `--unlabeled-dir` to point to a **flat directory of
+     `.parquet` or `.csv` shards** such as `data/ZINC-canonicalized`.
+   - `scripts/download_unlabeled.py` creates `data/unlabeled/train|val|test`; when
+     using that helper, pass one shard directory such as `data/unlabeled/train`,
+     **not** the `data/unlabeled` parent.
+   - `finetune` / `evaluate` no longer require reviewers to manually place a Tox21
+     CSV if they use the repository-bundled `data/tox21/data.csv`.
+   - `--cache-dir` stores **featurized graph caches only**. Caches speed up repeat
+     runs but do not replace raw data, benchmark fixtures, or split metadata.
 
    Minimal local examples:
 
    ```bash
-   # Pretraining: note the flat shard directory
-   python scripts/train_jepa.py pretrain --unlabeled-dir data/unlabeled/train
+   # Pretraining smoke path using bundled unlabeled shards
+   python scripts/train_jepa.py pretrain --unlabeled-dir data/ZINC-canonicalized
 
-   # Fine-tuning/evaluation: note the labeled dataset is separate
+   # Fine-tuning / evaluation using the bundled Tox21 CSV
    python scripts/train_jepa.py finetune --labeled-dir data/tox21 --labeled-csv data/tox21/data.csv --encoder encoder.pt --label-col NR-AR
    python scripts/train_jepa.py evaluate --labeled-dir data/tox21/data.csv --encoder encoder.pt --label-col NR-AR
    ```
 
-   Keep the README brief and use [`REPRODUCE.md`](REPRODUCE.md) for full setup,
-   cache, split, CPU/GPU, and output verification details.
+   Keep the README brief and use [`REPRODUCE.md`](REPRODUCE.md) for the detailed
+   repo-specific data layout, provenance notes, split behavior, smoke tests, and
+   output verification guidance.
 
 4. **Run tests**
 
