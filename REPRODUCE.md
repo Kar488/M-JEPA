@@ -453,6 +453,26 @@ This command writes a **new split artifact** to disk. It does not modify the rep
 - If scaffold splitting cannot satisfy those constraints, it falls back to stratified splitting, again with retries.
 - The chosen split strategy and split counts are written into the Tox21 diagnostics and manifests in the report directory.
 
+## Split Definitions and Reproducibility
+
+This section is intended to make the repository's split behavior explicit for reviewers.
+
+- **Pre-existing split folders (`train/`, `val/`, `test/`)**
+  - In this public repository, the clearest example is `data/katielinkmoleculenet_benchmark/train|val|test`.
+  - These folders are used as benchmark-ready fixtures or archival split artifacts that `benchmark` can consume directly.
+  - They should not automatically be interpreted as the exact manuscript splits unless a provenance record is added for that specific fixture.
+- **Runtime scaffold splits**
+  - `finetune` and `tox21` can generate splits at execution time from a single labeled dataset source such as `data/tox21/data.csv`.
+  - When scaffold splitting is enabled and SMILES are available, the split is derived inside the command using the active seed; if scaffold splitting is unavailable, the code may fall back to stratified/random alternatives as documented above.
+  - `scripts/make_scaffold_splits.py` can also materialize a new split artifact on disk for archival or benchmark use, but that output is distinct from the checked-in benchmark folders.
+- **Seeds**
+  - The manuscript's Phase-1 seed set is `{1,2,3,4,5}`.
+  - The repository's automated workflow also exposes `PHASE1_SEEDS: 1,2,3,4,5` in `.github/workflows/ci-vast.yml`, which is the strongest in-repo evidence for that Phase-1 seed policy.
+  - Unless otherwise stated, experiments follow the seed configurations described in Table 1 (seeds `{1,2,3,4,5}` for Phase-1). Downstream runs use multiple seeds for averaging where applicable.
+- **What is not claimed here**
+  - This repository does **not** currently prove that the exact manuscript split identities are stored in checked-in files.
+  - The checked-in `train|val|test` directories are therefore documented conservatively as reusable benchmark fixtures, while runtime split generation is documented as execution-time behavior.
+
 ## Outputs and verification
 
 ### Expected outputs
