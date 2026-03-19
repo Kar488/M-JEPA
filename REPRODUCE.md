@@ -388,6 +388,19 @@ python scripts/train_jepa.py tox21 \
   --device cuda
 ```
 
+When reproducing attribution figures or any other explainability outputs, add `--explain-mode ig` (and optionally `--explain-steps <N>`). Without `--explain-mode`, the Tox21 command only produces the metrics/prediction reports and also clears stale explanation artifacts for the selected assay/report directory.
+
+```bash
+python scripts/train_jepa.py tox21 \
+  --csv data/tox21/data.csv \
+  --tasks NR-AR NR-AhR SR-p53 \
+  --encoder-checkpoint ckpts/pretrain/encoder.pt \
+  --evaluation-mode hybrid \
+  --explain-mode ig \
+  --report-dir reports/tox21 \
+  --device cuda
+```
+
 For full automation, the equivalent remote path is the `ci-vast` workflow, which prepares the environment and runs the stage wrappers (`run-pretrain.sh`, `run-finetune.sh`, `run-tox21.sh`).
 
 ## CPU vs GPU notes
