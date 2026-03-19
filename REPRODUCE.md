@@ -362,19 +362,19 @@ python scripts/train_jepa.py evaluate \
 
 ### 7. Benchmarking
 
-The repository already includes one benchmark-ready split fixture under `data/katielinkmoleculenet_benchmark/`, and benchmark can also consume any explicit split directories you generate yourself:
+The repository already includes one benchmark-ready split fixture under `data/katielinkmoleculenet_benchmark/`. That bundled fixture is configured throughout CI/sweeps as the ESOL regression dataset, so use its actual label column and task type when reviewing the benchmark path:
 
 ```bash
 python scripts/train_jepa.py benchmark \
   --labeled-dir data/katielinkmoleculenet_benchmark/train \
   --jepa-encoder ckpts/pretrain/encoder.pt \
-  --task-type classification \
-  --label-col NR-AR \
+  --task-type regression \
+  --label-col "measured log solubility in mols per litre" \
   --report-dir reports \
   --device cuda
 ```
 
-If sibling `val/` and `test/` directories exist next to the supplied `train/` directory, `benchmark` discovers them automatically. The checked-in `data/katielinkmoleculenet_benchmark/` folder is arranged exactly in that fixture style.
+If sibling `val/` and `test/` directories exist next to the supplied `train/` directory, `benchmark` discovers them automatically. The checked-in `data/katielinkmoleculenet_benchmark/` folder is arranged exactly in that fixture style, so the bundled `train/` path resolves the matching ESOL `val/` and `test/` shards automatically.
 
 ### 8. Tox21 case study
 
