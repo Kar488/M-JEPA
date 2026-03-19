@@ -324,8 +324,7 @@ Evaluation-only alias:
 
 ```bash
 python scripts/train_jepa.py evaluate \
-  --labeled-dir data/tox21 \
-  --labeled-csv data/tox21/data.csv \
+  --labeled-dir data/tox21/data.csv \
   --label-col NR-AR \
   --encoder ckpts/pretrain/encoder.pt \
   --task-type classification \
