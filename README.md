@@ -80,23 +80,23 @@ Unless otherwise stated, experiments follow the seed configurations described in
 - **Figure 9: IG attribution patterns across assays**
   - Stage: Phase 3.
   - Generated from: Tox21 assay-level interpretation outputs.
-  - REPRODUCE.md commands: `python scripts/train_jepa.py tox21 ...`.
-  - Output: per-task Tox21 JSON/CSV outputs, prediction files, and report artifacts under the chosen `--report-dir`; TODO: confirm exact attribution export path used for the manuscript figure.
+  - REPRODUCE.md commands: `python scripts/train_jepa.py tox21 --explain-mode ig ...` (the Tox21 command only emits attribution artifacts when `--explain-mode` is set).
+  - Output: per-task Tox21 JSON/CSV outputs, prediction files, attribution artifacts, and report artifacts under the chosen `--report-dir`; TODO: confirm exact attribution export path used for the manuscript figure.
 - **Figure 10: NR-AR attribution case study**
   - Stage: Phase 3.
   - Generated from: Tox21 evaluation / interpretation focused on the `NR-AR` assay.
-  - REPRODUCE.md commands: `python scripts/train_jepa.py tox21 --tasks NR-AR ...`.
-  - Output: assay-specific Tox21 JSON/CSV outputs and related report artifacts under the chosen `--report-dir`; TODO: confirm exact attribution export path used for the manuscript figure.
+  - REPRODUCE.md commands: `python scripts/train_jepa.py tox21 --tasks NR-AR --explain-mode ig ...`.
+  - Output: assay-specific Tox21 JSON/CSV outputs, attribution artifacts, and related report artifacts under the chosen `--report-dir`; TODO: confirm exact attribution export path used for the manuscript figure.
 - **Figure 11: SR-HSE attribution case study**
   - Stage: Phase 3.
   - Generated from: Tox21 evaluation / interpretation focused on the `SR-HSE` assay.
-  - REPRODUCE.md commands: `python scripts/train_jepa.py tox21 --tasks SR-HSE ...`.
-  - Output: assay-specific Tox21 JSON/CSV outputs and related report artifacts under the chosen `--report-dir`; TODO: confirm exact attribution export path used for the manuscript figure.
+  - REPRODUCE.md commands: `python scripts/train_jepa.py tox21 --tasks SR-HSE --explain-mode ig ...`.
+  - Output: assay-specific Tox21 JSON/CSV outputs, attribution artifacts, and related report artifacts under the chosen `--report-dir`; TODO: confirm exact attribution export path used for the manuscript figure.
 - **Figure 12: NR-AR-LBD attribution case study**
   - Stage: Phase 3.
   - Generated from: Tox21 evaluation / interpretation focused on the `NR-AR-LBD` assay.
-  - REPRODUCE.md commands: `python scripts/train_jepa.py tox21 --tasks NR-AR-LBD ...`.
-  - Output: assay-specific Tox21 JSON/CSV outputs and related report artifacts under the chosen `--report-dir`; TODO: confirm exact attribution export path used for the manuscript figure.
+  - REPRODUCE.md commands: `python scripts/train_jepa.py tox21 --tasks NR-AR-LBD --explain-mode ig ...`.
+  - Output: assay-specific Tox21 JSON/CSV outputs, attribution artifacts, and related report artifacts under the chosen `--report-dir`; TODO: confirm exact attribution export path used for the manuscript figure.
 - **Table 1: Phase-1 sweep configuration**
   - Stage: Phase 1.
   - Generated from: Phase-1 sweep configuration and seed settings.
