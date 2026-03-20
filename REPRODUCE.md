@@ -486,6 +486,74 @@ This section is intended to make the repository's split behavior explicit for re
   - This repository does **not** currently prove that the exact manuscript split identities are stored in checked-in files.
   - The checked-in `train|val|test` directories are therefore documented conservatively as reusable benchmark fixtures, while runtime split generation is documented as execution-time behavior.
 
+## Main-paper Phase-3 reproduction
+
+The repository's explicit Phase-3 entry point is the `tox21` subcommand:
+
+```bash
+python scripts/train_jepa.py tox21 \
+  --csv data/tox21/data.csv \
+  --tasks NR-AR NR-AhR SR-p53 \
+  --encoder-checkpoint ckpts/pretrain/encoder.pt \
+  --evaluation-mode hybrid \
+  --report-dir reports/tox21 \
+  --device cuda
+```
+
+This is the command path to audit when reviewing the manuscript's Tox21 downstream evaluation. The `tox21` implementation resolves to `scripts/commands/tox21.py`, which calls `experiments.case_study.run_tox21_case_study`.
+
+### How splits are handled on this path
+
+- **Runtime scaffold splits**
+  - For `tox21`, the split is generated at runtime from the single labeled CSV (`data/tox21/data.csv`).
+  - When RDKit and scaffold splitting support are available, the case-study code prefers Bemis–Murcko scaffold splitting.
+  - The implementation retries up to five seeds (`seed`, `seed+1`, ...) to satisfy validation/test label-diversity and positive-count checks.
+  - If those scaffold attempts do not satisfy the checks, the command falls back to stratified splitting and records that decision in diagnostics/manifests.
+- **Benchmark split folders**
+  - Pre-existing `train/`, `val/`, and `test/` directories such as `data/katielinkmoleculenet_benchmark/` are benchmark fixtures consumed by other paths like `benchmark`.
+  - They are distinct from the runtime split generation used by `tox21`.
+- **Cached artifacts**
+  - `--cache-dir` and related cache folders store derived graph/cache artifacts for reuse across runs.
+  - They are not the split definitions.
+- **Model checkpoints**
+  - Paths such as `cache/pretrain/`, `cache/finetune/`, and checkpoint arguments such as `--encoder-checkpoint` refer to model artifacts used as inputs or outputs of training/evaluation stages.
+  - They are not the scaffold split definitions themselves.
+
+### Expected outputs for the main-paper Tox21 path
+
+The resolved report directory is chosen in this order: `--tox21-dir`, else `--report-dir`, else `<directory containing --csv>/reports`. Under that directory, the `tox21` command writes the following reviewer-relevant outputs:
+
+- Per-task summary files:
+  - `tox21_<task>.json`
+  - `tox21_<task>.csv`
+  - `tox21_<task>_calibrator.json`
+  - `run_manifest_<task>.json`
+- Per-task prediction / calibration artifacts when predictions are available:
+  - `tox21_<task>_scores.csv`
+  - `tox21_<task>_scores_by_seed.csv`
+  - `tox21_<task>_reliability_bins.json`
+- Aggregated outputs across tasks:
+  - `tox21_summary.json`
+  - `run_manifest.json`
+  - `stage-outputs/tox21_<encoder_source>_<task>.json` per task
+  - `stage-outputs/tox21_<encoder_source>.json` aggregated across tasks
+  - `tox21_<evaluation_mode>_metrics.csv` when per-task CSV summaries are available
+
+The per-task JSON/CSV outputs and the aggregated metrics CSV are the direct repository artifacts most relevant to the manuscript's Phase-3 reporting. From the implementation, this path surfaces assay-level metrics including ROC-AUC, PR-AUC, Brier score, and ECE, along with split diagnostics, selected-path metadata, prediction exports, and calibration artifacts.
+
+### Mapping to manuscript items
+
+- **Table 4**
+  - Supported by the `tox21` command's assay-level metric exports (`tox21_<task>.json`, `tox21_<task>.csv`, and `tox21_<evaluation_mode>_metrics.csv`).
+- **Figure 7**
+  - Supported by the reliability-bin / prediction artifacts written by the same `tox21` run, especially `tox21_<task>_reliability_bins.json` and `tox21_<task>_scores.csv`.
+- **Figure 8**
+  - Supported in part by the metrics and calibration outputs from the same `tox21` run. The repository emits the needed metric/calibration artifacts, but any exact plotting layout may still depend on additional report-building or plotting steps beyond a single `tox21` invocation.
+- **Figures 9–12**
+  - These figures depend on explainability outputs. The base `tox21` command does **not** emit attribution artifacts unless `--explain-mode` is added. For those figures, use the same `tox21` command with `--explain-mode ig` (and optionally `--explain-steps <N>`). Exact final figure assembly may still require post-processing beyond one command invocation.
+
+Conservatively, this repository makes the Phase-3 evaluation path and its emitted artifacts explicit, but it does not by itself guarantee exact manuscript numbers on every machine. Numerical values can vary with seeds, hardware, and runtime configuration, and the split path may differ if scaffold attempts fail and the code falls back to stratified splitting.
+
 ## Outputs and verification
 
 ### Expected outputs
