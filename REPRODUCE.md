@@ -80,12 +80,12 @@ CI / remote automation additionally relies on wrapper-managed variables such as
 The public repo already includes reviewer-usable data under `data/`. This
 section documents only what can be supported by repository evidence.
 
-| Path | Role in this repo | What it is | Provenance status from direct repo evidence |
+| Path | Role in this repo | What it is | Upstream source |
 | --- | --- | --- | --- |
-| `data/tox21/data.csv` | Tox21 and downstream labeled input | Bundled labeled benchmark CSV | The code and docs consistently treat it as a MoleculeNet-style Tox21 dataset, but the exact public snapshot is not documented here. |
-| `data/ZINC-canonicalized/` | Pretraining unlabeled corpus | Bundled parquet shard directory | The repo clearly uses it as a ZINC-family unlabeled shard set, but the exact source snapshot and canonicalization procedure are not documented here. |
-| `data/katielinkmoleculenet_benchmark/train`, `val`, `test` | Benchmark fixture | Bundled split directories consumed directly by benchmark paths | The repo treats this as a benchmark-ready split fixture. The exact upstream source and split-generation history are not established in the checked-in docs/code. |
-| `data/BASF_AIPubChem_v4/` | Optional alternate unlabeled corpus | Bundled parquet shard directory | Present as an additional offline example corpus; exact upstream provenance is not documented here. |
+| `data/tox21/data.csv` | Tox21 and downstream labeled input | Bundled local copy of the Tox21 benchmark CSV | Hugging Face: [`HUBioDataLab/tox21/data.csv`](https://huggingface.co/datasets/HUBioDataLab/tox21/resolve/main/data.csv) (~7.83K rows). |
+| `data/ZINC-canonicalized/` | Pretraining unlabeled corpus | Bundled shard dataset used as the unlabeled parquet corpus | Hugging Face: [`sagawa/ZINC-canonicalized`](https://huggingface.co/datasets/sagawa/ZINC-canonicalized) (~20.7M molecules). |
+| `data/katielinkmoleculenet_benchmark/train`, `val`, `test` | Benchmark fixture | Bundled benchmark split fixture consumed directly by benchmark paths | Hugging Face: [`katielink/moleculenet-benchmark` ESOL fixture](https://huggingface.co/datasets/katielink/moleculenet-benchmark/tree/af500889de49a7c64ede443c2928fd5e876dd677/esol) (ESOL train split ~1.21K rows). |
+| `data/BASF_AIPubChem_v4/` | Optional alternate unlabeled corpus | Bundled shard dataset available as an alternate unlabeled parquet corpus | Hugging Face: [`BASF-AI/PubChem-Raw`](https://huggingface.co/datasets/BASF-AI/PubChem-Raw) (~2.09M records). |
 
 ### Distinguish these four things during review
 
@@ -322,9 +322,7 @@ python scripts/train_jepa.py tox21 \
   --device cuda
 ```
 
-This is the repository's explicit Phase-3 Tox21 entry point. The CLI routes to
-`scripts/commands/tox21.py`, which in turn calls
-`experiments.case_study.run_tox21_case_study` when available.
+This is the repository's direct Phase-3 CLI path. CI uses `bash scripts/ci/run-tox21.sh`, which resolves the same stage through `scripts/ci/train_jepa_ci.yml` and launches `python -m scripts.commands.tox21 ...` with the wrapper-managed arguments. The Python CLI routes to `scripts/commands/tox21.py`, which in turn calls `experiments.case_study.run_tox21_case_study` when available.
 
 ### Split behavior on the Tox21 path
 
@@ -393,9 +391,7 @@ Look for artifacts such as:
 
 ### Tox21
 
-From direct implementation evidence in `scripts/commands/tox21.py`, the report
-root resolves from `--tox21-dir`, otherwise `--report-dir`, otherwise a default
-under the CSV directory. The command writes reviewer-relevant files including:
+From direct implementation evidence in `scripts/commands/tox21.py`, the output root resolves from `--tox21-dir`, otherwise `--report-dir`, otherwise `<csv_dir>/reports`. In CI, `scripts/ci/run-tox21.sh` sets `TOX21_DIR`, which defaults to `${EXPERIMENT_DIR}/tox21` and normally resolves to `/data/mjepa/experiments/<EXP_ID>/tox21`. The command writes reviewer-relevant files including:
 
 - per-task summaries
   - `tox21_<task>.json`
