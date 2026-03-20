@@ -37,7 +37,7 @@ existing sweeps, `GRID_EXP_ID`) to the frozen lineage.
 # Run tox21 grading on a frozen encoder
 export PRETRAIN_EXP_ID=1759825317
 bash scripts/ci/run-tox21.sh
-# Output -> /data/mjepa/experiments/$RUN_ID/tox21/
+# Output -> ${TOX21_DIR:-/data/mjepa/experiments/$EXP_ID/tox21}/
 ```
 
 See `docs/frozen_lineage_policy.rst` for override flags and lineage semantics,
