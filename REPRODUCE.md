@@ -1,540 +1,143 @@
-# Reproducibility Guide
+# Repository Reproducibility Note
+
+This note is a conservative, reviewer-facing summary of repository evidence. It describes what data and software are present, what their provenance is, what is bundled versus generated at runtime, and what kinds of checks this repository can realistically support.
+
+The wording here is intentionally restrained. It reflects the repository as checked in and avoids overstating reproducibility claims.
 
 ## Purpose
 
-This document is the canonical reviewer guide for repository-level
-reproducibility. It consolidates the detailed guidance that used to be split
-between `README.md` and this file.
+This repository provides:
 
-The repository exposes four primary execution paths:
+- software for JEPA pretraining, downstream evaluation, benchmarking, and the Tox21 case-study path;
+- pipeline entry points and CI/Vast wrappers used in longer-running staged execution; and
+- curated or preprocessed local data artifacts under `data/` that support inspection of inputs and data lineage.
 
-1. unlabeled-graph pretraining with `python scripts/train_jepa.py pretrain`,
-2. downstream fine-tuning / evaluation with `finetune` or `evaluate`,
-3. encoder comparison with `benchmark`, and
-4. the Tox21 case study with `tox21`.
+The repository therefore supports review of methods, software structure, and data provenance. It should not be read as a claim that a short local command sequence will recreate the full manuscript outputs.
 
-A successful run can produce:
+## Data and Software Availability
 
-- pretrained encoder checkpoints,
-- stage checkpoints and logs,
-- encoder manifests in CI-style runs,
-- downstream benchmark reports, and
-- for Tox21, per-task summaries, prediction exports, calibration artifacts, and
-  run manifests.
+### Software included in the repository
 
-## Supported environments
+The repository includes:
 
-- **Local CPU:** suitable for smoke tests and inspection.
-- **Local GPU:** suitable for practical single-machine training.
-- **Remote GPU / cluster:** the main automated path, driven through the
-  repository's CI wrappers and `.github/workflows/ci-vast.yml`.
+- training and evaluation code under the tracked source tree;
+- command-line entry points such as `scripts/train_jepa.py`;
+- CI and orchestration wrappers, including the automated pipeline path used in `.github/workflows/ci-vast.yml`; and
+- analysis/reporting utilities used to inspect or summarize run outputs.
 
-## Minimal setup
+These components document how the repository is organized and how staged runs are launched, even when the full manuscript workflow was executed through broader automation rather than a single local command.
 
-### Python
+### Data artifacts bundled in the repository
 
-- Prefer **Python 3.10**.
-- Python 3.12+ is not the default recommendation because `requirements.txt`
-  pins `rdkit-pypi` for Python `<3.12`.
+The `data/` directory contains reviewer-usable local artifacts that are already present in the repository. These are not described here as newly downloaded at review time; they are bundled local copies or prepared forms used by the software.
 
-### Python dependencies
-
-CPU-oriented local setup:
-
-```bash
-python -m pip install --upgrade pip setuptools wheel "numpy<2"
-pip install --index-url https://download.pytorch.org/whl/cpu torch==2.2.1
-pip install --no-cache-dir -f https://data.pyg.org/whl/torch-2.2.1+cpu.html torch-scatter==2.1.2
-pip install torch-geometric==2.5.3
-pip install -r requirements.txt
-```
-
-GPU local setup follows the same pattern with the appropriate PyTorch wheel for
-the target CUDA runtime. Automated GPU preparation is handled by
-`scripts/ci/prepare_env.sh`.
-
-### Runtime dependencies actually used by the repo
-
-- **RDKit** for molecular featurization and scaffold splitting.
-- **PyTorch / PyTorch Geometric / torch-scatter** for model training and graph
-  operations.
-- **pyarrow** or **fastparquet** for parquet input/output.
-- **DeepChem** only for helper download paths; it is not required when using the
-  bundled local data.
-
-### Environment variables
-
-No environment variable is required for the documented local smoke paths if the
-input data is already on disk.
-
-Optional variables:
-
-- `WANDB_API_KEY` for Weights & Biases logging.
-- `CUDA_VISIBLE_DEVICES` to restrict visible GPUs.
-
-CI / remote automation additionally relies on wrapper-managed variables such as
-`EXP_ID`, `PRETRAIN_EXP_ID`, `EXPERIMENTS_ROOT`, and `ARTIFACTS_DIR`.
-
-## Repository-bundled data and what it means
-
-The public repo already includes reviewer-usable data under `data/`. This
-section documents only what can be supported by repository evidence.
-
-| Path | Role in this repo | What it is | Upstream source |
+| Path | Repository role | Bundled form | Public provenance |
 | --- | --- | --- | --- |
-| `data/tox21/data.csv` | Tox21 and downstream labeled input | Bundled local copy of the Tox21 benchmark CSV | Hugging Face: [`HUBioDataLab/tox21/data.csv`](https://huggingface.co/datasets/HUBioDataLab/tox21/resolve/main/data.csv) (~7.83K rows). |
-| `data/ZINC-canonicalized/` | Pretraining unlabeled corpus | Bundled shard dataset used as the unlabeled parquet corpus | Hugging Face: [`sagawa/ZINC-canonicalized`](https://huggingface.co/datasets/sagawa/ZINC-canonicalized) (~20.7M molecules). |
-| `data/katielinkmoleculenet_benchmark/train`, `val`, `test` | Benchmark fixture | Bundled benchmark split fixture consumed directly by benchmark paths | Hugging Face: [`katielink/moleculenet-benchmark` ESOL fixture](https://huggingface.co/datasets/katielink/moleculenet-benchmark/tree/af500889de49a7c64ede443c2928fd5e876dd677/esol) (ESOL train split ~1.21K rows). |
-| `data/BASF_AIPubChem_v4/` | Optional alternate unlabeled corpus | Bundled shard dataset available as an alternate unlabeled parquet corpus | Hugging Face: [`BASF-AI/PubChem-Raw`](https://huggingface.co/datasets/BASF-AI/PubChem-Raw) (~2.09M records). |
+| `data/tox21/data.csv` | Labeled input used by the Tox21 and related evaluation paths | Local curated CSV | Public Tox21 data distributed via Hugging Face (`HUBioDataLab/tox21`). |
+| `data/ZINC-canonicalized/` | Unlabeled corpus used by JEPA pretraining paths | Local parquet shards | Public dataset distributed via Hugging Face (`sagawa/ZINC-canonicalized`). |
+| `data/BASF_AIPubChem_v4/` | Alternate unlabeled corpus available to the repository | Local parquet shards | Public dataset distributed via Hugging Face (`BASF-AI/PubChem-Raw`). |
+| `data/katielinkmoleculenet_benchmark/train`, `val`, `test` | Checked-in benchmark fixture for benchmark-style evaluation paths | Local prepared split directories | Public benchmark material distributed via Hugging Face (`katielink/moleculenet-benchmark`). |
 
-### Distinguish these four things during review
+In this repository, these bundled artifacts are important because they make at least part of the data lineage public and machine-readable inside the submission itself. They also distinguish repository-inspectable inputs from outputs that are only created during execution.
 
-- **Bundled labeled CSV:** `data/tox21/data.csv` is one dataset table, not a
-  pre-materialized split directory.
-- **Bundled split fixture:**
-  `data/katielinkmoleculenet_benchmark/train|val|test` is already split on disk
-  and can be consumed directly by `benchmark`.
-- **Runtime scaffold splits:** generated by `scripts/make_scaffold_splits.py` or
-  internally by `finetune` / `tox21` during execution.
-- **Caches and checkpoints:** generated artifacts for speed or model reuse; they
-  are not authoritative split definitions.
+## Bundled vs external vs runtime-generated
 
-## Data, split, cache, checkpoint, and report layout
+### Bundled in the repository
 
-### Input layouts
+Bundled materials include the tracked software and the local data artifacts under `data/` listed above.
 
-#### Unlabeled corpora for `pretrain`
+These materials support:
 
-`pretrain` expects `--unlabeled-dir` to point to a flat directory of shard
-files.
+- inspection of the repository's methods and execution structure;
+- inspection of data lineage and prepared inputs; and
+- limited smoke-style validation on a local machine, where dependencies and resources permit.
 
-Example:
+### External or upstream public sources
 
-```text
-data/
-  zinc_pretrain/
-    0000.parquet
-    0001.parquet
-```
+The upstream origin of the bundled data artifacts is public. The repository includes prepared local forms because the software operates on those local CSV/parquet/pre-split inputs, not because the submission claims exclusive ownership of the underlying raw public datasets.
 
-If `scripts/download_unlabeled.py` is used with its default split layout, pass a
-leaf shard directory such as `data/unlabeled/train`, not the parent
-`data/unlabeled` directory.
+### Runtime-generated materials
 
-#### Labeled datasets for `finetune` / `evaluate` / `tox21`
+The repository also works with outputs that are generated during execution rather than bundled in Git. These can include:
 
-Common layout:
+- graph or dataset caches;
+- model checkpoints;
+- run manifests and diagnostics;
+- benchmark summaries or report files; and
+- runtime-generated splits used by some evaluation paths.
 
-```text
-data/
-  tox21/
-    data.csv
-```
+Those generated materials depend on the execution context and should be treated separately from the bundled inputs already present in `data/`.
 
-These commands ingest a single labeled dataset source and can derive train / val
-/ test partitions in memory.
+## Important distinctions for reviewers
 
-#### Explicit split directories for `benchmark`
+### Public upstream data sources
 
-Example:
+The underlying datasets referenced above originate from public sources.
 
-```text
-data/
-  tox21_scaffold/
-    train/
-    val/
-    test/
-```
+### Preprocessed or curated local artifacts in this repository
 
-`benchmark` consumes explicit split directories directly. `finetune` and `tox21`
-do not require them because they can create splits at runtime.
+The repository contains local prepared forms that are directly usable by the implemented software, including CSV tables, parquet shards, and benchmark split directories.
 
-### Generated artifact layouts
+### Caches
 
-Typical generated directories:
+Caches are generated to accelerate featurization or repeated runs. They are convenience artifacts, not the primary record of public data provenance.
 
-```text
-cache/
-  graphs_10m/
-    <graph caches>
-    prebuilt_datasets/
-      <dataset caches>
+### Checkpoints
 
-ckpts/
-  pretrain/
-  finetune/
+Checkpoints are runtime outputs from training or evaluation stages. They are not the same thing as the bundled data artifacts.
 
-reports/
+### Reports and diagnostics
 
-/data/mjepa/experiments/<EXP_ID>/
-  artifacts/
-  pretrain/
-  finetune/
-  tox21/
-  bench/
-  report/
-```
+Reports, summaries, manifests, and similar outputs are produced during execution and depend on the stage that was run.
 
-### Keep these artifact categories separate
+### Runtime-generated splits
 
-- **Raw or manually supplied data:** CSV/parquet inputs and any explicit split
-  directories.
-- **Generated scaffold splits:** outputs from `scripts/make_scaffold_splits.py`
-  or in-memory splits selected during `finetune` / `tox21`.
-- **Graph caches:** `--cache-dir` outputs and `prebuilt_datasets/` helpers;
-  useful for speed, not for documenting split identities.
-- **Model checkpoints and reports:** encoder checkpoints, fine-tune checkpoints,
-  benchmark summaries, Tox21 summaries, calibration files, and manifests.
+Some repository paths can derive splits during execution rather than reading only checked-in split directories. Where that occurs, those split assignments are execution products and should not be conflated with the bundled benchmark fixture already present in `data/`.
 
-## Reproduction entry points
+## What a reviewer can realistically do
 
-The repository's real entry points are the Python CLI and the CI wrappers that
-call the same code.
+This repository can reasonably support the following reviewer activities:
 
-### Optional explicit scaffold split generation
+- inspect the software that implements pretraining, fine-tuning/evaluation, benchmarking, and the Tox21 case-study path;
+- inspect the structure of the automated pipeline and wrapper scripts;
+- inspect bundled local data artifacts and their public provenance; and
+- perform limited smoke-style checks or partial runs if the local environment is configured with the required dependencies and sufficient compute.
+
+For example, a reviewer may inspect the main CLI entry points and the checked-in `data/` contents, or run a narrowly scoped local command for software validation. Such checks should be understood as repository inspection or smoke validation, not as a claim of full manuscript rerun.
+
+## Optional smoke/inspection paths only
+
+Where a reviewer wants a minimal command example, the most appropriate repository-level examples are inspection-oriented entry points rather than claims of complete reproduction. For example:
 
 ```bash
-python scripts/make_scaffold_splits.py \
-  --input data/tox21/data.csv \
-  --smiles_col smiles \
-  --out_dir data/tox21_scaffold \
-  --format parquet \
-  --train 0.8 \
-  --val 0.1 \
-  --seed 42
+python scripts/train_jepa.py --help
 ```
 
-This writes a new split artifact to disk. It does not modify the checked-in
-benchmark fixture directories.
-
-### Reviewer smoke path using bundled data
-
-Minimal pretraining smoke test:
+or, for wrapper inspection,
 
 ```bash
-python scripts/train_jepa.py pretrain \
-  --unlabeled-dir data/ZINC-canonicalized \
-  --output encoder.pt \
-  --ckpt-dir ckpts/pretrain_smoke \
-  --epochs 1 \
-  --sample-unlabeled 128 \
-  --batch-size 32 \
-  --device cpu
+bash scripts/ci/run-tox21.sh --help
 ```
 
-Minimal downstream evaluation:
+These examples are included only to show the available entry points. They are not presented as guarantees that a short local invocation will regenerate manuscript figures, tables, or final numerical results.
 
-```bash
-python scripts/train_jepa.py evaluate \
-  --labeled-dir data/tox21 \
-  --encoder ckpts/pretrain_smoke/encoder.pt \
-  --label-col NR-AR \
-  --task-type classification \
-  --epochs 1 \
-  --batch-size 32 \
-  --device cpu
-```
+## Relationship to manuscript-scale outputs
 
-These are useful reviewer smoke tests, not manuscript-scale runs.
+The manuscript-scale outputs associated with this project arise from a broader multi-stage execution context. In practice, that context may involve staged automation, environment preparation, hardware-specific execution, caches, checkpoints, and pipeline orchestration.
 
-### Full pretraining path
+Accordingly, repository outputs should be described conservatively:
 
-```bash
-python scripts/train_jepa.py pretrain \
-  --unlabeled-dir data/ZINC-canonicalized \
-  --output encoder.pt \
-  --ckpt-dir ckpts/pretrain \
-  --cache-dir cache/graphs_10m \
-  --epochs 100 \
-  --batch-size 256 \
-  --lr 1e-4 \
-  --mask-ratio 0.15 \
-  --device cuda
-```
+- repository artifacts and generated outputs can support or contribute to manuscript analyses; but
+- the repository documentation does not claim that manuscript figures or tables are recreated by a trivial local command sequence.
 
-Notes:
+## Not claimed
 
-- `--output` controls the final checkpoint path.
-- The repo also maintains `ckpts/pretrain/encoder.pt` as the stable downstream
-  encoder path.
-- In CI-style runs, `ARTIFACTS_DIR` can additionally produce an
-  `encoder_manifest.json` artifact.
+This repository is **not** presented as a one-command, end-to-end manuscript rerun.
 
-### Fine-tuning / evaluation path
+Simple local commands, where used at all, are for inspection or smoke validation only.
 
-Single-task example:
+Exact numeric parity may depend on runtime environment, hardware, seeds, cached state, and the orchestration path used for the staged execution.
 
-```bash
-python scripts/train_jepa.py finetune \
-  --labeled-dir data/tox21 \
-  --labeled-csv data/tox21/data.csv \
-  --label-col NR-AR \
-  --encoder ckpts/pretrain/encoder.pt \
-  --ckpt-dir ckpts/finetune_tox21_nr_ar \
-  --task-type classification \
-  --use-scaffold \
-  --epochs 50 \
-  --batch-size 128 \
-  --device cuda
-```
+## Documentation boundary
 
-Evaluation-only alias:
-
-```bash
-python scripts/train_jepa.py evaluate \
-  --labeled-dir data/tox21/data.csv \
-  --label-col NR-AR \
-  --encoder ckpts/pretrain/encoder.pt \
-  --task-type classification \
-  --epochs 50 \
-  --batch-size 256 \
-  --device cuda
-```
-
-### Benchmark path
-
-The checked-in benchmark fixture is used as an ESOL-style regression benchmark:
-
-```bash
-python scripts/train_jepa.py benchmark \
-  --labeled-dir data/katielinkmoleculenet_benchmark/train \
-  --jepa-encoder ckpts/pretrain/encoder.pt \
-  --task-type regression \
-  --label-col "measured log solubility in mols per litre" \
-  --report-dir reports \
-  --device cuda
-```
-
-If sibling `val/` and `test/` directories exist beside the supplied `train/`
-path, `benchmark` discovers them automatically.
-
-## Phase-3 Tox21 evaluation path
-
-Reviewer-facing command path:
-
-```bash
-python scripts/train_jepa.py tox21 \
-  --csv data/tox21/data.csv \
-  --tasks NR-AR NR-AhR SR-p53 \
-  --encoder-checkpoint ckpts/pretrain/encoder.pt \
-  --evaluation-mode hybrid \
-  --report-dir reports/tox21 \
-  --device cuda
-```
-
-This is the repository's direct Phase-3 CLI path. CI uses `bash scripts/ci/run-tox21.sh`, which resolves the same stage through `scripts/ci/train_jepa_ci.yml` and launches `python -m scripts.commands.tox21 ...` with the wrapper-managed arguments. The Python CLI routes to `scripts/commands/tox21.py`, which in turn calls `experiments.case_study.run_tox21_case_study` when available.
-
-### Split behavior on the Tox21 path
-
-Direct code evidence shows the following behavior:
-
-- The command reads a single CSV source (`data/tox21/data.csv` in the documented
-  path).
-- When RDKit-backed scaffold splitting is available, `tox21` prefers runtime
-  Bemis-Murcko scaffold splits.
-- The implementation retries up to five seeds to satisfy validation / test label
-  diversity and positive-count checks.
-- If scaffold attempts do not satisfy those checks, the code falls back to
-  stratified splitting and records the selected strategy plus attempt summaries
-  in diagnostics/manifests.
-
-This split behavior is runtime-generated. It is separate from the bundled
-benchmark split directories.
-
-### Explainability requirement
-
-`--explain-mode` is required for attribution outputs.
-
-Without `--explain-mode`, the Tox21 path produces metrics, predictions,
-calibration outputs, and manifests, but not explainability artifacts. The
-repository docs and implementation both support this distinction.
-
-Example attribution-oriented invocation:
-
-```bash
-python scripts/train_jepa.py tox21 \
-  --csv data/tox21/data.csv \
-  --tasks NR-AR NR-AhR SR-p53 \
-  --encoder-checkpoint ckpts/pretrain/encoder.pt \
-  --evaluation-mode hybrid \
-  --explain-mode ig \
-  --report-dir reports/tox21 \
-  --device cuda
-```
-
-## Expected outputs
-
-### Pretraining
-
-Look for artifacts such as:
-
-- `ckpts/pretrain/pt_epoch_<N>.pt`
-- `ckpts/pretrain/encoder.pt`
-- `ckpts/pretrain/pretrain_losses.csv`
-- `ckpts/pretrain/plots/pretrain_loss.png`
-- `<artifacts_dir>/encoder_manifest.json` in CI-style runs
-
-### Fine-tuning
-
-Look for artifacts such as:
-
-- `ckpts/finetune/.../seed_<seed>/ft_best.pt`
-- `ckpts/finetune/.../head.pt`
-- optional exported fine-tuned encoder checkpoints
-
-### Benchmark
-
-Look for artifacts such as:
-
-- `reports/benchmark_<timestamp>.json`
-- `reports/benchmark_<timestamp>.csv`
-
-### Tox21
-
-From direct implementation evidence in `scripts/commands/tox21.py`, the output root resolves from `--tox21-dir`, otherwise `--report-dir`, otherwise `<csv_dir>/reports`. In CI, `scripts/ci/run-tox21.sh` sets `TOX21_DIR`, which defaults to `${EXPERIMENT_DIR}/tox21` and normally resolves to `/data/mjepa/experiments/<EXP_ID>/tox21`. The command writes reviewer-relevant files including:
-
-- per-task summaries
-  - `tox21_<task>.json`
-  - `tox21_<task>.csv`
-  - `tox21_<task>_calibrator.json`
-  - `run_manifest_<task>.json`
-- prediction and calibration artifacts when predictions are present
-  - `tox21_<task>_scores.csv`
-  - `tox21_<task>_scores_by_seed.csv`
-  - `tox21_<task>_reliability_bins.json`
-- aggregated outputs
-  - `tox21_summary.json`
-  - `run_manifest.json`
-  - `stage-outputs/tox21_<encoder_source>_<task>.json`
-  - `stage-outputs/tox21_<encoder_source>.json`
-  - `tox21_<evaluation_mode>_metrics.csv` when per-task CSV summaries are
-    available
-
-## Mapping Phase-3 outputs to the manuscript
-
-This section intentionally stays conservative and only keeps mappings that are
-supported by direct repository evidence.
-
-### Verified by direct code evidence
-
-- **Table 4:** Supported by the Tox21 assay-level metric exports written by the
-  `tox21` path, including per-task JSON/CSV files and the aggregated
-  `tox21_<evaluation_mode>_metrics.csv`. The implementation explicitly records
-  ROC-AUC, PR-AUC, Brier score, and ECE in these outputs.
-- **Figure 7:** Supported at the artifact level by
-  `tox21_<task>_reliability_bins.json` plus prediction exports such as
-  `tox21_<task>_scores.csv`. Those files are sufficient to reconstruct
-  reliability diagrams, but the exact final figure styling is a separate
-  plotting step.
-- **Figure 8:** Supported at the artifact level by the same Tox21 metric and
-  calibration outputs, because the implementation emits PR-AUC, ECE, and other
-  assay-level metrics. The exact manuscript scatter/plot layout is not produced
-  as a single deterministic file by one command.
-- **Figures 9-12:** These require explainability mode. The base Tox21 command
-  does not emit attribution outputs unless `--explain-mode` is supplied. The
-  repository therefore supports these figures only through an explainability run
-  plus whatever figure-assembly step was used outside the base command.
-
-### Not claimed here
-
-- This guide does **not** claim that one `tox21` command directly produces the
-  final manuscript-ready panels for Figures 7-12.
-- This guide does **not** claim that the checked-in benchmark split folders are
-  the exact manuscript splits.
-- This guide does **not** claim exact manuscript numeric parity on every
-  machine, because seeds, hardware, and scaffold-vs-stratified fallback behavior
-  can change emitted values.
-
-## CPU / GPU notes
-
-- Device selection uses `--device` and, where supported, `--devices`.
-- CPU runs are best limited to smoke-test scale.
-- Multi-GPU behavior is primarily exercised through DDP launchers or the CI
-  wrappers.
-- If memory is limited, reduce `--batch-size` first.
-
-## Caching behavior
-
-### What is cached
-
-- `--cache-dir` enables graph-feature caches.
-- Cache warmers may also build dataset-level caches under
-  `prebuilt_datasets/`.
-
-### What caches are not
-
-Standard caches are not the authoritative record of train / val / test split
-membership. They are speed aids.
-
-### When to rebuild caches
-
-If featurization-related settings change, especially `--add-3d`, clear and
-rebuild the affected cache subtree.
-
-## Output verification checklist
-
-- Confirm `--unlabeled-dir` points to a real shard directory, not a cache root.
-- Confirm a pretrained encoder checkpoint exists and is readable.
-- In CI-style runs, confirm `encoder_manifest.json` exists under the artifacts
-  directory when expected.
-- Confirm downstream stages wrote reports/checkpoints into the intended output
-  root.
-- For Tox21, confirm both aggregate files (`tox21_summary.json`,
-  `run_manifest.json`, and usually `tox21_<mode>_metrics.csv`) and per-task
-  files were emitted.
-- If reviewing attribution outputs, confirm `--explain-mode` was actually used.
-- If reviewing split behavior, inspect the emitted Tox21 diagnostics/manifests
-  for `split_strategy`, `split_counts`, and recorded split-attempt metadata.
-
-## Troubleshooting
-
-### `No unlabeled graphs found ... Check that --unlabeled-dir points to the ZINC dataset, not the cache`
-
-Cause: `--unlabeled-dir` points to a cache root or a directory without flat
-shard files.
-
-Fix: point `--unlabeled-dir` at the actual shard directory.
-
-### Stale or incompatible cache after changing featurization
-
-Fix: remove the affected cache subtree and rerun.
-
-### CPU-only execution is too slow or runs out of memory
-
-Fix: use `--device cpu`, reduce `--batch-size`, and prefer smoke-test scale.
-
-### RDKit missing
-
-Symptoms: scaffold splitting unavailable, featurization failures, or Tox21 split
-fallback to stratified behavior.
-
-Fix: use Python 3.10 with `requirements.txt`, or install RDKit the same way as
-in the CI environment.
-
-### PyTorch Geometric / torch-scatter missing
-
-Fix: install compatible `torch`, `torch-scatter`, and `torch-geometric`
-packages using the setup commands above.
-
-### Parquet read/write support missing
-
-Fix: ensure either `pyarrow` or `fastparquet` is installed.
-
-### Local-vs-CI path differences
-
-CI writes under `/data/mjepa/experiments/<EXP_ID>/...`, while local runs often
-write under `ckpts/` and `reports/`.
-
-Compare artifacts by role, not by absolute path.
-
-## Verification status for this document
-
-This refactor was verified conservatively by direct repository inspection.
-
-- Verified from code/docs inspection: Tox21 output filenames, the requirement
-  for `--explain-mode` to obtain attribution outputs, the presence of
-  ROC-AUC/PR-AUC/Brier/ECE in Tox21 reporting, and the recording of runtime
-  split strategy/count diagnostics.
-- Not verified by local command execution in this doc refactor: end-to-end Tox21
-  runtime output generation, because the current environment did not have the
-  required ML dependencies installed.
+This note reflects repository evidence only. It is intended to clarify data/software availability and practical reproducibility boundaries without overstating what the repository alone guarantees.

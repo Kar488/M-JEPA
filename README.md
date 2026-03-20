@@ -1,63 +1,22 @@
 # M-JEPA
 
-> **Summary**
-> - Frozen encoder lineages are immutable.
-> - Dependent runs must set `PRETRAIN_EXP_ID` to reuse them.
-> - To rebuild, remove or override the freeze marker explicitly.
+M-JEPA is a research repository for Joint Embedding Predictive Architectures on molecular graphs. The repository contains the software used to train and evaluate molecular graph encoders, together with pipeline wrappers and selected curated data artifacts that support repository inspection and reviewer access.
 
-Joint Embedding Predictive Architectures (JEPA) for molecular graphs. This
-repository contains the training entry points, CI wrappers, and bundled example
-benchmark data used for self-supervised pretraining, downstream evaluation, and
-Tox21 analysis.
+At a high level, this repository includes:
 
-Detailed reviewer-facing reproducibility guidance lives in
-[`REPRODUCE.md`](REPRODUCE.md). It is the canonical source for data layout,
-runtime split behavior, expected outputs, troubleshooting, and manuscript
-mapping notes.
+- model and training code for JEPA pretraining and downstream evaluation;
+- pipeline entry points and CI/Vast wrappers used to orchestrate multi-stage runs;
+- analysis and reporting utilities for benchmark and case-study outputs; and
+- reviewer-usable data artifacts already present under `data/`, including curated/preprocessed local copies or shards used by the repository workflows.
 
-## Reviewer path
+## Repository scope
 
-- Start with [`REPRODUCE.md`](REPRODUCE.md) for the end-to-end reproduction
-  guide.
-- Use the documented Phase-3 `python scripts/train_jepa.py tox21 ...` path in
-  `REPRODUCE.md` when reviewing Tox21 evaluation outputs.
-- Treat `REPRODUCE.md` as the source of truth for what is bundled in `data/`,
-  what is generated at runtime, and which outputs are actually emitted.
+This repository is intended to support inspection of the implemented methods, the structure of the pipeline, and the provenance of bundled data artifacts. It also supports limited local inspection or smoke-style validation where the environment and dependencies permit.
 
-## 🔒 Frozen Encoder Lineages
+It is **not** presented as a short, one-command route to recreate the full manuscript end-to-end. Manuscript-scale results depend on longer multi-stage execution, runtime orchestration, hardware, caches, checkpoints, and other environment-specific details.
 
-CI discovers encoders that carry the `bench/encoder_frozen.ok` marker and
-reuses them for downstream stages. Phase-1 sweeps now allocate their own
-`EXP_ID` and set `GRID_EXP_ID` to that value so fresh grid logs land under a
-dedicated directory. When a freeze marker is present, automation launches new
-runs under a fresh `EXP_ID` while binding `PRETRAIN_EXP_ID` (and, when reading
-existing sweeps, `GRID_EXP_ID`) to the frozen lineage.
+## Data and Software Availability
 
-```bash
-# Run tox21 grading on a frozen encoder
-export PRETRAIN_EXP_ID=1759825317
-bash scripts/ci/run-tox21.sh
-# Output -> ${TOX21_DIR:-/data/mjepa/experiments/$EXP_ID/tox21}/
-```
+The repository provides software plus curated or preprocessed data artifacts that are already present in `data/`. These local artifacts are derived from public upstream sources and are included to support inspection of data lineage and repository behavior. Additional outputs such as caches, checkpoints, reports, and diagnostics are generated at runtime.
 
-See `docs/frozen_lineage_policy.rst` for override flags and lineage semantics,
-including `FORCE_UNFREEZE_GRID=1` (rebuild a frozen lineage) and
-`FORCE_RERUN=stage1,stage2` to selectively invalidate caches.
-
-## Local development
-
-1. **Install dependencies**
-
-   ```bash
-   git clone https://github.com/.../M-JEPA.git
-   cd M-JEPA
-   python -m pip install --upgrade pip setuptools wheel "numpy<2"
-   pip install --index-url https://download.pytorch.org/whl/cpu torch==2.2.1
-   pip install --no-cache-dir -f https://data.pyg.org/whl/torch-2.2.1+cpu.html torch-scatter==2.1.2
-   pip install torch-geometric==2.5.3
-   pip install -r requirements.txt
-   pre-commit install
-   ```
-
-   Turn on developer mode in developer settings for symlinks to work when
-   running tests.
+A more detailed, reviewer-facing note is provided in [`REPRODUCE.md`](REPRODUCE.md). That document explains what is bundled in the repository, what is generated during execution, and what kinds of reproducibility checks are realistically supported without overstating end-to-end manuscript reruns.
