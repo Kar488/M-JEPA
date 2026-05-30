@@ -69,6 +69,90 @@ def _result_to_dict(result: Any) -> Dict[str, Any]:
     return _coerce(payload)
 
 
+def _pretrain_encoder(
+    arm: str, contrastive: bool, args: argparse.Namespace, ckpt_path: Path
+) -> None:
+    """Phase 1: pretrain an encoder on the Tox21 unlabelled molecules and save it.
+
+    Mirrors the pretraining block in ``experiments.case_study`` (same factory,
+    same train_jepa/train_contrastive, same hyperparameters) so the saved
+    checkpoint is a drop-in for hybrid fine-tuning. Both arms see the identical
+    molecule set; only the objective differs.
+    """
+    import pandas as pd
+    import torch
+    from rdkit import RDLogger
+
+    from data.mdataset import GraphDataset
+    from models.ema import EMA
+    from models.factory import build_encoder
+    from models.predictor import MLPPredictor
+    from training.unsupervised import train_contrastive, train_jepa
+    from utils.checkpoint import save_checkpoint
+
+    RDLogger.DisableLog("rdApp.*")
+
+    df = pd.read_csv(args.csv)
+    smiles = [str(s) for s in df[args.smiles_col].tolist()]
+    dataset = GraphDataset.from_smiles_list(smiles, random_seed=args.seed)
+    logger.info("[%s] pretrain dataset: %d graphs", arm, len(dataset))
+
+    try:
+        edge_dim = int(getattr(dataset[0], "edge_attr").shape[1])
+    except Exception:
+        edge_dim = 0
+    try:
+        input_dim = int(getattr(dataset[0], "x").shape[1])
+    except Exception:
+        input_dim = 0
+
+    torch.manual_seed(args.seed)
+    enc_kwargs = dict(
+        gnn_type=args.gnn_type,
+        input_dim=input_dim,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        edge_dim=edge_dim,
+    )
+    encoder = build_encoder(**enc_kwargs)
+
+    if contrastive:
+        train_contrastive(
+            dataset=dataset,
+            encoder=encoder,
+            epochs=args.pretrain_epochs,
+            batch_size=64,
+            lr=1e-4,
+            device="cpu",
+            mask_ratio=args.mask_ratio,
+            temperature=args.temperature,
+        )
+    else:
+        ema_encoder = build_encoder(**enc_kwargs)
+        ema_helper = EMA(encoder, decay=0.99)
+        predictor = MLPPredictor(
+            embed_dim=args.hidden_dim, hidden_dim=args.hidden_dim * 2
+        )
+        train_jepa(
+            dataset=dataset,
+            encoder=encoder,
+            ema_encoder=ema_encoder,
+            predictor=predictor,
+            ema=ema_helper,
+            epochs=args.pretrain_epochs,
+            batch_size=64,
+            mask_ratio=args.mask_ratio,
+            contiguous=True,
+            lr=1e-4,
+            device="cpu",
+            reg_lambda=1e-4,
+        )
+
+    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+    save_checkpoint(str(ckpt_path), encoder=encoder.state_dict())
+    logger.info("[%s] saved pretrained encoder -> %s", arm, ckpt_path)
+
+
 def _run_arm(arm: str, contrastive: bool, args: argparse.Namespace) -> Dict[str, Any]:
     out_dir = Path(args.out) / arm
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -77,19 +161,19 @@ def _run_arm(arm: str, contrastive: bool, args: argparse.Namespace) -> Dict[str,
         explain_config["steps"] = int(args.explain_steps)
 
     logger.info(
-        "=== %s arm: contrastive=%s pretrain=%d finetune=%d -> %s ===",
+        "=== %s arm: contrastive=%s mode=%s pretrain=%d finetune=%d -> %s ===",
         arm,
         contrastive,
+        args.eval_mode,
         args.pretrain_epochs,
         args.finetune_epochs,
         out_dir,
     )
 
-    result = run_tox21_case_study(
+    common = dict(
         csv_path=args.csv,
         task_name=args.task,
         seed=args.seed,
-        pretrain_epochs=args.pretrain_epochs,
         finetune_epochs=args.finetune_epochs,
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
@@ -97,11 +181,6 @@ def _run_arm(arm: str, contrastive: bool, args: argparse.Namespace) -> Dict[str,
         mask_ratio=args.mask_ratio,
         contiguous=True,  # connected-subgraph masking (irrelevant to contrastive arm)
         contrastive=contrastive,
-        # end_to_end with no external checkpoint => self-pretrains on the Tox21
-        # molecules then fine-tunes the whole model. This is what makes the run
-        # self-contained (no frozen lineage) and matched across both arms.
-        evaluation_mode="end_to_end",
-        full_finetune=True,
         encoder_lr=args.encoder_lr,
         head_lr=args.head_lr,
         layerwise_decay=args.layerwise_decay,
@@ -114,6 +193,28 @@ def _run_arm(arm: str, contrastive: bool, args: argparse.Namespace) -> Dict[str,
         calibration_method="temperature",
         threshold_metric="pr_auc",
     )
+
+    if args.eval_mode == "hybrid":
+        # Phase 1: pretrain + save an encoder (hybrid does NOT self-pretrain);
+        # Phase 2: hybrid staged-unfreeze fine-tune from that encoder + IG.
+        # This matches the paper's reported configuration (pretrained encoder ->
+        # hybrid fine-tune -> IG), at reduced budget on Tox21 molecules.
+        ckpt = out_dir / "pretrained_encoder.pt"
+        _pretrain_encoder(arm, contrastive, args, ckpt)
+        result = run_tox21_case_study(
+            evaluation_mode="hybrid",
+            encoder_checkpoint=str(ckpt),
+            pretrain_epochs=args.pretrain_epochs,
+            **common,
+        )
+    else:
+        # end_to_end / pretrain_frozen self-pretrain on the Tox21 molecules.
+        result = run_tox21_case_study(
+            evaluation_mode=args.eval_mode,
+            full_finetune=(args.eval_mode == "end_to_end"),
+            pretrain_epochs=args.pretrain_epochs,
+            **common,
+        )
 
     summary = _result_to_dict(result)
     (out_dir / "result_summary.json").write_text(json.dumps(summary, indent=2))
@@ -132,6 +233,15 @@ def main() -> None:
     p.add_argument("--num-layers", type=int, default=3)
     p.add_argument("--gnn-type", default="mpnn")
     p.add_argument("--mask-ratio", type=float, default=0.15)
+    p.add_argument("--temperature", type=float, default=0.1)
+    p.add_argument("--smiles-col", default="smiles")
+    p.add_argument(
+        "--eval-mode",
+        default="hybrid",
+        choices=["hybrid", "end_to_end", "pretrain_frozen"],
+        help="hybrid (paper's reported IG config): pretrain encoder then "
+        "staged-unfreeze fine-tune. end_to_end/pretrain_frozen self-pretrain.",
+    )
     p.add_argument("--encoder-lr", type=float, default=1e-5)
     p.add_argument("--head-lr", type=float, default=3e-4)
     p.add_argument("--layerwise-decay", type=float, default=0.8)
