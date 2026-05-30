@@ -1,0 +1,58 @@
+INFO:experiments.case_study:Split train: size=5806 finite=5806 positives=239
+INFO:experiments.case_study:Split val: size=726 finite=726 positives=39
+INFO:experiments.case_study:Split test: size=726 finite=726 positives=30
+INFO:training.unsupervised:Epoch 1/25 finished: JEPA loss 4.565087
+INFO:training.unsupervised:Epoch 2/25 finished: JEPA loss 2.208491
+INFO:training.unsupervised:Epoch 3/25 finished: JEPA loss 3.998022
+INFO:training.unsupervised:Epoch 4/25 finished: JEPA loss 7.138604
+INFO:training.unsupervised:Epoch 5/25 finished: JEPA loss 9.823465
+INFO:training.unsupervised:Epoch 6/25 finished: JEPA loss 11.671275
+INFO:training.unsupervised:Epoch 7/25 finished: JEPA loss 12.085077
+INFO:training.unsupervised:Epoch 8/25 finished: JEPA loss 11.520051
+INFO:training.unsupervised:Epoch 9/25 finished: JEPA loss 10.721908
+INFO:training.unsupervised:Epoch 10/25 finished: JEPA loss 9.984866
+INFO:training.unsupervised:Epoch 11/25 finished: JEPA loss 9.096093
+INFO:training.unsupervised:Epoch 12/25 finished: JEPA loss 8.154975
+INFO:training.unsupervised:Epoch 13/25 finished: JEPA loss 7.737181
+INFO:training.unsupervised:Epoch 14/25 finished: JEPA loss 7.304842
+INFO:training.unsupervised:Epoch 15/25 finished: JEPA loss 7.124477
+INFO:training.unsupervised:Epoch 16/25 finished: JEPA loss 6.939771
+INFO:training.unsupervised:Epoch 17/25 finished: JEPA loss 7.121655
+INFO:training.unsupervised:Epoch 18/25 finished: JEPA loss 7.179953
+INFO:training.unsupervised:Epoch 19/25 finished: JEPA loss 7.268294
+INFO:training.unsupervised:Epoch 20/25 finished: JEPA loss 7.167669
+INFO:training.unsupervised:Epoch 21/25 finished: JEPA loss 7.212169
+INFO:training.unsupervised:Epoch 22/25 finished: JEPA loss 7.281217
+INFO:training.unsupervised:Epoch 23/25 finished: JEPA loss 7.180132
+INFO:training.unsupervised:Epoch 24/25 finished: JEPA loss 7.469464
+INFO:training.unsupervised:Epoch 25/25 finished: JEPA loss 7.106181
+INFO:experiments.case_study:Tox21 evaluation summary: mode=end_to_end head_trained=yes steps=437.0 roc_auc=0.6359 pr_auc=0.0669
+INFO:experiments.case_study:Split train: size=5806 finite=5806 positives=239
+INFO:experiments.case_study:Split val: size=726 finite=726 positives=39
+INFO:experiments.case_study:Split test: size=726 finite=726 positives=30
+INFO:training.unsupervised:Epoch 1/25 finished: contrastive loss 3.781964
+INFO:training.unsupervised:Epoch 2/25 finished: contrastive loss 2.916565
+INFO:training.unsupervised:Epoch 3/25 finished: contrastive loss 2.557164
+INFO:training.unsupervised:Epoch 4/25 finished: contrastive loss 2.279042
+INFO:training.unsupervised:Epoch 5/25 finished: contrastive loss 2.072443
+INFO:training.unsupervised:Epoch 6/25 finished: contrastive loss 1.972956
+INFO:training.unsupervised:Epoch 7/25 finished: contrastive loss 1.854550
+INFO:training.unsupervised:Epoch 8/25 finished: contrastive loss 1.750708
+INFO:training.unsupervised:Epoch 9/25 finished: contrastive loss 1.646497
+INFO:training.unsupervised:Epoch 10/25 finished: contrastive loss 1.573047
+INFO:training.unsupervised:Epoch 11/25 finished: contrastive loss 1.493825
+INFO:training.unsupervised:Epoch 12/25 finished: contrastive loss 1.433886
+INFO:training.unsupervised:Epoch 13/25 finished: contrastive loss 1.370712
+INFO:training.unsupervised:Epoch 14/25 finished: contrastive loss 1.362841
+INFO:training.unsupervised:Epoch 15/25 finished: contrastive loss 1.292491
+INFO:training.unsupervised:Epoch 16/25 finished: contrastive loss 1.213928
+INFO:training.unsupervised:Epoch 17/25 finished: contrastive loss 1.182028
+INFO:training.unsupervised:Epoch 18/25 finished: contrastive loss 1.166806
+INFO:training.unsupervised:Epoch 19/25 finished: contrastive loss 1.142967
+INFO:training.unsupervised:Epoch 20/25 finished: contrastive loss 1.114561
+INFO:training.unsupervised:Epoch 21/25 finished: contrastive loss 1.093507
+INFO:training.unsupervised:Epoch 22/25 finished: contrastive loss 1.062070
+INFO:training.unsupervised:Epoch 23/25 finished: contrastive loss 1.067609
+INFO:training.unsupervised:Epoch 24/25 finished: contrastive loss 1.047879
+INFO:training.unsupervised:Epoch 25/25 finished: contrastive loss 1.048295
+INFO:experiments.case_study:Tox21 evaluation summary: mode=end_to_end head_trained=yes steps=575.0 roc_auc=0.7069 pr_auc=0.1563
