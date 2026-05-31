@@ -54,6 +54,24 @@ the matched test molecules:
 
 ## Results (reduced-budget, NR-AR, seed 42)
 
+Two evaluation modes were run. **Hybrid** is the configuration the paper
+actually reports IG under (pretrained encoder -> staged-unfreeze fine-tune ->
+IG); `end_to_end` is shown for comparison (full fine-tune from a self-pretrained
+encoder). In both, JEPA and contrastive encoders are confirmed distinct by
+checkpoint hash.
+
+### Hybrid mode (paper-reported IG configuration)
+
+| Metric | JEPA (masking) | Contrastive (InfoNCE) |
+| --- | --- | --- |
+| Atom IG Gini (mean) | 0.511 | **0.565** |
+| Top-20% atom mass (mean) | 0.485 | **0.542** |
+| Motif top-1 share (mean) | **0.546** | 0.534 |
+| Salient-atom largest CC fraction (mean) | 0.707 | 0.713 (tie) |
+| Downstream ROC-AUC | 0.621 | 0.646 |
+
+### end_to_end mode (full fine-tune, for comparison)
+
 | Metric | JEPA (masking) | Contrastive (InfoNCE) |
 | --- | --- | --- |
 | Atom IG Gini (mean) | 0.539 | **0.561** |
@@ -62,13 +80,16 @@ the matched test molecules:
 | Salient-atom largest CC fraction (mean) | 0.687 | **0.759** |
 | Downstream ROC-AUC | 0.636 | 0.707 |
 
-**Finding.** At this matched budget, connected-subgraph masking does **not**
-produce more coherent attributions than the contrastive objective. Contrastive
-is marginally more concentrated and notably more spatially connected; the two
-are essentially tied on motif concentration. This is evidence consistent with
-the reviewer's concern: the attribution coherence is **not** uniquely
-attributable to connected-subgraph masking, and a predictive contrastive
-objective yields comparable or better coherence on these proxies.
+**Finding.** Both evaluation modes agree: at this matched budget, connected-
+subgraph masking does **not** produce more coherent attributions than the
+contrastive objective. Contrastive is consistently *more concentrated* (higher
+Gini, higher top-20% mass); connectivity is a near-tie under the paper's hybrid
+config; JEPA edges contrastive only on motif top-1 share, marginally. This is
+evidence consistent with the reviewer's concern: on this assay the attribution
+coherence is **not** uniquely attributable to connected-subgraph masking, and a
+predictive contrastive objective yields comparable or better coherence on these
+proxies. The agreement across two independent eval modes makes the single-assay
+signal more credible (though still single-assay, single-seed -- see caveats).
 
 ## Caveats
 
@@ -90,12 +111,17 @@ points away from the masking-specificity claim rather than toward it.
 ## Reproduce
 
 ```bash
+# Hybrid (paper-reported IG config): pretrain encoder -> staged-unfreeze
+# fine-tune -> IG, for both arms.
 PYTHONPATH=. python experiments/contrastive_ig_ablation.py \
   --csv data/tox21/data_rdkit_clean.csv --task NR-AR \
+  --eval-mode hybrid \
   --pretrain-epochs 25 --finetune-epochs 25 \
   --explain-mode ig,ig_motif --explain-steps 32 \
-  --arms jepa,contrastive --out outputs/ig_ablation
+  --arms jepa,contrastive --out outputs/ig_hybrid_nrar
 
 PYTHONPATH=. python experiments/analyze_ig_coherence.py \
-  --root outputs/ig_ablation --task NR-AR
+  --root outputs/ig_hybrid_nrar --task NR-AR
+
+# end_to_end comparison run: --eval-mode end_to_end --out outputs/ig_ablation
 ```

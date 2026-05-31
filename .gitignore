@@ -67,3 +67,5 @@ logs/wb_last_payload.json
 outputs/ig_ablation/
 outputs/smoke/
 outputs/timing_probe/
+outputs/ig_hybrid_nrar/
+outputs/smoke_hybrid/
