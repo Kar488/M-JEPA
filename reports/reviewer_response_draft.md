@@ -1,9 +1,23 @@
 # Draft: response to reviewer follow-up on comparative IG (D26)
 
-> NOTE: numbers in [BRACKETS] are placeholders to be filled from
-> `outputs/ig_grid/grid_paired_stats.json` once the 4-assay x 3-seed x 3-arm
-> grid completes. This is a reduced-budget controlled ablation (CPU); final
-> manuscript figures should be regenerated under the production GPU protocol.
+> STATUS (31 May 2026): Round-2 verified against jcim_manuscript_rev11 and
+> jcim_supporting_information (Table S17). All four Reviewer-3 round-2 items
+> addressed. Full paste-ready letter: reports/response_letter_round2.md.
+>
+> Manuscript edits verified present in rev11:
+>   - p.4  Contribution (1) reframed  -- ACTION: delete leftover fragment
+>           "and computematched contrastive baselines;"
+>   - p.22 masking-ablation coherence sentence  -- present
+>   - p.35 Comparative attribution paragraph (replaced)  -- present
+>   - Limitations attribution-benchmarking sentence  -- present
+>   - SI  Table S17 (8 rows + per-assay + note)  -- present
+> New round-2 edits still to apply in rev11/SI:
+>   - Title  -> "M-JEPA: Predictive Self-Supervised Learning for Molecular
+>           Graphs with Scaffold-Shift Evaluation on Tox21" (+ running head)
+>   - p.17 delete redundant Phase-2 preview paragraph
+>   - p.8  define "breadth-first search (BFS)" at first use
+>   - Bump SI filename rev10 -> rev11 (Table S17 added)
+> Submit clean + marked (tracked rev10->rev11) for BOTH manuscript and SI.
 
 ## What the reviewer is right about
 
