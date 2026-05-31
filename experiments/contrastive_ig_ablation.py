@@ -69,8 +69,23 @@ def _result_to_dict(result: Any) -> Dict[str, Any]:
     return _coerce(payload)
 
 
+# arm -> (contrastive, pretrain_contiguous)
+#   jepa            : predictive JEPA, connected-subgraph masking (contiguity=1)
+#   jepa_dispersed  : predictive JEPA, non-contiguous random-atom masking (=0)
+#   contrastive     : InfoNCE (masking contiguity not used by the objective)
+ARM_SPECS: Dict[str, Dict[str, bool]] = {
+    "jepa": {"contrastive": False, "contiguous": True},
+    "jepa_dispersed": {"contrastive": False, "contiguous": False},
+    "contrastive": {"contrastive": True, "contiguous": True},
+}
+
+
 def _pretrain_encoder(
-    arm: str, contrastive: bool, args: argparse.Namespace, ckpt_path: Path
+    arm: str,
+    contrastive: bool,
+    contiguous: bool,
+    args: argparse.Namespace,
+    ckpt_path: Path,
 ) -> None:
     """Phase 1: pretrain an encoder on the Tox21 unlabelled molecules and save it.
 
@@ -142,7 +157,7 @@ def _pretrain_encoder(
             epochs=args.pretrain_epochs,
             batch_size=64,
             mask_ratio=args.mask_ratio,
-            contiguous=True,
+            contiguous=contiguous,
             lr=1e-4,
             device="cpu",
             reg_lambda=1e-4,
@@ -153,17 +168,23 @@ def _pretrain_encoder(
     logger.info("[%s] saved pretrained encoder -> %s", arm, ckpt_path)
 
 
-def _run_arm(arm: str, contrastive: bool, args: argparse.Namespace) -> Dict[str, Any]:
+def _run_arm(arm: str, args: argparse.Namespace) -> Dict[str, Any]:
+    spec = ARM_SPECS[arm]
+    contrastive = spec["contrastive"]
+    contiguous = spec["contiguous"]
     out_dir = Path(args.out) / arm
     out_dir.mkdir(parents=True, exist_ok=True)
     explain_config = {"task_name": args.task, "output_dir": str(out_dir)}
     if args.explain_steps is not None:
         explain_config["steps"] = int(args.explain_steps)
+    if args.max_molecules:
+        explain_config["max_molecules"] = int(args.max_molecules)
 
     logger.info(
-        "=== %s arm: contrastive=%s mode=%s pretrain=%d finetune=%d -> %s ===",
+        "=== %s arm: contrastive=%s contiguous=%s mode=%s pretrain=%d finetune=%d -> %s ===",
         arm,
         contrastive,
+        contiguous,
         args.eval_mode,
         args.pretrain_epochs,
         args.finetune_epochs,
@@ -179,7 +200,7 @@ def _run_arm(arm: str, contrastive: bool, args: argparse.Namespace) -> Dict[str,
         num_layers=args.num_layers,
         gnn_type=args.gnn_type,
         mask_ratio=args.mask_ratio,
-        contiguous=True,  # connected-subgraph masking (irrelevant to contrastive arm)
+        contiguous=contiguous,  # only used if engine self-pretrains (not in hybrid)
         contrastive=contrastive,
         encoder_lr=args.encoder_lr,
         head_lr=args.head_lr,
@@ -200,7 +221,7 @@ def _run_arm(arm: str, contrastive: bool, args: argparse.Namespace) -> Dict[str,
         # This matches the paper's reported configuration (pretrained encoder ->
         # hybrid fine-tune -> IG), at reduced budget on Tox21 molecules.
         ckpt = out_dir / "pretrained_encoder.pt"
-        _pretrain_encoder(arm, contrastive, args, ckpt)
+        _pretrain_encoder(arm, contrastive, contiguous, args, ckpt)
         result = run_tox21_case_study(
             evaluation_mode="hybrid",
             encoder_checkpoint=str(ckpt),
@@ -247,19 +268,30 @@ def main() -> None:
     p.add_argument("--layerwise-decay", type=float, default=0.8)
     p.add_argument("--explain-mode", default="ig,ig_motif")
     p.add_argument("--explain-steps", type=int, default=None)
+    p.add_argument(
+        "--max-molecules",
+        type=int,
+        default=0,
+        help="Cap IG to first N test molecules (0=all). Seed-deterministic "
+        "test order => same molecules across arms, so pairing is preserved.",
+    )
     p.add_argument("--out", default="outputs/ig_ablation")
     p.add_argument(
         "--arms",
-        default="jepa,contrastive",
-        help="Comma-separated arms to run (jepa, contrastive).",
+        default="jepa,jepa_dispersed,contrastive",
+        help="Comma-separated arms: jepa (connected masking), "
+        "jepa_dispersed (non-contiguous masking), contrastive (InfoNCE).",
     )
     args = p.parse_args()
 
     Path(args.out).mkdir(parents=True, exist_ok=True)
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
+    unknown = [a for a in arms if a not in ARM_SPECS]
+    if unknown:
+        raise SystemExit(f"Unknown arm(s) {unknown}; valid: {sorted(ARM_SPECS)}")
     combined: Dict[str, Any] = {}
     for arm in arms:
-        combined[arm] = _run_arm(arm, contrastive=(arm == "contrastive"), args=args)
+        combined[arm] = _run_arm(arm, args=args)
 
     (Path(args.out) / "ablation_summary.json").write_text(json.dumps(combined, indent=2))
     logger.info("Done. Combined summary at %s/ablation_summary.json", args.out)
