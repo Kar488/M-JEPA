@@ -62,11 +62,15 @@ def _load_atoms(path: Path) -> Dict[int, float]:
     scores: Dict[int, float] = {}
     with open(path, newline="") as fh:
         for row in csv.DictReader(fh):
-            t = row.get("type", "")
-            if not t.startswith("atom_"):
-                continue
+            # The atom index is the stable node id in the "id" field
+            # (<graph_idx>_<node_idx>). The "type" column is NOT reliable: the
+            # RDKit-backed exporter writes element symbols (C/N/O) there when
+            # SMILES parsing succeeds, and only falls back to "atom_<idx>"
+            # otherwise, so filtering on type would drop element-symbol rows.
+            rid = row.get("id", "")
+            node_part = rid.rsplit("_", 1)[-1]
             try:
-                idx = int(t.split("_", 1)[1])
+                idx = int(node_part)
                 scores[idx] = float(row["ig_score"])
             except (ValueError, KeyError):
                 continue
