@@ -30,15 +30,31 @@ container reclamation.
 - `jepa_minus_jepa_dispersed` — isolates connected-subgraph masking specifically
   (the reviewer's literal causal target).
 
-## Headline finding (pooled, ~2000 paired molecules over 8–12 cells)
+## Headline finding (pooled, 12/12 cells, 2964 paired molecules)
 
-- Contrastive attributions are **equal or more** concentrated/connected than
-  JEPA's (contrastive wins 62–79% of molecules; Wilcoxon p down to ~1e-190).
-  JEPA leads only on motif top-1 share.
-- Connected-subgraph masking specifically shows **no coherence advantage** over
-  non-contiguous masking (all four metrics ≈0 or slightly negative).
-- Conclusion: attribution coherence is **not** a JEPA/masking-specific property.
-  RQ1 (JEPA wins predictive *transfer*) is untouched — this concerns attribution
-  maps (RQ4), not transfer.
+Metric-dependent, so state it precisely:
+
+- **Motif-level concentration (motif top-1 share) — the manuscript's unit of
+  analysis: JEPA > contrastive**, robustly and across all four assays
+  (pooled Δ +0.055, JEPA wins 82% of molecules, Wilcoxon p ~ 1e-255; per-assay
+  Δ +0.013 to +0.115). The paper's motif-level coherence claim is *supported*
+  by the comparison.
+- **Atom-level metrics are mixed:** contrastive is somewhat more concentrated on
+  top-20% atom mass (Δ -0.030) and marginally more connected; atom Gini is a tie.
+- **Connected-subgraph masking specifically (jepa vs jepa_dispersed): no
+  coherence advantage** on any metric (motif Δ ≈ 0 to slightly negative;
+  connectivity negative on all four assays). The masking *contiguity* does not
+  drive coherence.
+
+Refined conclusion: motif-level attribution coherence traces to the **predictive
+JEPA objective**, not to connected-subgraph masking. So the reviewer's narrow
+point holds (coherence is not masking-specific), but the broader worry that
+"contrastive would be equally coherent" does not — JEPA is more motif-coherent
+than contrastive. RQ1 (predictive transfer) is untouched.
+
+NOTE ON EARLIER PARTIAL SNAPSHOTS: 2/4/8-cell intermediate aggregates were
+NR-AR-heavy (the noisy 4.2%-positive assay) and over-indexed on atom-level
+metrics; they suggested "contrastive wins decisively." The balanced 12-cell
+grid does not support that — see motif-level result above.
 
 Regenerate stats: `PYTHONPATH=. python experiments/aggregate_ig_grid.py --root <unpacked>/ig_grid`

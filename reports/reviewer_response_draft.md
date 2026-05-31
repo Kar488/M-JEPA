@@ -43,17 +43,25 @@ Two contrasts isolate two distinct factors:
   - which is the precise causal target of the reviewer's comment, and which a
   JEPA-vs-contrastive comparison alone cannot isolate.
 
-## Result (to fill)
+## Result (12/12 cells, 2964 paired molecules; reduced-budget CPU ablation)
 
-Objective family (jepa - contrastive): [mean_diff / p / CI per metric]
-Masking specifically (jepa - jepa_dispersed): [mean_diff / p / CI per metric]
+**Objective family (jepa - contrastive):** metric-dependent.
+- Motif top-1 share (the manuscript's motif-level unit of analysis):
+  Δ = +0.055, JEPA wins 82% of molecules, Wilcoxon p ~ 1e-255; per-assay
+  Δ +0.013 (NR-AR) to +0.115 (SR-MMP), JEPA-favouring on all four assays.
+- Atom top-20% mass: Δ = -0.030 (contrastive somewhat more concentrated).
+- Salient-atom connectivity: Δ = -0.013 (mixed across assays).
+- Atom Gini: Δ = +0.009 (tie).
 
-Provisional NR-AR pilot (single seed, reduced budget): attribution concentration
-was **not** higher for connected-subgraph JEPA; the InfoNCE baseline was equal or
-more concentrated (Gini +0.054 in favour of contrastive on ~99% of molecules,
-Wilcoxon p ~ 1e-119), with salient-atom connectivity statistically
-indistinguishable. The full grid tests whether this holds across assays/seeds and
-whether the masking-specific contrast moves at all.
+**Masking specifically (jepa - jepa_dispersed):** no coherence advantage for
+connected masking on any metric (motif Δ ~ 0 to slightly negative; connectivity
+negative on all four assays).
+
+Interpretation: motif-level attribution coherence is *higher* for the predictive
+JEPA objective than for the InfoNCE baseline, but does *not* depend on the
+connected-subgraph masking contiguity. The reviewer's narrow causal point holds
+(coherence is not masking-specific); the broader concern that coherence is
+objective-agnostic does not (JEPA is more motif-coherent than contrastive).
 
 ## Manuscript changes (these go INTO the paper, not just this letter)
 
@@ -66,14 +74,14 @@ whether the masking-specific contrast moves at all.
    coherence* (not just ESOL RMSE) to the masking-ablation section / SI - this is
    the control that actually speaks to "masking specifically".
 
-3. **Reframe Contribution (1)** from "chemically coherent masking" (which implies
-   an attribution advantage we did not measure) to "connected-subgraph masking as
-   a chemically coherent *target construction* (an algorithmic property; Algorithm
-   1)", with attribution coherence reported as a representation **diagnostic** that
-   [is / is not] objective-specific.
+3. **Reframe Contribution (1):** attribute motif-level attribution coherence to
+   the **predictive JEPA objective** (now supported: JEPA > contrastive on motif
+   top-1 share across all four assays), and demote "connected-subgraph masking"
+   to a chemically-interpretable *target construction* (Algorithm 1) that is NOT
+   the source of the coherence (jepa vs jepa_dispersed shows no masking effect).
 
-4. **Adjust the line-678 rationale** so the motivation for connected masking is
-   stated as target interpretability, explicitly noting that attribution
-   coherence is [not] unique to this objective/masking choice per the new
-   comparison - consistent with the paper's existing "diagnostic, not mechanistic"
-   framing.
+4. **Adjust the line-678 rationale:** state connected masking's motivation as
+   target interpretability, and note explicitly that attribution coherence is
+   objective-driven (predictive vs contrastive) rather than masking-contiguity-
+   driven, per the new comparison - consistent with the existing "diagnostic, not
+   mechanistic" framing.
