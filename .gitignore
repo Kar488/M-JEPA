@@ -69,3 +69,5 @@ outputs/smoke/
 outputs/timing_probe/
 outputs/ig_hybrid_nrar/
 outputs/smoke_hybrid/
+outputs/ig_grid/
+outputs/smoke_grid/
