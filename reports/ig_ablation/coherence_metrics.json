@@ -1,0 +1,18 @@
+{
+  "jepa": {
+    "n_molecules": 722,
+    "atom_gini_mean": 0.5393206909090654,
+    "atom_top20pct_mass_mean": 0.5021415986219399,
+    "salient_top20pct_largest_cc_frac_mean": 0.6874732243996492,
+    "motif_top1_share_mean": 0.5444242753151854,
+    "n_with_motif": 726
+  },
+  "contrastive": {
+    "n_molecules": 722,
+    "atom_gini_mean": 0.5615207599438088,
+    "atom_top20pct_mass_mean": 0.5372703064279957,
+    "salient_top20pct_largest_cc_frac_mean": 0.7594040255845177,
+    "motif_top1_share_mean": 0.5331464317202875,
+    "n_with_motif": 726
+  }
+}

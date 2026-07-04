@@ -61,3 +61,13 @@ outputs/grid_ckpts/jepa/jepa_ep0002.pt
 outputs/small_grid_results.csv
 data/tmp_small.parquet
 logs/wb_last_payload.json
+
+# Generated IG ablation artifacts (heatmaps/CSVs). Compact summaries are tracked
+# under reports/ig_ablation/ instead.
+outputs/ig_ablation/
+outputs/smoke/
+outputs/timing_probe/
+outputs/ig_hybrid_nrar/
+outputs/smoke_hybrid/
+outputs/ig_grid/
+outputs/smoke_grid/
