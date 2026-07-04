@@ -1011,6 +1011,9 @@ class _IGArtifactLogger:
         except Exception:
             steps = 50
         self.steps = max(1, steps)
+        # Opt-in cap: explain at most N molecules (paired-ablation tractability).
+        # Default 0 => unbounded (original behaviour preserved).
+        self._max_molecules = int(config.get("max_molecules", 0) or 0)
         self.normalise_mode = str(config.get("normalise", "signed")).strip().lower()
 
         self.task_name = str(
@@ -1079,6 +1082,8 @@ class _IGArtifactLogger:
 
     def _compute_for_index(self, idx: int) -> None:
         if idx in self._seen:
+            return
+        if self._max_molecules and len(self._seen) >= self._max_molecules:
             return
         try:
             graph = self.dataset.graphs[idx]
@@ -1217,6 +1222,9 @@ class _MotifIGArtifactLogger:
         except Exception:
             steps = 50
         self.steps = max(1, steps)
+        # Opt-in cap: explain at most N molecules (paired-ablation tractability).
+        # Default 0 => unbounded (original behaviour preserved).
+        self._max_molecules = int(config.get("max_molecules", 0) or 0)
         self.normalise_mode = str(config.get("normalise", "signed")).strip().lower()
         raw_task_names = config.get("task_names") or stage_cfg.get("task_names")
         if isinstance(raw_task_names, str):
@@ -1323,6 +1331,8 @@ class _MotifIGArtifactLogger:
 
     def _compute_for_index(self, idx: int) -> None:
         if idx in self._seen:
+            return
+        if self._max_molecules and len(self._seen) >= self._max_molecules:
             return
         try:
             graph = self.dataset.graphs[idx]

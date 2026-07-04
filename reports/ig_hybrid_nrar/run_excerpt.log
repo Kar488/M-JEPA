@@ -1,0 +1,12 @@
+INFO:utils.checkpoint:[encoder_hash]=13c81f44a4386f07c4659da48fa68b22be1e36ce998e689be7b2829de2f96d67 source=export path=/home/user/M-JEPA/outputs/ig_hybrid_nrar/jepa/pretrained_encoder.pt keys=6
+INFO:experiments.case_study:Split train: size=5806 finite=5806 positives=239
+INFO:experiments.case_study:Split val: size=726 finite=726 positives=39
+INFO:experiments.case_study:Split test: size=726 finite=726 positives=30
+INFO:training.supervised:[hybrid] schedule: freeze=0 partial=12 full=13 (total=25, unfreeze_top_layers=0)
+INFO:experiments.case_study:Tox21 evaluation summary: mode=hybrid head_trained=yes steps=506.0 roc_auc=0.6206 pr_auc=0.0608
+INFO:utils.checkpoint:[encoder_hash]=e1a081108ce5d8efa48e0691483acd06f687949ed00986830f4dc90edecde71a source=export path=/home/user/M-JEPA/outputs/ig_hybrid_nrar/contrastive/pretrained_encoder.pt keys=6
+INFO:experiments.case_study:Split train: size=5806 finite=5806 positives=239
+INFO:experiments.case_study:Split val: size=726 finite=726 positives=39
+INFO:experiments.case_study:Split test: size=726 finite=726 positives=30
+INFO:training.supervised:[hybrid] schedule: freeze=0 partial=12 full=13 (total=25, unfreeze_top_layers=0)
+INFO:experiments.case_study:Tox21 evaluation summary: mode=hybrid head_trained=yes steps=575.0 roc_auc=0.6457 pr_auc=0.0730
